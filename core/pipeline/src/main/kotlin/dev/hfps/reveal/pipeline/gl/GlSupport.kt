@@ -52,6 +52,17 @@ internal object GlSupport {
         }
     }
 
+    private val COLOUR0 = intArrayOf(GLES30.GL_COLOR_ATTACHMENT0)
+
+    /**
+     * Tells the driver that the bound framebuffer's colour is about to be overwritten in full: a tiling GPU (Adreno,
+     * Mali) then skips loading the old contents into its tile memory before the pass. Only for a pass whose viewport
+     * covers every texel anyone reads afterwards.
+     */
+    fun discardColour() {
+        GLES30.glInvalidateFramebuffer(GLES30.GL_FRAMEBUFFER, 1, COLOUR0, 0)
+    }
+
     fun checkError(what: String) {
         val error = GLES20.glGetError()
         if (error != GLES20.GL_NO_ERROR) throw GlException("OpenGL error 0x${error.toString(16)} after $what")

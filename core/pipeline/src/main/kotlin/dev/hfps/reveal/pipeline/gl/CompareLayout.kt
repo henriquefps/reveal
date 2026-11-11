@@ -1,6 +1,9 @@
 package dev.hfps.reveal.pipeline.gl
 
+import kotlin.math.ceil
+import kotlin.math.floor
 import kotlin.math.min
+import kotlin.math.roundToInt
 
 /**
  * The part of the window surface where the photo is framed, in window pixels (origin top-left). The editor keeps its
@@ -133,4 +136,39 @@ object CompareLayout {
             centerX = view.centerX - (pane.centerX - windowCx) / scale,
             centerY = view.centerY - (pane.centerY - windowCy) / scale,
         )
+
+    /**
+     * The window pixels a pane with [view] can paint the output of [outputWidth] x [outputHeight] pixels onto (window
+     * terms, top-left origin, whole pixels, one pixel of margin), within [clip] when there is one; null when nothing
+     * of the output is on screen. The output pass maps a window pixel `sp` to the output point
+     * `(sp - window centre) / scale + view centre`; every pixel outside this rectangle is the surround.
+     */
+    @Suppress("LongParameterList")
+    fun outputRect(
+        view: ViewTransform,
+        windowWidth: Int,
+        windowHeight: Int,
+        outputWidth: Int,
+        outputHeight: Int,
+        clip: ViewFrame? = null,
+    ): IntArray? {
+        val s = view.scale
+        val left = maxOf(floor((0f - view.centerX) * s + windowWidth / 2f) - 1f, clip?.left ?: 0f, 0f)
+        val top = maxOf(floor((0f - view.centerY) * s + windowHeight / 2f) - 1f, clip?.top ?: 0f, 0f)
+        val right = minOf(
+            ceil((outputWidth - view.centerX) * s + windowWidth / 2f) + 1f,
+            clip?.let { it.left + it.width } ?: windowWidth.toFloat(),
+            windowWidth.toFloat(),
+        )
+        val bottom = minOf(
+            ceil((outputHeight - view.centerY) * s + windowHeight / 2f) + 1f,
+            clip?.let { it.top + it.height } ?: windowHeight.toFloat(),
+            windowHeight.toFloat(),
+        )
+        val x0 = left.roundToInt()
+        val y0 = top.roundToInt()
+        val x1 = right.roundToInt()
+        val y1 = bottom.roundToInt()
+        return if (x1 <= x0 || y1 <= y0) null else intArrayOf(x0, y0, x1 - x0, y1 - y0)
+    }
 }

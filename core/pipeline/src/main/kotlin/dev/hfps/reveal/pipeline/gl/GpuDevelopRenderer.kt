@@ -18,6 +18,7 @@ import dev.hfps.reveal.pipeline.cpu.OutputSpace
 import dev.hfps.reveal.pipeline.cpu.OutputTransformOp
 import dev.hfps.reveal.pipeline.cpu.PostParams
 import dev.hfps.reveal.pipeline.cpu.VignetteOp
+import dev.hfps.reveal.pipeline.cpu.withoutLocal
 import dev.hfps.reveal.pipeline.geometry.GeometryMapping
 import dev.hfps.reveal.pipeline.geometry.Warp
 import dev.hfps.reveal.pipeline.input.TileSource
@@ -112,6 +113,11 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
     private val effects = EffectsPasses()
     private var labTarget: GlTarget? = null
     private var detailTargets: DetailPasses.Targets? = null
+    private val chainTargets = ArrayList<GlTarget>()
+    private var timerQueries = false
+
+    /** The working texture's mips match its level 0 (they are generated only when a draw reads them). */
+    private var stageMipsValid = false
     private var effectsGridValid = false
     private val defringe = DefringePasses()
     private var fringeTarget: GlTarget? = null
@@ -130,6 +136,10 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
     private var sourceTex = 0
     private var stageTex = 0
     private var stageFbo = 0
+    private var stageHalfFbo = 0
+
+    /** Only level 1 of the working texture is current (the final pass wrote it at half resolution, see runStage1). */
+    private var stageHalf = false
     private var readTex = 0
     private var readFbo = 0
     private var readWidth = 0
@@ -206,16 +216,22 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
 
     /**
      * Draws [view] (the editor's on-screen output pass, full-resolution tiles included where they are ready) into a
-     * [width] x [height] offscreen RGBA8 target and reads it back, top row first. For tests and measurements.
+     * [width] x [height] offscreen RGBA8 target and reads it back, top row first. For tests and measurements. With
+     * [halfStage] the Detail and Effects passes write the working texture's level 1 directly, as the editor's frames do
+     * for views at 50 % or less (docs/adr/0012, "M2/P").
      */
-    suspend fun renderView(view: ViewTransform, width: Int, height: Int, settings: OutputSettings): ByteArray = onGl {
+    suspend fun renderView(
+        view: ViewTransform,
+        width: Int,
+        height: Int,
+        settings: OutputSettings,
+        halfStage: Boolean = false,
+    ): ByteArray = onGl {
         val image = checkNotNull(input) { "no input" }
         val req = request.get()
         val params = image.params(req.recipe)
-        if (params.withoutPost() != stageParams || stageMask) {
-            runStage1(params)
-            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, stageTex)
-            GLES30.glGenerateMipmap(GLES30.GL_TEXTURE_2D)
+        if (params.withoutPost() != stageParams || stageMask || stageHalf != halfStage) {
+            runStage1(params, half = halfStage)
         }
         val mapping = image.mapping(req.recipe)
         ensureReadTarget(width, height)
@@ -266,8 +282,6 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         val params = image.params(req.recipe)
         if (params.withoutPost() != stageParams || stageMask) {
             runStage1(params)
-            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, stageTex)
-            GLES30.glGenerateMipmap(GLES30.GL_TEXTURE_2D)
         }
         ensureReadTarget(width, height)
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, readFbo)
@@ -372,20 +386,31 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         }
 
     /**
-     * Per-pass profiling of on-screen frames (each section ends with `glFinish`; measurements only). Read the means
-     * with [passProfile]; setting it resets them.
+     * Per-pass profiling of frames (GPU timer queries when the driver has them, else `glFinish` after each section;
+     * measurements only, see [PassProfiler]). Read the means with [passProfile]; setting it resets them.
      */
     var profilePasses: Boolean
         get() = profiler.enabled
         set(value) {
             handler.post {
                 profiler.reset()
+                profiler.gpuTimers = profileWithTimers && timerQueries
                 profiler.enabled = value
             }
         }
 
     /** Mean milliseconds per section of the profiled frames (see [profilePasses]). */
     suspend fun passProfile(): Map<String, Float> = onGl { profiler.snapshot() }
+
+    /** Mean CPU milliseconds spent issuing each section of the profiled frames. */
+    suspend fun passProfileCpu(): Map<String, Float> = onGl { profiler.cpuSnapshot() }
+
+    /** False makes [profilePasses] sync with `glFinish` even where timer queries exist (measurements). */
+    @Volatile
+    var profileWithTimers: Boolean = true
+
+    /** True when [passProfile] is GPU time from timer queries (`GL_EXT_disjoint_timer_query`), else wall time. */
+    val passProfileOnGpu: Boolean get() = profiler.gpuTimers
 
     /** GL-thread milliseconds of the last histogram (request draw + map + binning), for measurements. */
     val histogramMs: Float get() = histogram.lastMs
@@ -447,29 +472,15 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         onGl { readOutput(recipe, settings, clipping) }
 
     /**
-     * Times full offscreen renders (stage 1 + output pass into an RGBA8 target of the image size) for each recipe,
-     * in order, with `glFinish` after each; returns the wall milliseconds per frame. This is the "dragging a
-     * slider" measurement without the display or the compositor.
+     * Times full offscreen renders (stage 1 + output pass into an RGBA8 target) for each recipe, in order, with
+     * `glFinish` after each; returns the wall milliseconds per frame. This is the "dragging a slider" measurement
+     * without the display or the compositor. With a [frame] (width, height) the output pass draws the photo fitted to
+     * that frame (minified with the explicit LOD, as the editor's photo slot); without one, at 1:1 at the image size.
      */
-    suspend fun benchmark(recipes: List<Recipe>): List<Float> = onGl {
-        val image = checkNotNull(input) { "no input" }
+    suspend fun benchmark(recipes: List<Recipe>, frame: Pair<Int, Int>? = null): List<Float> = onGl {
         recipes.map { recipe ->
             val start = System.nanoTime()
-            profiler.begin()
-            val params = image.params(recipe)
-            // As on screen: the stage runs only when what it depends on changed (not for vignette or grain).
-            if (params.withoutPost() != stageParams || stageMask) {
-                runStage1(params)
-                GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, stageTex)
-                GLES30.glGenerateMipmap(GLES30.GL_TEXTURE_2D)
-                profiler.mark("mipmaps")
-            }
-            drawOutputOffscreen(
-                OutputSettings(dither = true),
-                // The recipe's geometry (a Transform drag resamples through the warp every frame, docs/adr/0015).
-                mapping = image.mapping(recipe),
-                post = PostParams.from(recipe.effects),
-            )
+            benchmarkFrame(recipe, frame)
             GLES20.glFinish()
             profiler.mark("output pass")
             (System.nanoTime() - start) / NANOS_PER_MS
@@ -477,34 +488,67 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
     }
 
     /**
-     * [benchmark] as the editor draws: each recipe's stage (when it changed) and the output pass of [view] into a
-     * [width] x [height] RGBA8 target, `glFinish` after each, no readback; wall milliseconds per frame.
+     * Frames as the display pipelines them: each frame is flushed with a fence and the CPU waits only for the frame
+     * [inFlight] frames back (a swap chain's depth), so one frame's CPU work overlaps the previous frames' GPU work.
+     * Returns the sustained milliseconds per frame (wall time over the frames: what a 120 Hz display needs at or below
+     * 8.3 ms) and, with GPU timer queries, each frame's GPU time. [benchmark] is the serialised latency of one frame
+     * (CPU, then GPU, then the sync).
      */
-    suspend fun benchmarkView(recipes: List<Recipe>, view: ViewTransform, width: Int, height: Int): List<Float> = onGl {
-        val image = checkNotNull(input) { "no input" }
-        recipes.map { recipe ->
-            val start = System.nanoTime()
-            val params = image.params(recipe)
-            if (params.withoutPost() != stageParams || stageMask) {
-                runStage1(params)
-                GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, stageTex)
-                GLES30.glGenerateMipmap(GLES30.GL_TEXTURE_2D)
+    suspend fun benchmarkPipelined(
+        recipes: List<Recipe>,
+        frame: Pair<Int, Int>? = null,
+        inFlight: Int = 2,
+    ): PipelinedTimes = onGl {
+        val fences = ArrayDeque<Long>()
+        val queries = IntArray(if (timerQueries) recipes.size else 0)
+        if (queries.isNotEmpty()) GLES30.glGenQueries(queries.size, queries, 0)
+        val start = System.nanoTime()
+        for ((i, recipe) in recipes.withIndex()) {
+            while (fences.size >= inFlight) {
+                GLES30.glClientWaitSync(fences.removeFirst(), GLES30.GL_SYNC_FLUSH_COMMANDS_BIT, FENCE_TIMEOUT_NS)
             }
-            ensureReadTarget(width, height)
+            if (queries.isNotEmpty()) GLES30.glBeginQuery(GL_TIME_ELAPSED_EXT, queries[i])
+            benchmarkFrame(recipe, frame)
+            if (queries.isNotEmpty()) GLES30.glEndQuery(GL_TIME_ELAPSED_EXT)
+            fences.addLast(GLES30.glFenceSync(GLES30.GL_SYNC_GPU_COMMANDS_COMPLETE, 0))
+            GLES30.glFlush()
+        }
+        GLES20.glFinish()
+        val wall = (System.nanoTime() - start) / NANOS_PER_MS / recipes.size
+        while (fences.isNotEmpty()) GLES30.glDeleteSync(fences.removeFirst())
+        val result = IntArray(1)
+        val gpu = queries.map {
+            GLES30.glGetQueryObjectuiv(it, GLES30.GL_QUERY_RESULT, result, 0)
+            result[0].toUInt().toFloat() / NANOS_PER_MS
+        }
+        if (queries.isNotEmpty()) GLES30.glDeleteQueries(queries.size, queries, 0)
+        PipelinedTimes(wall, gpu)
+    }
+
+    /** One benchmark frame without the final sync: stage 1 when needed, then the output pass. */
+    private fun benchmarkFrame(recipe: Recipe, frame: Pair<Int, Int>?) {
+        val image = checkNotNull(input) { "no input" }
+        profiler.begin()
+        val params = image.params(recipe)
+        profiler.mark("params (CPU)")
+        // The recipe's geometry: a Transform drag resamples through the warp every frame (docs/adr/0015).
+        val mapping = image.mapping(recipe)
+        // As on screen: the stage runs only when what it depends on changed (not for vignette or grain), at half
+        // resolution when the fitted frame reads level 1 or coarser (axis-aligned, as halfViewOnly).
+        val fit = frame?.let { (w, h) -> minOf(w.toFloat() / mapping.outputWidth, h.toFloat() / mapping.outputHeight) }
+        val half = fit != null && fit <= HALF_VIEW_SCALE && mapping.axisAligned
+        if (stageStale(params, false, half)) runStage1(params, half = half)
+        val post = PostParams.from(recipe.effects)
+        if (frame == null || fit == null) {
+            drawOutputOffscreen(OutputSettings(dither = true), mapping = mapping, post = post)
+        } else {
+            val (w, h) = frame
+            ensureReadTarget(w, h)
             GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, readFbo)
-            GLES30.glViewport(0, 0, width, height)
-            drawOutput(
-                image,
-                view,
-                width,
-                height,
-                OutputSettings(dither = true),
-                surround,
-                mapping = image.mapping(recipe),
-                post = PostParams.from(recipe.effects),
-            )
-            GLES20.glFinish()
-            (System.nanoTime() - start) / NANOS_PER_MS
+            GlSupport.discardColour()
+            GLES30.glViewport(0, 0, w, h)
+            val view = ViewTransform(fit, mapping.outputWidth / 2f, mapping.outputHeight / 2f)
+            drawOutput(image, view, w, h, OutputSettings(dither = true), surround, mapping = mapping, post = post)
         }
     }
 
@@ -565,16 +609,14 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         val params = image.params(if (req.showOriginal) Recipe.DEFAULT else req.recipe)
         val mask = req.detailMask && !req.showOriginal
         profiler.mark("params (CPU)")
-        if (params.withoutPost() != stageParams || mask != stageMask) {
-            runStage1(params, mask)
-            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, stageTex)
-            GLES30.glGenerateMipmap(GLES30.GL_TEXTURE_2D)
-            profiler.mark("mipmaps")
+        val tilesOn = tilesShown(req)
+        val half = halfViewOnly(panes, mapping, tilesOn, req)
+        if (stageStale(params, mask, half)) {
+            runStage1(params, mask, half)
             histogramDirty = true
         }
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
         GLES30.glViewport(0, 0, width, height)
-        val tilesOn = tilesShown(req)
         val tilePanes = if (tilesOn) tilePanes(panes, width, height, frame) else emptyList()
         val fading = zoom.beforeFrame(req.recipe, mapping, tilePanes, System.nanoTime())
         drawPanes(image, panes, width, height, req, mapping, tilesOn)
@@ -634,7 +676,7 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
      * built from it; [DetailPasses] caches its own intermediates, so a Detail or Effects drag re-runs only the passes
      * that depend on the dragged slider.
      */
-    private fun runStage1(all: DevelopParams, showMask: Boolean = false) {
+    private fun runStage1(all: DevelopParams, showMask: Boolean = false, half: Boolean = false) {
         val image = checkNotNull(input) { "no input" }
         val params = all.withoutPost()
         val localOn = params.localActive || showMask
@@ -672,12 +714,59 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
                 region = region,
                 showMask = showMask,
                 cache = true,
+                half = if (half && stageHalfFbo != 0) GlTarget(stageTex, stageHalfFbo) else null,
             )
             lastLocalPasses = detail.lastPasses
         }
         stageParams = params
         stageMask = showMask
+        stageHalf = localOn && half && !showMask && stageHalfFbo != 0
+        stageMipsValid = false
     }
+
+    /**
+     * True when the working texture does not hold [params] (without the post-crop finish) for this [mask] and
+     * resolution: level 0 is needed ([half] false) and only level 1 is current.
+     */
+    private fun stageStale(params: DevelopParams, mask: Boolean, half: Boolean): Boolean {
+        val needsLevel0 = stageHalf && !half
+        return params.withoutPost() != stageParams || mask != stageMask || needsLevel0
+    }
+
+    /**
+     * Writes level 0 of the working texture when only level 1 is current (a draw that reads level 0 after half-
+     * resolution frames): the final pass alone runs again (its inputs are cached). Keeps the caller's framebuffer,
+     * viewport and scissor.
+     */
+    private fun ensureStageLevel0() {
+        if (!stageHalf) return
+        val params = stageParams ?: return
+        val fbo = IntArray(1)
+        val viewport = IntArray(4)
+        val scissor = IntArray(4)
+        GLES30.glGetIntegerv(GLES30.GL_FRAMEBUFFER_BINDING, fbo, 0)
+        GLES30.glGetIntegerv(GLES30.GL_VIEWPORT, viewport, 0)
+        GLES30.glGetIntegerv(GLES30.GL_SCISSOR_BOX, scissor, 0)
+        val scissorOn = GLES30.glIsEnabled(GLES30.GL_SCISSOR_TEST)
+        GLES30.glDisable(GLES30.GL_SCISSOR_TEST)
+        runStage1(params, stageMask)
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, fbo[0])
+        GLES30.glViewport(viewport[0], viewport[1], viewport[2], viewport[3])
+        GLES30.glScissor(scissor[0], scissor[1], scissor[2], scissor[3])
+        if (scissorOn) GLES30.glEnable(GLES30.GL_SCISSOR_TEST)
+    }
+
+    /**
+     * True when every pane of this frame reads only mip level 1 or coarser of the working texture (axis-aligned views
+     * at 50 % or less, no zoom tiles, no loupe, no mask overlay): the Detail passes then write level 1 directly.
+     */
+    private fun halfViewOnly(
+        panes: List<ComparePane>,
+        mapping: GeometryMapping,
+        tilesOn: Boolean,
+        req: Request,
+    ): Boolean = !tilesOn && req.loupe == null && !req.detailMask && !req.geometryEditing && mapping.axisAligned &&
+        panes.all { it.original || it.view.scale <= HALF_VIEW_SCALE }
 
     /** Passes slots 11 and 12 ran in the last stage-1 render (0 when they were cached or off); for the benchmark. */
     @Volatile
@@ -713,6 +802,7 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         )
         if (scene != sceneKey) {
             GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, sceneFbo)
+            GlSupport.discardColour()
             GLES30.glViewport(0, 0, image.width, image.height)
             GLES30.glUseProgram(sceneProgram)
             bindVignette(sceneProgram, params, vignetteLut, image.width, image.height)
@@ -729,6 +819,7 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
             profiler.mark("guided filter")
         }
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, if (labOut) checkNotNull(labTarget).fbo else stageFbo)
+        GlSupport.discardColour()
         GLES30.glViewport(0, 0, image.width, image.height)
         GLES30.glUseProgram(developProgram)
         GLES30.glUniform1i(GLES30.glGetUniformLocation(developProgram, "uLabOut"), if (labOut) 1 else 0)
@@ -760,8 +851,9 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
             halfD = target(GLES30.GL_RGBA16F, hw, hh),
             halfA = target(GLES30.GL_RGBA16F, hw, hh),
             halfB = target(GLES30.GL_RGBA16F, hw, hh),
-            blurA = target(GLES30.GL_RG32F),
-            blurB = target(GLES30.GL_RG32F),
+            blurA = target(GLES30.GL_RG16F),
+            blurB = target(GLES30.GL_RG16F),
+            chain = { k -> chainTargets.getOrNull(k) ?: target(GLES30.GL_RGBA16F).also { chainTargets += it } },
         )
         detail.invalidate()
     }
@@ -774,7 +866,7 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
 
     private fun deleteDetailTargets() {
         val t = detailTargets
-        val targets = listOfNotNull(labTarget, fringeTarget) +
+        val targets = listOfNotNull(labTarget, fringeTarget) + chainTargets +
             (
                 t?.let { listOf(it.lumA, it.lumB, it.lumH, it.halfD, it.halfA, it.halfB, it.blurA, it.blurB) }
                     ?: emptyList()
@@ -786,6 +878,7 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         labTarget = null
         detailTargets = null
         fringeTarget = null
+        chainTargets.clear()
         developed = null
         effectsGridValid = false
         detail.invalidate()
@@ -814,12 +907,25 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         tiles: TileUniforms? = null,
         post: PostParams = PostParams.NONE,
     ) {
+        val aligned = mapping.axisAligned
+        val readsLevel0 = tiles != null || OutputSampling.readsLevel0(view.scale, aligned)
+        if (texture == stageTex && stageHalf && readsLevel0) ensureStageLevel0()
+        if (texture == stageTex && !stageMipsValid && OutputSampling.needsMips(view.scale, aligned)) {
+            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, stageTex)
+            // From level 1 when only it is current (levels above 1 only: readsLevel0 was false).
+            if (stageHalf) GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_BASE_LEVEL, 1)
+            GLES30.glGenerateMipmap(GLES30.GL_TEXTURE_2D)
+            if (stageHalf) GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_BASE_LEVEL, 0)
+            stageMipsValid = true
+            profiler.mark("mipmaps")
+        }
+        val boxLevel = if (texture == stageTex && stageHalf) 1 else 0
         GLES30.glUseProgram(outputProgram)
         uploadUbo(
             outputUbo,
             outputBlock(
                 image.width, image.height, view, width, height, settings, surround, clipping.bits, mapping, tiles,
-                post,
+                post, boxLevel,
             ),
         )
         if (tiles != null) zoom.bind(tiles.nearest)
@@ -850,6 +956,7 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         val h = mapping.outputHeight
         ensureReadTarget(w, h)
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, readFbo)
+        GlSupport.discardColour()
         GLES30.glViewport(0, 0, w, h)
         val identity = ViewTransform(1f, w / 2f, h / 2f)
         drawOutput(image, identity, w, h, settings, surround, clipping = clipping, mapping = mapping, post = post)
@@ -891,8 +998,6 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
     ): ByteArray {
         val image = checkNotNull(input) { "no input" }
         runStage1(image.params(recipe))
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, stageTex)
-        GLES30.glGenerateMipmap(GLES30.GL_TEXTURE_2D)
         val mapping = image.mapping(recipe)
         drawOutputOffscreen(settings, clipping, mapping, PostParams.from(recipe.effects))
         val w = mapping.outputWidth
@@ -913,6 +1018,9 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         egl.create()
         info = GlSupport.query()
         GlSupport.require(info)
+        timerQueries = GLES20.glGetString(GLES20.GL_EXTENSIONS).orEmpty().split(' ')
+            .contains(PassProfiler.TIMER_EXTENSION)
+        profiler.gpuTimers = timerQueries
         sceneProgram = GlSupport.compile(Shaders.FULLSCREEN_VERT, Shaders.SCENE_FRAG)
         developProgram = GlSupport.compile(Shaders.FULLSCREEN_VERT, Shaders.DEVELOP_FRAG)
         outputProgram = GlSupport.compile(Shaders.FULLSCREEN_VERT, Shaders.OUTPUT_FRAG)
@@ -1004,6 +1112,9 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         sceneTex = newTexture(1, image.width, image.height, GLES30.GL_NEAREST, GLES30.GL_NEAREST)
         sceneFbo = newFramebuffer(sceneTex)
         stageFbo = newFramebuffer(stageTex)
+        stageHalfFbo = if (levels > 1) newFramebuffer(stageTex, 1) else 0
+        stageHalf = false
+        stageMipsValid = false
         shownMapping = GeometryMapping.identity(image.width, image.height)
         // Upload in bands so the RGB -> RGBA float staging buffer stays small even for a 2400 px proxy.
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, sourceTex)
@@ -1053,7 +1164,7 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         return id[0]
     }
 
-    private fun newFramebuffer(texture: Int): Int {
+    private fun newFramebuffer(texture: Int, level: Int = 0): Int {
         val id = IntArray(1)
         GLES30.glGenFramebuffers(1, id, 0)
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, id[0])
@@ -1062,7 +1173,7 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
             GLES30.GL_COLOR_ATTACHMENT0,
             GLES30.GL_TEXTURE_2D,
             texture,
-            0,
+            level,
         )
         val status = GLES30.glCheckFramebufferStatus(GLES30.GL_FRAMEBUFFER)
         if (status !=
@@ -1077,13 +1188,15 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         releaseCompareAndReadbacks()
         deleteDetailTargets()
         GLES30.glDeleteTextures(4, intArrayOf(sourceTex, stageTex, readTex, sceneTex), 0)
-        GLES30.glDeleteFramebuffers(3, intArrayOf(stageFbo, readFbo, sceneFbo), 0)
+        GLES30.glDeleteFramebuffers(4, intArrayOf(stageFbo, readFbo, sceneFbo, stageHalfFbo), 0)
         sceneTex = 0
         sceneFbo = 0
         sourceTex = 0
         stageTex = 0
         readTex = 0
         stageFbo = 0
+        stageHalfFbo = 0
+        stageHalf = false
         readFbo = 0
         readWidth = 0
         readHeight = 0
@@ -1092,6 +1205,7 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
     private fun releaseGl() {
         if (!::info.isInitialized) return
         zoom.release()
+        profiler.release()
         deleteImageTextures()
         light.release()
         detail.release()
@@ -1126,23 +1240,22 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         tilesOn: Boolean = false,
     ) {
         val settings = OutputSettings(req.space)
-        if (panes.first().clip != null) {
-            // Side by side: the gap between the panes is the surround.
-            GLES30.glClearColor(surround[0], surround[1], surround[2], 1f)
-            GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
-        }
+        // The surround everywhere, then each pane's output only where the output can be (docs/adr/0012, "M2/P"): the
+        // window is the whole screen behind the chrome, and the output pass costs per pixel.
+        GLES30.glDisable(GLES30.GL_SCISSOR_TEST)
+        GLES30.glClearColor(surround[0], surround[1], surround[2], 1f)
+        GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
         for (pane in panes) {
-            val clip = pane.clip
-            if (clip == null) {
-                GLES30.glDisable(GLES30.GL_SCISSOR_TEST)
-            } else {
-                val x = clip.left.roundToInt()
-                val top = clip.top.roundToInt()
-                val w = (clip.left + clip.width).roundToInt() - x
-                val h = (clip.top + clip.height).roundToInt() - top
-                GLES30.glEnable(GLES30.GL_SCISSOR_TEST)
-                GLES30.glScissor(x, height - (top + h), w.coerceAtLeast(0), h.coerceAtLeast(0))
-            }
+            val rect = CompareLayout.outputRect(
+                pane.view,
+                width,
+                height,
+                mapping.outputWidth,
+                mapping.outputHeight,
+                pane.clip,
+            ) ?: continue
+            GLES30.glEnable(GLES30.GL_SCISSOR_TEST)
+            GLES30.glScissor(rect[0], height - (rect[1] + rect[3]), rect[2], rect[3])
             drawOutput(
                 image = image,
                 view = pane.view,
@@ -1380,17 +1493,24 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
             mapping: GeometryMapping = GeometryMapping.identity(imageWidth, imageHeight),
             tiles: TileUniforms? = null,
             post: PostParams = PostParams.NONE,
+            boxLevel: Int = 0,
         ): ByteBuffer {
             val b = ByteBuffer.allocateDirect(OUTPUT_BLOCK_FLOATS * Float.SIZE_BYTES).order(ByteOrder.nativeOrder())
             putMat4(b, OutputTransformOp.workingToOutput(settings.space).toFloatArray())
             b.putFloat(
                 imageWidth.toFloat(),
-            ).putFloat(imageHeight.toFloat()).putFloat(view.scale).putFloat(OutputSampling.lod(view.scale))
+            ).putFloat(imageHeight.toFloat()).putFloat(view.scale).putFloat(
+                if (OutputSampling.stageMode(view.scale, mapping.axisAligned) == OutputSampling.MODE_BOX) {
+                    boxLevel.toFloat()
+                } else {
+                    OutputSampling.lod(view.scale)
+                },
+            )
             b.putFloat(view.centerX).putFloat(view.centerY).putFloat(width.toFloat()).putFloat(height.toFloat())
             b.putFloat(surround[0]).putFloat(surround[1]).putFloat(surround[2]).putFloat(1f)
             val aligned = mapping.axisAligned
             b.putInt(settings.ditherSeed).putInt(if (settings.dither) 1 else 0)
-                .putInt(OutputSampling.mode(view.scale, aligned)).putInt(clippingBits)
+                .putInt(OutputSampling.stageMode(view.scale, aligned)).putInt(clippingBits)
             val m = mapping.toImageFloats()
             b.putFloat(m[0]).putFloat(m[1]).putFloat(m[2]).putFloat(mapping.outputWidth.toFloat())
             b.putFloat(m[3]).putFloat(m[4]).putFloat(m[5]).putFloat(mapping.outputHeight.toFloat())
@@ -1459,8 +1579,19 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         private const val WARP_BLOCK_FLOATS = 24
         private const val OUTPUT_BLOCK_FLOATS = 44 + TILE_BLOCK_FLOATS + POST_BLOCK_FLOATS + WARP_BLOCK_FLOATS
         private const val FADE_TICK_MS = 16L
+        private const val FENCE_TIMEOUT_NS = 2_000_000_000L
+        private const val GL_TIME_ELAPSED_EXT = 0x88BF
+
+        /** Views at this scale or below read the working texture's level 1 or coarser (the half-resolution write). */
+        private const val HALF_VIEW_SCALE = 0.5f
     }
 }
+
+/**
+ * [GpuDevelopRenderer.benchmarkPipelined]'s result: the sustained wall milliseconds per frame and, where the driver has
+ * timer queries, each frame's GPU milliseconds (empty otherwise).
+ */
+data class PipelinedTimes(val msPerFrame: Float, val gpuMs: List<Float>)
 
 /**
  * What the GL thread keeps of an uploaded input: its size, a 1x1 stand-in carrying the colour metadata, the Light
@@ -1475,8 +1606,23 @@ private class UploadedImage(
     val needsReconstruction: Boolean,
     val pixelScale: Float,
 ) {
-    /** The operator parameters of [recipe] for this image at its pixel scale. */
-    fun params(recipe: Recipe): DevelopParams = DevelopParams.from(colour, recipe, pixelScale)
+    private var baseKey: Recipe? = null
+    private var base: DevelopParams? = null
+
+    /**
+     * The operator parameters of [recipe] for this image at its pixel scale. Everything but Detail and Effects is
+     * kept from the previous call while the rest of the recipe is unchanged: a Detail or Effects drag recomputes only
+     * its own group (the curve table, the mixer and grading parameters cost a millisecond or more per frame). GL
+     * thread only.
+     */
+    fun params(recipe: Recipe): DevelopParams {
+        val key = recipe.withoutLocal()
+        val kept = base?.takeIf { baseKey == key } ?: DevelopParams.from(colour, key, pixelScale).also {
+            baseKey = key
+            base = it
+        }
+        return kept.withLocal(colour, recipe, pixelScale)
+    }
 
     /** The geometry operator's mapping of [recipe] (lens corrections included), or the crop mode's plane. */
     fun mapping(recipe: Recipe, editing: Boolean = false): GeometryMapping = if (editing) {

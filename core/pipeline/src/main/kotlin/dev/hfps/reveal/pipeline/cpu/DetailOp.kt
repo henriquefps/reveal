@@ -124,6 +124,13 @@ data class DetailParams(
         /** Luminance shrinkage threshold at amount 100 (OkLab L; high-ISO noise is about 0.01-0.03). */
         const val LUM_TAU_MAX: Float = 0.06f
 
+        /**
+         * The luminance levels' edge-stop sigma in units of the level's threshold at amount 100 (times the noise
+         * factor). Independent of the sliders (docs/adr/0012, "M2/P"); 1.5 keeps the flat-area noise of the
+         * amount-tied stop it replaced at amounts 30-60 and keeps edges and thin lines (DetailOpTest).
+         */
+        const val EDGE_SIGMA: Float = 1.5f
+
         /** Exponent of the amount -> threshold curve (calibrated on CC0 ISO 2000 and 12800 files, docs/adr/0012). */
         private const val LUM_CURVE = 1.5
 
@@ -198,8 +205,10 @@ data class DetailParams(
                 val shape = if (i < FINE_LEVELS) mix(1.5f, 0.3f, lumDetail) else 1f - 0.85f * lumContrast
                 val tau = lum * LUM_TAU_MAX * LUM_LEVEL[i] * shape
                 taus += tau
-                val sigmaE = max(tau * mix(8f, 3f, lumDetail), 1e-4f)
-                edges += if (tau > 0f) 1f / (2f * sigmaE * sigmaE) else 0f
+                // The edge stop follows the expected noise, never the sliders: the smoothing chain is the same for
+                // every amount, detail and contrast (only the shrinkage changes), so a drag of them re-runs one pass.
+                val sigmaE = max(EDGE_SIGMA * LUM_TAU_MAX * LUM_LEVEL[i] * noiseFactor, 1e-4f)
+                edges += 1f / (2f * sigmaE * sigmaE)
                 val levelMix = when (i) {
                     3 -> min(1f, smooth * 2f)
                     4 -> max(0f, smooth * 2f - 1f)
@@ -617,8 +626,9 @@ object DetailOp {
                     s1 += wl * lo + wh * hi
                     n1 += wl + wh
                 }
-                rows[(y * width + x) * 2] = s0
-                rows[(y * width + x) * 2 + 1] = if (n1 > 0f) s1 / n1 else c
+                // Both axes store float16 (RG16F targets on the GPU, docs/adr/0012 "M2/P").
+                rows[(y * width + x) * 2] = Half.round(s0)
+                rows[(y * width + x) * 2 + 1] = Half.round(if (n1 > 0f) s1 / n1 else c)
             }
         }
         val out = FloatArray(width * height * 2)
@@ -638,8 +648,8 @@ object DetailOp {
                     s1 += wl * lo + wh * hi
                     n1 += wl + wh
                 }
-                out[(y * width + x) * 2] = s0
-                out[(y * width + x) * 2 + 1] = if (n1 > 0f) s1 / n1 else c
+                out[(y * width + x) * 2] = Half.round(s0)
+                out[(y * width + x) * 2 + 1] = Half.round(if (n1 > 0f) s1 / n1 else c)
             }
         }
         return out

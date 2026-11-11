@@ -3,9 +3,7 @@ package dev.hfps.reveal.pipeline
 import android.util.Log
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
-import dev.hfps.reveal.pipeline.cpu.OutputSettings
 import dev.hfps.reveal.pipeline.gl.GpuDevelopRenderer
-import dev.hfps.reveal.pipeline.gl.ViewTransform
 import dev.hfps.reveal.pipeline.recipe.BandValues
 import dev.hfps.reveal.pipeline.recipe.BaseLook
 import dev.hfps.reveal.pipeline.recipe.Colour
@@ -175,21 +173,239 @@ class PipelineBenchmark {
      */
     @Test
     fun detailAndEffectsSliderDrags(): Unit = runBlocking {
-        val detail = Detail(
-            nrLuminance = 40f,
-            nrColour = 50f,
-            sharpenAmount = 50f,
-            sharpenMasking = 30f,
+        val base = Recipe(light = Light(0.2f, contrast = 15f), detail = ALL_DETAIL, effects = ALL_EFFECTS)
+        val image = noisy()
+        val profile = InstrumentationRegistry.getArguments().getString("profile") == "true"
+        for ((name, at) in SLIDERS) {
+            if (profile) {
+                profileDrag(name, image) { at(base, it) }
+                continue
+            }
+            drag("drag $name (Detail + Effects on, proxy of 24 MP)", image, PROXY_SCALE) {
+                at(base, it)
+            }
+        }
+    }
+
+    /**
+     * Every tool on (Light, Camera JPEG match, tone curve, colour mixer, colour grading, Detail, Effects) and each
+     * Detail and Effects slider dragged in turn on the proxy of a 24 MP photo, the output drawn as the editor draws it
+     * (fitted to the photo frame, `-e frame WxH`, default [FRAME]): one `REVEAL_BENCH` line per slider with p50/p95 and
+     * whether it meets the display-rate target (docs/adr/0012, "M2/P": p50 <= 8.3 ms, p95 <= 12 ms). `-e profile true`
+     * logs the per-pass profile instead (GPU timer queries where available).
+     */
+    @Test
+    fun everyToolOnSliderDrags(): Unit = runBlocking {
+        val base = Recipe(
+            profile = Profile(BaseLook.CAMERA_MATCH, 110f),
+            light = Light(
+                0.2f,
+                contrast = 15f,
+                highlights = -30f,
+                shadows = 25f,
+                curve = Curves(parametric = ParametricCurve(highlights = -10f), red = Curves.MEDIUM_CONTRAST),
+            ),
+            colour = Colour(
+                vibrance = 15f,
+                mixer = ColourMixer(hue = BandValues(orange = 10f), saturation = BandValues(blue = 20f)),
+                grading = ColourGrading(shadows = GradeWheel(220f, 15f), highlights = GradeWheel(50f, 10f)),
+            ),
+            detail = ALL_DETAIL,
+            effects = ALL_EFFECTS,
         )
-        val effects = Effects(
-            texture = 30f,
-            clarity = 25f,
-            dehaze = 20f,
-            vignetteAmount = -30f,
-            grainAmount = 25f,
+        val image = noisy()
+        val profile = InstrumentationRegistry.getArguments().getString("profile") == "true"
+        val frame = frameArgument()
+        for ((name, at) in SLIDERS) {
+            coolDown()
+            if (profile) {
+                profileDrag("all tools: $name", image, frame) { at(base, it) }
+            } else {
+                drag("all tools on, drag $name", image, PROXY_SCALE, frame, target = true) { at(base, it) }
+            }
+        }
+    }
+
+    /**
+     * Dragging the Transform's vertical slider (docs/adr/0015) on a photo with lens corrections and CA removal: the
+     * stage is cached, every frame is the output pass through the warp (three Catmull-Rom samples per pixel). At 1:1
+     * into a 2400 x 1600 target (the worst case, an export tile) and as the editor shows it (fitted to `-e frame`);
+     * plus the lens distortion amount and the defringe amount. `-e profile true` logs the per-pass profile.
+     */
+    @Test
+    fun transformDragFrameTime(): Unit = runBlocking {
+        val image = SyntheticImages.scene(WIDTH, HEIGHT).withLens(GpuParityTest.PARITY_LENS)
+        val transform = { t: Float ->
+            Recipe(
+                optics = Optics(lensCorrections = true, removeCa = true),
+                geometry = Geometry(transform = Transform(vertical = -40f + 80f * t, scale = 110f)),
+            )
+        }
+        val drags: List<Triple<String, Pair<Int, Int>?, (Float) -> Recipe>> = listOf(
+            Triple("transform vertical 1:1 (lens + CA on)", null, transform),
+            Triple("transform vertical, fit view (lens + CA on)", frameArgument(), transform),
+            Triple("lens distortion amount, fit view", frameArgument()) { t: Float ->
+                Recipe(optics = Optics(lensCorrections = true, distortionPercent = 200f * t))
+            },
+            Triple("defringe purple amount (proxy scale), fit view", frameArgument()) { t: Float ->
+                Recipe(optics = Optics(purpleAmount = 20f * t))
+            },
         )
-        val base = Recipe(light = Light(0.2f, contrast = 15f), detail = detail, effects = effects)
-        val sliders: List<Pair<String, (Recipe, Float) -> Recipe>> = listOf(
+        val profile = InstrumentationRegistry.getArguments().getString("profile") == "true"
+        for ((name, frame, at) in drags) {
+            if (profile) {
+                profileDrag(name, image, frame, at)
+            } else {
+                drag(name, image, PROXY_SCALE, frame, target = true, recipeAt = at)
+            }
+        }
+    }
+
+    private fun noisy() = SyntheticImages.noisyCard(WIDTH, HEIGHT, seed = 5)
+
+    private fun p(sorted: List<Float>, percent: Int): String = "%.2f".format(sorted[(sorted.size - 1) * percent / 100])
+
+    private fun meets(sorted: List<Float>): Boolean =
+        sorted[(sorted.size - 1) / 2] <= TARGET_P50 && sorted[(sorted.size - 1) * 95 / 100] <= TARGET_P95
+
+    /**
+     * Renders the sweep back and forth for at least [WARMUP_MS] (`-e warmup <ms>`) before measuring: a phone GPU's
+     * clock follows its recent load, and a drag on screen is continuous rendering, so a measurement that starts from an
+     * idle GPU mixes clock states (the same frame cost 6 or 11 ms depending on what ran before).
+     */
+    private suspend fun warmUp(renderer: GpuDevelopRenderer, sweep: List<Recipe>, frame: Pair<Int, Int>?) {
+        val ms = InstrumentationRegistry.getArguments().getString("warmup")?.toLong() ?: WARMUP_MS
+        val end = System.nanoTime() + ms * NANOS_PER_MS
+        var forward = true
+        do {
+            renderer.benchmark(if (forward) sweep else sweep.reversed(), frame)
+            forward = !forward
+        } while (System.nanoTime() < end)
+    }
+
+    /**
+     * `-e cool <s>`: idles that many seconds before a measurement and logs the thermal status, so each slider starts
+     * from the same state (a phone's GPU clock falls as it warms: the same pass costs up to 2x more after a minute of
+     * continuous rendering).
+     */
+    private fun coolDown() {
+        val seconds = InstrumentationRegistry.getArguments().getString("cool")?.toLong() ?: return
+        Thread.sleep(seconds * MS_PER_S)
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val power = context.getSystemService(android.os.PowerManager::class.java)
+        Log.i(TAG, "thermal status ${power.currentThermalStatus}, headroom %.2f".format(power.getThermalHeadroom(0)))
+    }
+
+    /** `-e frame WxH` (the photo frame on screen), else [FRAME]; `-e frame image` draws 1:1 at the proxy's size. */
+    private fun frameArgument(): Pair<Int, Int>? {
+        val arg = InstrumentationRegistry.getArguments().getString("frame") ?: FRAME
+        if (arg == "image") return null
+        val (w, h) = arg.split('x').map { it.trim().toInt() }
+        return w to h
+    }
+
+    /** [drag] with `glFinish` after every section (`-e profile true`): mean ms per pass, `REVEAL_BENCH profile`. */
+    private suspend fun profileDrag(
+        name: String,
+        image: PipelineInput,
+        frame: Pair<Int, Int>? = null,
+        recipeAt: (Float) -> Recipe,
+    ) {
+        val renderer = GpuDevelopRenderer.create()
+        try {
+            renderer.setInput(image, PROXY_SCALE)
+            val sweep = List(FRAMES) { recipeAt(it.toFloat() / (FRAMES - 1)) }
+            warmUp(renderer, sweep, frame)
+            renderer.profileWithTimers = InstrumentationRegistry.getArguments().getString("timers") != "false"
+            renderer.profilePasses = true
+            val times = renderer.benchmark(sweep, frame).sorted()
+            val gpu = renderer.passProfile()
+            val cpu = renderer.passProfileCpu()
+            val mode = if (renderer.passProfileOnGpu) "gpu timer" else "glFinish"
+            val sections = gpu.entries.joinToString { (k, v) -> "$k %.2f (cpu %.2f)".format(v, cpu[k] ?: 0f) }
+            Log.i(
+                TAG,
+                "profile $name [$mode, ms per occurrence]: $sections; gpu sum %.2f; frame p50 %.2f".format(
+                    gpu.values.sum(),
+                    times[times.size / 2],
+                ),
+            )
+        } finally {
+            renderer.close()
+        }
+    }
+
+    @Suppress("LongParameterList")
+    private suspend fun drag(
+        name: String,
+        image: PipelineInput,
+        pixelScale: Float = 1f,
+        frame: Pair<Int, Int>? = null,
+        target: Boolean = false,
+        recipeAt: (Float) -> Recipe,
+    ) {
+        val renderer = GpuDevelopRenderer.create()
+        try {
+            val uploadStart = System.nanoTime()
+            renderer.setInput(image, pixelScale)
+            renderer.benchmark(listOf(Recipe()), frame)
+            val uploadMs = (System.nanoTime() - uploadStart) / 1e6
+            val sweep = List(FRAMES) { recipeAt(it.toFloat() / (FRAMES - 1)) }
+            warmUp(renderer, sweep, frame)
+            val times = renderer.benchmark(sweep, frame).sorted()
+            val piped = renderer.benchmarkPipelined(sweep + sweep.reversed(), frame)
+            val gpuTimes = piped.gpuMs.sorted()
+            val gpu = "${renderer.info.renderer} (${renderer.info.version})"
+            val shown = frame?.let { (w, h) -> " shown in ${w}x$h" } ?: ""
+            // The display rate: the sustained frame time and the GPU time of each frame (p50 / p95).
+            val met = piped.msPerFrame <= TARGET_P50 && (gpuTimes.isEmpty() || meets(gpuTimes))
+            val verdict = if (!target) {
+                ""
+            } else if (met) {
+                " [target met]"
+            } else {
+                " [target MISSED]"
+            }
+            val gpuPart = if (gpuTimes.isEmpty()) {
+                ""
+            } else {
+                ", GPU per frame p50 ${p(
+                    gpuTimes,
+                    50,
+                )}, p95 ${p(gpuTimes, 95)}"
+            }
+            Log.i(
+                TAG,
+                "$name: $gpu ${image.width}x${image.height}$shown: upload+first frame ${"%.1f".format(uploadMs)} ms; " +
+                    "pipelined ${"%.2f".format(piped.msPerFrame)} ms per frame$gpuPart$verdict; " +
+                    "latency (glFinish per frame) mean ${"%.2f".format(times.average())} ms, p50 ${p(times, 50)}, " +
+                    "p95 ${p(times, 95)}, max ${"%.2f".format(times.last())}",
+            )
+        } finally {
+            renderer.close()
+        }
+    }
+
+    private companion object {
+        const val TAG = "REVEAL_BENCH"
+        const val WIDTH = 2400
+        const val HEIGHT = 1600
+        const val FRAMES = 120
+        const val WARMUP_MS = 2000L
+        const val NANOS_PER_MS = 1_000_000L
+        const val PROXY_SCALE = 2.5f
+
+        /** The editor's photo frame on the owner's phone (S24 Ultra at 1080 x 2340, a 3:2 photo in portrait). */
+        const val FRAME = "1080x720"
+        const val TARGET_P50 = 8.3f
+        const val TARGET_P95 = 12f
+        const val MS_PER_S = 1000L
+
+        val ALL_DETAIL = Detail(nrLuminance = 40f, nrColour = 50f, sharpenAmount = 50f, sharpenMasking = 30f)
+        val ALL_EFFECTS = Effects(texture = 30f, clarity = 25f, dehaze = 20f, vignetteAmount = -30f, grainAmount = 25f)
+
+        /** Every Detail and Effects slider: name and the recipe at drag position t in [0, 1]. */
+        val SLIDERS: List<Pair<String, (Recipe, Float) -> Recipe>> = listOf(
             "luminance" to { r, t -> r.copy(detail = r.detail.copy(nrLuminance = 100f * t)) },
             "luminance detail" to { r, t -> r.copy(detail = r.detail.copy(nrLuminanceDetail = 100f * t)) },
             "luminance contrast" to { r, t -> r.copy(detail = r.detail.copy(nrLuminanceContrast = 100f * t)) },
@@ -206,120 +422,5 @@ class PipelineBenchmark {
             "vignette" to { r, t -> r.copy(effects = r.effects.copy(vignetteAmount = -100f + 200f * t)) },
             "grain" to { r, t -> r.copy(effects = r.effects.copy(grainAmount = 1f + 99f * t)) },
         )
-        val image = noisy()
-        val profile = InstrumentationRegistry.getArguments().getString("profile") == "true"
-        for ((name, at) in sliders) {
-            if (profile) {
-                profileDrag(name, image) { at(base, it) }
-                continue
-            }
-            drag("drag $name (Detail + Effects on, proxy of 24 MP)", image, PROXY_SCALE) {
-                at(base, it)
-            }
-        }
-    }
-
-    /**
-     * Dragging the Transform's vertical slider (docs/adr/0015) on a photo with lens corrections and CA removal: the
-     * stage is cached, every frame is the output pass through the warp (three Catmull-Rom samples per pixel).
-     */
-    @Test
-    fun transformDragFrameTime(): Unit = runBlocking {
-        val image = SyntheticImages.scene(WIDTH, HEIGHT).withLens(GpuParityTest.PARITY_LENS)
-        val transform = { t: Float ->
-            Recipe(
-                optics = Optics(lensCorrections = true, removeCa = true),
-                geometry = Geometry(transform = Transform(vertical = -40f + 80f * t, scale = 110f)),
-            )
-        }
-        // 1:1 into a 2400 x 1600 target (every pixel three Catmull-Rom samples: the worst case, an export tile).
-        drag("transform vertical 1:1 (lens + CA on)", image, PROXY_SCALE, transform)
-        // As the editor shows it: the whole photo fitted to a phone's photo area (minified, explicit LOD).
-        dragView("transform vertical, fit view (lens + CA on)", image, transform)
-        drag("lens distortion amount", image, PROXY_SCALE) {
-            Recipe(optics = Optics(lensCorrections = true, distortionPercent = 200f * it))
-        }
-        drag("defringe purple amount (proxy scale)", image, PROXY_SCALE) {
-            Recipe(optics = Optics(purpleAmount = 20f * it))
-        }
-    }
-
-    /**
-     * [drag] as the editor draws it: the output pass into a [VIEW_W] x [VIEW_H] target with the photo fitted (a phone's
-     * photo area), stage 1 re-run only when needed, `glFinish` after each frame (no readback).
-     */
-    private suspend fun dragView(name: String, image: PipelineInput, recipeAt: (Float) -> Recipe) {
-        val renderer = GpuDevelopRenderer.create()
-        try {
-            renderer.setInput(image, PROXY_SCALE)
-            val scale = minOf(VIEW_W.toFloat() / image.width, VIEW_H.toFloat() / image.height)
-            val view = ViewTransform(scale, image.width / 2f, image.height / 2f)
-            val sweep = List(FRAMES) { recipeAt(it.toFloat() / (FRAMES - 1)) }
-            renderer.benchmarkView(sweep.take(WARMUP), view, VIEW_W, VIEW_H)
-            val times = renderer.benchmarkView(sweep, view, VIEW_W, VIEW_H).sorted()
-            Log.i(
-                TAG,
-                "$name: ${renderer.info.renderer} ${VIEW_W}x$VIEW_H view of ${image.width}x${image.height}: " +
-                    "frame mean ${"%.2f".format(times.average())} ms, p50 ${"%.2f".format(times[times.size / 2])}, " +
-                    "p95 ${"%.2f".format(times[(times.size * 95) / 100])}, max ${"%.2f".format(times.last())}",
-            )
-        } finally {
-            renderer.close()
-        }
-    }
-
-    private fun noisy() = SyntheticImages.noisyCard(WIDTH, HEIGHT, seed = 5)
-
-    /** [drag] with `glFinish` after every section (`-e profile true`): mean ms per pass, `REVEAL_BENCH profile`. */
-    private suspend fun profileDrag(name: String, image: PipelineInput, recipeAt: (Float) -> Recipe) {
-        val renderer = GpuDevelopRenderer.create()
-        try {
-            renderer.setInput(image, PROXY_SCALE)
-            val sweep = List(FRAMES) { recipeAt(it.toFloat() / (FRAMES - 1)) }
-            renderer.benchmark(sweep.take(WARMUP))
-            renderer.profilePasses = true
-            renderer.benchmark(sweep)
-            val sections = renderer.passProfile().entries.joinToString { (k, v) -> "$k %.2f".format(v) }
-            Log.i(TAG, "profile $name: $sections")
-        } finally {
-            renderer.close()
-        }
-    }
-
-    private suspend fun drag(name: String, image: PipelineInput, pixelScale: Float = 1f, recipeAt: (Float) -> Recipe) {
-        val renderer = GpuDevelopRenderer.create()
-        try {
-            val uploadStart = System.nanoTime()
-            renderer.setInput(image, pixelScale)
-            renderer.benchmark(listOf(Recipe()))
-            val uploadMs = (System.nanoTime() - uploadStart) / 1e6
-            val sweep = List(FRAMES) { recipeAt(it.toFloat() / (FRAMES - 1)) }
-            renderer.benchmark(sweep.take(WARMUP))
-            val times = renderer.benchmark(sweep).sorted()
-            val gpu = "${renderer.info.renderer} (${renderer.info.version})"
-            val mean = "%.2f".format(times.average())
-            val p50 = "%.2f".format(times[times.size / 2])
-            val p95 = "%.2f".format(times[(times.size * 95) / 100])
-            val max = "%.2f".format(times.last())
-            val first = "%.1f".format(uploadMs)
-            Log.i(
-                TAG,
-                "$name: $gpu ${image.width}x${image.height}: upload+first frame $first ms, " +
-                    "frame mean $mean ms, p50 $p50, p95 $p95, max $max",
-            )
-        } finally {
-            renderer.close()
-        }
-    }
-
-    private companion object {
-        const val TAG = "REVEAL_BENCH"
-        const val VIEW_W = 1080
-        const val VIEW_H = 1500
-        const val WIDTH = 2400
-        const val HEIGHT = 1600
-        const val FRAMES = 120
-        const val WARMUP = 10
-        const val PROXY_SCALE = 2.5f
     }
 }

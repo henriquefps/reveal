@@ -4,6 +4,7 @@ import android.util.Log
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.hasTestTag
+import androidx.compose.ui.test.isEnabled
 import androidx.compose.ui.test.junit4.v2.createEmptyComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
@@ -119,10 +120,15 @@ class ColourToolsInteractionTest {
     @Test
     fun blackAndWhiteAutoMixWritesAGreyMix() = withPhoto {
         selectTool(ToolId.COLOUR)
-        compose.onNodeWithTag(EditorTags.treatment(Treatment.BLACK_WHITE)).performClick()
-        compose.waitForIdle()
-        assertThat(committed.profile.treatment).isEqualTo(Treatment.BLACK_WHITE)
+        // Every node is awaited (present and enabled) before it is touched: the panel, the grey mixer's row (shown
+        // once the treatment is committed) and the sub-panel's Auto (enabled once the Auto sample is in memory) appear
+        // after state changes that `waitForIdle` does not cover on a fast device.
+        val blackWhite = EditorTags.treatment(Treatment.BLACK_WHITE)
+        awaitEnabled(blackWhite)
+        compose.onNodeWithTag(blackWhite).performScrollTo().performClick()
+        compose.waitUntil(TIMEOUT_MS) { committed.profile.treatment == Treatment.BLACK_WHITE }
         openRow(EditorTags.GREY_MIXER_ROW)
+        awaitEnabled(EditorTags.AUTO_MIX)
         compose.onNodeWithTag(EditorTags.AUTO_MIX).performClick()
         compose.waitUntil(TIMEOUT_MS) { !committed.colour.greyMixer.isNeutral }
         Log.i(TAG, "auto mix: ${committed.colour.greyMixer}")
@@ -150,15 +156,21 @@ class ColourToolsInteractionTest {
     }
 
     private fun selectTool(tool: ToolId) {
+        awaitEnabled(EditorTags.tool(tool))
         compose.onNodeWithTag(EditorTags.tool(tool)).performClick()
         compose.waitForIdle()
     }
 
     private fun openRow(tag: String) {
-        compose.waitUntilAtLeastOneExists(hasTestTag(tag), TIMEOUT_MS)
+        awaitEnabled(tag)
         compose.onNodeWithTag(tag).performScrollTo().performClick()
         compose.waitForIdle()
         Thread.sleep(SETTLE_MS)
+    }
+
+    /** Waits until exactly one node with [tag] exists and is enabled (a condition wait, not a sleep). */
+    private fun awaitEnabled(tag: String) {
+        compose.waitUntilExactlyOneExists(hasTestTag(tag) and isEnabled(), TIMEOUT_MS)
     }
 
     /** Waits until the working recipe is committed and differs from where the gesture started (or is equal again). */

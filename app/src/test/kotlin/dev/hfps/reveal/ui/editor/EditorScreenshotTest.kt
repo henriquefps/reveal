@@ -23,6 +23,7 @@ import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import com.github.takahirom.roborazzi.RoborazziOptions
 import com.github.takahirom.roborazzi.captureRoboImage
 import dev.hfps.reveal.designsystem.components.slider.NumericInputContent
 import dev.hfps.reveal.designsystem.theme.EditorTheme
@@ -151,6 +152,16 @@ class EditorTabletScreenshotTest : EditorScreenshotBase("tablet") {
 }
 
 abstract class EditorScreenshotBase(private val size: String) {
+    private companion object {
+        /**
+         * Share of pixels allowed to differ. The histogram is drawn on an offscreen layer with blended paths, and
+         * Skia's software rasterizer anti-aliases those edges differently on Linux (CI) and macOS; nothing else in
+         * the editor differs between the two. 2 % of the frame is far above the histogram's edge pixels and far
+         * below any layout, colour or text regression.
+         */
+        const val ANTIALIAS_TOLERANCE = 0.02f
+    }
+
     @get:Rule
     val composeRule = createComposeRule()
 
@@ -160,7 +171,12 @@ abstract class EditorScreenshotBase(private val size: String) {
     }
 
     protected fun capture(name: String) {
-        composeRule.onRoot().captureRoboImage("src/test/screenshots/editor/${size}_$name.png")
+        composeRule.onRoot().captureRoboImage(
+            "src/test/screenshots/editor/${size}_$name.png",
+            roborazziOptions = RoborazziOptions(
+                compareOptions = RoborazziOptions.CompareOptions(changeThreshold = ANTIALIAS_TOLERANCE),
+            ),
+        )
     }
 
     @Composable

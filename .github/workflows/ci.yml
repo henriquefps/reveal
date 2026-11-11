@@ -26,5 +26,14 @@ jobs:
       # No secrets here: the release is signed locally with `skv run reveal -- ./gradlew :app:assembleRelease`.
       - name: Quality gates (unit tests, screenshots, lint, ktlint, detekt)
         run: ./gradlew qa
+      - name: Upload screenshot diffs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: roborazzi-diffs
+          path: |
+            **/build/outputs/roborazzi/**
+            **/build/reports/tests/**
+          if-no-files-found: ignore
       - name: Debug build
         run: ./gradlew :app:assembleDebug

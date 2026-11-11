@@ -36,7 +36,7 @@ class OpenPhotoFlowTest {
     @Test
     fun anUneditedJpegIsShownAsItsSourceWithinOneLevel() {
         val jpeg = TestPhotos.syntheticJpeg()
-        val uri = TestPhotos.insert("reveal-card.jpg", "image/jpeg", jpeg)
+        val uri = TestPhotos.insert(TestPhotos.uniqueName("reveal-card.jpg"), "image/jpeg", jpeg)
         try {
             TestPhotos.launchView(uri, "image/jpeg").use {
                 compose.waitUntilAtLeastOneExists(hasTestTag(EditorTags.DEVELOPED), TIMEOUT_MS)
@@ -70,7 +70,7 @@ class OpenPhotoFlowTest {
     fun aPublicSonyArwOpensWithItsPreviewThenTheDevelopedFrame() {
         val sample = TestPhotos.sample(ARW_SAMPLE)
         assumeTrue("push $ARW_SAMPLE into files/samples (CLAUDE.md)", sample != null)
-        val uri = TestPhotos.insert("DSC00002.ARW", "image/x-sony-arw", sample!!)
+        val uri = TestPhotos.insert(TestPhotos.uniqueName("DSC00002.ARW"), "image/x-sony-arw", sample!!)
         try {
             TestPhotos.launchView(uri, "image/x-sony-arw").use {
                 compose.waitUntilAtLeastOneExists(hasTestTag(EditorTags.DEVELOPED), TIMEOUT_MS)
@@ -88,7 +88,7 @@ class OpenPhotoFlowTest {
     fun aDamagedRawShowsTheErrorState() {
         // A TIFF header and then garbage: classified as a RAW by name and magic, rejected by LibRaw.
         val bytes = byteArrayOf(0x49, 0x49, 0x2A, 0x00, 0x08, 0, 0, 0) + ByteArray(64 * 1024) { (it * 31).toByte() }
-        val uri = TestPhotos.insert("broken.ARW", "image/x-sony-arw", bytes)
+        val uri = TestPhotos.insert(TestPhotos.uniqueName("broken.ARW"), "image/x-sony-arw", bytes)
         try {
             TestPhotos.launchView(uri, "image/x-sony-arw").use {
                 compose.waitUntilAtLeastOneExists(hasTestTag(EditorTags.ERROR), TIMEOUT_MS)
@@ -101,7 +101,7 @@ class OpenPhotoFlowTest {
 
     @Test
     fun aFileThatIsNotAnImageShowsTheErrorState() {
-        val uri = TestPhotos.insert("notes.jpg", "image/jpeg", "not a photo".toByteArray())
+        val uri = TestPhotos.insert(TestPhotos.uniqueName("notes.jpg"), "image/jpeg", "not a photo".toByteArray())
         try {
             TestPhotos.launchView(uri, "image/jpeg").use {
                 compose.waitUntilAtLeastOneExists(hasTestTag(EditorTags.ERROR), TIMEOUT_MS)

@@ -5,7 +5,9 @@ import android.database.Cursor
 import android.net.Uri
 import android.provider.DocumentsContract
 import android.provider.DocumentsContract.Document
+import android.util.Log
 import dev.hfps.image.ImageInput
+import dev.hfps.image.source.FileFingerprint
 import java.io.FileNotFoundException
 import java.io.IOException
 
@@ -20,6 +22,14 @@ data class DocumentEntry(
 ) {
     val isDirectory: Boolean get() = mimeType == Document.MIME_TYPE_DIR
 }
+
+/**
+ * The content fingerprint of a document (`FileFingerprint`: size, first and last MiB; ADR 0006 "Identity"), or null
+ * when it cannot be read. Blocks: run it on an IO dispatcher.
+ */
+fun DocumentTree.fingerprint(documentId: String, name: String): String? = runCatching {
+    openInput(documentId, name).use { input -> input.withSource(FileFingerprint::of) }
+}.onFailure { Log.i("RevealIdentity", "No fingerprint for a document: ${it.javaClass.simpleName}") }.getOrNull()
 
 /**
  * Read (and sidecar write) access to one added folder. The SAF implementation is [SafDocumentTree]; tests use an

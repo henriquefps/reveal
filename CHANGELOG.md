@@ -31,6 +31,15 @@ All notable changes to Reveal are documented here. The format follows
   white balance when it is on Auto) from an analysis of the photo; the Light panel's Auto sets the Light sliders
   only. The result is ordinary slider values, one undoable step, and the same every time you tap it.
 
+### Fixed
+- A photo opened from another app could open with the edits and history of a different photo that had the same file
+  name (cameras repeat `DSC00001.JPG` after a counter reset; two memory cards). Photos are now recognised by their
+  content: the same photo keeps its edits even when it comes through another app or under another name, and a
+  different file never inherits another one's edits.
+- Cancelling an export while it was rendering could crash the app.
+- The photo info sheet sometimes needed two presses of back (or two back gestures) to close on phones with a shorter
+  screen or a larger font; one back now closes every sheet.
+
 ## [0.1.1] - 2026-11-10
 
 ### Fixed

@@ -6,6 +6,7 @@ import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.google.common.truth.Truth.assertThat
 import dev.hfps.image.format.ExifTime
+import dev.hfps.image.source.FileFingerprint
 import dev.hfps.reveal.data.FileDocumentTree
 import dev.hfps.reveal.data.db.PhotoQuerySql
 import dev.hfps.reveal.data.db.RevealDatabase
@@ -23,6 +24,7 @@ import dev.hfps.reveal.data.synthetic.SyntheticShoot
 import java.io.File
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.yield
 import org.junit.After
@@ -199,6 +201,35 @@ class LibraryIndexerTest {
         index()
         assertThat(rows().first { it.name == "DSC00001.ARW" }.rating).isEqualTo(5)
         assertThat(db.photoDao().get(firstIds.getValue("DSC00001.ARW"))!!.xmpDocumentId).isNull()
+    }
+
+    @Test
+    fun `fingerprints fill after a walk and are cleared and refilled when a file changes`() = runTest {
+        jpeg("A.JPG", "2026:08:07 10:00:00")
+        raw("DSC00001.ARW", "2026:08:07 10:00:01")
+        val indexer = LibraryIndexer(db)
+        val tree = FileDocumentTree(root)
+        indexer.index(sourceId, tree)
+        fun prints() = runBlocking {
+            rows().flatMap { db.photoDao().files(it.id) }.associate { it.name to it.fingerprint }
+        }
+        assertThat(prints().values.toSet()).containsExactly(null)
+
+        assertThat(indexer.fillFingerprints(sourceId, tree)).isEqualTo(2)
+        val first = prints()
+        assertThat(first.getValue("A.JPG")).isEqualTo(FileFingerprint.of(File(root, "A.JPG").readBytes()))
+        assertThat(first.getValue("DSC00001.ARW")).startsWith("v1:")
+        // Nothing left: a second fill reads nothing.
+        assertThat(indexer.fillFingerprints(sourceId, tree)).isEqualTo(0)
+
+        jpeg("A.JPG", "2026:08:07 11:00:00")
+        File(root, "A.JPG").setLastModified(2_000_000)
+        indexer.index(sourceId, tree)
+        assertThat(prints()["A.JPG"]).isNull()
+        assertThat(prints()["DSC00001.ARW"]).isEqualTo(first["DSC00001.ARW"])
+        assertThat(indexer.fillFingerprints(sourceId, tree)).isEqualTo(1)
+        assertThat(prints().getValue("A.JPG")).isEqualTo(FileFingerprint.of(File(root, "A.JPG").readBytes()))
+        assertThat(prints().getValue("A.JPG")).isNotEqualTo(first["A.JPG"])
     }
 
     @Test

@@ -116,6 +116,7 @@ data class PhotoEntity(
     indices = [
         Index(value = ["source_id", "relative_path"], unique = true),
         Index(value = ["photo_id"]),
+        Index(value = ["fingerprint"]),
     ],
 )
 data class PhotoFileEntity(
@@ -128,6 +129,12 @@ data class PhotoFileEntity(
     val size: Long,
     val modified: Long,
     val role: FileRole,
+    /**
+     * Content fingerprint (`FileFingerprint`, `v1:` + SHA-256 of size, head and tail): the file's identity across
+     * names, URIs and sources (ADR 0006 "Identity"). Null until computed (folders fill it in the background after a
+     * walk) or when the file could not be read.
+     */
+    val fingerprint: String? = null,
 )
 
 /**

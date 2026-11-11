@@ -110,7 +110,7 @@ class CropModeTest {
     }
 
     private fun withPhoto(block: () -> Unit) {
-        val uri = TestPhotos.insert("reveal-crop.jpg", "image/jpeg", TestPhotos.syntheticJpeg())
+        val uri = TestPhotos.insert(TestPhotos.uniqueName("reveal-crop.jpg"), "image/jpeg", TestPhotos.syntheticJpeg())
         try {
             TestPhotos.launchView(uri, "image/jpeg").use {
                 compose.waitUntilAtLeastOneExists(hasTestTag(EditorTags.DEVELOPED), TIMEOUT_MS)

@@ -13,6 +13,8 @@ import dev.hfps.reveal.MainActivity
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.InputStream
+import java.io.SequenceInputStream
+import java.util.UUID
 
 /**
  * Test photos served through a real content provider: they are inserted into MediaStore's Downloads collection (the
@@ -29,8 +31,14 @@ object TestPhotos {
     fun privateFiles(): List<File> =
         File(context.filesDir, "private").listFiles()?.filter { it.isFile }?.sortedBy { it.name }.orEmpty()
 
-    /** Inserts [data] as a download named [name] and returns its content URI. */
-    fun insert(name: String, mimeType: String, data: InputStream): Uri {
+    /**
+     * Inserts [data] as a download named [name] and returns its content URI. An image gets a unique trailer after its
+     * data (decoders ignore bytes after a JPEG's EOI or outside a TIFF's offsets): Reveal recognises a photo by its
+     * content fingerprint (ADR 0006 "Identity"), and edits persist per photo, so without it a run would reopen the
+     * previous run's photo, edits and history (the device keeps app data between runs).
+     */
+    fun insert(name: String, mimeType: String, data: InputStream, unique: Boolean = true): Uri {
+        val content = if (unique && mimeType.startsWith("image/")) SequenceInputStream(data, uniqueTrailer()) else data
         val resolver = context.contentResolver
         val values = ContentValues().apply {
             put(MediaStore.MediaColumns.DISPLAY_NAME, name)
@@ -39,14 +47,26 @@ object TestPhotos {
             put(MediaStore.MediaColumns.IS_PENDING, 1)
         }
         val uri = checkNotNull(resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)) { "insert $name" }
-        checkNotNull(resolver.openOutputStream(uri)).use { out -> data.use { it.copyTo(out) } }
+        checkNotNull(resolver.openOutputStream(uri)).use { out -> content.use { it.copyTo(out) } }
         resolver.update(uri, ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING, 0) }, null, null)
         return uri
     }
 
+    /** A per-call unique tail (see [insert]). */
+    private fun uniqueTrailer() =
+        "\nreveal-test ${System.nanoTime()} ${UUID.randomUUID()}\n".toByteArray().inputStream()
+
+    /** [name] with a unique part before its extension, for tests that must not meet an earlier run's photo. */
+    fun uniqueName(name: String): String =
+        "${name.substringBeforeLast('.')}-${System.nanoTime()}.${name.substringAfterLast('.')}"
+
     fun insert(name: String, mimeType: String, file: File): Uri = insert(name, mimeType, file.inputStream())
 
-    fun insert(name: String, mimeType: String, bytes: ByteArray): Uri = insert(name, mimeType, bytes.inputStream())
+    fun insert(name: String, mimeType: String, bytes: ByteArray, unique: Boolean = true): Uri =
+        insert(name, mimeType, bytes.inputStream(), unique)
+
+    /** [bytes] made a picture no earlier run has inserted (see [insert]); insert it with `unique = false` to reuse. */
+    fun uniqueContent(bytes: ByteArray): ByteArray = bytes + uniqueTrailer().readBytes()
 
     fun delete(uri: Uri) {
         runCatching { context.contentResolver.delete(uri, null, null) }

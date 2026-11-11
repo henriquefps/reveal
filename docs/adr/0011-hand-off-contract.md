@@ -65,8 +65,16 @@ A hand-off becomes rows of the library (ADR 0006 tables) under one special sourc
 the sources list as "Opened from other apps", never as a folder). Its `DocumentTree` (`HandoffTree`) uses the content URI
 as the document id, so thumbnails, the viewer, the editor, ratings and edit history work as for any folder. The grid
 lists **most recent hand-off first** (`photos.handoff_at`, with a header per batch: the title or the arrival time),
-files in a batch by name. Sending a photo again moves it to the top, keeps its edits and history, and replaces its file
-set. Edits and ratings of a hand-off photo are never lost by a new hand-off.
+files in a batch by name.
+
+**Which photo a hand-off is** (ADR 0006 "Identity"): files are recognised by their **content fingerprint**, never by
+name. Sending the same file again (same content, through any URI or app, under any name) moves its photo to the top,
+keeps its edits and history, and replaces its file set with the URIs just sent. A different file with a name already
+seen (`DSC00001.JPG` from a second card) is a new photo with an empty history, and so is a file replaced under the
+same URI. A photo of an added folder handed over by another app opens as that folder photo, with its edits. Pairing
+by stem applies only to the files of one request; a pair completed later (the RAW first, RAW+JPEG afterwards) joins
+the earlier photo because one of its files has the same content. Edits and ratings of a hand-off photo are never
+lost to another file; a photo whose only file was replaced under its URI is removed, since its picture is gone.
 
 What happens when it arrives:
 
@@ -164,7 +172,10 @@ result: Hoard re-reads sidecars (`xmp:Rating`) when it comes back to the foregro
 ## Consequences
 
 - Hoard's side is one function (the example) and a `<queries>` element; no Reveal library is needed.
-- DB version 3 (auto-migration: `sources.kind`, `photos.handoff_at`, `photos.handoff_title`).
+- DB version 3 (auto-migration: `sources.kind`, `photos.handoff_at`, `photos.handoff_title`); version 4 adds
+  `photo_files.fingerprint` (ADR 0006 "Identity").
+- Receiving reads up to 2 MiB per new file to fingerprint it (4 at a time); a URI already known with the same size and
+  mtime reuses its stored fingerprint.
 - Hand-offs are library photos like any other: they appear in "All photos" and "Recent", can be rated, edited and
   removed, and keep their edit history across hand-offs of the same photo.
 - The instrumented test cannot send from another uid; cross-app grants are the platform's, verified by Hoard's side.

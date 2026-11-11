@@ -21,6 +21,7 @@ import dev.hfps.reveal.data.model.PhotoFormat
 import dev.hfps.reveal.data.model.PickFlag
 import dev.hfps.reveal.data.storage.DocumentEntry
 import dev.hfps.reveal.data.storage.DocumentTree
+import dev.hfps.reveal.data.storage.fingerprint
 import dev.hfps.reveal.data.xmp.XmpFields
 import dev.hfps.reveal.data.xmp.XmpReader
 import java.util.TimeZone
@@ -102,6 +103,35 @@ class LibraryIndexer(private val db: RevealDatabase, private val clock: () -> Lo
 
     /** Reads the headers of the photos of [sourceId] still `PENDING` (the hand-off source has no walk, ADR 0011). */
     suspend fun readMetadata(sourceId: Long, tree: DocumentTree): Int = readHeaders(sourceId, tree) {}
+
+    /**
+     * Computes the content fingerprint (ADR 0006 "Identity") of every file of [sourceId] that has none yet: new or
+     * changed files after a walk. Runs after indexing, in the background, [FINGERPRINT_PARALLELISM] at a time and
+     * cancellable between batches; reads at most 2 MiB per file. A file that cannot be read stays without one and is
+     * tried again after the next walk; a file that changed meanwhile is not overwritten (`setFingerprint` checks
+     * size and mtime). Returns how many were stored.
+     */
+    suspend fun fillFingerprints(sourceId: Long, tree: DocumentTree): Int {
+        val pending = photos.unprintedFiles(sourceId)
+        val gate = Semaphore(FINGERPRINT_PARALLELISM)
+        var stored = 0
+        pending.chunked(HEADER_BATCH).forEach { batch ->
+            currentCoroutineContext().ensureActive()
+            val prints = coroutineScope {
+                batch.map { file ->
+                    async { gate.withPermit { file to tree.fingerprint(file.documentId, file.name) } }
+                }.awaitAll()
+            }
+            db.withTransaction {
+                for ((file, print) in prints) {
+                    if (print == null) continue
+                    photos.setFingerprint(file.id, file.size, file.modified, print)
+                    stored++
+                }
+            }
+        }
+        return stored
+    }
 
     // ------------------------------------------------------------------ 1. walk
 
@@ -420,6 +450,7 @@ class LibraryIndexer(private val db: RevealDatabase, private val clock: () -> Lo
         private const val SQL_ARGS = 900
         private const val HEADER_BATCH = 64
         private const val HEADER_PARALLELISM = 4
+        private const val FINGERPRINT_PARALLELISM = 2
         private const val MAX_ORIENTATION = 8
         const val MAX_SIDECAR_BYTES = 1024 * 1024
 

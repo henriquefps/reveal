@@ -1,5 +1,6 @@
 package dev.hfps.reveal.export
 
+import android.Manifest
 import android.net.Uri
 import android.provider.MediaStore
 import androidx.compose.ui.test.ExperimentalTestApi
@@ -9,10 +10,12 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.test.platform.app.InstrumentationRegistry
 import com.google.common.truth.Truth.assertThat
 import dev.hfps.reveal.editor.TestPhotos
 import dev.hfps.reveal.feature.editor.EditorTags
 import dev.hfps.reveal.feature.export.ui.ExportTags
+import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -23,6 +26,19 @@ import org.junit.runner.RunWith
 class ExportSheetTest {
     @get:Rule
     val compose = createEmptyComposeRule()
+
+    /**
+     * Export asks for the notification permission the first time; its system dialog would cover the editor on a
+     * fresh install. Granted up front, so the test does not depend on what an earlier run (or the owner) answered.
+     */
+    @Before
+    fun grantNotifications() {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        instrumentation.uiAutomation.grantRuntimePermission(
+            instrumentation.targetContext.packageName,
+            Manifest.permission.POST_NOTIFICATIONS,
+        )
+    }
 
     @Test
     fun exportFromTheEditorSheetToTheGallery() {

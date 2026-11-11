@@ -269,7 +269,7 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         uploadUbo(outputUbo, outputBlock(image.width, image.height, view, width, height, settings, surround))
         GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, stageTex)
-        val magnified = view.scale >= NEAREST_ABOVE_SCALE
+        val magnified = OutputSampling.nearestMagnification(view.scale)
         GLES30.glTexParameteri(
             GLES30.GL_TEXTURE_2D,
             GLES30.GL_TEXTURE_MAG_FILTER,
@@ -500,7 +500,6 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         private const val RGBA = 4
         private const val UPLOAD_ROWS = 128
         private const val NANOS_PER_MS = 1_000_000f
-        private const val NEAREST_ABOVE_SCALE = 2f
 
         /** Default surround outside the image, display-encoded `#1C1C1C` (the editor's `EditorNeutrals.Surround`). */
         private val DEFAULT_SURROUND = floatArrayOf(0x1c / 255f, 0x1c / 255f, 0x1c / 255f)
@@ -545,10 +544,13 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         ): ByteBuffer {
             val b = ByteBuffer.allocateDirect(OUTPUT_BLOCK_FLOATS * Float.SIZE_BYTES).order(ByteOrder.nativeOrder())
             putMat4(b, OutputTransformOp.workingToOutput(settings.space).toFloatArray())
-            b.putFloat(imageWidth.toFloat()).putFloat(imageHeight.toFloat()).putFloat(view.scale).putFloat(0f)
+            b.putFloat(
+                imageWidth.toFloat(),
+            ).putFloat(imageHeight.toFloat()).putFloat(view.scale).putFloat(OutputSampling.lod(view.scale))
             b.putFloat(view.centerX).putFloat(view.centerY).putFloat(width.toFloat()).putFloat(height.toFloat())
             b.putFloat(surround[0]).putFloat(surround[1]).putFloat(surround[2]).putFloat(1f)
-            b.putInt(settings.ditherSeed).putInt(if (settings.dither) 1 else 0).putInt(0).putInt(0)
+            b.putInt(settings.ditherSeed).putInt(if (settings.dither) 1 else 0)
+                .putInt(OutputSampling.mode(view.scale)).putInt(0)
             b.flip()
             return b
         }

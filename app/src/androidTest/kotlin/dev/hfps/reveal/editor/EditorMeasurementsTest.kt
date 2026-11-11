@@ -16,6 +16,7 @@ import com.google.common.truth.Truth.assertThat
 import dev.hfps.reveal.MainActivity
 import dev.hfps.reveal.feature.editor.EditorMetrics
 import dev.hfps.reveal.feature.editor.EditorTags
+import dev.hfps.reveal.pipeline.gl.FrameStats
 import java.io.File
 import java.util.Locale
 import kotlin.concurrent.thread
@@ -94,7 +95,7 @@ class EditorMeasurementsTest {
                 assertThat(frames.size).isAtLeast(MIN_FRAMES)
                 val intervals = times.zipWithNext { a, b -> (b - a) / NANOS_PER_MS }.sorted()
                 val gpu = frames.map { it.gpuWallMs }.sorted()
-                val coalesced = frames.last().updates - frames.first().updates - (frames.size - 1)
+                val coalesced = coalescedUpdates(frames)
                 val line = String.format(
                     Locale.ROOT,
                     "%s %s | drag 4 s: %d frames (%d updates coalesced), interval p50 %.1f p95 %.1f max %.1f ms, " +
@@ -179,4 +180,9 @@ class EditorMeasurementsTest {
         const val TIMEOUT_MS = 60_000L
         const val NANOS_PER_MS = 1_000_000f
     }
+
+    /** Updates the renderer coalesced: cumulative counters, not the number of polled samples (0 or more). */
+    private fun coalescedUpdates(frames: List<FrameStats>): Long =
+        (frames.last().updates - frames.first().updates - (frames.last().frames - frames.first().frames))
+            .coerceAtLeast(0L)
 }

@@ -86,3 +86,20 @@ adb -s emulator-<port> logcat -d -s REVEAL_PARITY REVEAL_BENCH     # measured er
 
 Debug canvas: `adb -s emulator-<port> shell am start -n dev.hfps.reveal.debug/dev.hfps.reveal.debug.PipelineDebugActivity`
 (debug build only: `app/src/debug`, hosting `EditorDebugScreen`, to be replaced by the editor in M1).
+
+## `:core:image` harness (ADR 0004)
+
+```sh
+scripts/fetch-samples.sh                                      # public CC0 RAWs (raw.pixls.us) into core/image/build/samples, checksummed
+scripts/emulator.sh create reveal-image && scripts/emulator.sh start reveal-image 5561
+./gradlew :core:image:assembleDebugAndroidTest
+adb -s emulator-5561 install -r -t core/image/build/outputs/apk/androidTest/debug/image-debug-androidTest.apk
+scripts/harness-push.sh emulator-5561 core/image/build/samples/*     # into the test app's files/samples (emulators only)
+adb -s emulator-5561 shell am instrument -w dev.hfps.image.test/androidx.test.runner.AndroidJUnitRunner   # all harness tests
+#   one class: -e class dev.hfps.image.MeasurementsHarnessTest ; results: adb logcat -d -s RevealHarness:I
+```
+
+Opt-in tests on the owner's photos (COPIES only, aggregates only, delete the copies afterwards, never commit or
+screenshot): JVM `REVEAL_ARW_DIR=<dir of copies> ./gradlew :core:image:testDebugUnitTest -i` (prints `REALSHOOT ...`);
+device: push the copies to `files/private` with `run-as`, run with `-e dir /data/user/0/dev.hfps.image.test/files/private
+-e anonymize true` (logs `file#N`), then `run-as dev.hfps.image.test rm -rf files/private`.

@@ -17,4 +17,33 @@ Start with `docs/plan/README.md` (the brief), then `docs/plan/` and `docs/adr/`.
 
 ## Commands
 
-Added by M0 (Gradle tasks, emulator setup, release build under `skv run reveal`).
+Setup once per worktree: `local.properties` (git-ignored) with `sdk.dir=/Users/henriquefps/Library/Android/sdk`, and
+`export JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home"` (no system JDK).
+
+```sh
+./gradlew :app:assembleDebug                      # debug APK, id dev.hfps.reveal.debug
+skv run reveal -- ./gradlew :app:assembleRelease  # signed release (REVEAL_KEYSTORE* from skv); unsigned without it
+./gradlew qa                                      # unit tests + screenshot verify + lint + ktlint + detekt, all modules
+./gradlew :<module>:qa                            # same, one module (e.g. :core:pipeline:qa)
+./gradlew ktlintFormat                            # auto-fix style
+./gradlew testDebugUnitTest                       # JVM unit tests only
+./gradlew :app:recordRoborazziDebug               # re-record screenshot goldens (app/src/test/screenshots)
+./gradlew :app:verifyRoborazziDebug               # compare against goldens
+ANDROID_SERIAL=emulator-<port> ./gradlew :app:connectedDebugAndroidTest :core:pipeline:connectedDebugAndroidTest
+```
+
+Emulator (own AVD, own port 5560-5590, headless, one per worker, delete when done; never the phone):
+
+```sh
+scripts/emulator.sh create reveal-<workstream>
+scripts/emulator.sh start  reveal-<workstream> <port>   # waits for boot
+adb -s emulator-<port> exec-out screencap -p > shot.png
+scripts/emulator.sh stop <port> && scripts/emulator.sh delete reveal-<workstream>
+```
+
+Signed release check: `apksigner verify --print-certs app/build/outputs/apk/release/app-release.apk` (SHA-256 should
+start `0d0c62a3...`). Only the orchestrator installs it on the phone. A connected test run uninstalls the debug app.
+
+Layout: `build-logic/` convention plugins, `gradle/libs.versions.toml` all versions, `config/detekt/detekt.yml`,
+`docs/adr/0001-stack-and-modules.md` (modules, DI, tests, versions). A module build file is plugins + namespace +
+dependencies. Add a Room schema change with a migration and the exported file in `core/data/schemas`.

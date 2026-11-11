@@ -12,3 +12,10 @@ captures
 *.keystore
 keystore.properties
 .playwright-mcp
+.pr-body.md
+.kotlin
+*.apk
+*.aab
+.vscode
+.fleet
+*.log

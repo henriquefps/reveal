@@ -106,6 +106,7 @@ class LibraryRepository(
     private val photoDao = db.photoDao()
     private val indexer = LibraryIndexer(db, clock)
     private val jobs = ConcurrentHashMap<Long, Job>()
+    private val fingerprintJobs = ConcurrentHashMap<Long, Job>()
     private val progress = MutableStateFlow<Map<Long, IndexProgress>>(emptyMap())
     private val reports = MutableStateFlow<Map<Long, IndexReport>>(emptyMap())
 
@@ -227,6 +228,7 @@ class LibraryRepository(
     /** Starts indexing [sourceId] unless a run is already going. */
     fun index(sourceId: Long): Job {
         jobs[sourceId]?.takeIf { it.isActive }?.let { return it }
+        fingerprintJobs.remove(sourceId)?.cancel()
         val job = scope.launch(Dispatchers.IO) {
             val source = sourceDao.get(sourceId) ?: return@launch
             progress.update { it + (sourceId to IndexProgress(dev.hfps.reveal.data.index.IndexPhase.LISTING, 0, 0)) }
@@ -237,6 +239,7 @@ class LibraryRepository(
                 sourceDao.setIndexed(sourceId, clock())
                 reports.update { it + (sourceId to report) }
                 Log.i(TAG, "Indexed source $sourceId: $report")
+                fingerprint(source)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: SecurityException) {
@@ -256,6 +259,26 @@ class LibraryRepository(
         jobs[sourceId] = job
         job.invokeOnCompletion { jobs.remove(sourceId, job) }
         return job
+    }
+
+    /**
+     * Fills the content fingerprints of [source]'s new or changed files (ADR 0006 "Identity") after a walk, in its own
+     * job so the library is "indexed" (and a rescan can start) without waiting for it; a new walk cancels it.
+     */
+    private fun fingerprint(source: SourceEntity) {
+        fingerprintJobs.remove(source.id)?.cancel()
+        val job = scope.launch(Dispatchers.IO) {
+            try {
+                val stored = indexer.fillFingerprints(source.id, trees.open(source))
+                if (stored > 0) Log.i(TAG, "Fingerprinted $stored files of source ${source.id}")
+            } catch (e: CancellationException) {
+                throw e
+            } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
+                Log.w(TAG, "Fingerprints of source ${source.id} stopped", e)
+            }
+        }
+        fingerprintJobs[source.id] = job
+        job.invokeOnCompletion { fingerprintJobs.remove(source.id, job) }
     }
 
     /** What the library showed last (an opaque string of the UI), so a fresh start reopens it. */

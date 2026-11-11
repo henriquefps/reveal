@@ -102,6 +102,35 @@ class EditorHistoryTest {
         }
     }
 
+    /**
+     * ADR 0006 "Identity": a photo is its content. Another file with the same name (a camera counter reset, two cards)
+     * opens clean; the same content through another URI (another app, another name) opens with its edits.
+     */
+    @Test
+    fun aPhotoIsRecognisedByItsContentNotItsName() {
+        val name = TestPhotos.uniqueName("DSC00001.JPG")
+        val content = TestPhotos.uniqueContent(TestPhotos.syntheticJpeg())
+        val first = TestPhotos.insert(name, "image/jpeg", content, unique = false)
+        val sameName = TestPhotos.insert(name, "image/jpeg", TestPhotos.syntheticJpeg(1000, 700))
+        val sameContent = TestPhotos.insert(TestPhotos.uniqueName("copy.jpg"), "image/jpeg", content, unique = false)
+        try {
+            open(first) {
+                typeExposure("+1")
+                assertThat(exposureValue).isEqualTo("+1.00")
+            }
+            open(sameName) {
+                assertThat(exposureValue).isEqualTo("0.00")
+                button(EditorTags.UNDO).assertIsNotEnabled()
+            }
+            open(sameContent) {
+                assertThat(exposureValue).isEqualTo("+1.00")
+                button(EditorTags.UNDO).assertIsEnabled()
+            }
+        } finally {
+            listOf(first, sameName, sameContent).forEach(TestPhotos::delete)
+        }
+    }
+
     private fun open(uri: Uri, block: () -> Unit) {
         TestPhotos.launchView(uri, "image/jpeg").use {
             compose.waitUntilAtLeastOneExists(hasTestTag(EditorTags.DEVELOPED), TIMEOUT_MS)

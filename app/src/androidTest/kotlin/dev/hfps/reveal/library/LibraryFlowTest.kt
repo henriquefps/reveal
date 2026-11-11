@@ -107,13 +107,16 @@ class LibraryFlowTest {
             compose.waitUntilAtLeastOneExists(hasText("SONY ZV-E10"), TIMEOUT_MS)
             compose.waitUntilAtLeastOneExists(hasText("E 16-50mm F3.5-5.6 OSS"), TIMEOUT_MS)
             shot("info")
-            // A real back key: the sheet's own window takes it first, as on a device.
+            // A real back key: the sheet's own window takes it first, as on a device. One back closes it, whatever
+            // the window height (RevealBottomSheet has no half-height stop for back to collapse to).
             Espresso.pressBack()
             compose.waitUntilDoesNotExist(hasTestTag(ViewerTags.INFO_SHEET), TIMEOUT_MS)
 
             compose.onNodeWithTag(ViewerTags.EDIT).performClick()
             // The synthetic ARW only carries a preview: the editor opens on the RAW and reports it cannot develop it.
-            compose.waitUntilAtLeastOneExists(hasText("DSC00001.ARW"), TIMEOUT_MS)
+            // The top bar shortens the name in the middle on narrow phones (DSC0…01.ARW); the full name is its
+            // content description.
+            compose.waitUntilAtLeastOneExists(hasContentDescription("DSC00001.ARW"), TIMEOUT_MS)
             compose.waitUntilAtLeastOneExists(
                 hasTestTag(EditorTags.ERROR) or hasTestTag(EditorTags.DEVELOPED),
                 TIMEOUT_MS,

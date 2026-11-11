@@ -1,6 +1,7 @@
 # ADR 0006: Library data model, indexing, XMP and thumbnails
 
-Status: accepted (M1, library). Date: 2026-11-11.
+Status: accepted (M1, library). Date: 2026-11-11. Amended 2026-11-11: file identity is a content fingerprint
+("Identity", DB version 4).
 
 ## Context
 
@@ -20,7 +21,7 @@ test assets of both the JVM and the device tests).
 | --- | --- | --- |
 | `sources` | an added folder: SAF tree URI (unique), root document id, display name, `volume_id` (`primary`, an SD/USB uuid, or null for other providers), `volume_name`, `state` (`AVAILABLE` / `UNPLUGGED` / `PERMISSION_LOST`), `writable`, `added_at`, `indexed_at` | |
 | `photos` | a **shot**: RAW, rendering, or RAW+JPEG pair (one row) | unique `(source_id, folder, stem_key)`; `sort_time`, `capture_time` (EXIF, camera clock as UTC ms incl. sub-seconds), `capture_offset`, `width`/`height`/`orientation`, `format` (`RAW_PAIR`, `RAW`, `JPEG`, `HEIF`, `PNG`, `WEBP`), `has_raw`, `rating` 0..5, `label`, `flag` (`NONE`/`PICK`/`REJECT`), `has_edit`, `metadata_state`, `xmp_document_id` + `xmp_modified`, `last_opened_at` (Recent), `hidden` ("remove from library") |
-| `photo_files` | one file of a photo; its **identity = source + relative path + size + mtime** | unique `(source_id, relative_path)`; `document_id`, `role` (`RAW`/`RENDERED`/`OTHER`) |
+| `photo_files` | one file of a photo, at a place (source + relative path) and with a **content fingerprint** (see "Identity") | unique `(source_id, relative_path)`; `document_id`, `role` (`RAW`/`RENDERED`/`OTHER`), `size`, `modified`, `fingerprint` (indexed, null until computed) |
 | `versions` | an independent edit of a photo; M1 creates exactly one per photo (position 0, `name` null) with the photo, M5 adds virtual copies | unique `(photo_id, position)` |
 | `recipes` | the committed recipe of a version: ADR 0003 JSON (`v` inside), `is_default`, `updated_at`. No row = the default recipe | PK `version_id` |
 | `history` | one committed step of a version (see "History") | unique `(version_id, position)` |
@@ -34,6 +35,34 @@ stored by name. `photos.has_edit` and `sort_time` are denormalised for the grid'
 **Why a photo and its files are two tables:** a pair has two files with two sizes and mtimes; the photo is the unit
 the user rates, edits and sees, the file is the unit the walk compares. A photo's key is its folder and lower-case
 stem, the pairing rule of Hoard ADR 0006 (`ShotPairing`, ported in `:core:image`).
+
+## Identity (DB version 4)
+
+A file is recognised by **what it contains**, not by its name or where it is: `photo_files.fingerprint` =
+`v1:` + hex SHA-256 over the file size (8 bytes, big-endian), the first 1 MiB and the last 1 MiB (the whole file
+after its size when it is at most 2 MiB). `FileFingerprint` (`:core:image/source`) computes it from any
+`RandomAccessSource` with at most 2 MiB of positional reads, never the whole of a 25-60 MB RAW. It is unique in
+practice: a camera file's head carries the EXIF capture time with sub-seconds, the body serial number and the
+shutter count, and its tail the end of the image data. **Known limit:** two files of the same size that differ only
+more than 1 MiB from both ends share a fingerprint (cameras do not produce them; a tool rewriting pixels in place
+without touching the header could); the `v1:` prefix lets a later scheme live beside stored values. Version 4 adds
+the nullable, indexed column (`AutoMigration(3, 4)`; existing rows stay null until filled).
+
+- **Hand-offs** (ADR 0011) find their photo by fingerprint: the photo that already holds the main file's content
+  (else another file of the shot) is reused with its edits and history, in any source. The same photo opened from
+  the gallery, a file manager or an SMB app (other URI, even another name) is one photo; two different files named
+  `DSC00001.JPG` (a counter reset, two cards) are two. A file replaced under the same URI has another fingerprint:
+  it leaves its old photo and becomes a new one, never inheriting the old recipe (the old photo, if it had no other
+  file, is removed: its picture no longer exists). A match in an added folder (available, not removed from the
+  library) opens that folder photo as it is. A row without a fingerprint (filed before version 4, or unreadable)
+  still matches by URI + size + mtime, the previous rule. A known URI with the same size and mtime reuses its stored
+  fingerprint instead of reading the file again.
+- **Folders** keep pairing and diffing by path (the walk compares size and mtime, see "Indexing"); their
+  fingerprints are filled **in the background after each walk** (`LibraryIndexer.fillFingerprints`, 2 files at a
+  time, cancellable, its own job so the library is "indexed" without waiting for it; a changed file's fingerprint is
+  cleared and computed again; a write checks size and mtime so it never stores a stale value). Matching library
+  photos across folders by fingerprint (a folder moved or renamed keeping its edits, duplicates) is **not done yet**;
+  it is the prerequisite for sync (M5+), where the fingerprint is the photo's key on the server.
 
 **"Remove from library"** sets `hidden`: the row stays (so a rescan does not bring the photo back) and the file is
 never touched. Removing a folder deletes its rows (edits included, after a confirmation) and releases the grant.
@@ -184,6 +213,9 @@ add (release build, real SD card).
 ## Consequences
 
 - One shared database owns the working copy of ratings and edits; sidecars are the portable copy.
-- A file renamed outside Reveal is a new photo (its edits stay with the old, now removed, row): identity is the path.
+- In an added folder, a file renamed or moved outside Reveal is still a new photo for now (its edits stay with the
+  old, removed row): folders match by path until cross-folder matching by fingerprint lands. A photo handed over by
+  another app keeps its edits when renamed or moved (it is matched by content), and a different file with a known
+  name never inherits another one's edits.
 - Editing a lone RAW at 100 % in the viewer waits for M2's tiles; pairs and JPEGs already zoom to real pixels.
 - Hoard reads `xmp:Rating` only; to round-trip picks it can read/write `digiKam:PickLabel` (noted for the hand-off).

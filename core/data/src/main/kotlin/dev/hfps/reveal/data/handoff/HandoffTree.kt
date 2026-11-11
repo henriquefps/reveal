@@ -2,6 +2,7 @@ package dev.hfps.reveal.data.handoff
 
 import android.content.ContentResolver
 import android.net.Uri
+import android.provider.MediaStore
 import android.provider.OpenableColumns
 import androidx.core.net.toUri
 import dev.hfps.image.ImageInput
@@ -23,27 +24,33 @@ class HandoffTree(private val resolver: ContentResolver) : DocumentTree {
 
     override fun stat(documentId: String): DocumentEntry? = stat(documentId.toUri())
 
-    /** Name, size and (when the provider has it) mtime of [uri]; null when it cannot be queried. */
-    fun stat(uri: Uri): DocumentEntry? =
-        query(uri, STAT_COLUMNS) ?: query(uri, arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE))
+    /**
+     * Name, size and (when the provider has it) mtime of [uri]; null when it cannot be queried. The mtime is
+     * `last_modified` (DocumentsProvider, ms), else `date_modified` (MediaStore, s), else unknown (0). Providers reject
+     * unknown columns, hence one query per shape.
+     */
+    fun stat(uri: Uri): DocumentEntry? = query(uri, STAT_COLUMNS, COLUMN_LAST_MODIFIED, 1)
+        ?: query(uri, MEDIA_STAT_COLUMNS, MediaStore.MediaColumns.DATE_MODIFIED, MILLIS_PER_SECOND)
+        ?: query(uri, arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE), null, 1)
 
-    private fun query(uri: Uri, columns: Array<String>): DocumentEntry? = runCatching {
-        resolver.query(uri, columns, null, null, null)?.use { c ->
-            if (!c.moveToFirst()) return@use null
-            val name = c.getColumnIndex(OpenableColumns.DISPLAY_NAME).takeIf { it >= 0 && !c.isNull(it) }
-                ?.let(c::getString)
-            val size = c.getColumnIndex(OpenableColumns.SIZE).takeIf { it >= 0 && !c.isNull(it) }?.let(c::getLong)
-            val modified = c.getColumnIndex(COLUMN_LAST_MODIFIED).takeIf { it >= 0 && !c.isNull(it) }
-                ?.let(c::getLong)
-            DocumentEntry(
-                documentId = uri.toString(),
-                name = name ?: uri.lastPathSegment.orEmpty().substringAfterLast('/'),
-                mimeType = resolver.getType(uri).orEmpty(),
-                size = size ?: 0,
-                modified = modified ?: 0,
-            )
-        }
-    }.getOrNull()
+    private fun query(uri: Uri, columns: Array<String>, mtimeColumn: String?, mtimeScale: Long): DocumentEntry? =
+        runCatching {
+            resolver.query(uri, columns, null, null, null)?.use { c ->
+                if (!c.moveToFirst()) return@use null
+                val name = c.getColumnIndex(OpenableColumns.DISPLAY_NAME).takeIf { it >= 0 && !c.isNull(it) }
+                    ?.let(c::getString)
+                val size = c.getColumnIndex(OpenableColumns.SIZE).takeIf { it >= 0 && !c.isNull(it) }?.let(c::getLong)
+                val modified = mtimeColumn?.let(c::getColumnIndex)?.takeIf { it >= 0 && !c.isNull(it) }
+                    ?.let { c.getLong(it) * mtimeScale }
+                DocumentEntry(
+                    documentId = uri.toString(),
+                    name = name ?: uri.lastPathSegment.orEmpty().substringAfterLast('/'),
+                    mimeType = resolver.getType(uri).orEmpty(),
+                    size = size ?: 0,
+                    modified = modified ?: 0,
+                )
+            }
+        }.getOrNull()
 
     override fun openInput(documentId: String, name: String): ImageInput =
         ImageInput.fromUri(resolver, documentId.toUri(), name)
@@ -70,6 +77,9 @@ class HandoffTree(private val resolver: ContentResolver) : DocumentTree {
     private companion object {
         /** `MediaColumns.DATE_MODIFIED` is in seconds; `DocumentsContract` uses `last_modified` in milliseconds. */
         const val COLUMN_LAST_MODIFIED = "last_modified"
+        const val MILLIS_PER_SECOND = 1_000L
         val STAT_COLUMNS = arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE, COLUMN_LAST_MODIFIED)
+        val MEDIA_STAT_COLUMNS =
+            arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE, MediaStore.MediaColumns.DATE_MODIFIED)
     }
 }

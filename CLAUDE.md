@@ -45,7 +45,9 @@ python3 scripts/theme/convert_theme.py ~/.agents/skills/hfps-app-ui/assets/theme
 python3 scripts/icons/generate_icons.py                                                 # PhosphorRegular.kt / PhosphorFill.kt (fetches the pinned npm release)
 ```
 
-Emulator (own AVD, own port 5560-5590, headless, one per worker, delete when done; never the phone):
+Emulator (own AVD, own port 5560-5590, headless, one per worker, delete when done; never the phone). The script picks
+the host's image (arm64 on the Mac, x86_64 on Linux); `EMULATOR_LCD=1080x2340@450` makes it phone-like (the owner's S24
+Ultra: some layouts only break at that size):
 
 ```sh
 scripts/emulator.sh create reveal-<workstream>
@@ -117,7 +119,7 @@ plane; `renderOutput` returns the operator's output size (`CpuDevelop.mapping(in
 
 ## Library (`:core:data`, `:feature:library`, M1, ADR 0006)
 
-Room `RevealDatabase` v2 (sources, photos, photo_files, versions, recipes, history, history_cursor, cache_entries);
+Room `RevealDatabase` v4 (sources, photos, photo_files, versions, recipes, history, history_cursor, cache_entries);
 schema change = new version + migration (or `AutoMigration`) + exported `core/data/schemas/*.json`, tested by
 `RevealDatabaseMigrationTest`. `LibraryRepository` (sources, SAF grants, volumes, indexing, ratings/flags with XMP
 write-back), `LibraryIndexer` (walk → diff → sidecars → headers), `XmpReader`/`XmpWriter` (merge, never overwrite a
@@ -145,6 +147,9 @@ Frame measurements must not use a Compose test rule (it holds frames while it sy
 `HandoffIntents.parse` (action `dev.hfps.reveal.action.DEVELOP`, `VIEW`, `EDIT`, `SEND`, `SEND_MULTIPLE`; URIs from data +
 ClipData + `EXTRA_STREAM`) -> `HandoffRepository.receive` (pairs by stem and parent, files the photos under the single
 `sources.kind = HANDOFF` source, `HandoffTree` keys documents by URI) -> `HandoffOutcome` (`MainActivity.show`). DB v3.
+Identity (ADR 0006 "Identity", DB v4): a file is its content fingerprint (`FileFingerprint` in `:core:image/source`,
+`photo_files.fingerprint`); hand-offs find their photo by fingerprint (any source, URI+size+mtime only for rows without
+one), never by name; folders fill fingerprints in the background after a walk (`LibraryIndexer.fillFingerprints`).
 Library scope `FromApps` = "Opened from other apps" (newest hand-off first, header per batch). Sidecars are only written
 when the sender included a writable `.xmp` item. Instrumented: `dev.hfps.reveal.handoff.HandoffFlowTest` (same command
 shape as the library tests).
@@ -198,8 +203,10 @@ committing control calls `onCommit` once on release, never per frame. The histor
 Goldens: `app/src/test/screenshots/editor/` (`EditorScreenshotTest`, `SliderScreenshotTest`; the photo is the
 pipeline's synthetic scene developed on the CPU). Instrumented: `EditorInteractionTest` (synthetic JPEG, any
 emulator), `EditorHistoryTest` (undo/redo/jump/branch, reopen restores from Room), `:core:pipeline`
-`ReadbackApisTest` (clipping flag, source sample). Edits persist per photo and a hand-off file with the same name is
-the same photo: give instrumented test photos unique names.
+`ReadbackApisTest` (clipping flag, source sample). Edits persist per photo and a hand-off is the same photo exactly
+when its content is the same: `TestPhotos.insert` appends a unique trailer to every image (so each run
+is a new photo; pass `unique = false` to reuse content on purpose) and test names stay unique (`TestPhotos.uniqueName`).
+The full suite must pass twice in a row without `pm clear` (the phone keeps app data).
 
 ## Export (`:feature:export`, `gl/TiledRenderer`, ADR 0009)
 

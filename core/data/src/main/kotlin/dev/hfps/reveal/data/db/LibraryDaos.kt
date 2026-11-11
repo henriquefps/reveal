@@ -12,6 +12,7 @@ import androidx.sqlite.db.SupportSQLiteQuery
 import dev.hfps.reveal.data.model.MetadataState
 import dev.hfps.reveal.data.model.PhotoFormat
 import dev.hfps.reveal.data.model.PickFlag
+import dev.hfps.reveal.data.model.SourceKind
 import dev.hfps.reveal.data.model.SourceState
 import kotlinx.coroutines.flow.Flow
 
@@ -44,6 +45,23 @@ data class IndexedFile(
     @ColumnInfo(name = "relative_path") val relativePath: String,
     val size: Long,
     val modified: Long,
+)
+
+/** A file whose content fingerprint is still to be computed (filled in the background after a walk). */
+data class UnprintedFile(
+    val id: Long,
+    @ColumnInfo(name = "document_id") val documentId: String,
+    val name: String,
+    val size: Long,
+    val modified: Long,
+)
+
+/** A stored file found by its fingerprint, with what decides whether a hand-off may reuse its photo. */
+data class FingerprintMatch(
+    @Embedded val file: PhotoFileEntity,
+    @ColumnInfo(name = "source_kind") val sourceKind: SourceKind,
+    @ColumnInfo(name = "source_state") val sourceState: SourceState,
+    @ColumnInfo(name = "photo_hidden") val photoHidden: Boolean,
 )
 
 /** What the incremental walk compares a listed shot with. */
@@ -139,9 +157,10 @@ interface PhotoDao {
     @Query("DELETE FROM photo_files WHERE id IN (:ids)")
     suspend fun deleteFiles(ids: List<Long>)
 
+    /** A changed file (size or mtime): its fingerprint is cleared, to be computed again. */
     @Query(
-        "UPDATE photo_files SET size = :size, modified = :modified, document_id = :documentId, role = :role " +
-            "WHERE id = :id",
+        "UPDATE photo_files SET size = :size, modified = :modified, document_id = :documentId, role = :role, " +
+            "fingerprint = NULL WHERE id = :id",
     )
     suspend fun updateFile(id: Long, size: Long, modified: Long, documentId: String, role: String)
 
@@ -212,6 +231,28 @@ interface PhotoDao {
 
     @Query("DELETE FROM photo_files WHERE photo_id = :photoId")
     suspend fun deleteFilesOf(photoId: Long)
+
+    // ---- content fingerprints (ADR 0006 "Identity")
+
+    @Query(
+        "SELECT f.*, s.kind AS source_kind, s.state AS source_state, p.hidden AS photo_hidden FROM photo_files f " +
+            "JOIN photos p ON p.id = f.photo_id JOIN sources s ON s.id = f.source_id " +
+            "WHERE f.fingerprint IN (:fingerprints) ORDER BY f.id",
+    )
+    suspend fun filesByFingerprint(fingerprints: List<String>): List<FingerprintMatch>
+
+    @Query(
+        "SELECT id, document_id, name, size, modified FROM photo_files " +
+            "WHERE source_id = :sourceId AND fingerprint IS NULL",
+    )
+    suspend fun unprintedFiles(sourceId: Long): List<UnprintedFile>
+
+    /** Stores a fingerprint unless the file changed (or was printed) since it was read. */
+    @Query(
+        "UPDATE photo_files SET fingerprint = :fingerprint WHERE id = :id AND size = :size AND modified = :modified " +
+            "AND fingerprint IS NULL",
+    )
+    suspend fun setFingerprint(id: Long, size: Long, modified: Long, fingerprint: String)
 
     @Query(
         "UPDATE photos SET name = :name, format = :format, has_raw = :hasRaw, folder_document_id = :folder, " +

@@ -2,7 +2,9 @@
 # Headless emulator helper for Reveal workers. Creates a named AVD without avdmanager (this Mac has no
 # cmdline-tools), starts it on a given console port, waits for boot, stops and deletes it.
 #
-#   scripts/emulator.sh create <name>            AVD: arm64-v8a, API 36.1 google_apis_playstore, Pixel-like screen
+#   scripts/emulator.sh create <name>            AVD: API 36.1 (else 36) google_apis_playstore for the host (arm64-v8a on
+#                                                the Mac, x86_64 on Linux), Pixel-like screen; EMULATOR_LCD=WxH@DPI
+#                                                overrides it (e.g. 1080x2340@450, the owner's Galaxy S24 Ultra)
 #   scripts/emulator.sh start  <name> <port>     headless on emulator-<port> (5560-5590), waits until booted
 #   scripts/emulator.sh stop   <port>            kill emulator-<port>
 #   scripts/emulator.sh delete <name>            remove the AVD
@@ -12,11 +14,20 @@
 # `adb -s emulator-<port>` / ANDROID_SERIAL, stop and delete when done.
 set -euo pipefail
 
-SDK="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-$HOME/Library/Android/sdk}}"
+if [ "$(uname -s)" = Darwin ]; then DEFAULT_SDK="$HOME/Library/Android/sdk"; else DEFAULT_SDK="$HOME/Android/Sdk"; fi
+SDK="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-$DEFAULT_SDK}}"
 AVD_HOME="${ANDROID_AVD_HOME:-$HOME/.android/avd}"
 ADB="$SDK/platform-tools/adb"
 EMULATOR="$SDK/emulator/emulator"
-IMAGE="system-images/android-36.1/google_apis_playstore/arm64-v8a/"
+case "$(uname -m)" in
+  arm64|aarch64) ABI=arm64-v8a; CPU_ARCH=arm64 ;;
+  *) ABI=x86_64; CPU_ARCH=x86_64 ;;
+esac
+API=android-36.1
+[ -d "$SDK/system-images/$API/google_apis_playstore/$ABI" ] || API=android-36
+IMAGE="system-images/$API/google_apis_playstore/$ABI/"
+LCD="${EMULATOR_LCD:-1080x2400@420}"
+LCD_W="${LCD%%x*}"; LCD_REST="${LCD#*x}"; LCD_H="${LCD_REST%@*}"; LCD_DPI="${LCD##*@}"
 GPU="${EMULATOR_GPU:-swiftshader_indirect}"
 
 die() { echo "emulator.sh: $*" >&2; exit 1; }
@@ -31,20 +42,20 @@ case "$cmd" in
 avd.ini.encoding=UTF-8
 path=$AVD_HOME/$name.avd
 path.rel=avd/$name.avd
-target=android-36.1
+target=$API
 INI
     cat > "$AVD_HOME/$name.avd/config.ini" <<INI
 AvdId=$name
 avd.ini.displayname=$name
 PlayStore.enabled=true
-abi.type=arm64-v8a
-hw.cpu.arch=arm64
+abi.type=$ABI
+hw.cpu.arch=$CPU_ARCH
 hw.cpu.ncore=4
 hw.ramSize=3072
 disk.dataPartition.size=6G
-hw.lcd.width=1080
-hw.lcd.height=2400
-hw.lcd.density=420
+hw.lcd.width=$LCD_W
+hw.lcd.height=$LCD_H
+hw.lcd.density=$LCD_DPI
 hw.keyboard=yes
 hw.gpu.enabled=yes
 hw.gpu.mode=auto
@@ -80,6 +91,6 @@ INI
     echo "emulator-${1:?port}"
     ;;
   *)
-    sed -n '2,13p' "$0"; exit 2
+    sed -n '2,15p' "$0"; exit 2
     ;;
 esac

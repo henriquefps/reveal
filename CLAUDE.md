@@ -12,7 +12,9 @@ Start with `docs/plan/README.md` (the brief), then `docs/plan/` and `docs/adr/`.
 - Originals are never modified; edits are recipes (`docs/plan/architecture.md`).
 - Credentials only through `skv` (group `reveal`). Never commit keystores or secrets.
 - Private photos: copies only, never committed, never in screenshots, aggregates only.
-- Workers use emulators; only the orchestrator installs on the owner's phone (`RXCX109VTTM`).
+- Workers use emulators. Only when the emulator itself keeps crashing may a worker run its debug/test APKs on the
+  owner's phone (`RXCX109VTTM`, on the Mac's USB, adb over SSH); if it is not connected, ask the orchestrator.
+  Release installs on the phone are the orchestrator's.
   On the phone always install with `adb install --user 0` (it has a Dual App profile, user 95: a plain
   `adb install` adds a second icon there), and uninstall `dev.hfps.reveal.debug` after a test run.
 - Code, identifiers, comments and ADRs in English.

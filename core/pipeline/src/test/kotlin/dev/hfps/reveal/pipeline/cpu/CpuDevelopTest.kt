@@ -261,6 +261,6 @@ class CpuDevelopTest {
         const val GOLDEN_CRC_V4: Long = 3273411752L
         const val GOLDEN_CRC_LIGHT_V4: Long = 2469709740L
         const val GOLDEN_CRC_COLOUR_V4: Long = 3805206770L
-        const val GOLDEN_CRC_GEOMETRY_V5: Long = 0L
+        const val GOLDEN_CRC_GEOMETRY_V5: Long = 341663594L
     }
 }

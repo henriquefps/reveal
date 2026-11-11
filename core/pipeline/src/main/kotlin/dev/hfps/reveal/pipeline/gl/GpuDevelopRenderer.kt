@@ -15,6 +15,7 @@ import dev.hfps.reveal.pipeline.cpu.LowResGrid
 import dev.hfps.reveal.pipeline.cpu.OutputSettings
 import dev.hfps.reveal.pipeline.cpu.OutputSpace
 import dev.hfps.reveal.pipeline.cpu.OutputTransformOp
+import dev.hfps.reveal.pipeline.geometry.GeometryMapping
 import dev.hfps.reveal.pipeline.recipe.Recipe
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -71,6 +72,7 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         val compare: CompareMode = CompareMode.Off,
         val clipping: ClippingWarnings = ClippingWarnings.NONE,
         val loupe: Loupe? = null,
+        val geometryEditing: Boolean = false,
     )
 
     @Volatile
@@ -111,6 +113,9 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
     private var stageFbo = 0
     private var readTex = 0
     private var readFbo = 0
+    private var readWidth = 0
+    private var readHeight = 0
+    private var shownMapping = GeometryMapping.identity(1, 1)
     private var input: UploadedImage? = null
     private var stageParams: DevelopParams? = null
     private var sceneKey: SceneKey? = null
@@ -182,6 +187,15 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
     /** Shows or hides (`null`) the magnifier of the eyedropper. Coalesced. */
     fun setLoupe(loupe: Loupe?) {
         update { it.copy(loupe = loupe) }
+    }
+
+    /**
+     * The crop mode: true shows the **editing plane** ([GeometryMapping.editing]: the whole image straightened and
+     * oriented, empty areas in the surround) instead of the geometry operator's output; the view ([setView]) is then
+     * in plane coordinates. Compare panes are off while editing. Coalesced.
+     */
+    fun setGeometryEditing(editing: Boolean) {
+        update { it.copy(geometryEditing = editing) }
     }
 
     /** Turns the on-screen clipping overlays on or off (see [ClippingWarnings]). Coalesced. */
@@ -293,7 +307,7 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
             runStage1(DevelopParams.from(image.colour, recipe))
             GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, stageTex)
             GLES30.glGenerateMipmap(GLES30.GL_TEXTURE_2D)
-            drawOutputOffscreen(OutputSettings(dither = true))
+            drawOutputOffscreen(OutputSettings(dither = true), mapping = GeometryMapping.identity(image.width, image.height))
             GLES20.glFinish()
             (System.nanoTime() - start) / NANOS_PER_MS
         }
@@ -331,9 +345,18 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         val req = request.get()
         val (width, height) = egl.windowSize()
         val frame = req.frame ?: ViewFrame.whole(width, height)
-        val compare = if (req.showOriginal) CompareMode.Off else req.compare
-        val panes = CompareLayout.panes(compare, frame, width, height, image.width, image.height, req.view) +
-            listOfNotNull(req.loupe?.let { CompareLayout.loupePane(it, width, height) })
+        val compare = if (req.showOriginal || req.geometryEditing) CompareMode.Off else req.compare
+        // Geometry (slot 13) is part of the view: "show original" keeps the crop so the photo does not jump.
+        val geometry = req.recipe.geometry
+        val mapping = if (req.geometryEditing) {
+            GeometryMapping.editing(geometry, image.width, image.height)
+        } else {
+            GeometryMapping.of(geometry, image.width, image.height)
+        }
+        if (!req.geometryEditing) shownMapping = mapping
+        val panes = CompareLayout.panes(
+            compare, frame, width, height, mapping.outputWidth, mapping.outputHeight, req.view,
+        ) + listOfNotNull(req.loupe?.let { CompareLayout.loupePane(it, width, height) })
         if (panes.any { it.original }) ensureOriginal(image)
         val params = DevelopParams.from(image.colour, if (req.showOriginal) Recipe.DEFAULT else req.recipe)
         profiler.mark("params (CPU)")
@@ -346,7 +369,7 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         }
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
         GLES30.glViewport(0, 0, width, height)
-        drawPanes(image, panes, width, height, req)
+        drawPanes(image, panes, width, height, req, mapping)
         profiler.mark("output pass")
         val submitted = System.nanoTime()
         egl.swap()
@@ -438,11 +461,12 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         surround: FloatArray,
         texture: Int = stageTex,
         clipping: ClippingWarnings = ClippingWarnings.NONE,
+        mapping: GeometryMapping = GeometryMapping.identity(image.width, image.height),
     ) {
         GLES30.glUseProgram(outputProgram)
         uploadUbo(
             outputUbo,
-            outputBlock(image.width, image.height, view, width, height, settings, surround, clipping.bits),
+            outputBlock(image.width, image.height, view, width, height, settings, surround, clipping.bits, mapping),
         )
         GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, texture)
@@ -456,12 +480,33 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         GlSupport.checkError("output pass")
     }
 
-    private fun drawOutputOffscreen(settings: OutputSettings, clipping: ClippingWarnings = ClippingWarnings.NONE) {
+    /** The output pass at 1:1 into the RGBA8 read target sized to [mapping]'s output. */
+    private fun drawOutputOffscreen(
+        settings: OutputSettings,
+        clipping: ClippingWarnings = ClippingWarnings.NONE,
+        mapping: GeometryMapping,
+    ) {
         val image = checkNotNull(input) { "no input" }
+        val w = mapping.outputWidth
+        val h = mapping.outputHeight
+        ensureReadTarget(w, h)
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, readFbo)
-        GLES30.glViewport(0, 0, image.width, image.height)
-        val identity = ViewTransform(1f, image.width / 2f, image.height / 2f)
-        drawOutput(image, identity, image.width, image.height, settings, surround, clipping = clipping)
+        GLES30.glViewport(0, 0, w, h)
+        val identity = ViewTransform(1f, w / 2f, h / 2f)
+        drawOutput(image, identity, w, h, settings, surround, clipping = clipping, mapping = mapping)
+    }
+
+    /** (Re)allocates the RGBA8 readback target when the output size changes (crop, quarter turns). */
+    private fun ensureReadTarget(width: Int, height: Int) {
+        if (readTex != 0 && readWidth == width && readHeight == height) return
+        if (readTex != 0) {
+            GLES30.glDeleteTextures(1, intArrayOf(readTex), 0)
+            GLES30.glDeleteFramebuffers(1, intArrayOf(readFbo), 0)
+        }
+        readTex = newTexture(1, width, height, GLES30.GL_NEAREST, GLES30.GL_NEAREST, GLES30.GL_RGBA8)
+        readFbo = newFramebuffer(readTex)
+        readWidth = width
+        readHeight = height
     }
 
     private fun readLinear(recipe: Recipe): FloatArray {
@@ -489,14 +534,17 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         runStage1(DevelopParams.from(image.colour, recipe))
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, stageTex)
         GLES30.glGenerateMipmap(GLES30.GL_TEXTURE_2D)
-        drawOutputOffscreen(settings, clipping)
-        val pixels = ByteBuffer.allocateDirect(image.width * image.height * RGBA)
-        GLES30.glReadPixels(0, 0, image.width, image.height, GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, pixels)
+        val mapping = GeometryMapping.of(recipe.geometry, image.width, image.height)
+        drawOutputOffscreen(settings, clipping, mapping)
+        val w = mapping.outputWidth
+        val h = mapping.outputHeight
+        val pixels = ByteBuffer.allocateDirect(w * h * RGBA)
+        GLES30.glReadPixels(0, 0, w, h, GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, pixels)
         GlSupport.checkError("readback of the output")
-        val flipped = ByteArray(image.width * image.height * RGBA)
-        val stride = image.width * RGBA
-        for (row in 0 until image.height) {
-            pixels.position((image.height - 1 - row) * stride)
+        val flipped = ByteArray(w * h * RGBA)
+        val stride = w * RGBA
+        for (row in 0 until h) {
+            pixels.position((h - 1 - row) * stride)
             pixels.get(flipped, row * stride, stride)
         }
         return flipped
@@ -584,11 +632,10 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         val levels = 32 - Integer.numberOfLeadingZeros(maxOf(image.width, image.height))
         sourceTex = newTexture(1, image.width, image.height, GLES30.GL_NEAREST, GLES30.GL_NEAREST)
         stageTex = newTexture(levels, image.width, image.height, GLES30.GL_LINEAR_MIPMAP_LINEAR, GLES30.GL_LINEAR)
-        readTex = newTexture(1, image.width, image.height, GLES30.GL_NEAREST, GLES30.GL_NEAREST, GLES30.GL_RGBA8)
         sceneTex = newTexture(1, image.width, image.height, GLES30.GL_NEAREST, GLES30.GL_NEAREST)
         sceneFbo = newFramebuffer(sceneTex)
         stageFbo = newFramebuffer(stageTex)
-        readFbo = newFramebuffer(readTex)
+        shownMapping = GeometryMapping.identity(image.width, image.height)
         // Upload in bands so the RGB -> RGBA float staging buffer stays small even for a 2400 px proxy.
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, sourceTex)
         GLES30.glPixelStorei(GLES30.GL_UNPACK_ALIGNMENT, 1)
@@ -668,6 +715,8 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         readTex = 0
         stageFbo = 0
         readFbo = 0
+        readWidth = 0
+        readHeight = 0
     }
 
     private fun releaseGl() {
@@ -689,7 +738,15 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
     // ------------------------------------------------------------------ compare, histogram, sampling (GL thread)
 
     /** Draws the output pass once per compare pane, scissored to the pane where it has a clip. */
-    private fun drawPanes(image: UploadedImage, panes: List<ComparePane>, width: Int, height: Int, req: Request) {
+    @Suppress("LongParameterList")
+    private fun drawPanes(
+        image: UploadedImage,
+        panes: List<ComparePane>,
+        width: Int,
+        height: Int,
+        req: Request,
+        mapping: GeometryMapping,
+    ) {
         val settings = OutputSettings(req.space)
         if (panes.first().clip != null) {
             // Side by side: the gap between the panes is the surround.
@@ -716,7 +773,8 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
                 settings = settings,
                 surround = surround,
                 texture = if (pane.original) originalTex else stageTex,
-                clipping = if (pane.original) ClippingWarnings.NONE else req.clipping,
+                clipping = if (pane.original || req.geometryEditing) ClippingWarnings.NONE else req.clipping,
+                mapping = mapping,
             )
         }
         GLES30.glDisable(GLES30.GL_SCISSOR_TEST)
@@ -780,9 +838,11 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         val wait = histogram.waitMs()
         if (wait == 0L) {
             profiler.begin()
-            histogram.request(image.width, image.height) { scale, w, h ->
-                val view = ViewTransform(scale, image.width / 2f, image.height / 2f)
-                drawOutput(image, view, w, h, OutputSettings(dither = false), surround)
+            // The histogram is of the picture as it will be exported: the geometry operator's output.
+            val mapping = shownMapping
+            histogram.request(mapping.outputWidth, mapping.outputHeight) { scale, w, h ->
+                val view = ViewTransform(scale, mapping.outputWidth / 2f, mapping.outputHeight / 2f)
+                drawOutput(image, view, w, h, OutputSettings(dither = false), surround, mapping = mapping)
             }
             profiler.mark("histogram request")
             histogramDirty = false
@@ -913,8 +973,10 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         }
 
         /**
-         * std140 block of the output pass: mat4, image (vec4), viewport (vec4), surround (vec4), dither (uvec4: seed,
-         * on, sampling mode, clipping-warning bits of [ClippingWarnings]).
+         * std140 block of the output pass: mat4, image (vec4), viewport (vec4: output point at the view centre, view
+         * size), surround (vec4), dither (uvec4: seed, on, sampling mode, clipping-warning bits of
+         * [ClippingWarnings]), the geometry mapping's rows (2 x vec4: output -> image, output size) and its flags
+         * (uvec4: snap to output pixels, empty = surround).
          */
         @Suppress("LongParameterList")
         internal fun outputBlock(
@@ -926,6 +988,7 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
             settings: OutputSettings,
             surround: FloatArray,
             clippingBits: Int = 0,
+            mapping: GeometryMapping = GeometryMapping.identity(imageWidth, imageHeight),
         ): ByteBuffer {
             val b = ByteBuffer.allocateDirect(OUTPUT_BLOCK_FLOATS * Float.SIZE_BYTES).order(ByteOrder.nativeOrder())
             putMat4(b, OutputTransformOp.workingToOutput(settings.space).toFloatArray())
@@ -934,8 +997,14 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
             ).putFloat(imageHeight.toFloat()).putFloat(view.scale).putFloat(OutputSampling.lod(view.scale))
             b.putFloat(view.centerX).putFloat(view.centerY).putFloat(width.toFloat()).putFloat(height.toFloat())
             b.putFloat(surround[0]).putFloat(surround[1]).putFloat(surround[2]).putFloat(1f)
+            val aligned = mapping.axisAligned
             b.putInt(settings.ditherSeed).putInt(if (settings.dither) 1 else 0)
-                .putInt(OutputSampling.mode(view.scale)).putInt(clippingBits)
+                .putInt(OutputSampling.mode(view.scale, aligned)).putInt(clippingBits)
+            val m = mapping.toImageFloats()
+            b.putFloat(m[0]).putFloat(m[1]).putFloat(m[2]).putFloat(mapping.outputWidth.toFloat())
+            b.putFloat(m[3]).putFloat(m[4]).putFloat(m[5]).putFloat(mapping.outputHeight.toFloat())
+            b.putInt(if (OutputSampling.snapToOutputPixels(view.scale, aligned)) 1 else 0)
+                .putInt(if (mapping.emptyIsSurround) 1 else 0).putInt(0).putInt(0)
             b.flip()
             return b
         }
@@ -950,7 +1019,7 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
 
         private const val DEVELOP_BLOCK_FLOATS = 24
         private const val LIGHT_BLOCK_FLOATS = 16
-        private const val OUTPUT_BLOCK_FLOATS = 32
+        private const val OUTPUT_BLOCK_FLOATS = 44
     }
 }
 

@@ -39,7 +39,11 @@ enum class CropHandle(val hx: Int, val hy: Int) {
  */
 @Suppress("TooManyFunctions")
 object CropEditing {
-    private const val EPS = 1e-6
+    /** Validity tolerance in pixels: covers the float rounding of the recipe's normalised crop. */
+    private const val EPS = 1e-3
+
+    /** Size of the probe frame used to find a valid centre. */
+    private const val PROBE = 1e-6
     private const val SEARCH_STEPS = 24
     private const val FULL_EPS = 1e-5
     private const val SQUARE_ANGLE = 90.0
@@ -80,11 +84,12 @@ object CropEditing {
         return Box.centred(v.x + width / 2.0, v.y + height / 2.0, w, h)
     }
 
-    /** Whether [frame] is allowed for [g] (see the class comment). */
-    fun isValid(g: Geometry, frame: Box, width: Int, height: Int): Boolean {
+    /** Whether [frame] is allowed for [g] (see the class comment), within [tolerance] pixels. */
+    fun isValid(g: Geometry, frame: Box, width: Int, height: Int, tolerance: Double = EPS): Boolean {
+        
         if (frame.width <= 0.0 || frame.height <= 0.0) return false
         val r = imageRect(g, frame, width, height)
-        val inside = r.left >= -EPS && r.top >= -EPS && r.right <= width + EPS && r.bottom <= height + EPS
+        val inside = r.left >= -tolerance && r.top >= -tolerance && r.right <= width + tolerance && r.bottom <= height + tolerance
         if (!inside) return false
         if (!g.constrain) return true
         val rad = Math.toRadians(GeometryMapping.angle(g))
@@ -92,19 +97,20 @@ object CropEditing {
         val sn = abs(sin(rad))
         val ex = cs * r.width / 2 + sn * r.height / 2
         val ey = sn * r.width / 2 + cs * r.height / 2
-        return r.centerX - ex >= -EPS && r.centerX + ex <= width + EPS &&
-            r.centerY - ey >= -EPS && r.centerY + ey <= height + EPS
+        return r.centerX - ex >= -tolerance && r.centerX + ex <= width + tolerance &&
+            r.centerY - ey >= -tolerance && r.centerY + ey <= height + tolerance
     }
 
     /** The last valid frame on the straight path from the valid [from] to [to] ([to] itself when valid). */
     fun limit(g: Geometry, from: Box, to: Box, width: Int, height: Int): Box {
-        if (isValid(g, to, width, height)) return to
+        // Searched strictly (no tolerance) so the result survives the float rounding of the stored crop.
+        if (isValid(g, to, width, height, 0.0)) return to
         if (!isValid(g, from, width, height)) return from
         var lo = 0.0
         var hi = 1.0
         repeat(SEARCH_STEPS) {
             val mid = (lo + hi) / 2
-            if (isValid(g, lerp(from, to, mid), width, height)) lo = mid else hi = mid
+            if (isValid(g, lerp(from, to, mid), width, height, 0.0)) lo = mid else hi = mid
         }
         return lerp(from, to, lo)
     }
@@ -134,6 +140,19 @@ object CropEditing {
             return limit(g, afterX, yMoved, width, height)
         }
         val minW = max(minSize, minSize * ratio)
+        // The search starts from the smallest frame of the ratio at the same anchor, so every step keeps the ratio
+        // even when the starting frame did not have it yet (a preset picked on a free crop).
+        val smallest = if (handle.corner) {
+            val anchorX = if (handle.hx > 0) start.left else start.right
+            val anchorY = if (handle.hy > 0) start.top else start.bottom
+            Box.centred(anchorX + handle.hx * minW / 2, anchorY + handle.hy * minW / ratio / 2, minW, minW / ratio)
+        } else if (handle.hx != 0) {
+            val anchorX = if (handle.hx > 0) start.left else start.right
+            Box.centred(anchorX + handle.hx * minW / 2, start.centerY, minW, minW / ratio)
+        } else {
+            val anchorY = if (handle.hy > 0) start.top else start.bottom
+            Box.centred(start.centerX, anchorY + handle.hy * minW / ratio / 2, minW, minW / ratio)
+        }
         val target = if (handle.corner) {
             val anchorX = if (handle.hx > 0) start.left else start.right
             val anchorY = if (handle.hy > 0) start.top else start.bottom
@@ -155,7 +174,8 @@ object CropEditing {
             val top = if (handle.hy > 0) start.top else start.bottom - h
             Box.centred(start.centerX, top + h / 2, h * ratio, h)
         }
-        return limit(g, start, target, width, height)
+        if (!isValid(g, smallest, width, height)) return start
+        return limit(g, smallest, target, width, height)
     }
 
     /** The photo dragged by ([dx], [dy]) plane units under the frame: the frame moves the other way, per axis. */
@@ -195,7 +215,7 @@ object CropEditing {
      */
     fun shrinkToFit(g: Geometry, box: Box, width: Int, height: Int): Box {
         if (isValid(g, box, width, height)) return box
-        val tiny = { cx: Double, cy: Double -> Box.centred(cx, cy, EPS, EPS) }
+        val tiny = { cx: Double, cy: Double -> Box.centred(cx, cy, PROBE, PROBE) }
         var cx = box.centerX
         var cy = box.centerY
         if (!isValid(g, tiny(cx, cy), width, height)) {

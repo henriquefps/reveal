@@ -26,6 +26,17 @@ class OutputSamplingTest {
     }
 
     @Test
+    fun straightenedGeometryResamplesWithCatmullRomFromOneToOne() {
+        assertThat(OutputSampling.mode(1f, axisAligned = false)).isEqualTo(OutputSampling.MODE_CATMULL_ROM)
+        assertThat(OutputSampling.mode(3f, axisAligned = false)).isEqualTo(OutputSampling.MODE_CATMULL_ROM)
+        assertThat(OutputSampling.mode(0.5f, axisAligned = false)).isEqualTo(OutputSampling.MODE_LOD)
+        assertThat(OutputSampling.snapToOutputPixels(1f, axisAligned = false)).isTrue()
+        assertThat(OutputSampling.snapToOutputPixels(1.5f, axisAligned = false)).isFalse()
+        assertThat(OutputSampling.snapToOutputPixels(2f, axisAligned = false)).isTrue()
+        assertThat(OutputSampling.snapToOutputPixels(1f, axisAligned = true)).isFalse()
+    }
+
+    @Test
     fun nearestFromTwoHundredPercent() {
         assertThat(OutputSampling.nearestMagnification(1.99f)).isFalse()
         assertThat(OutputSampling.nearestMagnification(2f)).isTrue()

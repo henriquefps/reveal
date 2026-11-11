@@ -47,7 +47,7 @@ class RecipeCodecTest {
                 """"relTemperature":0.0,"relTint":0.0},"vibrance":0.0,"saturation":0.0},""" +
                 """"effects":{},"detail":{},"optics":{},""" +
                 """"geometry":{"crop":null,"angle":0.0,"rotate":0,"flipH":false,"flipV":false,""" +
-                """"aspect":{"preset":"free","w":1,"h":1,"locked":false}},"masks":[],"heals":[]}""",
+                """"aspect":{"preset":"free","w":1,"h":1,"locked":false},"constrain":true},"masks":[],"heals":[]}""",
         )
         assertThat(codec.decode(text)).isEqualTo(Recipe())
     }

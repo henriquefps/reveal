@@ -25,8 +25,9 @@ data class Box(val left: Double, val top: Double, val right: Double, val bottom:
 
 /**
  * A 2D affine map `(x, y) -> (a x + b y + tx, c x + d y + ty)`, in double precision. Composition reads like
- * function application: `(f * g)(p) = f(g(p))`.
+ * function application: `(f * g)(p) = f(g(p))`. Equality is numeric (`-0.0 == 0.0`).
  */
+@Suppress("DataClassContainsFunctions")
 data class Affine(
     val a: Double,
     val b: Double,
@@ -36,6 +37,12 @@ data class Affine(
     val ty: Double,
 ) {
     fun mapX(x: Double, y: Double): Double = a * x + b * y + tx
+
+    override fun equals(other: Any?): Boolean = other is Affine &&
+        a == other.a && b == other.b && c == other.c && d == other.d && tx == other.tx && ty == other.ty
+
+    override fun hashCode(): Int =
+        listOf(a, b, c, d, tx, ty).fold(0) { h, v -> h * HASH + (v + 0.0).hashCode() }
 
     fun mapY(x: Double, y: Double): Double = c * x + d * y + ty
 
@@ -82,6 +89,7 @@ data class Affine(
     }
 
     companion object {
+        private const val HASH = 31
         val IDENTITY: Affine = Affine(1.0, 0.0, 0.0, 1.0, 0.0, 0.0)
 
         fun translate(x: Double, y: Double): Affine = Affine(1.0, 0.0, 0.0, 1.0, x, y)

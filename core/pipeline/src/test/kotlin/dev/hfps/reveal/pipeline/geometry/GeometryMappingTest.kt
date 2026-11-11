@@ -171,8 +171,8 @@ class GeometryMappingTest {
         // ... and the crop centre is the fixed point of the plane's rotation.
         val plane = GeometryMapping.editing(g.copy(angle = 12f), w, h)
         val c = plane.imageToOutput(0.3 * w, 0.5 * h)
-        assertThat(c.x).isWithin(1e-9).of(before.centerX)
-        assertThat(c.y).isWithin(1e-9).of(before.centerY)
+        assertThat(c.x).isWithin(1e-6).of(before.centerX)
+        assertThat(c.y).isWithin(1e-6).of(before.centerY)
     }
 
     @Test

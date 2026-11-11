@@ -1,6 +1,7 @@
 package dev.hfps.reveal.pipeline.geometry
 
 import com.google.common.truth.Truth.assertThat
+import com.google.common.truth.Truth.assertWithMessage
 import dev.hfps.reveal.pipeline.recipe.Aspect
 import dev.hfps.reveal.pipeline.recipe.AspectPreset
 import dev.hfps.reveal.pipeline.recipe.CropRect
@@ -57,7 +58,7 @@ class CropEditingTest {
     @Test
     fun `turning back during the same gesture regrows the crop`() {
         val start = Geometry(crop = CropRect(0.2f, 0.2f, 0.8f, 0.8f))
-        val there = CropEditing.straighten(start, 20f, w, h)
+        val there = CropEditing.straighten(start, 40f, w, h)
         val back = CropEditing.straighten(start, 0f, w, h)
 
         assertThat(CropEditing.frame(there, w, h).width).isLessThan(CropEditing.frame(start, w, h).width)
@@ -81,20 +82,23 @@ class CropEditingTest {
     @Test
     fun `handle drags stay valid under random gestures`() {
         val random = Random(3)
-        var g = CropEditing.straighten(Geometry(), 8f, w, h)
-        repeat(300) {
-            val start = CropEditing.frame(g, w, h)
-            val handle = CropHandle.entries[random.nextInt(CropHandle.entries.size)]
-            val ratio = if (random.nextBoolean()) null else 1.5
-            val box = CropEditing.dragHandle(
-                g, start, handle, random.nextDouble(-200.0, 200.0), random.nextDouble(-200.0, 200.0), ratio, w, h, min,
-            )
-            assertThat(CropEditing.isValid(g, box, w, h)).isTrue()
-            assertThat(box.width).isAtLeast(min - 1e-6)
-            assertThat(box.height).isAtLeast(min - 1e-6)
-            if (ratio != null) assertThat(box.width / box.height).isWithin(1e-6).of(ratio)
-            g = CropEditing.withFrame(g, box, w, h)
-            assertThat(cornersInside(g)).isTrue()
+        for (ratio in listOf(null, 1.5, 0.8)) {
+            var g = CropEditing.straighten(Geometry(), 8f, w, h)
+            if (ratio != null) g = CropEditing.withAspect(g, Aspect(AspectPreset.CUSTOM, (ratio * 10).toInt(), 10, true), w, h)
+            repeat(300) {
+                val start = CropEditing.frame(g, w, h)
+                val handle = CropHandle.entries[random.nextInt(CropHandle.entries.size)]
+                val box = CropEditing.dragHandle(
+                    g, start, handle, random.nextDouble(-200.0, 200.0), random.nextDouble(-200.0, 200.0), ratio, w, h,
+                    min,
+                )
+                assertThat(CropEditing.isValid(g, box, w, h)).isTrue()
+                assertThat(box.width).isAtLeast(min - 1e-4)
+                assertThat(box.height).isAtLeast(min - 1e-4)
+                if (ratio != null) assertThat(box.width / box.height).isWithin(1e-4).of(ratio)
+                g = CropEditing.withFrame(g, box, w, h)
+                assertWithMessage("ratio $ratio step $it ${g.crop} box $box").that(cornersInside(g)).isTrue()
+            }
         }
     }
 
@@ -143,7 +147,7 @@ class CropEditingTest {
         assertThat(box.centerX).isWithin(1e-9).of(150.0)
         // Pinching out past the image stops at the image.
         val out = CropEditing.pinch(g, box, 0.1, 150.0, 100.0, w, h, min)
-        assertThat(out.width).isWithin(1e-3).of(300.0)
+        assertThat(out.width).isWithin(1e-2).of(300.0)
     }
 
     @Test

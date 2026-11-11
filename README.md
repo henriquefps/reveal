@@ -1,3 +1,5 @@
+<img src="branding/icon.svg" alt="" width="96" height="96">
+
 # Reveal
 
 A non-destructive RAW photo editor for Android: develop Sony ARW (and other RAW, JPEG and HEIF)

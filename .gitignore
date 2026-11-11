@@ -1,0 +1,14 @@
+.DS_Store
+.idea
+*.iml
+.gradle
+build
+local.properties
+captures
+.externalNativeBuild
+.cxx
+# signing material lives in skv, never in the repo
+*.jks
+*.keystore
+keystore.properties
+.playwright-mcp

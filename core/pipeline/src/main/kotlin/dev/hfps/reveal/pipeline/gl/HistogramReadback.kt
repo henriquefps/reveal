@@ -80,6 +80,7 @@ internal class HistogramReadback {
     }
 
     /** The histogram of the pending request once the GPU finished it, else `null` (never blocks). */
+    @Suppress("ReturnCount")
     fun poll(): Histogram? {
         if (fence == 0L) return null
         val status = GLES30.glClientWaitSync(fence, 0, 0L)

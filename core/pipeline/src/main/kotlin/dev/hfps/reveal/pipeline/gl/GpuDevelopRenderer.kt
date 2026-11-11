@@ -56,7 +56,7 @@ data class FrameStats(
  * Create with [create]; call [close] when done. Failures to meet the GPU requirements surface from [create] as
  * [GlesRequirementException].
  */
-@Suppress("TooManyFunctions")
+@Suppress("TooManyFunctions", "LargeClass")
 class GpuDevelopRenderer private constructor() : AutoCloseable {
     private val thread = HandlerThread("reveal-gl").apply { start() }
     private val handler = Handler(thread.looper)
@@ -716,6 +716,7 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
      * After a presented frame: starts a histogram readback of the displayed stage now, or once the rate limit allows
      * (trailing update); a readback in flight is polled until the GPU finished it.
      */
+    @Suppress("ReturnCount")
     private fun maybeMeasureHistogram() {
         if (!histogramEnabled || onHistogram == null) return
         if (histogram.pending) {

@@ -100,7 +100,8 @@ class EditorInteractionTest {
         waitUntil("histogram after the edit") { renderer.histogramCount > before }
         Log.i(
             TAG,
-            "histogram: GL thread ${renderer.histogramMs} ms (request ${renderer.histogramRequestMs}), latency ${renderer.histogramLatencyMs} ms, " +
+            "histogram: GL thread ${renderer.histogramMs} ms (request ${renderer.histogramRequestMs}), " +
+                "latency ${renderer.histogramLatencyMs} ms, " +
                 "${renderer.histogramCount} so far",
         )
 

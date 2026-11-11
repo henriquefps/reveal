@@ -224,3 +224,12 @@ emulator (host scheduling, the start of an `input swipe`): render + swap p95 sta
 contended runs.
 Time to the first developed frame: ADR 0004, "Measurements of the real open flow".
 
+
+## Measurement of the M1 editor (M1/E, emulator, to be re-measured on the phone)
+
+`EditorMeasurementsTest` on the public ZV-E10 ARW after the Light operators (PR #9), emulator API 36 arm64 with host
+GPU, another worker's emulator running alongside. The editor's live histogram (async PBO readback, 10 Hz cap) does
+not change the drag cost: with the histogram on, render + swap p50 40-51 ms (p95 109-148 ms), 52-64 frames in 4 s,
+5-7 histograms per drag at 1.3-23 ms GL-thread time each; with `-e histogram false`, p50 44-62 ms (p95 148-179 ms),
+45-57 frames. The frame cost is the Light group's passes on the emulator's translated GPU (M0 stage 1 alone was about
+2 ms); the phone numbers decide whether they need a proxy-resolution budget.

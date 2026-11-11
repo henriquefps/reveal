@@ -7,8 +7,10 @@ import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -52,7 +54,9 @@ fun TransformControls(host: ModeHost, modifier: Modifier = Modifier) {
     val g = host.state.edit.recipe.geometry
     val t = g.transform
     val session = host.crop
-    Column(modifier.fillMaxWidth()) {
+    // The side column (landscape, tablet) scrolls the whole tab; portrait bounds the sliders below.
+    val scroll = if (host.vertical) Modifier.verticalScroll(rememberScrollState()) else Modifier
+    Column(modifier.fillMaxWidth().then(scroll)) {
         FlowRow(
             Modifier
                 .fillMaxWidth()
@@ -103,29 +107,47 @@ fun TransformControls(host: ModeHost, modifier: Modifier = Modifier) {
             }
         }
         var start by remember { mutableStateOf<Geometry?>(null) }
-        for ((id, label) in SLIDERS) {
-            val range = RecipeRanges[id]
-            val spec = remember(range) { range.toSliderSpec() }
-            RevealSlider(
-                label = stringResource(label),
-                value = OpticsControls.get(host.state.edit.recipe, id),
-                spec = spec,
-                format = range::format,
-                onValueChange = { v ->
-                    val from = start ?: g
-                    host.actions.onGeometry(transformed(from, id, range.clamp(v), ready.width, ready.height))
-                },
-                onReset = {
-                    host.actions.onGeometry(transformed(g, id, range.neutral, ready.width, ready.height))
-                },
-                enabled = host.state.ready,
-                testTag = EditorTags.control(id),
-                onDragStateChange = { dragging ->
-                    start = if (dragging) g else null
-                    session.grid = if (dragging) CropGrid.FINE else CropGrid.NONE
-                },
-            )
+        // Portrait: the sliders scroll in a bounded area so the photo keeps its room (the side column scrolls the tab).
+        val sliders = if (host.vertical) {
+            Modifier
+        } else {
+            Modifier.heightIn(max = SLIDERS_MAX_HEIGHT).verticalScroll(rememberScrollState())
         }
+        Column(sliders) { Sliders(host, ready, g, start) { start = it } }
+    }
+}
+
+@Composable
+private fun Sliders(
+    host: ModeHost,
+    ready: EditorPhase.Ready,
+    g: Geometry,
+    start: Geometry?,
+    onStart: (Geometry?) -> Unit,
+) {
+    val session = host.crop
+    for ((id, label) in SLIDERS) {
+        val range = RecipeRanges[id]
+        val spec = remember(range) { range.toSliderSpec() }
+        RevealSlider(
+            label = stringResource(label),
+            value = OpticsControls.get(host.state.edit.recipe, id),
+            spec = spec,
+            format = range::format,
+            onValueChange = { v ->
+                val from = start ?: g
+                host.actions.onGeometry(transformed(from, id, range.clamp(v), ready.width, ready.height))
+            },
+            onReset = {
+                host.actions.onGeometry(transformed(g, id, range.neutral, ready.width, ready.height))
+            },
+            enabled = host.state.ready,
+            testTag = EditorTags.control(id),
+            onDragStateChange = { dragging ->
+                onStart(if (dragging) g else null)
+                session.grid = if (dragging) CropGrid.FINE else CropGrid.NONE
+            },
+        )
     }
 }
 
@@ -156,6 +178,8 @@ private fun UprightMode.label(): Int = when (this) {
     UprightMode.FULL -> R.string.editor_upright_full
     UprightMode.GUIDED -> R.string.editor_upright_guided
 }
+
+private val SLIDERS_MAX_HEIGHT = 232.dp
 
 private val SLIDERS = listOf(
     ControlId.TRANSFORM_VERTICAL to R.string.editor_transform_vertical,

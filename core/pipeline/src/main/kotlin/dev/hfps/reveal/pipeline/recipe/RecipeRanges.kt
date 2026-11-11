@@ -309,7 +309,7 @@ object RecipeRanges {
     val transformRotate = bipolar(ControlId.TRANSFORM_ROTATE, ROTATE_MAX, ANGLE_STEP, ANGLE_STEP, ValueKind.DEGREES)
     val transformAspect = signedInt(ControlId.TRANSFORM_ASPECT)
     val transformScale = ControlRange(
-        ControlId.TRANSFORM_SCALE, SCALE_MIN, SCALE_MAX, 100f, 1f, 1f, bipolar = false, neutral = 100f,
+        ControlId.TRANSFORM_SCALE, SCALE_MIN, SCALE_MAX, 100f, 1f, 1f, bipolar = true, neutral = 100f,
         kind = ValueKind.PERCENT,
     )
     val transformOffsetX = signedInt(ControlId.TRANSFORM_OFFSET_X)

@@ -79,7 +79,7 @@ void main() {
     if (uVignette.x != 0.0) {
         float dx = (float(p.x + uOrigin.x) + 0.5) - uVignette.y;
         float dy = (float(p.y + uOrigin.y) + 0.5) - uVignette.z;
-        c = c * lensLookup(uVignetteLut, 0, sqrt(dx * dx + dy * dy) * uVignette.w);
+        c = c * lensLookup(uVignetteLut, sqrt(dx * dx + dy * dy) * uVignette.w).r;
     }
     c = c * exposure.x;
     outColor = vec4(c, 1.0);

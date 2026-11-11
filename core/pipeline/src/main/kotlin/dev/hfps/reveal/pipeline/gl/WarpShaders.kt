@@ -21,13 +21,13 @@ const float LENS_PER_RADIUS = ${ColourShaders.glslFloat(LensTables.PER_RADIUS)};
 const float LENS_LAST = ${ColourShaders.glslFloat((LensTables.SIZE - 1).toFloat())};
 const float WARP_W_MIN = ${ColourShaders.glslFloat(Warp.W_MIN)};
 
-// LensTables.lookup: entry ch of the table at radius r, linear between entries, flat beyond the last.
-float lensLookup(sampler2D table, int ch, float r) {
+// LensTables.lookup for every channel at once: the table at radius r, linear between entries, flat beyond the last.
+vec4 lensLookup(sampler2D table, float r) {
     float t = clamp(r * LENS_PER_RADIUS, 0.0, LENS_LAST);
     int i = min(int(t), ${LensTables.SIZE - 2});
     float f = t - float(i);
-    float a = texelFetch(table, ivec2(i, 0), 0)[ch];
-    float b = texelFetch(table, ivec2(i + 1, 0), 0)[ch];
+    vec4 a = texelFetch(table, ivec2(i, 0), 0);
+    vec4 b = texelFetch(table, ivec2(i + 1, 0), 0);
     return a + f * (b - a);
 }
 
@@ -50,10 +50,10 @@ bool warpSource(vec2 t, vec4 norm, vec3 r0, vec3 r1, vec3 r2, bool lens, sampler
         sB = sG;
         return true;
     }
-    float r = sqrt(ux * ux + uy * uy);
-    float kr = lensLookup(table, 0, r);
-    float kg = lensLookup(table, 1, r);
-    float kb = lensLookup(table, 2, r);
+    vec4 k = lensLookup(table, sqrt(ux * ux + uy * uy));
+    float kr = k.r;
+    float kg = k.g;
+    float kb = k.b;
     sR = vec2(norm.x + norm.z * (kr * ux), norm.y + norm.z * (kr * uy));
     sG = vec2(norm.x + norm.z * (kg * ux), norm.y + norm.z * (kg * uy));
     sB = vec2(norm.x + norm.z * (kb * ux), norm.y + norm.z * (kb * uy));

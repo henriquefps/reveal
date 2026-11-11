@@ -3,7 +3,9 @@ package dev.hfps.reveal.pipeline
 import android.util.Log
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import dev.hfps.reveal.pipeline.cpu.OutputSettings
 import dev.hfps.reveal.pipeline.gl.GpuDevelopRenderer
+import dev.hfps.reveal.pipeline.gl.ViewTransform
 import dev.hfps.reveal.pipeline.recipe.BandValues
 import dev.hfps.reveal.pipeline.recipe.BaseLook
 import dev.hfps.reveal.pipeline.recipe.Colour
@@ -224,16 +226,55 @@ class PipelineBenchmark {
     @Test
     fun transformDragFrameTime(): Unit = runBlocking {
         val image = SyntheticImages.scene(WIDTH, HEIGHT).withLens(GpuParityTest.PARITY_LENS)
-        drag("transform vertical (lens + CA on)", image) {
+        val transform = { t: Float ->
             Recipe(
                 optics = Optics(lensCorrections = true, removeCa = true),
-                geometry = Geometry(transform = Transform(vertical = -40f + 80f * it, scale = 110f)),
+                geometry = Geometry(transform = Transform(vertical = -40f + 80f * t, scale = 110f)),
             )
         }
-        drag("lens distortion amount", image) {
+        // 1:1 into a 2400 x 1600 target (every pixel three Catmull-Rom samples: the worst case, an export tile).
+        drag("transform vertical 1:1 (lens + CA on)", image, PROXY_SCALE, transform)
+        // As the editor shows it: the whole photo fitted to a phone's photo area (minified, explicit LOD).
+        dragView("transform vertical, fit view (lens + CA on)", image, transform)
+        drag("lens distortion amount", image, PROXY_SCALE) {
             Recipe(optics = Optics(lensCorrections = true, distortionPercent = 200f * it))
         }
-        drag("defringe purple amount", image) { Recipe(optics = Optics(purpleAmount = 20f * it)) }
+        drag("defringe purple amount (proxy scale)", image, PROXY_SCALE) {
+            Recipe(optics = Optics(purpleAmount = 20f * it))
+        }
+    }
+
+    /**
+     * [drag] as the editor draws it: the output pass into a [VIEW_W] x [VIEW_H] target with the photo fitted (a phone's
+     * photo area), stage 1 re-run only when needed; the readback of each frame is included (an upper bound).
+     */
+    private suspend fun dragView(name: String, image: PipelineInput, recipeAt: (Float) -> Recipe) {
+        val renderer = GpuDevelopRenderer.create()
+        try {
+            renderer.setInput(image, PROXY_SCALE)
+            val scale = minOf(VIEW_W.toFloat() / image.width, VIEW_H.toFloat() / image.height)
+            val view = ViewTransform(scale, image.width / 2f, image.height / 2f)
+            val settings = OutputSettings(dither = true)
+            val sweep = List(FRAMES) { recipeAt(it.toFloat() / (FRAMES - 1)) }
+            for (r in sweep.take(WARMUP)) {
+                renderer.setRecipe(r)
+                renderer.renderView(view, VIEW_W, VIEW_H, settings)
+            }
+            val times = sweep.map { r ->
+                val start = System.nanoTime()
+                renderer.setRecipe(r)
+                renderer.renderView(view, VIEW_W, VIEW_H, settings)
+                (System.nanoTime() - start) / 1e6f
+            }.sorted()
+            Log.i(
+                TAG,
+                "$name: ${renderer.info.renderer} ${VIEW_W}x$VIEW_H view of ${image.width}x${image.height}: " +
+                    "frame mean ${"%.2f".format(times.average())} ms, p50 ${"%.2f".format(times[times.size / 2])}, " +
+                    "p95 ${"%.2f".format(times[(times.size * 95) / 100])}, max ${"%.2f".format(times.last())}",
+            )
+        } finally {
+            renderer.close()
+        }
     }
 
     private fun noisy() = SyntheticImages.noisyCard(WIDTH, HEIGHT, seed = 5)
@@ -282,6 +323,8 @@ class PipelineBenchmark {
 
     private companion object {
         const val TAG = "REVEAL_BENCH"
+        const val VIEW_W = 1080
+        const val VIEW_H = 1500
         const val WIDTH = 2400
         const val HEIGHT = 1600
         const val FRAMES = 120

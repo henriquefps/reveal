@@ -2,6 +2,7 @@
 
 package dev.hfps.reveal.pipeline.synthetic
 
+import dev.hfps.reveal.pipeline.InputKind
 import dev.hfps.reveal.pipeline.PipelineInput
 import dev.hfps.reveal.pipeline.cpu.ColorSpaces
 import dev.hfps.reveal.pipeline.cpu.Mat3
@@ -64,6 +65,42 @@ object SyntheticImages {
         return PipelineInput.linearSrgb(width, height, data)
     }
 
+    /** A horizontal ramp from 0 to [max] as RAW-like scene-referred data (camera neutral under the as-shot light). */
+    fun rawRamp(width: Int, height: Int, max: Float): PipelineInput {
+        val data = FloatArray(width * height * PipelineInput.CHANNELS)
+        for (y in 0 until height) {
+            for (x in 0 until width) {
+                val v = max * x / (width - 1).coerceAtLeast(1)
+                for (c in 0 until PipelineInput.CHANNELS) {
+                    data[(y * width + x) * PipelineInput.CHANNELS + c] = v / TEST_AS_SHOT[c]
+                }
+            }
+        }
+        return PipelineInput(InputKind.SCENE_REFERRED, width, height, data, TEST_CAMERA_TO_XYZ, TEST_AS_SHOT)
+    }
+
+    /**
+     * What a JPEG decoder hands over: [width] x 3 patches, every grey level 0..255 in sRGB 8-bit (so the expected
+     * output is the source itself) followed by the colour-checker patches, linearised, as display-referred sRGB.
+     * Returns the input and its 8-bit sRGB source values (RGBA8, opaque).
+     */
+    fun srgb8Chart(): Pair<PipelineInput, ByteArray> {
+        val patches = mutableListOf<IntArray>()
+        for (v in 0..255) patches += intArrayOf(v, v, v)
+        for (v in 0..255 step 5) patches += intArrayOf(v, 255 - v, (v * 3) % 256)
+        patches += CHECKER_SRGB8
+        val data = FloatArray(patches.size * PipelineInput.CHANNELS)
+        val source = ByteArray(patches.size * 4)
+        patches.forEachIndexed { i, p ->
+            for (c in 0 until PipelineInput.CHANNELS) {
+                data[i * PipelineInput.CHANNELS + c] = srgbToLinear(p[c] / MAX8)
+                source[i * 4 + c] = p[c].toByte()
+            }
+            source[i * 4 + 3] = -1
+        }
+        return PipelineInput.linearSrgb(patches.size, 1, data) to source
+    }
+
     /** Values outside [0, 1]: negative (out-of-gamut), exactly white and far over white, as linear sRGB. */
     fun outOfRange(): PipelineInput {
         val colours = listOf(
@@ -85,7 +122,7 @@ object SyntheticImages {
     fun rawNoise(width: Int, height: Int, seed: Int): PipelineInput {
         val random = Random(seed)
         val data = FloatArray(width * height * PipelineInput.CHANNELS) { random.nextFloat() }
-        return PipelineInput(width, height, data, TEST_CAMERA_TO_XYZ, TEST_AS_SHOT)
+        return PipelineInput(InputKind.SCENE_REFERRED, width, height, data, TEST_CAMERA_TO_XYZ, TEST_AS_SHOT)
     }
 
     /**
@@ -107,7 +144,7 @@ object SyntheticImages {
                 for (c in 0 until PipelineInput.CHANNELS) data[i + c] = cam[c].toFloat()
             }
         }
-        return PipelineInput(width, height, data, TEST_CAMERA_TO_XYZ, TEST_AS_SHOT)
+        return PipelineInput(InputKind.SCENE_REFERRED, width, height, data, TEST_CAMERA_TO_XYZ, TEST_AS_SHOT)
     }
 
     private val SCENE_TO_CAMERA: Mat3 = TEST_CAMERA_TO_XYZ.inverse() * ColorSpaces.SRGB.toXyz

@@ -74,6 +74,9 @@ object BaseToneOp {
     /** Knee of the Standard curve, in linear working-space units. */
     const val KNEE: Float = 0.8f
 
+    /** Knee that makes the curve the identity for every finite input (display-referred images). */
+    const val IDENTITY_KNEE: Float = Float.MAX_VALUE
+
     private const val MAX_INPUT = 1e4f
 
     /** The curve for one value. */

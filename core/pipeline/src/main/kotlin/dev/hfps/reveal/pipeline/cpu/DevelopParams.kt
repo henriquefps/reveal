@@ -1,5 +1,6 @@
 package dev.hfps.reveal.pipeline.cpu
 
+import dev.hfps.reveal.pipeline.InputKind
 import dev.hfps.reveal.pipeline.PipelineInput
 import dev.hfps.reveal.pipeline.recipe.Recipe
 
@@ -11,7 +12,8 @@ import dev.hfps.reveal.pipeline.recipe.Recipe
  * @property wbMultipliers raw white-balance multipliers (R, G, B), G = 1.
  * @property cameraToWorking row-major 3x3, balanced camera RGB to linear Rec.2020.
  * @property exposureGain linear gain `2^EV`.
- * @property toneKnee knee of the base tone curve.
+ * @property toneKnee knee of the base tone curve; [BaseToneOp.IDENTITY_KNEE] (curve is the identity) for
+ *   display-referred input.
  */
 class DevelopParams(
     val wbMultipliers: FloatArray,
@@ -42,7 +44,7 @@ class DevelopParams(
                 wbMultipliers = FloatArray(PipelineInput.CHANNELS) { wb.multipliers[it].toFloat() },
                 cameraToWorking = wb.balancedToWorking.toFloatArray(),
                 exposureGain = ExposureOp.gain(recipe.light.exposureEv),
-                toneKnee = BaseToneOp.KNEE,
+                toneKnee = if (input.kind == InputKind.SCENE_REFERRED) BaseToneOp.KNEE else BaseToneOp.IDENTITY_KNEE,
             )
         }
     }

@@ -20,6 +20,12 @@ Implemented in M0 are marked **(M0)**; the rest are the reserved slots from `doc
    mask from step 1.
 6. **Profile / base look (M0, the "Standard" tone curve)**: turns scene-linear into display-referred values. Every
    user adjustment below acts on this base, so presets and profiles define the look and sliders refine it.
+   **Only for scene-referred input.** `PipelineInput.kind` is `SCENE_REFERRED` (demosaiced RAW) or `DISPLAY_REFERRED`
+   (JPEG/HEIF/PNG, already tone-mapped by a camera or editor). For display-referred input the base look is the
+   identity (`DevelopParams.toneKnee = IDENTITY_KNEE`), so the default recipe shows the original pixels (product
+   principle: nothing is applied without the user seeing it). Tested: an sRGB 8-bit chart (every grey level plus colour
+   patches) round-trips within 1 level with dither on, on the CPU and on the GPU. Exposure and white balance still
+   apply to display-referred input; its out-of-range values clip only at the output.
 7. **White balance fine / tint (M0 handles temperature and tint at step 1-2, see below)**.
 8. **Tone (later)**: contrast, highlights/shadows (edge-aware), whites/blacks, curves: display-referred, after the
    base look.
@@ -93,7 +99,7 @@ Measured on the emulator (OpenGL ES 3.0, host GPU, 5 synthetic images x 13 recip
 
 | Quantity | Tolerance (test) | Measured |
 | --- | --- | --- |
-| Linear working-space stage, per value | `abs <= 1e-6 + 3e-3 * (largest \|channel\| of that pixel)`; mean abs error `<= 3e-4` | max abs error 2.2e-3, mean 1.8e-4, worst 73 % of tolerance |
+| Linear working-space stage, per value | `abs <= 1e-6 + 3e-3 * (largest \|channel\| of that pixel)`; mean abs error `<= 3e-4` | max abs error 2.2e-3 on RAW-like and in-range images (0.11 on the 16x over-white ramp, where the tolerance scales with the value), mean 2.5e-4, worst 73 % of tolerance |
 | 8-bit output (dither on, same seed), per value | max 2 levels (4 on the random-noise stress image); mean `<= 0.1` | max 1 level on gradients, checker, out-of-range and the scene; 3 on random noise; mean 0.035; 8 of 978,627 values off by more than 1 (sRGB) |
 
 The tolerance is relative to the pixel's largest channel because a single fp16 rounding of a large channel
@@ -108,7 +114,8 @@ same (file, recipe) changes: a formula, a constant, the operator order, the dith
 mapping into `PipelineInput`. Do not bump for refactors, performance work with identical output, or new operators
 whose recipe defaults are identity. `CpuDevelopTest` pins a CRC of a full CPU render of a synthetic scene to the
 version; a legitimate change makes that test fail and the author updates the CRC and the version together.
-Version 1 is this pipeline.
+Version 1 is this pipeline. Making the base look identity for display-referred input changes output for such
+inputs, but version 1 has not shipped, so it stays 1 (no cache from an earlier pipeline exists).
 
 ## Determinism
 

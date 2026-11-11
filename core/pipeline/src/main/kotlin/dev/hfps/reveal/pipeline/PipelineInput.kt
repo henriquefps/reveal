@@ -3,11 +3,22 @@ package dev.hfps.reveal.pipeline
 import dev.hfps.reveal.pipeline.cpu.ColorSpaces
 import dev.hfps.reveal.pipeline.cpu.Mat3
 
+/** What the pixel values of a [PipelineInput] mean; it decides whether the base look is applied. */
+enum class InputKind {
+    /** Scene-referred linear light (a demosaiced RAW): the Standard base look maps it to a display range. */
+    SCENE_REFERRED,
+
+    /** Display-referred (JPEG/HEIF/PNG, already rendered by a camera or editor): the base look is identity. */
+    DISPLAY_REFERRED,
+}
+
 /**
  * What the develop pipeline consumes: a linear image plus what is needed to bring it into the working space.
  * Plain Kotlin on purpose; `:core:image` produces a `LinearImage` + `RawColorInfo` and a later integration step
  * maps them onto this type (this type does not depend on `:core:image`).
  *
+ * @property kind whether [linearRgb] is scene-referred (RAW) or display-referred (already tone-mapped, linearised
+ *   only for processing); display-referred input renders as itself under the default recipe.
  * @property width image width in pixels.
  * @property height image height in pixels.
  * @property linearRgb interleaved R,G,B floats, row-major from the top-left, `width * height * 3` values. For a
@@ -23,6 +34,7 @@ import dev.hfps.reveal.pipeline.cpu.Mat3
  *   neutral as `1/multiplier`; `null` for non-RAW images (already neutral, treated as multipliers 1,1,1).
  */
 class PipelineInput(
+    val kind: InputKind,
     val width: Int,
     val height: Int,
     val linearRgb: FloatArray,
@@ -47,10 +59,10 @@ class PipelineInput(
 
         /** Wraps linear sRGB pixels (a JPEG/HEIF decoded and linearised by the image core). */
         fun linearSrgb(width: Int, height: Int, linearRgb: FloatArray): PipelineInput =
-            PipelineInput(width, height, linearRgb, ColorSpaces.SRGB.toXyz, null)
+            PipelineInput(InputKind.DISPLAY_REFERRED, width, height, linearRgb, ColorSpaces.SRGB.toXyz, null)
 
         /** Wraps linear Display P3 pixels (a P3 HEIF decoded and linearised by the image core). */
         fun linearDisplayP3(width: Int, height: Int, linearRgb: FloatArray): PipelineInput =
-            PipelineInput(width, height, linearRgb, ColorSpaces.DISPLAY_P3.toXyz, null)
+            PipelineInput(InputKind.DISPLAY_REFERRED, width, height, linearRgb, ColorSpaces.DISPLAY_P3.toXyz, null)
     }
 }

@@ -1,5 +1,6 @@
 package dev.hfps.reveal.feature.editor.debug
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -25,6 +26,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import dev.hfps.reveal.feature.editor.R
@@ -67,7 +69,12 @@ fun EditorDebugScreen(modifier: Modifier = Modifier) {
     val input by produceState<PipelineInput?>(initialValue = null) {
         value = withContext(Dispatchers.Default) { SyntheticImages.scene(PROXY_WIDTH, PROXY_HEIGHT) }
     }
-    Box(modifier = modifier.fillMaxSize()) {
+    Box(
+        modifier = modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background)
+            .statusBarsPadding(),
+    ) {
         val ready = renderer?.getOrNull()
         val image = input
         when {
@@ -112,31 +119,30 @@ private fun DebugCanvas(renderer: GpuDevelopRenderer, input: PipelineInput, modi
             colour = Colour(WhiteBalance(temperatureK = temperature.roundToInt().toFloat())),
         )
     }
-    Box(modifier = modifier) {
-        ZoomableGlCanvas(
-            renderer = renderer,
-            input = input,
-            recipe = recipe,
-            modifier = Modifier.fillMaxSize(),
-            zoom = zoom,
-        )
-        TextButton(
-            onClick = { scope.launch { zoom.animateDoubleTap(zoom.viewCenterX, zoom.viewCenterY) } },
-            modifier = Modifier
-                .align(Alignment.TopEnd)
-                .statusBarsPadding(),
-        ) {
-            Text(stringResource(R.string.debug_toggle_zoom))
+    // The canvas takes only the space above the panel (docs/plan/ux.md), clipped to its bounds; the panel is opaque.
+    Column(modifier = modifier) {
+        Box(modifier = Modifier.weight(1f).fillMaxWidth().clipToBounds()) {
+            ZoomableGlCanvas(
+                renderer = renderer,
+                input = input,
+                recipe = recipe,
+                modifier = Modifier.fillMaxSize(),
+                zoom = zoom,
+            )
+            TextButton(
+                onClick = { scope.launch { zoom.animateDoubleTap(zoom.viewCenterX, zoom.viewCenterY) } },
+                modifier = Modifier.align(Alignment.TopEnd),
+            ) {
+                Text(stringResource(R.string.debug_toggle_zoom))
+            }
         }
         Surface(
             modifier = Modifier
-                .align(Alignment.BottomCenter)
                 .fillMaxWidth()
                 .navigationBarsPadding()
                 .padding(8.dp),
-            tonalElevation = 3.dp,
             shape = MaterialTheme.shapes.large,
-            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
+            color = MaterialTheme.colorScheme.surface,
             contentColor = MaterialTheme.colorScheme.onSurface,
         ) {
             Column(

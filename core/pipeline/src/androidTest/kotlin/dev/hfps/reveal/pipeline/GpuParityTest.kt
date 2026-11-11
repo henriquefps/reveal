@@ -42,6 +42,8 @@ class GpuParityTest {
 
     private val images: Map<String, PipelineInput> = linkedMapOf(
         "ramp" to SyntheticImages.grayRamp(256, 4, max = 4f),
+        "rawRamp" to SyntheticImages.rawRamp(256, 4, max = 16f),
+        "srgbChart" to SyntheticImages.srgb8Chart().first,
         "checker" to SyntheticImages.colorChecker(cell = 6),
         "outOfRange" to SyntheticImages.outOfRange(),
         "scene" to SyntheticImages.scene(160, 108),
@@ -134,6 +136,22 @@ class GpuParityTest {
             )
             assertThat(sum.toDouble() / count).isAtMost(OUTPUT_MEAN_LEVELS)
         }
+    }
+
+    @Test
+    fun displayReferredImageRoundTripsOnTheGpu(): Unit = runBlocking {
+        val (input, source) = SyntheticImages.srgb8Chart()
+        renderer.setInput(input)
+
+        val out = renderer.renderOutput(Recipe())
+
+        var maxDiff = 0
+        for (i in source.indices) {
+            maxDiff =
+                maxOf(maxDiff, abs((out[i].toInt() and 0xff) - (source[i].toInt() and 0xff)))
+        }
+        Log.i(TAG, "sRGB 8-bit round trip on the GPU: max diff $maxDiff levels")
+        assertThat(maxDiff).isAtMost(1)
     }
 
     @Test

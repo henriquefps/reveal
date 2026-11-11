@@ -34,13 +34,19 @@ milestone run in parallel where they do not touch the same files.
   Upright, auto-straighten.
 - Tablet/foldable layout with the filmstrip; S Pen basics.
 
-## M3 - Presets and smart presets (0.4.0)
+## MS - Sync and cloud library (0.4.0, after M2)
+- Self-hosted Go sync server (`reveal-sync`, on `cachyos-fps` behind Cloudflare Tunnel), edits and
+  library metadata keyed by a content fingerprint, optional smart previews and originals backup,
+  NAS folders served by the server, phone + tablet on the same library, a small web setup UI on the server (devices/keys, storage paths).
+  Design: `sync.md`.
+
+## M3 - Presets and smart presets (0.5.0)
 - Built-in presets designed on real photos, live previews, strength, user presets and groups,
   import/export, favourites, batch apply.
 - Smart presets (analysis rules + style), calibrated on the owner's photos, documented
   platform-neutrally in an ADR. Auto upgraded to use the same analysis.
 
-## M4 - Masks (0.5.0)
+## M4 - Masks (0.6.0)
 - AI subject / background / sky (and people parts if the spike finds good enough models), linear and
   radial gradients, brush with auto-mask and pen pressure, luminance/colour range, add/subtract/
   intersect/invert, all local adjustments, overlay, mask list management. ML spike ADR first.
@@ -50,11 +56,6 @@ milestone run in parallel where they do not touch the same files.
 - Versions/virtual copies, snapshots, export presets, XMP sidecar portability (round-trip with Hoard
   and darktable/Lightroom for the overlapping fields), settings complete, accessibility pass,
   worst-case pass, performance pass on the phone. 1.0.0 = the owner can cancel his subscription.
-
-## MS - Sync and cloud library (proposal; placement to be decided by the owner)
-- Self-hosted Go sync server (`reveal-sync`, on `cachyos-fps` behind Cloudflare Tunnel), edits and
-  library metadata keyed by a content fingerprint, optional smart previews and originals backup,
-  NAS folders served by the server, phone + tablet on the same library. Design: `sync.md`.
 
 ## Later (only if the owner asks)
 AI denoise, on-device inpainting model for larger removals, HDR merge, panorama, Lightroom preset

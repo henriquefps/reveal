@@ -1,7 +1,7 @@
 # Reveal: sync and cloud library (proposal, not scheduled yet)
 
-Status: proposal from the owner (2026-11-11), placed in `milestones.md` as **MS**. Nothing here is built
-yet, except the content fingerprint (see "Prepare now").
+Status: planned as **MS (0.4.0), after M2** (owner, 2026-11-11). Nothing here is built yet, except the
+content fingerprint (see "Prepare now").
 
 ## What the owner wants
 
@@ -38,8 +38,12 @@ background, is the content address for uploads.
 2. **Smart previews (optional, medium):** a compact developable proxy per photo, about 2560 px,
    so a device without the original can still edit at screen size. Export at full size then needs the
    original (download on demand) or is queued until it is reachable.
-3. **Originals (optional backup, large):** RAW/JPEG files uploaded once, content-addressed by full
-   SHA-256, so duplicates cost nothing. Per folder or per album, Wi-Fi only by default.
+3. **Originals backup (large), only for photos the server cannot already reach:** photos that live
+   only on a device (imported from the camera or an SD card, the phone's DCIM) are uploaded once,
+   content-addressed by full SHA-256, Wi-Fi only by default, on by default for those. A photo whose
+   fingerprint the server already has (it is in an indexed NAS folder, or another device uploaded it)
+   is never uploaded again: editing a NAS photo syncs only its edits. A per-folder switch turns the
+   backup off (decided with the owner, 2026-11-11).
 4. **The SMB share:** `cachyos-fps` is on the same network as the NAS, so the server can index NAS
    folders directly and serve them, with no upload from the phone. The tablet then sees the NAS shoots
    and their edits even away from home, through the tunnel.
@@ -65,6 +69,21 @@ in a content-addressed folder, chunked resumable uploads, a list endpoint with c
 cursor, tombstones kept forever, health endpoint with counts only. Docker image + static binaries,
 like the other two servers. Deployed on `cachyos-fps` with Docker Compose and a Cloudflare Tunnel.
 
+### Setup UI and deployment
+
+The server serves a small web setup page (protected by an admin password set on first run, and only
+on the LAN/Tailscale unless the owner enables it through the tunnel):
+- **Devices:** pair a new device with a QR code (the app scans it and receives its own key), see last
+  sync per device, revoke a device.
+- **Storage:** choose the backup folder among the paths mounted into the container, see space used
+  and free.
+- **NAS folders:** choose which mounted NAS folders the server indexes and serves (read-only).
+- Status: photos, previews, originals, pending uploads, errors.
+
+Docker Compose mounts the volumes: `/data` (database and settings), the backup root (for example a
+folder on the NAS or on `cachyos-fps`'s disk) and the NAS shoots read-only. The UI only picks among
+those mounts, so the container never sees anything else.
+
 ### App side
 
 A WorkManager sync job (offline queue, backoff, Wi-Fi/charging constraints for blobs), a Settings
@@ -78,9 +97,8 @@ only, original in the cloud), and the tablet layout from M2 using the same libra
   presets ship.
 - Recipes stay self-contained JSON (ADR 0003), which is already the sync payload.
 
-## Open questions for the owner
+## Decided (2026-11-11)
 
-- Placement: right after M2 (recommended: the tablet layout lands in M2 and sync makes it useful) or
-  after 1.0.
-- Originals backup on by default, or opt-in per folder?
-- Storage on the server: `cachyos-fps`'s own disk, or a folder on the NAS mounted there?
+- Placement: after M2 (orchestrator's choice, owner left it open).
+- Originals backup: only for photos the server cannot already reach (rule above).
+- Storage: chosen in the setup UI among Docker-mounted paths.

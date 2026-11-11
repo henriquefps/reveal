@@ -1,4 +1,4 @@
-@file:Suppress("MagicNumber")
+@file:Suppress("MagicNumber", "NestedBlockDepth", "LoopWithTooManyJumpStatements")
 
 package dev.hfps.reveal.pipeline.cpu
 

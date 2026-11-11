@@ -32,10 +32,10 @@ object OpticsControls {
     }
 
     /**
-     * [recipe] with [id] set to [value] (already clamped by the caller). A hue range end never crosses the other one
-     * (the low end stays at or below the high end, at least [MIN_HUE_SPAN] apart). A transform slider moved by hand
-     * leaves Upright ([UprightMode.OFF]: the sliders no longer are its result); its constrained crop is refitted by
-     * the crop mode (`CropEditing.transform`).
+     * [recipe] with [id] set to [value] (already clamped by the caller). The hue range ends may cross: the operator
+     * reads the lower one as the start (`DefringeParams.from`). A transform slider moved by hand leaves Upright
+     * ([UprightMode.OFF]: the sliders no longer are its result); its constrained crop is refitted by the crop mode
+     * (`CropEditing.transform`).
      */
     @Suppress("CyclomaticComplexMethod")
     fun set(recipe: Recipe, id: ControlId, value: Float): Recipe {
@@ -53,30 +53,24 @@ object OpticsControls {
 
             ControlId.DEFRINGE_PURPLE_HUE_LOW -> optics(
                 o.copy(
-                    purpleHueLow = minOf(
-                        value,
-                        o.purpleHueHigh - MIN_HUE_SPAN,
-                    ),
+                    purpleHueLow = value,
                 ),
             )
 
             ControlId.DEFRINGE_PURPLE_HUE_HIGH -> optics(
                 o.copy(
-                    purpleHueHigh = maxOf(
-                        value,
-                        o.purpleHueLow + MIN_HUE_SPAN,
-                    ),
+                    purpleHueHigh = value,
                 ),
             )
 
             ControlId.DEFRINGE_GREEN_AMOUNT -> optics(o.copy(greenAmount = value))
 
             ControlId.DEFRINGE_GREEN_HUE_LOW -> optics(
-                o.copy(greenHueLow = minOf(value, o.greenHueHigh - MIN_HUE_SPAN)),
+                o.copy(greenHueLow = value),
             )
 
             ControlId.DEFRINGE_GREEN_HUE_HIGH -> optics(
-                o.copy(greenHueHigh = maxOf(value, o.greenHueLow + MIN_HUE_SPAN)),
+                o.copy(greenHueHigh = value),
             )
 
             ControlId.TRANSFORM_VERTICAL -> transform(t.copy(vertical = value))
@@ -96,7 +90,4 @@ object OpticsControls {
             else -> error("$id is not an optics or transform control")
         }
     }
-
-    /** Smallest hue range of a defringe colour (slider units). */
-    const val MIN_HUE_SPAN: Float = 5f
 }

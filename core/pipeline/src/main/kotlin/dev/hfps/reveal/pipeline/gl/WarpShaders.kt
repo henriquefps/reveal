@@ -1,3 +1,6 @@
+// Numeric and geometric code: early returns validate, loops mirror the shaders, constants are the maths.
+@file:Suppress("MagicNumber")
+
 package dev.hfps.reveal.pipeline.gl
 
 import android.opengl.GLES30

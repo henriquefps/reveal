@@ -332,18 +332,17 @@ data class Optics(
         const val GREEN_LOW: Float = 40f
         const val GREEN_HIGH: Float = 60f
 
-        /**
-         * The optics a new edit starts with (docs/adr/0015, "Defaults"): lens corrections on for a RAW with a profile,
-         * and CA removal on when that profile carries CA data. JPEG/HEIF were usually corrected by the camera already:
-         * their profile is offered but off.
-         */
-
         /** Every optics [forNewPhoto] can give with a profile. */
         val NEW_PHOTO_DEFAULTS: Set<Optics> = setOf(
             Optics(lensCorrections = true),
             Optics(lensCorrections = true, removeCa = true),
         )
 
+        /**
+         * The optics a new edit starts with (docs/adr/0015, "Defaults"): lens corrections on for a RAW with a profile,
+         * and CA removal on when that profile carries CA data. JPEG/HEIF were usually corrected by the camera already:
+         * their profile is offered but off.
+         */
         fun forNewPhoto(hasProfile: Boolean, profileHasCa: Boolean, isRaw: Boolean): Optics {
             val on = hasProfile && isRaw
             return Optics(lensCorrections = on, removeCa = on && profileHasCa)

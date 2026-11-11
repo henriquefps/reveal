@@ -230,7 +230,7 @@
     <string name="editor_upright_full">Completo</string>
     <string name="editor_upright_guided">Guiado</string>
     <string name="editor_transform_no_lines">Não há linhas retas suficientes para o Upright.</string>
-    <string name="editor_transform_guides_hint">Desenhe de 2 a 4 linhas sobre bordas que deveriam ficar verticais ou horizontais (%1$d desenhadas).</string>
+    <string name="editor_transform_guides_hint">Desenhe de 2 a 4 linhas sobre bordas que deveriam ficar verticais ou horizontais. Guias: %1$d</string>
     <string name="editor_transform_guides_clear">Remover guias</string>
     <string name="editor_transform_vertical">Vertical</string>
     <string name="editor_transform_horizontal">Horizontal</string>

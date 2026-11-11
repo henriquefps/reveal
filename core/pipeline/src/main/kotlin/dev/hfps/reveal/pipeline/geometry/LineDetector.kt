@@ -1,4 +1,4 @@
-@file:Suppress("MagicNumber")
+@file:Suppress("MagicNumber", "NestedBlockDepth", "ComplexCondition", "ReturnCount", "LoopWithTooManyJumpStatements")
 
 package dev.hfps.reveal.pipeline.geometry
 
@@ -142,7 +142,7 @@ object LineDetector {
         }
     }
 
-    /** Whether two level-line angles agree within [TOLERANCE] (direction matters: a dark-to-light edge has one side). */
+    /** Whether two level-line angles agree within [TOLERANCE] (direction matters: an edge has a dark side). */
     private fun aligned(a: Double, b: Double): Boolean {
         var d = abs(a - b)
         if (d > PI) d = 2 * PI - d

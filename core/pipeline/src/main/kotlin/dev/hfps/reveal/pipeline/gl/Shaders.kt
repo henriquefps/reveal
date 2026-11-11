@@ -54,8 +54,8 @@ precision highp sampler2D;
 
     /**
      * Stage 1, scene-linear (slots 1-5 of ADR 0002): raw white balance, highlight reconstruction, camera matrix, the
-     * lens's vignetting correction (slot 3, `VignetteOp`, docs/adr/0015) and exposure. Reads the source texture texel by texel and writes the scene texture 1:1 (RGBA16F), which the
-     * local-tone guide passes read.
+     * lens's vignetting correction (slot 3, `VignetteOp`, docs/adr/0015) and exposure. Reads the source texture texel
+     * by texel and writes the scene texture 1:1 (RGBA16F), which the local-tone guide passes read.
      */
     val SCENE_FRAG: String = HEADER + DEVELOP_BLOCK + LightShaders.COMMON + """
 uniform sampler2D uSource;

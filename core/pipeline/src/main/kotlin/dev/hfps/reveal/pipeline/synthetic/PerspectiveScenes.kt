@@ -1,4 +1,4 @@
-@file:Suppress("MagicNumber")
+@file:Suppress("MagicNumber", "NestedBlockDepth", "ReturnCount")
 
 package dev.hfps.reveal.pipeline.synthetic
 

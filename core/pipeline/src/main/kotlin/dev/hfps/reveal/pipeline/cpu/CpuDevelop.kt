@@ -11,12 +11,13 @@ import dev.hfps.reveal.pipeline.recipe.Recipe
  */
 object CpuDevelop {
     /**
-     * Runs raw WB, highlight reconstruction, camera matrix, vignetting correction (docs/adr/0015), exposure, highlights/shadows, the profile (base look),
-     * contrast/whites/blacks, the tone curve, vibrance/saturation, the colour mixer or black & white, colour grading
-     * (docs/adr/0013), Detail (noise reduction, sharpening) and the local Effects (texture, clarity, dehaze;
-     * docs/adr/0014), returning linear Rec.2020 RGB (`width*height*3`, display-referred below 1.0) before the output
-     * transform. Defringe (docs/adr/0015) runs right before Detail. [input] is not modified.
-     * [pixelScale]: full-resolution pixels per pixel of [input] (a proxy's downscale; the Detail operator's scale).
+     * Runs raw WB, highlight reconstruction, camera matrix, vignetting correction (docs/adr/0015), exposure,
+     * highlights/shadows, the profile (base look), contrast/whites/blacks, the tone curve, vibrance/saturation, the
+     * colour mixer or black & white, colour grading (docs/adr/0013), Detail (noise reduction, sharpening) and the local
+     * Effects (texture, clarity, dehaze; docs/adr/0014), returning linear Rec.2020 RGB (`width*height*3`,
+     * display-referred below 1.0) before the output transform. Defringe (docs/adr/0015) runs right before Detail.
+     * [input] is not modified. [pixelScale]: full-resolution pixels per pixel of [input] (a proxy's downscale; the
+     * Detail operator's scale).
      */
     fun renderLinear(input: PipelineInput, recipe: Recipe, pixelScale: Float = 1f): FloatArray {
         val params = DevelopParams.from(input, recipe, pixelScale)

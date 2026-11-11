@@ -51,7 +51,7 @@ enum class HistoryField(val group: RecipeGroup) {
     GRAIN_SIZE(RecipeGroup.EFFECTS),
     GRAIN_ROUGHNESS(RecipeGroup.EFFECTS),
 
-    // Optics and Transform (docs/adr/0015); before TREATMENT (HistoryLabels formats the fields after it as colour tools).
+    // Optics and Transform (docs/adr/0015); before TREATMENT (HistoryLabels formats the later fields as colour tools).
     LENS_CORRECTIONS(RecipeGroup.OPTICS),
     LENS_DISTORTION(RecipeGroup.OPTICS),
     LENS_VIGNETTING(RecipeGroup.OPTICS),

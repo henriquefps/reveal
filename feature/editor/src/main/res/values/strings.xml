@@ -237,7 +237,7 @@
     <string name="editor_upright_full">Full</string>
     <string name="editor_upright_guided">Guided</string>
     <string name="editor_transform_no_lines">Not enough straight lines found for Upright.</string>
-    <string name="editor_transform_guides_hint">Draw 2 to 4 lines along edges that should be vertical or horizontal (%1$d drawn).</string>
+    <string name="editor_transform_guides_hint">Draw 2 to 4 lines along edges that should be vertical or horizontal. Guides: %1$d</string>
     <string name="editor_transform_guides_clear">Remove guides</string>
     <string name="editor_transform_vertical">Vertical</string>
     <string name="editor_transform_horizontal">Horizontal</string>

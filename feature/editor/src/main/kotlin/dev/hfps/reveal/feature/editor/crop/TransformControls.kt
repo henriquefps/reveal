@@ -45,6 +45,7 @@ import dev.hfps.reveal.pipeline.recipe.UprightMode
  * on the photo.
  */
 @OptIn(ExperimentalLayoutApi::class)
+@Suppress("LongMethod")
 @Composable
 fun TransformControls(host: ModeHost, modifier: Modifier = Modifier) {
     val ready = host.state.phase as? EditorPhase.Ready ?: return

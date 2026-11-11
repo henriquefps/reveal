@@ -146,6 +146,7 @@ class EditorViewModel @Inject constructor(
         }
     }
 
+    @Suppress("LongMethod")
     private fun open() {
         val metrics = context.resources.displayMetrics
         val screenLong = maxOf(metrics.widthPixels, metrics.heightPixels)
@@ -588,10 +589,10 @@ class EditorViewModel @Inject constructor(
     private fun applyLensDefault(input: PipelineInput) {
         val lens = input.lens ?: return
         val edit = _state.value.edit
-        if (edit.history.entries.isNotEmpty()) return
         val optics = Optics.forNewPhoto(hasProfile = true, profileHasCa = lens.hasChromatic, isRaw = input.isRaw)
-        if (optics == edit.recipe.optics) return
-        editAndCommit(HistoryAction.LENS_PROFILE) { it.copy(optics = optics) }
+        if (edit.history.entries.isEmpty() && optics != edit.recipe.optics) {
+            editAndCommit(HistoryAction.LENS_PROFILE) { it.copy(optics = optics) }
+        }
     }
 
     /** Lines and (without profile CA data) the CA estimate, off the main thread while the proxy is on the heap. */

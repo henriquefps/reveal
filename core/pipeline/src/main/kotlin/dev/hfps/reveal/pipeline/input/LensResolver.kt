@@ -1,3 +1,6 @@
+// Numeric and geometric code: early returns validate, loops mirror the shaders, constants are the maths.
+@file:Suppress("ReturnCount")
+
 package dev.hfps.reveal.pipeline.input
 
 import dev.hfps.image.color.ColorInfo

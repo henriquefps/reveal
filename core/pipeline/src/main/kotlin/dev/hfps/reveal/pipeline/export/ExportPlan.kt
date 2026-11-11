@@ -180,8 +180,8 @@ class ExportPlan(
 
         /**
          * The plan for an upright [width] x [height] image with the recipe's [geometry] (and the lens corrections of
-         * [optics] with the photo's [lens] profile) at [size]; [reach] is the apron of defringe, Detail and Effects' texture at
-         * full resolution (`DevelopParams.reach`).
+         * [optics] with the photo's [lens] profile) at [size]; [reach] is the apron of defringe, Detail and Effects'
+         * texture at full resolution (`DevelopParams.reach`).
          */
         @Suppress("LongParameterList")
         fun of(

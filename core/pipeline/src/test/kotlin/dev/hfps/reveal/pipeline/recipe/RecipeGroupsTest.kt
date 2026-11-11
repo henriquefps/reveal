@@ -52,6 +52,31 @@ class RecipeGroupsTest {
             flipH = true,
             flipV = true,
             aspect = Aspect(locked = true),
+            transform = Transform(
+                vertical = 10f,
+                horizontal = -5f,
+                rotate = 1.5f,
+                aspect = 4f,
+                scale = 90f,
+                offsetX = 3f,
+                offsetY = -2f,
+                upright = UprightMode.GUIDED,
+                guides = listOf(GuideLine(0.1f, 0.1f, 0.1f, 0.9f)),
+            ),
+        ),
+        optics = Optics(
+            lensCorrections = true,
+            distortionPercent = 80f,
+            vignettingPercent = 120f,
+            removeCa = true,
+            caRed = 3f,
+            caBlue = -2f,
+            purpleAmount = 5f,
+            purpleHueLow = 20f,
+            purpleHueHigh = 80f,
+            greenAmount = 4f,
+            greenHueLow = 30f,
+            greenHueHigh = 70f,
         ),
         detail = Detail(10f, 1.5f, 30f, 40f, 50f, 60f, 70f, 80f, 90f, 95f),
         effects = Effects(11f, 12f, 13f, 14f, 15f, 16f, 17f, 18f, 19f, 20f, 21f),
@@ -64,7 +89,7 @@ class RecipeGroupsTest {
         // The group is a constructor property, so "exactly one" holds by construction; check coverage.
         val used = HistoryField.entries.map { it.group }.toSet()
         val reserved =
-            setOf(RecipeGroup.OPTICS, RecipeGroup.MASKS, RecipeGroup.HEALS)
+            setOf(RecipeGroup.MASKS, RecipeGroup.HEALS)
         assertThat(used + reserved).containsExactlyElementsIn(RecipeGroup.entries)
     }
 

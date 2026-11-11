@@ -1,3 +1,6 @@
+// Numeric and geometric code: early returns validate, loops mirror the shaders, constants are the maths.
+@file:Suppress("ComplexCondition", "ReturnCount", "MagicNumber")
+
 package dev.hfps.reveal.pipeline.geometry
 
 import dev.hfps.reveal.pipeline.optics.LensProfile
@@ -119,7 +122,7 @@ class GeometryMapping private constructor(
         return Box(left - 1, top - 1, right + 1, bottom + 1)
     }
 
-    /** Whether the plane rectangle meets the output [box] (a box can contain the plane without a border sample in it). */
+    /** Whether the plane rectangle meets the output [box] (it can contain the plane with no border sample in it). */
     private fun intersectsPlane(box: Box): Boolean {
         val plane = toOutput.mapBounds(Box(0.0, 0.0, imageWidth.toDouble(), imageHeight.toDouble()))
         return plane.left < box.right && plane.right > box.left && plane.top < box.bottom && plane.bottom > box.top

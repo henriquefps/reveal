@@ -1,4 +1,4 @@
-@file:Suppress("MagicNumber")
+@file:Suppress("MagicNumber", "CyclomaticComplexMethod", "ReturnCount", "LoopWithTooManyJumpStatements")
 
 package dev.hfps.reveal.pipeline.optics
 

@@ -1,3 +1,6 @@
+// Numeric and geometric code: early returns validate, loops mirror the shaders, constants are the maths.
+@file:Suppress("CyclomaticComplexMethod", "ComplexCondition", "LoopWithTooManyJumpStatements")
+
 package dev.hfps.reveal.pipeline.geometry
 
 import com.google.common.truth.Truth.assertThat

@@ -1,4 +1,4 @@
-@file:Suppress("MagicNumber")
+@file:Suppress("MagicNumber", "ReturnCount")
 
 package dev.hfps.reveal.pipeline.optics
 
@@ -169,7 +169,7 @@ class LensfunDatabase private constructor(private val cameras: List<Camera>, pri
 
         private fun normal(s: String): String = s.lowercase(Locale.ROOT).filter { it.isLetterOrDigit() }
 
-        /** Lower-case words and numbers of a lens name (`f/3.5-5.6` gives `f`, `3.5`, `5.6`; `16-50mm` gives `16`, `50`, `mm`). */
+        /** Lower-case words and numbers of a lens name (`f/3.5-5.6`: `f 3.5 5.6`; `16-50mm`: `16 50 mm`). */
         internal fun tokens(s: String): Set<String> =
             Regex("[a-z]+|[0-9]+(?:\\.[0-9]+)?").findAll(s.lowercase(Locale.ROOT)).map { m ->
                 m.value.removeSuffix(".0")

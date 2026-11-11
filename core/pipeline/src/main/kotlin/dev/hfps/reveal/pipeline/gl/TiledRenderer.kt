@@ -1,4 +1,4 @@
-@file:Suppress("MagicNumber")
+@file:Suppress("MagicNumber", "ReturnCount")
 
 package dev.hfps.reveal.pipeline.gl
 

@@ -46,9 +46,9 @@ import dev.hfps.reveal.pipeline.recipe.Geometry
 
 /**
  * The Crop mode's controls in place of the tool strip (docs/plan/ux.md): the Crop | Transform tabs; Crop shows the
- * straighten dial, the aspect chips (after Auto straighten) and the tool buttons: rotate left/right, flip horizontal/vertical, the horizon
- * line, lock, swap orientation, constrain to image and reset. Portrait lays the chips and buttons out in scrolling
- * rows; the landscape/tablet column wraps them.
+ * straighten dial, the aspect chips (after Auto straighten) and the tool buttons: rotate left/right, flip
+ * horizontal/vertical, the horizon line, lock, swap orientation, constrain to image and reset. Portrait lays the chips
+ * and buttons out in scrolling rows; the landscape/tablet column wraps them.
  */
 @Composable
 fun CropControls(host: ModeHost, modifier: Modifier = Modifier) {

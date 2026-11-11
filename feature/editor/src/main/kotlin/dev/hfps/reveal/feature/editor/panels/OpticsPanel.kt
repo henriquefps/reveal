@@ -26,6 +26,7 @@ import dev.hfps.reveal.pipeline.recipe.ControlId
  * automatic estimate) and Defringe (purple and green amounts and hue ranges).
  */
 @OptIn(ExperimentalLayoutApi::class)
+@Suppress("LongMethod")
 @Composable
 fun OpticsPanel(host: PanelHost, modifier: Modifier = Modifier) {
     val edit = host.state.edit

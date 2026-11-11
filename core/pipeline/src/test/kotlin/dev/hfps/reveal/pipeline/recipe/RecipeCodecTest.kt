@@ -81,8 +81,8 @@ class RecipeCodecTest {
                 """"greenAmount":0.0,"greenHueLow":40.0,"greenHueHigh":60.0},""" +
                 """"geometry":{"crop":null,"angle":0.0,"rotate":0,"flipH":false,"flipV":false,""" +
                 """"aspect":{"preset":"free","w":1,"h":1,"locked":false},"constrain":true,""" +
-                """"transform":{"vertical":0.0,"horizontal":0.0,"rotate":0.0,"aspect":0.0,"scale":100.0,"offsetX":0.0,""" +
-                """"offsetY":0.0,"upright":"off","guides":[]}},"masks":[],"heals":[]}""",
+                """"transform":{"vertical":0.0,"horizontal":0.0,"rotate":0.0,"aspect":0.0,"scale":100.0,""" +
+                """"offsetX":0.0,"offsetY":0.0,"upright":"off","guides":[]}},"masks":[],"heals":[]}""",
         )
         assertThat(codec.decode(text)).isEqualTo(Recipe())
     }

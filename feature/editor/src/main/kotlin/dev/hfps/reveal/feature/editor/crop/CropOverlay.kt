@@ -1,4 +1,4 @@
-@file:Suppress("MagicNumber")
+@file:Suppress("MagicNumber", "LoopWithTooManyJumpStatements")
 
 package dev.hfps.reveal.feature.editor.crop
 
@@ -63,8 +63,8 @@ import kotlinx.coroutines.launch
  * Gestures: a handle drags that edge/corner (the photo holds still, then the view eases to the new frame); one finger
  * elsewhere drags the photo under the frame; two fingers pinch to zoom inside the crop; with the horizon tool armed,
  * a drag draws a line that becomes level (or plumb); with Guided Upright armed, a drag draws a guide (with the loupe
- * magnifying under the finger) and the guides drawn so far show on the photo. Every frame of a gesture changes the working geometry only;
- * Done commits it.
+ * magnifying under the finger) and the guides drawn so far show on the photo. Every frame of a gesture changes the
+ * working geometry only; Done commits it.
  */
 @Suppress("LongMethod", "CyclomaticComplexMethod")
 @Composable

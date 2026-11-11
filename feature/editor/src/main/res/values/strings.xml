@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Temporary debug panel of the M0 pipeline canvas (debug builds only; replaced by the editor in M1). -->
+    <string name="debug_title">PIPELINE DEBUG</string>
+    <string name="debug_exposure">Exposure</string>
+    <string name="debug_toggle_zoom">Fit / 100%</string>
+    <string name="debug_temperature">Temperature</string>
+    <string name="debug_kelvin">%1$d K</string>
+    <string name="debug_frame_stats">Last frame %1$.1f ms · frames: %2$d · updates: %3$d</string>
+    <string name="debug_gpu_unsupported">This device cannot run the GPU pipeline: %1$s</string>
+</resources>

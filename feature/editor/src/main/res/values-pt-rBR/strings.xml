@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Painel de depuração temporário do canvas do pipeline do M0 (só em builds debug; substituído pelo editor no M1). -->
+    <string name="debug_title">DEPURAÇÃO DO PIPELINE</string>
+    <string name="debug_exposure">Exposição</string>
+    <string name="debug_toggle_zoom">Ajustar / 100%</string>
+    <string name="debug_temperature">Temperatura</string>
+    <string name="debug_kelvin">%1$d K</string>
+    <string name="debug_frame_stats">Último quadro %1$.1f ms · quadros: %2$d · atualizações: %3$d</string>
+    <string name="debug_gpu_unsupported">Este aparelho não consegue executar o pipeline de GPU: %1$s</string>
+</resources>

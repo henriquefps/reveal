@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- History list labels; %1$s is the signed value, for example "+0.70" or "5600 K" (RecipeDiff). -->
+    <string name="history_exposure">Exposure %1$s</string>
+    <string name="history_temperature">Temperature %1$s</string>
+    <string name="history_tint">Tint %1$s</string>
+    <string name="history_base_look">Profile %1$s</string>
+    <!-- Same labels when the field returns to the camera's as-shot setting. -->
+    <string name="history_temperature_as_shot">Temperature as shot</string>
+    <string name="history_tint_as_shot">Tint as shot</string>
+</resources>

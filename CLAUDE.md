@@ -60,3 +60,29 @@ start `0d0c62a3...`). Only the orchestrator installs it on the phone. A connecte
 Layout: `build-logic/` convention plugins, `gradle/libs.versions.toml` all versions, `config/detekt/detekt.yml`,
 `docs/adr/0001-stack-and-modules.md` (modules, DI, tests, versions). A module build file is plugins + namespace +
 dependencies. Add a Room schema change with a migration and the exported file in `core/data/schemas`.
+
+## Develop pipeline (`:core:pipeline`, ADR 0002 and 0003)
+
+Packages: `recipe/` (model, codec, diff; pure Kotlin), `cpu/` (CPU reference; pure Kotlin), `gl/` (GLES renderer on its
+own thread), `synthetic/` (generated test images). `PipelineInput` is the pipeline's input type.
+
+**Adding an operator** (one pattern, every time):
+1. Recipe: add the field(s) to the group in `recipe/Recipe.kt` (default = no change; additive, so no `RECIPE_VERSION`
+   bump) and, if the user sees it in history, a `HistoryField` + `RecipeDiff` branch + `history_*` strings in both languages.
+2. CPU reference: an `object ...Op` in `cpu/Operators.kt` over `FloatArray` with the formula in KDoc; put its constants in
+   `DevelopParams` (computed in Double, rounded once). Call it from `CpuDevelop` at its slot in the order of ADR 0002.
+3. Shader: the same maths, line for line, in `gl/Shaders.kt` (fuse into stage 1 when it is per-pixel; its parameters go in
+   the std140 `Develop` block and `GpuDevelopRenderer.developBlock`); local operators are extra passes.
+4. Golden JVM test in `cpu/` on small synthetic images (`SyntheticImages`: gradients, colour checker, out-of-range).
+5. Extend `GpuParityTest` recipes so the operator is exercised; keep within the tolerance of ADR 0002.
+6. If any pixel output changes: bump `PIPELINE_VERSION` and the golden CRC in `CpuDevelopTest`.
+
+Parity and benchmark (emulator or phone, GLES 3.0+ with `EXT_color_buffer_float`):
+
+```sh
+ANDROID_SERIAL=emulator-<port> ./gradlew :core:pipeline:connectedDebugAndroidTest
+adb -s emulator-<port> logcat -d -s REVEAL_PARITY REVEAL_BENCH     # measured errors and frame times
+```
+
+Debug canvas: `adb -s emulator-<port> shell am start -n dev.hfps.reveal.debug/dev.hfps.reveal.debug.PipelineDebugActivity`
+(debug build only: `app/src/debug`, hosting `EditorDebugScreen`, to be replaced by the editor in M1).

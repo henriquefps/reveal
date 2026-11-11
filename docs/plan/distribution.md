@@ -9,6 +9,10 @@ Status: direction decided by the owner (2026-11-11). Nothing to build before 1.0
   the convenience of a signed, updated build; anyone may still build it from source.
 - **Bring your own server.** Sync (`sync.md`) works with any `reveal-sync` server the user runs; the app never assumes
   the owner's server. The server stays in this repo, open, with its setup UI.
+- **No "free then pay" model** (free download with a time-limited trial and an unlock purchase): it reads as
+  misleading and draws bad reviews. The price is visible in the store. Ways to try before buying stay honest: Play's
+  refund window, a listing with real before/after screenshots and a short video, promo codes for reviewers, and the
+  free build from source (GitHub releases / F-Droid).
 
 ## Later, only if the app becomes exceptional
 

@@ -10,6 +10,7 @@ import dev.hfps.reveal.pipeline.gl.GpuDevelopRenderer
 import dev.hfps.reveal.pipeline.gl.Histogram
 import dev.hfps.reveal.pipeline.recipe.BaseLook
 import dev.hfps.reveal.pipeline.recipe.ControlId
+import dev.hfps.reveal.pipeline.recipe.EditHistory
 import dev.hfps.reveal.pipeline.recipe.Recipe
 import dev.hfps.reveal.pipeline.recipe.RecipeGroup
 import dev.hfps.reveal.pipeline.recipe.WbMode
@@ -34,8 +35,9 @@ sealed interface EditorPhase {
 }
 
 /**
- * The edit of the open photo: the working [recipe] (what is on screen, updated every drag frame) and the
- * [committed] one (moved forward on release: the history and Room seam, docs/adr/0003 "Committed steps").
+ * The edit of the open photo: the working [recipe] (what is on screen, updated every drag frame) and its [history]
+ * of committed steps, whose current step is the [committed] recipe (moved forward on release, docs/adr/0003
+ * "Committed steps"; persisted per version, ADR 0006 "History").
  *
  * @property isRaw RAW input shows absolute white balance (kelvin/tint); display-referred input the relative pair.
  * @property asShot the camera's white balance, shown while the recipe holds `null`.
@@ -44,11 +46,22 @@ sealed interface EditorPhase {
 @Immutable
 data class EditState(
     val recipe: Recipe = Recipe.DEFAULT,
-    val committed: Recipe = Recipe.DEFAULT,
+    val history: EditHistory = EditHistory(),
     val isRaw: Boolean = true,
     val asShot: AsShot = AsShot(),
     val autoWb: AsShot? = null,
-)
+    /** The copied edit (from here or the library), null when nothing was copied: Paste is available. */
+    val clipboard: Recipe? = null,
+    /** Another photo has an edit: "Previous" is available. */
+    val hasPrevious: Boolean = false,
+    /** The paste chooser is open with these groups ticked; null = closed. */
+    val pasteChooser: Set<RecipeGroup>? = null,
+) {
+    /** The recipe of the current history step. */
+    val committed: Recipe get() = history.current
+
+    val canPaste: Boolean get() = clipboard != null
+}
 
 /** How the photo is shown: histogram, clipping overlays, before/after, eyedropper. */
 @Immutable
@@ -106,9 +119,22 @@ class EditorActions(
     val onEyedropper: (Boolean) -> Unit = {},
     /** Eyedropper result: the neutral point in proxy image pixels. */
     val onPickNeutral: (imageX: Float, imageY: Float) -> Unit = { _, _ -> },
-    // TODO(history worker): undo/redo are placeholders until the history lands.
     val onUndo: () -> Unit = {},
     val onRedo: () -> Unit = {},
+    /** History list: jump to the step at a position (-1 = the original). */
+    val onGoTo: (Int) -> Unit = {},
+    /** More ⋯: copy the whole edit; the paste chooser picks the groups. */
+    val onCopy: () -> Unit = {},
+    /** Opens the paste chooser. */
+    val onPaste: () -> Unit = {},
+    val onPasteGroups: (Set<RecipeGroup>) -> Unit = {},
+    val onPasteConfirm: () -> Unit = {},
+    val onPasteDismiss: () -> Unit = {},
+    /** Applies the last edited photo's recipe. */
+    val onPrevious: () -> Unit = {},
+    val onResetAll: () -> Unit = {},
+    /** Back to the recipe the photo opens with (default + the user's defaults). */
+    val onResetAsOpened: () -> Unit = {},
     // TODO(export worker): opens the export sheet.
     val onExport: () -> Unit = {},
     // TODO(auto worker): the panel-level Auto of Light.

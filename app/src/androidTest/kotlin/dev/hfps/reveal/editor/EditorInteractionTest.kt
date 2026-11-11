@@ -139,8 +139,9 @@ class EditorInteractionTest {
 
     // ------------------------------------------------------------------ helpers
 
+    /** A fresh photo per test: edits now persist per photo (ADR 0006), and a reused name is the same photo. */
     private fun withPhoto(block: () -> Unit) {
-        val uri = TestPhotos.insert("reveal-card.jpg", "image/jpeg", TestPhotos.syntheticJpeg())
+        val uri = TestPhotos.insert("reveal-card-${System.nanoTime()}.jpg", "image/jpeg", TestPhotos.syntheticJpeg())
         try {
             TestPhotos.launchView(uri, "image/jpeg").use {
                 compose.waitUntilAtLeastOneExists(hasTestTag(EditorTags.DEVELOPED), TIMEOUT_MS)

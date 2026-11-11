@@ -37,6 +37,7 @@ import dev.hfps.reveal.feature.editor.EditorUiState
 import dev.hfps.reveal.feature.editor.ViewOptions
 import dev.hfps.reveal.feature.editor.edit.AsShot
 import dev.hfps.reveal.feature.editor.layout.PanelSnap
+import dev.hfps.reveal.feature.editor.panels.PasteChooserContent
 import dev.hfps.reveal.feature.editor.panels.toSliderSpec
 import dev.hfps.reveal.feature.editor.tools.ToolId
 import dev.hfps.reveal.pipeline.PipelineInput
@@ -46,8 +47,12 @@ import dev.hfps.reveal.pipeline.gl.ClippingWarnings
 import dev.hfps.reveal.pipeline.gl.CompareMode
 import dev.hfps.reveal.pipeline.gl.Histogram
 import dev.hfps.reveal.pipeline.recipe.Colour
+import dev.hfps.reveal.pipeline.recipe.EditHistory
+import dev.hfps.reveal.pipeline.recipe.HistoryAction
 import dev.hfps.reveal.pipeline.recipe.Light
 import dev.hfps.reveal.pipeline.recipe.Recipe
+import dev.hfps.reveal.pipeline.recipe.RecipeGroup
+import dev.hfps.reveal.pipeline.recipe.RecipePaste
 import dev.hfps.reveal.pipeline.recipe.RecipeRanges
 import dev.hfps.reveal.pipeline.recipe.WbMode
 import dev.hfps.reveal.pipeline.recipe.WhiteBalance
@@ -105,6 +110,32 @@ class EditorPhoneScreenshotTest : EditorScreenshotBase("phone") {
     @Test fun lightFontScale200() = shoot("light_font200") { Scaled(2f) { Editor() } }
 
     @Test fun colourFontScale200() = shoot("colour_font200") { Scaled(2f) { Editor(tool = ToolId.COLOUR) } }
+
+    @Test fun historyPanel() = shoot("history") {
+        Editor(tool = ToolId.HISTORY, snap = PanelSnap.EXPANDED, history = Photos.history)
+    }
+
+    @Test fun pasteChooser() = shoot("paste_chooser") {
+        EditorTheme {
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .background(RevealTheme.colors.background),
+                contentAlignment = Alignment.BottomCenter,
+            ) {
+                Surface(color = RevealTheme.colors.card, shape = RevealTheme.shapes.sheet) {
+                    PasteChooserContent(
+                        copied = Photos.recipe,
+                        groups = RecipePaste.DEFAULT_GROUPS - RecipeGroup.PROFILE,
+                        onGroupsChange = {},
+                        onPaste = {},
+                        onCancel = {},
+                        modifier = Modifier.padding(top = 24.dp),
+                    )
+                }
+            }
+        }
+    }
 
     @Test fun numericInput() = shoot("numeric_input") {
         EditorTheme {
@@ -186,6 +217,7 @@ abstract class EditorScreenshotBase(private val size: String) {
         tool: ToolId = ToolId.LIGHT,
         snap: PanelSnap = PanelSnap.HALF,
         view: ViewOptions = ViewOptions(),
+        history: EditHistory = EditHistory(),
     ) {
         EditorTheme {
             EditorContent(
@@ -197,7 +229,7 @@ abstract class EditorScreenshotBase(private val size: String) {
                     developed = true,
                     edit = EditState(
                         recipe = Photos.recipe,
-                        committed = Photos.recipe,
+                        history = history,
                         isRaw = true,
                         asShot = AsShot(5200f, 4f),
                         autoWb = AsShot(5450f, 2f),
@@ -232,6 +264,20 @@ private object Photos {
     // The synthetic scene's values are display-like (grey near 0.18); a camera exposes a RAW about 1.3 EV lower
     // (grey near 0.06), which is what Standard's baseline gain expects (docs/adr/0008). Exposed like a camera so the
     // screenshots show a normal photo instead of a blown-out one.
+
+    /** A history of five steps, the last one undone (the current step is a paste). */
+    val history: EditHistory = run {
+        val exposure = Recipe(light = Light(exposureEv = 0.7f))
+        val light = exposure.copy(light = recipe.light)
+        var h = EditHistory()
+        h = h.commit(exposure)!!
+        h = h.commit(light)!!
+        h = h.commit(Recipe.DEFAULT, HistoryAction.RESET_GROUP, listOf(RecipeGroup.LIGHT))!!
+        h = h.commit(recipe, HistoryAction.PASTE, listOf(RecipeGroup.LIGHT, RecipeGroup.COLOUR))!!
+        h = h.commit(recipe.copy(colour = recipe.colour.copy(vibrance = 45f)))!!
+        h.undo()!!
+    }
+
     private val input = SyntheticImages.scene(WIDTH, HEIGHT).let { scene ->
         val k = (1.0 / ProfileLooks.STANDARD_FILMIC.gain).toFloat()
         PipelineInput(

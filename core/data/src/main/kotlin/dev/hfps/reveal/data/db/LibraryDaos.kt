@@ -281,6 +281,13 @@ interface EditDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun setCursor(cursor: HistoryCursorEntity)
+
+    /** The most recently changed edited recipe of any version but [excludeVersionId] ("Previous"). */
+    @Query(
+        "SELECT * FROM recipes WHERE version_id != :excludeVersionId AND is_default = 0 " +
+            "ORDER BY updated_at DESC LIMIT 1",
+    )
+    suspend fun lastEdited(excludeVersionId: Long): RecipeEntity?
 }
 
 @Dao

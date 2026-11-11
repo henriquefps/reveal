@@ -1,11 +1,76 @@
 package dev.hfps.reveal.pipeline
 
 import android.content.Context
+import dev.hfps.reveal.pipeline.recipe.HistoryAction
 import dev.hfps.reveal.pipeline.recipe.HistoryField
 import dev.hfps.reveal.pipeline.recipe.HistoryStep
+import dev.hfps.reveal.pipeline.recipe.RecipeGroup
+import dev.hfps.reveal.pipeline.recipe.StepLabel
 
 /** Resolves [HistoryStep]s to localised history-list labels ("Exposure +0.70"). */
 object HistoryLabels {
+    /**
+     * The history-list title of a committed step: its action's name ("Paste edits", "Reset Light"), else its only
+     * change ("Exposure +0.70"), else the first change and how many more.
+     */
+    fun format(context: Context, label: StepLabel): String {
+        val action = label.action
+        val more = label.changes.size - 1
+        return when {
+            action != null -> action(context, action, label.groups)
+
+            more < 0 -> ""
+
+            more == 0 -> format(context, label.changes[0])
+
+            else -> context.resources.getQuantityString(
+                R.plurals.history_and_more,
+                more,
+                format(context, label.changes[0]),
+                more,
+            )
+        }
+    }
+
+    /** The changes of [label] one per line (the detail under a named step). */
+    fun details(context: Context, label: StepLabel): List<String> = label.changes.map { format(context, it) }
+
+    /** The localised name of a copy/paste group ("Light"). */
+    fun groupName(context: Context, group: RecipeGroup): String = context.getString(GROUP_NAMES.getValue(group))
+
+    /** The string resource of a copy/paste group's name, for composables. */
+    fun groupNameRes(group: RecipeGroup): Int = GROUP_NAMES.getValue(group)
+
+    private fun action(context: Context, action: HistoryAction, groups: List<RecipeGroup>): String = when (action) {
+        HistoryAction.RESET_GROUP -> context.getString(
+            R.string.history_action_reset_group,
+            groups.joinToString(", ") { groupName(context, it) },
+        )
+
+        else -> context.getString(ACTION_LABELS.getValue(action))
+    }
+
+    private val ACTION_LABELS: Map<HistoryAction, Int> = mapOf(
+        HistoryAction.RESET_ALL to R.string.history_action_reset_all,
+        HistoryAction.AS_OPENED to R.string.history_action_as_opened,
+        HistoryAction.PASTE to R.string.history_action_paste,
+        HistoryAction.PREVIOUS to R.string.history_action_previous,
+        HistoryAction.AUTO to R.string.history_action_auto,
+        HistoryAction.PRESET to R.string.history_action_preset,
+    )
+
+    private val GROUP_NAMES: Map<RecipeGroup, Int> = mapOf(
+        RecipeGroup.PROFILE to R.string.recipe_group_profile,
+        RecipeGroup.LIGHT to R.string.recipe_group_light,
+        RecipeGroup.COLOUR to R.string.recipe_group_colour,
+        RecipeGroup.EFFECTS to R.string.recipe_group_effects,
+        RecipeGroup.DETAIL to R.string.recipe_group_detail,
+        RecipeGroup.OPTICS to R.string.recipe_group_optics,
+        RecipeGroup.GEOMETRY to R.string.recipe_group_geometry,
+        RecipeGroup.MASKS to R.string.recipe_group_masks,
+        RecipeGroup.HEALS to R.string.recipe_group_heals,
+    )
+
     /** The label of [step] in the app's current language. */
     fun format(context: Context, step: HistoryStep): String {
         val value = step.value

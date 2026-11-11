@@ -83,4 +83,20 @@
     <string name="editor_eyedropper_hint">Toque numa área cinza ou branca neutra</string>
     <string name="editor_eyedropper_cancel">Cancelar</string>
     <string name="editor_eyedropper_raw_only">O conta-gotas funciona em fotos RAW</string>
+    <string name="editor_menu_history">Histórico</string>
+    <string name="editor_menu_copy">Copiar edições</string>
+    <string name="editor_menu_paste">Colar edições…</string>
+    <string name="editor_menu_previous">Anterior (edições da última foto)</string>
+    <string name="editor_menu_reset_all">Redefinir tudo</string>
+    <string name="editor_menu_reset_as_opened">Voltar ao original da câmera</string>
+    <string name="editor_history_title">Histórico</string>
+    <string name="editor_history_empty">Nenhuma edição ainda. Cada ajuste aparece aqui; toque em um para voltar a ele.</string>
+    <string name="editor_history_current">Etapa atual</string>
+    <string name="editor_history_undone">Desfeita</string>
+    <string name="editor_paste_title">Quais edições colar</string>
+    <string name="editor_paste_all">Todas</string>
+    <string name="editor_paste_confirm">Colar</string>
+    <string name="editor_paste_no_change">Sem alteração (colar redefine)</string>
+    <string name="editor_cancel">Cancelar</string>
+    <string name="editor_copied">Edições copiadas</string>
 </resources>

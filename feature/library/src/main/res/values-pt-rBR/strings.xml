@@ -138,4 +138,25 @@
     <string name="info_shutter_value">%1$s s</string>
     <string name="info_dimensions_value">%1$d × %2$d · %3$s MP</string>
     <string name="info_file_value">%1$s · %2$s</string>
+    <string name="library_action_paste_edits_choose">Colar edições…</string>
+    <string name="library_edits_copied">Edições copiadas</string>
+    <plurals name="library_edits_pasted">
+        <item quantity="one">Edições coladas em %1$d foto</item>
+        <item quantity="many">Edições coladas em %1$d fotos</item>
+        <item quantity="other">Edições coladas em %1$d fotos</item>
+    </plurals>
+    <string name="library_paste_all">Todas</string>
+    <string name="library_paste_confirm">Colar</string>
+    <string name="library_paste_no_change">Sem alteração (colar redefine)</string>
+    <plurals name="library_paste_title_count">
+        <item quantity="one">Colar em %1$d foto</item>
+        <item quantity="many">Colar em %1$d fotos</item>
+        <item quantity="other">Colar em %1$d fotos</item>
+    </plurals>
+    <string name="library_action_reset_edits">Redefinir edições</string>
+    <plurals name="library_edits_reset">
+        <item quantity="one">Edições redefinidas em %1$d foto</item>
+        <item quantity="many">Edições redefinidas em %1$d fotos</item>
+        <item quantity="other">Edições redefinidas em %1$d fotos</item>
+    </plurals>
 </resources>

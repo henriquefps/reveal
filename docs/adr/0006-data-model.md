@@ -40,17 +40,37 @@ never touched. Removing a folder deletes its rows (edits included, after a confi
 
 ## History (for the editor's undo/redo)
 
-`EditRepository` (in `:core:data`) is the persistence API of ADR 0003's committed steps:
+The history engine is pure Kotlin (`EditHistory` in `:core:pipeline/recipe`, ADR 0003 "History engine"); this
+section is its persistence. `EditRepository` (in `:core:data`):
 
-- `commit(versionId, recipe, labels)`: one step per commit, appended after the cursor (redo steps above it are
-  dropped), the recipe stored as the version's recipe, the cursor moved to it, `has_edit` updated.
-- `undo` / `redo` / `goTo(position)` move the cursor (-1 = the base, the default recipe) and return the recipe to
-  show; `history(versionId)` returns the steps (labels as `HistoryStep`s) and the cursor. Everything survives restarts.
-- Each row stores the **full recipe after the step** (`encoding = "snapshot"`) plus its `RecipeDiff` labels as JSON
-  (`[{"field":"EXPOSURE","value":"+0.70"}]`; unknown fields from a newer app are skipped). Recipes are a few KB, so
+- `load(versionId)` rebuilds the editor's `EditHistory` (every step's snapshot, its label and the cursor) when a
+  photo is opened; the editor then works on it in memory.
+- `apply(ops)` writes the editor's changes in order, in **one transaction per batch**: `HistoryOp.Commit` (a step
+  after the cursor, redo steps above it dropped, the recipe stored as the version's recipe, cursor moved, `has_edit`
+  updated) and `HistoryOp.Move` (undo, redo, a jump in the history list; -1 = the base, the default recipe).
+  `commit` / `undo` / `redo` / `goTo` / `history` remain as single-operation forms.
+- **`HistoryWriter`** (a singleton on the app-wide data scope) queues the editor's ops and writes them off the main
+  thread; ops that arrive while a write runs are coalesced into the next transaction (a burst of commits is one write),
+  and the queue outlives the screen, so leaving the editor right after a commit still saves it. A kill loses at most
+  the last few milliseconds of queued steps, never half a step. The editor flushes the writer before `load`, so
+  reopening a photo at once reads its newest step.
+- Each row stores the **full recipe after the step** (`encoding = "snapshot"`) plus its label as JSON: the field
+  changes (`{"field":"EXPOSURE","value":"+0.70"}`) and, for a named step, a first element
+  `{"action":"PASTE","groups":["LIGHT","COLOUR"]}`. Unknown fields or actions from a newer app are skipped; a step
+  whose recipe cannot be decoded (a newer schema) ends the loaded history there. Recipes are a few KB, so
   snapshots keep undo O(1) and robust against migrations (each snapshot goes through `RecipeCodec`'s migrators).
   When masks with brush strokes make recipes large, the `encoding` column allows keyframes + diffs without a schema
-  change.
+  change. History is unlimited.
+- **Copy/paste:** `copy(recipe)` stores the whole recipe as the clipboard in `meta` (`edits.clipboard`, survives
+  restarts; `clipboard()` is a Flow the editor and the library observe); the paste chooser picks the groups and
+  remembers them (`edits.pasteGroups`, default everything but geometry). `paste(versionIds, clipboard, groups, action)`
+  pastes onto many versions in one transaction, **one history step per changed version** (`PASTE`; the library's
+  "Reset edits" is the same path with the default recipe and `RESET_ALL`), so each photo can undo its own paste.
+- **"Previous":** `previous(excludeVersionId)` = the recipe with the newest `updated_at` among non-default recipes
+  of other versions (one query on `recipes`). No schema change: the M1 data model already had every table.
+
+Photos opened from other apps are filed in the library (ADR 0011), so they get a version and a persisted history as
+well; an `EditorRoute(uri)` that has no version keeps its history in memory for the session only.
 
 ## Indexing (`LibraryIndexer`)
 
@@ -138,7 +158,7 @@ sources). The library reopens the folder it showed last (`meta`). Grid: 3 column
 dimmed; badge text capped at 130 % font scale, the cell's TalkBack description carries everything). Filters: all /
 edited / not edited / picked / rated ≥ N / RAW (has a RAW) / JPEG (no RAW); sort newest, oldest, name; search by
 file name (`LIKE` with escaped wildcards). Multi-select: long-press, tap to toggle, drag across rows with auto-scroll;
-rate, pick, reject, clear flag, remove from library, select all; copy/paste edits, preset and export are disabled
+rate, pick, reject, clear flag, remove from library, select all; preset and export are disabled
 placeholders. "Open a photo…" (single document, M0's flow) stays in the menu; the editor route takes a version id
 from the library (it opens the RAW of a pair) or a URI from other apps.
 

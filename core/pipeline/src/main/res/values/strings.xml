@@ -53,4 +53,27 @@
     <string name="history_value_aspect_r16_9">16:9</string>
     <string name="history_value_aspect_r9_16">9:16</string>
     <string name="history_value_aspect_custom">Custom</string>
+    <!-- Named history steps (HistoryAction) and copy/paste groups (RecipeGroup). -->
+    <string name="history_action_reset_all">Reset all</string>
+    <string name="history_action_reset_group">Reset %1$s</string>
+    <string name="history_action_as_opened">Reset to as opened</string>
+    <string name="history_action_paste">Paste edits</string>
+    <string name="history_action_previous">Previous edit</string>
+    <string name="history_action_auto">Auto</string>
+    <string name="history_action_preset">Preset</string>
+    <string name="history_original">Original</string>
+    <!-- A step that changed several fields: the first label and how many more. -->
+    <plurals name="history_and_more">
+        <item quantity="one">%1$s and %2$d more</item>
+        <item quantity="other">%1$s and %2$d more</item>
+    </plurals>
+    <string name="recipe_group_profile">Profile</string>
+    <string name="recipe_group_light">Light</string>
+    <string name="recipe_group_colour">Colour</string>
+    <string name="recipe_group_effects">Effects</string>
+    <string name="recipe_group_detail">Detail</string>
+    <string name="recipe_group_optics">Optics</string>
+    <string name="recipe_group_geometry">Geometry (crop, rotate)</string>
+    <string name="recipe_group_masks">Masks</string>
+    <string name="recipe_group_heals">Healing</string>
 </resources>

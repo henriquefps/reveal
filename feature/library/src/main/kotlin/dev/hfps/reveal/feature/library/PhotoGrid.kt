@@ -88,6 +88,10 @@ object LibraryTags {
     const val SELECTION_BAR = "library-selection"
     const val EMPTY = "library-empty"
     const val SEARCH_FIELD = "library-search"
+    const val COPY_EDITS = "library-copy-edits"
+    const val PASTE_EDITS = "library-paste-edits"
+    const val PASTE_CHOOSER = "library-paste"
+    const val RESET_EDITS = "library-reset-edits"
 
     fun cell(id: Long) = "library-cell-$id"
 

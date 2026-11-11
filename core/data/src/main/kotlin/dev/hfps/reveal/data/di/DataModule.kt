@@ -11,6 +11,7 @@ import dagger.hilt.components.SingletonComponent
 import dev.hfps.reveal.data.db.MetaDao
 import dev.hfps.reveal.data.db.RevealDatabase
 import dev.hfps.reveal.data.edit.EditRepository
+import dev.hfps.reveal.data.edit.HistoryWriter
 import dev.hfps.reveal.data.handoff.HandoffRepository
 import dev.hfps.reveal.data.handoff.HandoffTree
 import dev.hfps.reveal.data.index.LibraryIndexer
@@ -98,6 +99,11 @@ object DataModule {
     @Provides
     @Singleton
     fun provideEdits(database: RevealDatabase): EditRepository = EditRepository(database)
+
+    @Provides
+    @Singleton
+    fun provideHistoryWriter(edits: EditRepository, @DataScope scope: CoroutineScope): HistoryWriter =
+        HistoryWriter(edits, scope)
 
     @Provides
     @Singleton

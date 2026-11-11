@@ -84,6 +84,7 @@ fun NavGraphBuilder.libraryScreens(
 }
 
 /** The library screen with its ViewModel, pickers, messages and back handling. */
+@Suppress("LongMethod")
 @Composable
 fun LibraryScreen(
     onOpen: (PhotoRow, LibraryUiState) -> Unit,
@@ -117,6 +118,12 @@ fun LibraryScreen(
             onRate = viewModel::rate,
             onFlag = viewModel::flag,
             onRemovePhotos = viewModel::removeSelected,
+            onCopyEdits = viewModel::copyEdits,
+            onPasteEdits = viewModel::openPaste,
+            onPasteGroups = viewModel::setPasteGroups,
+            onPasteConfirm = viewModel::confirmPaste,
+            onPasteDismiss = viewModel::dismissPaste,
+            onResetEdits = viewModel::resetEdits,
             onGallery = onGallery,
             onAbout = onAbout,
         )
@@ -175,6 +182,20 @@ private fun LibraryMessages(events: Flow<LibraryMessage>, snackbar: SnackbarHost
                 LibraryMessage.AddFailed -> resources.getString(R.string.library_add_folder_failed)
 
                 LibraryMessage.AlreadyAdded -> resources.getString(R.string.library_add_folder_exists)
+
+                LibraryMessage.Copied -> resources.getString(R.string.library_edits_copied)
+
+                is LibraryMessage.Reset -> resources.getQuantityString(
+                    R.plurals.library_edits_reset,
+                    message.count,
+                    message.count,
+                )
+
+                is LibraryMessage.Pasted -> resources.getQuantityString(
+                    R.plurals.library_edits_pasted,
+                    message.count,
+                    message.count,
+                )
             }
             snackbar.showSnackbar(text)
         }

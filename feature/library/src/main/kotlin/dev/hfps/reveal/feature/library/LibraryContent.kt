@@ -33,6 +33,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
@@ -106,6 +107,11 @@ fun LibraryContent(
                 GridPane(state, actions, thumbnails, onGridDraw)
             }
             SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter))
+        }
+        val pasteGroups = state.pasteChooser
+        val copied = state.clipboard
+        if (pasteGroups != null && copied != null) {
+            PasteEditsSheet(copied, pasteGroups, state.selected.size, actions)
         }
     }
 }
@@ -320,6 +326,13 @@ private fun RatingMenu(actions: LibraryActions) {
     }
 }
 
+/** A [MenuItem] with a test tag (instrumented tests find it in any language). */
+@Composable
+private fun TaggedMenuItem(icon: ImageVector, text: String, tag: String, enabled: Boolean = true, onClick: () -> Unit) {
+    Box(Modifier.testTag(tag)) { MenuItem(icon, text, enabled, onClick) }
+}
+
+@Suppress("LongMethod")
 @Composable
 private fun SelectionOverflow(state: LibraryUiState, actions: LibraryActions) {
     var open by remember { mutableStateOf(false) }
@@ -344,20 +357,34 @@ private fun SelectionOverflow(state: LibraryUiState, actions: LibraryActions) {
                 open = false
                 actions.onRemovePhotos()
             }
-            // Placeholders until their workstreams land (copy/paste edits, presets, export).
-            val coming = stringResource(R.string.library_action_coming)
-            MenuItem(
+            TaggedMenuItem(
                 PhosphorRegular.Copy,
-                "${stringResource(R.string.library_action_copy_edits)} · $coming",
-                enabled = false,
+                stringResource(R.string.library_action_copy_edits),
+                LibraryTags.COPY_EDITS,
+                enabled = state.selected.size == 1,
             ) {
+                open = false
+                actions.onCopyEdits()
             }
-            MenuItem(
+            TaggedMenuItem(
                 PhosphorRegular.ClipboardText,
-                "${stringResource(R.string.library_action_paste_edits)} · $coming",
-                enabled = false,
+                stringResource(R.string.library_action_paste_edits_choose),
+                LibraryTags.PASTE_EDITS,
+                enabled = state.clipboard != null,
             ) {
+                open = false
+                actions.onPasteEdits()
             }
+            TaggedMenuItem(
+                PhosphorRegular.ArrowCounterClockwise,
+                stringResource(R.string.library_action_reset_edits),
+                LibraryTags.RESET_EDITS,
+            ) {
+                open = false
+                actions.onResetEdits()
+            }
+            // Placeholders until their workstreams land (presets, export).
+            val coming = stringResource(R.string.library_action_coming)
             MenuItem(
                 PhosphorRegular.Sparkle,
                 "${stringResource(R.string.library_action_preset)} · $coming",

@@ -184,10 +184,16 @@ Tools live in `tools/EditorTools.kt` (`EditorTool` + `ToolBehaviour.Panel / Mode
 enable a tool there, never in the layout. Panels get a `PanelHost` (state, actions, `SliderFocus`, `PanelNavigator`
 for sub-panels); bind a slider with `ControlSlider(host, ControlId.X, R.string.label)` (`RecipeControls` maps ids to
 recipe fields, `RecipeRanges` gives range/step/format). The ViewModel owns the working/committed recipe and pushes
-it, the compare mode, clipping and histogram flags to the renderer; `commit()` is the history/Room seam (TODO).
+it, the compare mode, clipping and histogram flags to the renderer. History (ADR 0003 "History engine", ADR 0006):
+`EditState.history` is a pure `EditHistory`; `commit()` / `editAndCommit(action, groups)` add one step and queue a
+`HistoryOp` on the `HistoryWriter` (Room, coalesced, outlives the screen); undo/redo/`goTo` move the cursor. A new
+committing control calls `onCommit` once on release, never per frame. The history list is `EditorTools.history`
+(opened from More ⋯, not in the strip); copy/paste/Previous/resets are in More ⋯ and in the library's selection menu.
 Goldens: `app/src/test/screenshots/editor/` (`EditorScreenshotTest`, `SliderScreenshotTest`; the photo is the
 pipeline's synthetic scene developed on the CPU). Instrumented: `EditorInteractionTest` (synthetic JPEG, any
-emulator), `:core:pipeline` `ReadbackApisTest` (clipping flag, source sample).
+emulator), `EditorHistoryTest` (undo/redo/jump/branch, reopen restores from Room), `:core:pipeline`
+`ReadbackApisTest` (clipping flag, source sample). Edits persist per photo and a hand-off file with the same name is
+the same photo: give instrumented test photos unique names.
 
 ## `:core:image` harness (ADR 0004)
 

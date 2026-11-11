@@ -3,6 +3,7 @@ package dev.hfps.reveal.feature.editor
 import dev.hfps.reveal.feature.editor.tools.ToolId
 import dev.hfps.reveal.pipeline.recipe.BaseLook
 import dev.hfps.reveal.pipeline.recipe.ControlId
+import dev.hfps.reveal.pipeline.recipe.RecipeGroup
 import dev.hfps.reveal.pipeline.recipe.WbMode
 
 /** Test tags of the editor, for instrumented and screenshot tests (locale-independent). */
@@ -34,6 +35,15 @@ object EditorTags {
     const val COMPARE_DIVIDER = "editor-compare-divider"
     const val EYEDROPPER = "editor-eyedropper"
     const val EYEDROPPER_HINT = "editor-eyedropper-hint"
+    const val HISTORY_LIST = "editor-history"
+    const val MENU_HISTORY = "editor-menu-history"
+    const val MENU_COPY = "editor-menu-copy"
+    const val MENU_PASTE = "editor-menu-paste"
+    const val MENU_PREVIOUS = "editor-menu-previous"
+    const val MENU_RESET_ALL = "editor-menu-reset-all"
+    const val MENU_RESET_AS_OPENED = "editor-menu-reset-as-opened"
+    const val PASTE_CHOOSER = "editor-paste"
+    const val PASTE_CONFIRM = "$PASTE_CHOOSER-confirm"
 
     /** The slider row of recipe control [id], e.g. `editor-control-exposure`. */
     fun control(id: ControlId): String = "editor-control-${id.name.lowercase()}"
@@ -48,4 +58,10 @@ object EditorTags {
     fun wbMode(mode: WbMode): String = "editor-wb-${mode.name.lowercase()}"
 
     fun compareOption(index: Int): String = "editor-compare-option-$index"
+
+    /** A row of the history list; position -1 is "Original". */
+    fun historyStep(position: Int): String = "editor-history-step-$position"
+
+    /** A group's row in the paste chooser. */
+    fun pasteGroup(group: RecipeGroup): String = "$PASTE_CHOOSER-$group"
 }

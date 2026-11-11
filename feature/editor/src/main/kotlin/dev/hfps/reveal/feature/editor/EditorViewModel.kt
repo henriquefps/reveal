@@ -13,6 +13,10 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import dev.hfps.image.proxy.ProxyStep
 import dev.hfps.image.source.CancelToken
 import dev.hfps.image.source.CancelledException
+import dev.hfps.reveal.data.edit.EditClipboard
+import dev.hfps.reveal.data.edit.EditRepository
+import dev.hfps.reveal.data.edit.HistoryOp
+import dev.hfps.reveal.data.edit.HistoryWriter
 import dev.hfps.reveal.data.library.LibraryRepository
 import dev.hfps.reveal.feature.editor.edit.AsShot
 import dev.hfps.reveal.feature.editor.edit.RecipeControls
@@ -28,8 +32,11 @@ import dev.hfps.reveal.pipeline.gl.CompareMode
 import dev.hfps.reveal.pipeline.gl.GpuDevelopRenderer
 import dev.hfps.reveal.pipeline.recipe.BaseLook
 import dev.hfps.reveal.pipeline.recipe.ControlId
+import dev.hfps.reveal.pipeline.recipe.EditHistory
+import dev.hfps.reveal.pipeline.recipe.HistoryAction
 import dev.hfps.reveal.pipeline.recipe.Recipe
 import dev.hfps.reveal.pipeline.recipe.RecipeGroup
+import dev.hfps.reveal.pipeline.recipe.RecipePaste
 import dev.hfps.reveal.pipeline.recipe.RecipeRanges
 import dev.hfps.reveal.pipeline.recipe.WbMode
 import javax.inject.Inject
@@ -58,8 +65,13 @@ class EditorViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
     @ApplicationContext private val context: Context,
     private val library: LibraryRepository,
+    private val edits: EditRepository,
+    private val writer: HistoryWriter,
 ) : ViewModel() {
     private val route: EditorRoute = savedStateHandle.toRoute<EditorRoute>()
+
+    /** The library version being edited; null for a photo opened from another app (history in memory only). */
+    private val versionId: Long? = route.versionId
     private val cancel = CancelToken()
     private val opener = PhotoOpener(context.contentResolver)
 
@@ -79,8 +91,36 @@ class EditorViewModel @Inject constructor(
         MutableStateFlow(EditorUiState(fileName = route.uri?.let { opener.displayNameOrEmpty(it.toUri()) }.orEmpty()))
     val state: StateFlow<EditorUiState> = _state.asStateFlow()
 
+    /** The version's persisted history (after any write still queued from a previous visit). */
+    private val storedHistory: Deferred<EditHistory> = viewModelScope.async {
+        versionId?.let {
+            writer.flush()
+            edits.load(it)
+        } ?: EditHistory()
+    }
+
+    /** The edit currently on clipboard (copied here or in the library). */
+    @Volatile
+    private var clipboard: EditClipboard? = null
+
     init {
         open()
+        viewModelScope.launch {
+            val history = storedHistory.await()
+            val recipe = history.current
+            _state.update { it.copy(edit = it.edit.copy(recipe = recipe, history = history)) }
+            renderer()?.setRecipe(recipe)
+        }
+        viewModelScope.launch {
+            edits.clipboard().collect { clip ->
+                clipboard = clip
+                _state.update { it.copy(edit = it.edit.copy(clipboard = clip?.recipe)) }
+            }
+        }
+        viewModelScope.launch {
+            val previous = edits.previous(versionId ?: NO_VERSION) != null
+            _state.update { it.copy(edit = it.edit.copy(hasPrevious = previous)) }
+        }
     }
 
     private fun open() {
@@ -103,6 +143,8 @@ class EditorViewModel @Inject constructor(
                     AsShot(RecipeRanges.temperature.snap(it.temperatureK.toFloat()), it.tint.roundToInt().toFloat())
                 }
                 val ready = gpu.await()
+                // The renderer starts on the stored recipe (attach() pushes it).
+                storedHistory.await()
                 ready.upload(input)
                 EditorMetrics.uploaded()
                 EditorMetrics.renderer = ready
@@ -198,16 +240,86 @@ class EditorViewModel @Inject constructor(
     fun setControl(id: ControlId, value: Float) = edit { RecipeControls.set(it, id, value) }
 
     /**
-     * Commits the working recipe (slider release, numeric input, chips, resets).
-     * TODO(history worker): compute RecipeDiff.between(committed, working), append the step and store the recipe.
+     * Commits the working recipe (slider release, numeric input, chips, resets): one history step labelled with its
+     * `RecipeDiff` (docs/adr/0003), saved to Room through the [HistoryWriter]. Nothing user-visible changed = no
+     * step, and the working recipe snaps back to the committed one.
      */
-    fun commit() {
-        _state.update { it.copy(edit = it.edit.copy(committed = it.edit.recipe)) }
-    }
+    fun commit() = commitWith(null)
 
     fun resetControl(id: ControlId) = editAndCommit { RecipeControls.reset(it, id) }
 
-    fun resetGroup(group: RecipeGroup) = editAndCommit { group.reset(it) }
+    fun resetGroup(group: RecipeGroup) = editAndCommit(HistoryAction.RESET_GROUP, listOf(group)) { group.reset(it) }
+
+    /** Every group back to "no change" (one step). */
+    fun resetAll() = editAndCommit(HistoryAction.RESET_ALL) { Recipe.DEFAULT }
+
+    /** Back to the recipe the photo opens with: the default recipe plus the user's default settings (one step). */
+    fun resetAsOpened() = editAndCommit(HistoryAction.AS_OPENED) { asOpened() }
+
+    // ------------------------------------------------------------------ history
+
+    fun undo() = move { it.undo() }
+
+    fun redo() = move { it.redo() }
+
+    /** The history list: jumps to the step at [position] (-1 = the original); later steps stay for redo. */
+    fun goTo(position: Int) = move { it.goTo(position) }
+
+    private fun move(change: (EditHistory) -> EditHistory?) {
+        val history = change(_state.value.edit.history) ?: return
+        show(history.current, history)
+        versionId?.let { writer.write(HistoryOp.Move(it, history.cursor)) }
+    }
+
+    // ------------------------------------------------------------------ copy / paste
+
+    /** Copies the whole edit (the paste chooser picks the groups). */
+    fun copy() {
+        val recipe = _state.value.edit.committed
+        viewModelScope.launch { edits.copy(recipe) }
+    }
+
+    /** Opens the paste chooser on the last choice of groups. */
+    fun openPaste() {
+        if (clipboard == null) return
+        viewModelScope.launch {
+            val groups = edits.pasteGroups()
+            _state.update { it.copy(edit = it.edit.copy(pasteChooser = groups)) }
+        }
+    }
+
+    fun setPasteGroups(groups: Set<RecipeGroup>) {
+        _state.update { s -> s.copy(edit = s.edit.copy(pasteChooser = groups.takeIf { s.edit.pasteChooser != null })) }
+    }
+
+    fun dismissPaste() = _state.update { it.copy(edit = it.edit.copy(pasteChooser = null)) }
+
+    /** Pastes the chosen groups of the clipboard onto this photo: one step. */
+    fun confirmPaste() {
+        val groups = _state.value.edit.pasteChooser ?: return
+        val clip = clipboard
+        dismissPaste()
+        if (clip == null || groups.isEmpty()) return
+        viewModelScope.launch { edits.setPasteGroups(groups) }
+        editAndCommit(HistoryAction.PASTE, RecipeGroup.entries.filter { it in groups }) { clip.pasteOnto(it, groups) }
+    }
+
+    /** "Previous": the last edited photo's recipe (everything but geometry) applied as one step. */
+    fun previous() {
+        viewModelScope.launch {
+            val previous = edits.previous(versionId ?: NO_VERSION) ?: return@launch
+            val groups = RecipePaste.DEFAULT_GROUPS
+            editAndCommit(HistoryAction.PREVIOUS, RecipeGroup.entries.filter { it in groups }) {
+                RecipePaste.paste(previous, it, groups)
+            }
+        }
+    }
+
+    /**
+     * The recipe a photo opens with ("as opened from camera"): the default recipe. TODO(settings worker): apply the
+     * user's default settings (default profile, open with Auto) here once Settings stores them.
+     */
+    private fun asOpened(): Recipe = Recipe.DEFAULT
 
     fun setLook(look: BaseLook) = editAndCommit { RecipeControls.withLook(it, look) }
 
@@ -269,9 +381,30 @@ class EditorViewModel @Inject constructor(
         renderer()?.setRecipe(next.edit.recipe)
     }
 
-    private fun editAndCommit(change: (Recipe) -> Recipe) {
+    private fun editAndCommit(
+        action: HistoryAction? = null,
+        groups: List<RecipeGroup> = emptyList(),
+        change: (Recipe) -> Recipe,
+    ) {
         edit(change)
-        commit()
+        commitWith(action, groups)
+    }
+
+    private fun commitWith(action: HistoryAction?, groups: List<RecipeGroup> = emptyList()) {
+        val edit = _state.value.edit
+        val history = edit.history.commit(edit.recipe, action, groups)
+        if (history == null) {
+            if (edit.recipe != edit.committed) show(edit.committed, edit.history)
+            return
+        }
+        _state.update { it.copy(edit = it.edit.copy(history = history)) }
+        versionId?.let { writer.write(HistoryOp.Commit(it, history.current, history.entries[history.cursor].label)) }
+    }
+
+    /** Shows [recipe] as both the working and the committed recipe of [history]. */
+    private fun show(recipe: Recipe, history: EditHistory) {
+        _state.update { it.copy(edit = it.edit.copy(recipe = recipe, history = history)) }
+        renderer()?.setRecipe(recipe)
     }
 
     private fun updateView(change: (ViewOptions) -> ViewOptions) {
@@ -323,5 +456,8 @@ class EditorViewModel @Inject constructor(
 
         /** Half-size of the eyedropper's sampled square, in proxy pixels (a 9x9 average). */
         const val EYEDROPPER_RADIUS = 4
+
+        /** "No version" for queries that exclude the current one. */
+        const val NO_VERSION = -1L
     }
 }

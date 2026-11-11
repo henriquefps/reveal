@@ -141,4 +141,22 @@
     <string name="info_shutter_value">%1$s s</string>
     <string name="info_dimensions_value">%1$d × %2$d · %3$s MP</string>
     <string name="info_file_value">%1$s · %2$s</string>
+    <string name="library_action_paste_edits_choose">Paste edits…</string>
+    <string name="library_edits_copied">Edits copied</string>
+    <plurals name="library_edits_pasted">
+        <item quantity="one">Edits pasted onto %1$d photo</item>
+        <item quantity="other">Edits pasted onto %1$d photos</item>
+    </plurals>
+    <string name="library_paste_all">All</string>
+    <string name="library_paste_confirm">Paste</string>
+    <string name="library_paste_no_change">No change (pasting resets it)</string>
+    <plurals name="library_paste_title_count">
+        <item quantity="one">Paste onto %1$d photo</item>
+        <item quantity="other">Paste onto %1$d photos</item>
+    </plurals>
+    <string name="library_action_reset_edits">Reset edits</string>
+    <plurals name="library_edits_reset">
+        <item quantity="one">Edits reset on %1$d photo</item>
+        <item quantity="other">Edits reset on %1$d photos</item>
+    </plurals>
 </resources>

@@ -63,3 +63,6 @@ eyedropper
 square-split-horizontal
 square-split-vertical
 columns
+square
+check-square
+arrow-bend-up-left

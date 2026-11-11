@@ -53,4 +53,28 @@
     <string name="history_value_aspect_r16_9">16:9</string>
     <string name="history_value_aspect_r9_16">9:16</string>
     <string name="history_value_aspect_custom">Personalizado</string>
+    <!-- Named history steps (HistoryAction) and copy/paste groups (RecipeGroup). -->
+    <string name="history_action_reset_all">Redefinir tudo</string>
+    <string name="history_action_reset_group">Redefinir %1$s</string>
+    <string name="history_action_as_opened">Voltar ao original da câmera</string>
+    <string name="history_action_paste">Colar edições</string>
+    <string name="history_action_previous">Edição anterior</string>
+    <string name="history_action_auto">Automático</string>
+    <string name="history_action_preset">Predefinição</string>
+    <string name="history_original">Original</string>
+    <!-- A step that changed several fields: the first label and how many more. -->
+    <plurals name="history_and_more">
+        <item quantity="one">%1$s e mais %2$d</item>
+        <item quantity="many">%1$s e mais %2$d</item>
+        <item quantity="other">%1$s e mais %2$d</item>
+    </plurals>
+    <string name="recipe_group_profile">Perfil</string>
+    <string name="recipe_group_light">Luz</string>
+    <string name="recipe_group_colour">Cor</string>
+    <string name="recipe_group_effects">Efeitos</string>
+    <string name="recipe_group_detail">Detalhe</string>
+    <string name="recipe_group_optics">Óptica</string>
+    <string name="recipe_group_geometry">Geometria (corte, rotação)</string>
+    <string name="recipe_group_masks">Máscaras</string>
+    <string name="recipe_group_heals">Correção</string>
 </resources>

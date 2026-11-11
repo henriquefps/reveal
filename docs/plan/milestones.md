@@ -57,6 +57,11 @@ milestone run in parallel where they do not touch the same files.
   and darktable/Lightroom for the overlapping fields), settings complete, accessibility pass,
   worst-case pass, performance pass on the phone. 1.0.0 = the owner can cancel his subscription.
 
+## M6 - AI editing assistant (after 1.0.0)
+- A prompt becomes a recipe patch (values for Reveal's own controls, never generated pixels), proposed by a
+  vision model through the sync server, checked by rendering it and refined, applied as one undoable step; batch over
+  a selection; masks by name. Design: `ai-assistant.md`.
+
 ## Later (only if the owner asks)
 AI denoise, on-device inpainting model for larger removals, HDR merge, panorama, Lightroom preset
 import, HDR (Ultra HDR / gain map) export, a Hoard-side shared `:core:image` dependency.

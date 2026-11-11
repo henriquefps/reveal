@@ -126,4 +126,48 @@ class RawHarnessTest {
             return Stats(min, max, sum.toDouble() / count, atMax.toDouble() / count)
         }
     }
+
+    /**
+     * A descriptor served by a `ProxyFileDescriptorCallback` is what a DocumentsProvider (SAF) hands to apps for
+     * non-local storage: reads arrive at the callback with an offset. The decode must work on it and match a direct
+     * decode of the same file.
+     */
+    @Test
+    fun decodesFromAProxyDescriptorLikeASafDocument() {
+        val file = Harness.samples("arw").firstOrNull() ?: Harness.samples(*rawExtensions).first()
+        val reads = java.util.concurrent.atomic.AtomicLong()
+        val random = java.io.RandomAccessFile(file, "r")
+        val callback = object : android.os.ProxyFileDescriptorCallback() {
+            override fun onGetSize(): Long = random.length()
+
+            override fun onRead(offset: Long, size: Int, data: ByteArray): Int {
+                reads.incrementAndGet()
+                random.seek(offset)
+                return random.read(data, 0, size)
+            }
+
+            override fun onRelease() = random.close()
+        }
+        val thread = android.os.HandlerThread("proxy-fd").also { it.start() }
+        val context = androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().targetContext
+        val storage = context.getSystemService(android.os.storage.StorageManager::class.java)
+        val proxy = storage.openProxyFileDescriptor(
+            ParcelFileDescriptor.MODE_READ_ONLY,
+            callback,
+            android.os.Handler(thread.looper),
+        )
+        try {
+            val viaProxy = RawDecoder.decode(proxy, RawDecodeOptions(halfSize = true))
+            val direct = ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY).use {
+                RawDecoder.decode(it, RawDecodeOptions(halfSize = true))
+            }
+            Harness.log("PROXYFD decode ${viaProxy.stats} reads=${reads.get()}")
+            assertThat(viaProxy.image.data).isEqualTo(direct.image.data)
+            assertThat(viaProxy.info.levels).isEqualTo(direct.info.levels)
+            assertThat(reads.get()).isGreaterThan(0)
+        } finally {
+            proxy.close()
+            thread.quitSafely()
+        }
+    }
 }

@@ -12,6 +12,7 @@
 #include <jni.h>
 #include <android/log.h>
 #include <fcntl.h>
+#include <sys/stat.h>
 #include <unistd.h>
 #include <cerrno>
 #include <cmath>
@@ -324,7 +325,10 @@ Session *openSession(JNIEnv *env, jint fd, bool halfSize, jint demosaic, Callbac
     auto *s = new Session();
     configure(s->raw, halfSize, demosaic);
     s->raw.set_progress_handler(cb ? progressCallback : nullptr, cb);
-    off_t size = lseek(fd, 0, SEEK_END);
+    // fstat first (a FUSE/proxy descriptor from a DocumentsProvider reports its size there), lseek as a fallback.
+    struct stat st {};
+    off_t size = (fstat(fd, &st) == 0 && S_ISREG(st.st_mode)) ? st.st_size : 0;
+    if (size <= 0) size = lseek(fd, 0, SEEK_END);
     if (size <= 0) { throwRaw(env, ERR_IO, "descriptor size"); delete s; return nullptr; }
     s->stream = new FdStream(fd, size);
     int rc = s->raw.open_datastream(s->stream);

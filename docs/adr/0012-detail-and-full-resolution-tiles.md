@@ -204,11 +204,25 @@ phone. Standard images take 4 bytes per pixel instead of 6. Everything is freed 
 | Double-tap to 100 % until every visible tile is sharp (6 tiles) | 150-160 ms | 430 ms |
 | Detail edit at 100 % until sharp again (150 ms settle included) | 280 ms | - |
 
+**On the phone** (Galaxy S24 Ultra, Adreno 750, debug build, measured by the worker with the owner's permission):
+
+| | ZV-E10 ARW, 24 MP (CC0) | 12 MP JPEG |
+| --- | --- | --- |
+| Full-resolution decode (background) | 0.95-1.04 s | 0.22 s |
+| Tile, mean (the first, cold one ~100 ms) | 11-20 ms | 52-58 ms |
+| Double-tap to 100 % until every visible tile is sharp (9 tiles) | 240-300 ms | 640-660 ms |
+| Detail edit at 100 % until sharp again | 360-450 ms | - |
+| 100 % view vs export / vs CPU | 0 values differ / max 1 level (`ZoomTilesTest`) | max 2 levels, mean 0.10 (`EditorZoomTest`) |
+
+Detail on the 2400 px proxy on the phone (`PipelineBenchmark`): luminance NR drag with colour NR and sharpening
+**23.2 ms** per frame (p95 26.6), sharpening drag 12.8 ms, against 9.0 ms for an exposure drag: a Detail drag runs at
+about 43 fps. Detail parity on the Adreno: proxy scales max 5 levels (mean 0.03), export vs preview 0 levels, export
+vs CPU max 1; luminance NR 100 on the random-noise stress image reaches 7 levels (allowance 8 there).
+
 On-screen Detail on the proxy (`PipelineBenchmark`, 2400 x 1600, pixel scale 2.5, develop output cached): luminance
 NR drag with colour NR and sharpening on **2.49 ms** per frame (p95 3.12), sharpening drag 1.92 ms (p95 2.47), against
-0.89 ms for an exposure drag. This GPU is about ten times an Adreno 750: the phone will be around 15-25 ms per
-Detail frame; if it is too slow, the first candidates are colour NR at half resolution (chroma is low-frequency) and
-a cheaper edge-stop than `exp`.
+0.89 ms for an exposure drag (the phone's numbers above). To bring a Detail drag to the display rate, the first
+candidates are colour NR at half resolution (chroma is low-frequency) and a cheaper edge-stop than `exp`.
 
 ## PIPELINE_VERSION
 
@@ -221,6 +235,6 @@ it (`CpuDevelopTest`, two recipes at scale 1 and one at a proxy scale).
   noise model (or an estimate from the image's finest wavelet level) could normalise the slider; the amount curve is
   the M2 compromise.
 - Tiles are made from 50 % up; between the proxy's scale and 50 % a 61 MP photo's proxy is magnified up to 2x.
-- Phone measurements (tile time, Detail frame time) are for the orchestrator (commands in the PR and CLAUDE.md).
-- `GpuParityTest.outputMatchesCpuReferenceIn8Bit` fails on this Linux host GPU for one Light-only regression recipe on
-  the sRGB chart (5 levels, also on `main`; the M1 measurements were on Apple's GPU); it is unrelated to Detail.
+- A Detail drag costs 23 ms per frame on the Adreno 750 (above): smooth but under 120 Hz; see the candidates above.
+- `GpuParityTest.outputMatchesCpuReferenceIn8Bit` fails on the Linux host GPU (NVIDIA via the emulator's translator)
+  for one Light-only regression recipe on the sRGB chart (5 levels, also on `main`); it passes on the phone.

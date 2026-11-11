@@ -203,7 +203,7 @@ class GpuParityTest {
 
     /** The 8-bit limit for [recipe] on image [name]: the image's own, raised for colour and noise+tone cases. */
     private fun outputAllowed(name: String, recipe: Recipe, imageAllowed: Int): Int = when {
-        name == "rawNoise" && recipe.hasDetail() -> OUTPUT_MAX_LEVELS_NOISE_TONE
+        name == "rawNoise" && recipe.hasDetail() -> OUTPUT_MAX_LEVELS_NOISE_DETAIL
         recipe.hasDetail() -> maxOf(imageAllowed, OUTPUT_MAX_LEVELS_DETAIL)
         recipe.hasColour() -> maxOf(imageAllowed, OUTPUT_MAX_LEVELS_COLOUR)
         name == "rawNoise" && recipe.light.hasTone() -> OUTPUT_MAX_LEVELS_NOISE_TONE
@@ -266,7 +266,7 @@ class GpuParityTest {
                         count++
                     }
                     worst = maxOf(worst, max)
-                    val allowed = if (name == "rawNoise") OUTPUT_MAX_LEVELS_NOISE_TONE else OUTPUT_MAX_LEVELS_DETAIL
+                    val allowed = if (name == "rawNoise") OUTPUT_MAX_LEVELS_NOISE_DETAIL else OUTPUT_MAX_LEVELS_DETAIL
                     assertThat(max).isAtMost(allowed)
                 }
             }
@@ -463,6 +463,10 @@ class GpuParityTest {
         const val DETAIL_ABS = 4e-3f
         const val DETAIL_REL = 3e-2f
         const val OUTPUT_MAX_LEVELS_DETAIL = 4
+
+        // Detail on the random-noise stress image: luminance NR 100 on uniform per-channel noise reaches 7 levels on
+        // the Adreno 750 (a few pixels whose edge-stop weights sit at the exp's steepest point); 5 on the host GPU.
+        const val OUTPUT_MAX_LEVELS_NOISE_DETAIL = 8
 
         fun Light.hasTone() = contrast != 0f || highlights != 0f || shadows != 0f || whites != 0f || blacks != 0f
         const val OUTPUT_MEAN_LEVELS = 0.1

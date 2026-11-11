@@ -1,7 +1,7 @@
 # Reveal: AI editing assistant (proposal, after 1.0)
 
-Status: owner's idea (2026-11-11), planned as **M6, after M5 (1.0.0)**. Depends on MS (sync server) and benefits from
-M3 (smart preset analysis) and M4 (masks).
+Status: owner's idea (2026-11-11), **noted only, not scheduled and not a priority** ("Later" in `milestones.md`).
+If it is ever built: after 1.0, on top of MS (sync server), M3 (smart preset analysis) and M4 (masks).
 
 ## Idea
 

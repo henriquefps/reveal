@@ -12,11 +12,12 @@ import dev.hfps.reveal.pipeline.recipe.Recipe
 object CpuDevelop {
     /**
      * Runs raw WB, highlight reconstruction, camera matrix, exposure, highlights/shadows, the profile (base look),
-     * contrast/whites/blacks and vibrance/saturation, returning linear Rec.2020 RGB (`width*height*3`,
-     * display-referred below 1.0) before the output transform. [input] is not modified.
+     * contrast/whites/blacks, vibrance/saturation and Detail (noise reduction, sharpening), returning linear Rec.2020
+     * RGB (`width*height*3`, display-referred below 1.0) before the output transform. [input] is not modified.
+     * [pixelScale]: full-resolution pixels per pixel of [input] (a proxy's downscale; the Detail operator's scale).
      */
-    fun renderLinear(input: PipelineInput, recipe: Recipe): FloatArray {
-        val params = DevelopParams.from(input, recipe)
+    fun renderLinear(input: PipelineInput, recipe: Recipe, pixelScale: Float = 1f): FloatArray {
+        val params = DevelopParams.from(input, recipe, pixelScale)
         val grid = LowResGrid(input.width, input.height)
         val rgb = input.linearRgb.copyOf()
         RawWhiteBalanceOp.apply(rgb, params.wbMultipliers)
@@ -34,6 +35,7 @@ object CpuDevelop {
         ProfileOp.apply(rgb, params.profile)
         if (params.tone.globalActive) GlobalToneOp.apply(rgb, params.tone)
         VibranceSaturationOp.apply(rgb, params.colour)
+        DetailOp.apply(rgb, input.width, input.height, params.detail)
         return rgb
     }
 
@@ -45,8 +47,9 @@ object CpuDevelop {
         input: PipelineInput,
         recipe: Recipe,
         mapping: GeometryMapping = mapping(input, recipe),
+        pixelScale: Float = 1f,
     ): FloatArray {
-        val linear = renderLinear(input, recipe)
+        val linear = renderLinear(input, recipe, pixelScale)
         return if (mapping.isIdentity) linear else GeometryOp.apply(linear, mapping)
     }
 
@@ -58,10 +61,15 @@ object CpuDevelop {
      * Full render to RGBA8 (top row first) in the requested output space, [mapping]`(input, recipe)`'s output size
      * (the input's size when the recipe has no geometry).
      */
-    fun render(input: PipelineInput, recipe: Recipe, output: OutputSettings = OutputSettings()): ByteArray {
+    fun render(
+        input: PipelineInput,
+        recipe: Recipe,
+        output: OutputSettings = OutputSettings(),
+        pixelScale: Float = 1f,
+    ): ByteArray {
         val mapping = mapping(input, recipe)
         return OutputTransformOp.apply(
-            renderGeometry(input, recipe, mapping),
+            renderGeometry(input, recipe, mapping, pixelScale),
             mapping.outputWidth,
             mapping.outputHeight,
             output,

@@ -23,6 +23,7 @@ object RecipeControls {
         val light = recipe.light
         val colour = recipe.colour
         val wb = colour.whiteBalance
+        val detail = recipe.detail
         return when (id) {
             ControlId.PROFILE_AMOUNT -> recipe.profile.amountPercent
             ControlId.EXPOSURE -> light.exposureEv
@@ -38,6 +39,16 @@ object RecipeControls {
             ControlId.VIBRANCE -> colour.vibrance
             ControlId.SATURATION -> colour.saturation
             ControlId.ANGLE -> recipe.geometry.angle
+            ControlId.SHARPEN_AMOUNT -> detail.sharpenAmount
+            ControlId.SHARPEN_RADIUS -> detail.sharpenRadius
+            ControlId.SHARPEN_DETAIL -> detail.sharpenDetail
+            ControlId.SHARPEN_MASKING -> detail.sharpenMasking
+            ControlId.NR_LUMINANCE -> detail.nrLuminance
+            ControlId.NR_LUMINANCE_DETAIL -> detail.nrLuminanceDetail
+            ControlId.NR_LUMINANCE_CONTRAST -> detail.nrLuminanceContrast
+            ControlId.NR_COLOUR -> detail.nrColour
+            ControlId.NR_COLOUR_DETAIL -> detail.nrColourDetail
+            ControlId.NR_COLOUR_SMOOTHNESS -> detail.nrColourSmoothness
         }
     }
 
@@ -48,6 +59,7 @@ object RecipeControls {
         val light = recipe.light
         val colour = recipe.colour
         val wb = colour.whiteBalance
+        val d = recipe.detail
         return when (id) {
             ControlId.PROFILE_AMOUNT -> recipe.copy(profile = recipe.profile.copy(amountPercent = v))
             ControlId.EXPOSURE -> recipe.copy(light = light.copy(exposureEv = v))
@@ -63,6 +75,16 @@ object RecipeControls {
             ControlId.VIBRANCE -> recipe.copy(colour = colour.copy(vibrance = v))
             ControlId.SATURATION -> recipe.copy(colour = colour.copy(saturation = v))
             ControlId.ANGLE -> recipe.copy(geometry = recipe.geometry.copy(angle = v))
+            ControlId.SHARPEN_AMOUNT -> recipe.copy(detail = d.copy(sharpenAmount = v))
+            ControlId.SHARPEN_RADIUS -> recipe.copy(detail = d.copy(sharpenRadius = v))
+            ControlId.SHARPEN_DETAIL -> recipe.copy(detail = d.copy(sharpenDetail = v))
+            ControlId.SHARPEN_MASKING -> recipe.copy(detail = d.copy(sharpenMasking = v))
+            ControlId.NR_LUMINANCE -> recipe.copy(detail = d.copy(nrLuminance = v))
+            ControlId.NR_LUMINANCE_DETAIL -> recipe.copy(detail = d.copy(nrLuminanceDetail = v))
+            ControlId.NR_LUMINANCE_CONTRAST -> recipe.copy(detail = d.copy(nrLuminanceContrast = v))
+            ControlId.NR_COLOUR -> recipe.copy(detail = d.copy(nrColour = v))
+            ControlId.NR_COLOUR_DETAIL -> recipe.copy(detail = d.copy(nrColourDetail = v))
+            ControlId.NR_COLOUR_SMOOTHNESS -> recipe.copy(detail = d.copy(nrColourSmoothness = v))
         }
     }
 

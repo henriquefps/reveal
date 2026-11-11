@@ -44,13 +44,30 @@ layout(std140) uniform Look {
         return if (s.contains('.') || s.contains('E')) s else "$s.0"
     }
 
-    /** Operator functions; constants are the CPU's own float values. */
-    val FUNCTIONS: String = """
-const float LOOK_FIRST_STOP = ${glslFloat(ToneCurve.FIRST_STOP)};
+    /** OkLab (`cpu/OkLab.kt`): `toOkLab` / `fromOkLab` on linear Rec.2020, shared with the Detail passes. */
+    val OKLAB: String = """
 const mat3 OK_RGB_TO_LMS = ${mat3Glsl(OkLab.RGB_TO_LMS)};
 const mat3 OK_LMS_TO_LAB = ${mat3Glsl(OkLab.LMS_TO_LAB)};
 const mat3 OK_LAB_TO_LMS = ${mat3Glsl(OkLab.LAB_TO_LMS)};
 const mat3 OK_LMS_TO_RGB = ${mat3Glsl(OkLab.LMS_TO_RGB)};
+
+vec3 okCbrt(vec3 v) {
+    return sign(v) * pow(abs(v), vec3(1.0 / 3.0));
+}
+
+vec3 toOkLab(vec3 c) {
+    return OK_LMS_TO_LAB * okCbrt(OK_RGB_TO_LMS * c);
+}
+
+vec3 fromOkLab(vec3 lab) {
+    vec3 l = OK_LAB_TO_LMS * lab;
+    return OK_LMS_TO_RGB * (l * l * l);
+}
+"""
+
+    /** Operator functions; constants are the CPU's own float values. */
+    val FUNCTIONS: String = OKLAB + """
+const float LOOK_FIRST_STOP = ${glslFloat(ToneCurve.FIRST_STOP)};
 const float VS_C_SOFT = ${glslFloat(VibranceSaturationOp.C_SOFT)};
 const float VS_C_VIB = ${glslFloat(VibranceSaturationOp.C_VIB)};
 const float VS_SKIN_COS = ${glslFloat(VibranceSaturationOp.SKIN_COS)};
@@ -72,18 +89,6 @@ float lookCurveEval(float x) {
         (-2.0 * f3 + 3.0 * f2) * k1.x + (f3 - f2) * k1.y;
 }
 
-vec3 okCbrt(vec3 v) {
-    return sign(v) * pow(abs(v), vec3(1.0 / 3.0));
-}
-
-vec3 toOkLab(vec3 c) {
-    return OK_LMS_TO_LAB * okCbrt(OK_RGB_TO_LMS * c);
-}
-
-vec3 fromOkLab(vec3 lab) {
-    vec3 l = OK_LAB_TO_LMS * lab;
-    return OK_LMS_TO_RGB * (l * l * l);
-}
 
 vec3 hueTreatment(vec3 lab) {
     float c = sqrt(lab.y * lab.y + lab.z * lab.z);

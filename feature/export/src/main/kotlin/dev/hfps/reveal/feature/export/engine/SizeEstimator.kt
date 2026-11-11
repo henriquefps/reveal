@@ -100,9 +100,11 @@ class SizeEstimator private constructor(
                 val (fw, fh) = PipelineInputMapper.orientedSize(proxy.stats.fullWidth, proxy.stats.fullHeight, turn)
                 // The proxy goes through the geometry operator too: the estimate is of the cropped picture.
                 val mapping = CpuDevelop.mapping(pipelineInput, recipe)
+                // Detail at the proxy's scale (docs/adr/0012), as the editor's fit view shows it.
+                val scale = maxOf(fw, fh).toFloat() / maxOf(pipelineInput.width, pipelineInput.height)
                 SizeEstimator(
                     PixelSize(fw, fh),
-                    CpuDevelop.renderGeometry(pipelineInput, recipe, mapping),
+                    CpuDevelop.renderGeometry(pipelineInput, recipe, mapping, scale.coerceAtLeast(1f)),
                     mapping.outputWidth,
                     mapping.outputHeight,
                     recipe,

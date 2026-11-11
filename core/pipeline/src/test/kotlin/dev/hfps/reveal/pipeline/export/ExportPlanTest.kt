@@ -101,4 +101,22 @@ class ExportPlanTest {
             }
         }
     }
+
+    @Test
+    fun `the detail apron grows every input region and shrinks the tiles`() {
+        val plain = ExportPlan.of(1100, 740, Geometry(), ExportSize.Original, 256)
+        val apron = ExportPlan.of(1100, 740, Geometry(), ExportSize.Original, 256, reach = 72)
+        assertThat(plain.geometryPass).isFalse()
+        assertThat(apron.geometryPass).isTrue()
+        assertThat(apron.geometryBudget).isEqualTo(256 - 2 * 72)
+        for (tile in apron.outputTiles()) {
+            val box = tile.geometry
+            val input = checkNotNull(tile.input)
+            assertThat(input.width).isAtMost(256)
+            assertThat(input.height).isAtMost(256)
+            // At least the apron around the box, unless the image edge clamps it.
+            assertThat(box.x - input.x).isEqualTo(minOf(72, box.x))
+            assertThat(input.right - box.right).isEqualTo(minOf(72, 1100 - box.right))
+        }
+    }
 }

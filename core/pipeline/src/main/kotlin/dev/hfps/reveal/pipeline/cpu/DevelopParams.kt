@@ -18,6 +18,7 @@ import dev.hfps.reveal.pipeline.recipe.RecipeRanges
  * @property profile the profile (base look, slot 6) resolved for this input; identity for display-referred input.
  * @property tone the Light group's tone sliders ([LocalToneOp], [GlobalToneOp]).
  * @property colour vibrance and saturation (slot 9).
+ * @property detail noise reduction and sharpening (slot 11, [DetailOp]) at this render's pixel scale.
  */
 class DevelopParams(
     val wbMultipliers: FloatArray,
@@ -27,6 +28,7 @@ class DevelopParams(
     val highlights: HighlightParams? = null,
     val tone: ToneParams = ToneParams(),
     val colour: ColourParams = ColourParams.NONE,
+    val detail: DetailParams = DetailParams.NONE,
 ) {
     override fun equals(other: Any?): Boolean = other is DevelopParams &&
         wbMultipliers.contentEquals(other.wbMultipliers) &&
@@ -35,7 +37,12 @@ class DevelopParams(
         profile == other.profile &&
         highlights == other.highlights &&
         tone == other.tone &&
-        colour == other.colour
+        colour == other.colour &&
+        detail == other.detail
+
+    /** The same parameters without the Detail operator: what the stages before slot 11 depend on. */
+    fun withoutDetail(): DevelopParams =
+        DevelopParams(wbMultipliers, cameraToWorking, exposureGain, profile, highlights, tone, colour)
 
     override fun hashCode(): Int {
         var h = wbMultipliers.contentHashCode()
@@ -44,15 +51,20 @@ class DevelopParams(
         h = h * HASH + profile.hashCode()
         h = h * HASH + highlights.hashCode()
         h = h * HASH + tone.hashCode()
-        return h * HASH + colour.hashCode()
+        h = h * HASH + colour.hashCode()
+        return h * HASH + detail.hashCode()
     }
 
     companion object {
         private const val HASH = 31
         private const val PERCENT = 100f
 
-        /** Resolves [recipe] against [input]. */
-        fun from(input: PipelineInput, recipe: Recipe): DevelopParams {
+        /**
+         * Resolves [recipe] against [input]. [pixelScale] is how many full-resolution pixels one pixel of [input]
+         * covers (the proxy's downscale; 1 for full-resolution renders): only the Detail operator's lengths depend on
+         * it.
+         */
+        fun from(input: PipelineInput, recipe: Recipe, pixelScale: Float = 1f): DevelopParams {
             val wb = WhiteBalanceModel.solve(input, recipe.colour.whiteBalance)
             val multipliers = FloatArray(PipelineInput.CHANNELS) { wb.multipliers[it].toFloat() }
             val scene = input.kind == InputKind.SCENE_REFERRED
@@ -67,6 +79,7 @@ class DevelopParams(
                     saturation = RecipeRanges.saturation.clamp(recipe.colour.saturation) / PERCENT,
                     vibrance = RecipeRanges.vibrance.clamp(recipe.colour.vibrance) / PERCENT,
                 ),
+                detail = DetailParams.from(recipe.detail, pixelScale),
             )
         }
     }

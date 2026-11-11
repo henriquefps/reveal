@@ -4,6 +4,7 @@ import android.util.Log
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.google.common.truth.Truth.assertThat
 import dev.hfps.reveal.pipeline.cpu.CpuDevelop
+import dev.hfps.reveal.pipeline.cpu.DetailParams
 import dev.hfps.reveal.pipeline.cpu.LanczosResampleOp
 import dev.hfps.reveal.pipeline.cpu.OutputSettings
 import dev.hfps.reveal.pipeline.cpu.OutputSpace
@@ -16,6 +17,7 @@ import dev.hfps.reveal.pipeline.gl.TileSink
 import dev.hfps.reveal.pipeline.gl.TiledRenderer
 import dev.hfps.reveal.pipeline.input.PipelineInputTileSource
 import dev.hfps.reveal.pipeline.recipe.CropRect
+import dev.hfps.reveal.pipeline.recipe.Detail
 import dev.hfps.reveal.pipeline.recipe.Geometry
 import dev.hfps.reveal.pipeline.recipe.Light
 import dev.hfps.reveal.pipeline.recipe.Recipe
@@ -146,6 +148,44 @@ class TiledRendererTest {
                 assertThat(vsPreview.first).isAtMost(1)
                 assertThat(vsCpu.first).isAtMost(3)
             }
+        } finally {
+            preview.close()
+        }
+    }
+
+    /**
+     * Detail (slot 11, docs/adr/0012): with its apron the tiles stitch bit-identically (with and without geometry), the
+     * export equals the preview renderer and stays within the Detail tolerance of the CPU reference.
+     */
+    @Test
+    fun detailTilesStitchAndMatchThePreviewAndTheCpu() = runBlocking {
+        val edit = recipe.copy(
+            detail = Detail(sharpenAmount = 80f, sharpenMasking = 25f, nrLuminance = 50f, nrColour = 60f),
+        )
+        val reach = DetailParams.from(edit.detail, 1f).reach
+        assertThat(reach).isGreaterThan(0)
+        fun detailPlan(tile: Int, geometry: Geometry = Geometry()) =
+            ExportPlan.of(image.width, image.height, geometry, ExportSize.Original, tile, reach)
+        val whole = render(detailPlan(1024), with = edit)
+        val tiles = render(detailPlan(256), with = edit)
+        assertThat(detailPlan(256).outputTiles().size).isGreaterThan(9)
+        assertThat(tiles.contentEquals(whole)).isTrue()
+        val straight = Geometry(crop = CropRect(0.2f, 0.2f, 0.8f, 0.8f), angle = 7.3f)
+        val turned = edit.copy(geometry = straight)
+        assertThat(
+            render(
+                detailPlan(256, straight),
+                with = turned,
+            ).contentEquals(render(detailPlan(1024, straight), with = turned)),
+        ).isTrue()
+        val preview = GpuDevelopRenderer.create()
+        try {
+            preview.upload(image)
+            val vsPreview = maxDiff(preview.renderOutput(edit), whole)
+            val vsCpu = maxDiff(CpuDevelop.render(image, edit), whole)
+            Log.i(TAG, "detail: vs preview $vsPreview, vs CPU $vsCpu (max levels, values differing)")
+            assertThat(vsPreview.first).isAtMost(1)
+            assertThat(vsCpu.first).isAtMost(4)
         } finally {
             preview.close()
         }

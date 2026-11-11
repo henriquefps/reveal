@@ -104,4 +104,18 @@ class RecipeDiffTest {
     private fun Recipe.withExposure(ev: Float) = copy(light = Light(ev))
 
     private fun Recipe.withWb(wb: WhiteBalance) = copy(colour = Colour(wb))
+
+    @Test
+    fun `detail sliders are labelled with their value`() {
+        val steps = RecipeDiff.between(
+            Recipe(),
+            Recipe(detail = Detail(sharpenAmount = 40f, sharpenRadius = 1.4f, nrLuminance = 25f)),
+        )
+        assertThat(steps).containsExactly(
+            HistoryStep(HistoryField.NR_LUMINANCE, "25"),
+            HistoryStep(HistoryField.SHARPEN_AMOUNT, "40"),
+            HistoryStep(HistoryField.SHARPEN_RADIUS, "1.4"),
+        ).inOrder()
+        assertThat(steps.map { it.field.group }.toSet()).containsExactly(RecipeGroup.DETAIL)
+    }
 }

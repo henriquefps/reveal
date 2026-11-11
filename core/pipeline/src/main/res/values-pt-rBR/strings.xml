@@ -24,6 +24,16 @@
     <string name="history_crop_reset">Recorte removido</string>
     <string name="history_angle">Endireitar %1$s</string>
     <string name="history_rotate">Girar %1$s</string>
+    <string name="history_sharpen_amount">Nitidez %1$s</string>
+    <string name="history_sharpen_radius">Raio da nitidez %1$s</string>
+    <string name="history_sharpen_detail">Detalhe da nitidez %1$s</string>
+    <string name="history_sharpen_masking">Máscara da nitidez %1$s</string>
+    <string name="history_nr_luminance">Redução de ruído de luminância %1$s</string>
+    <string name="history_nr_luminance_detail">Detalhe de luminância %1$s</string>
+    <string name="history_nr_luminance_contrast">Contraste de luminância %1$s</string>
+    <string name="history_nr_colour">Redução de ruído de cor %1$s</string>
+    <string name="history_nr_colour_detail">Detalhe de cor %1$s</string>
+    <string name="history_nr_colour_smoothness">Suavidade de cor %1$s</string>
     <string name="history_flip_h">Espelhar na horizontal</string>
     <string name="history_flip_v">Espelhar na vertical</string>
     <string name="history_aspect">Proporção: %1$s</string>

@@ -146,6 +146,40 @@ object SyntheticImages {
     }
 
     /**
+     * A high-ISO-like test card for the Detail operator (docs/adr/0012), RAW-like with the invented camera: a mid-grey
+     * left half and a brighter, slightly warm right half (a step edge to keep sharp), a thin bright line and a fine
+     * texture of +-[texture] stops (a 2D sine of period 8 px) on the bottom quarter, plus seeded Gaussian noise of
+     * [noise] (relative, per channel and independent: luminance and colour noise) on every pixel. Without noise the
+     * clean image ([noise] = 0) is the truth NR is measured against.
+     */
+    @Suppress("LongParameterList")
+    fun noisyCard(width: Int, height: Int, seed: Int, noise: Float = 0.12f, texture: Float = 0.3f): PipelineInput {
+        val random = Random(seed)
+        val data = FloatArray(width * height * PipelineInput.CHANNELS)
+        for (y in 0 until height) {
+            for (x in 0 until width) {
+                val right = x >= width / 2
+                val base = if (right) floatArrayOf(0.42f, 0.36f, 0.30f) else floatArrayOf(0.12f, 0.12f, 0.12f)
+                val line = if (y == height / 3 && x in width / 8 until width * 7 / 8) 3f else 1f
+                val t = if (y >= height * 3 / 4) sin(x * TEXTURE_FREQ) * sin(y * TEXTURE_FREQ) else 0f
+                val gain = line * StrictMath.pow(2.0, (texture * t).toDouble()).toFloat()
+                for (c in 0 until PipelineInput.CHANNELS) {
+                    val n = 1f + noise * gaussian(random)
+                    data[(y * width + x) * PipelineInput.CHANNELS + c] = base[c] * gain * n / TEST_AS_SHOT[c]
+                }
+            }
+        }
+        return PipelineInput(InputKind.SCENE_REFERRED, width, height, data, TEST_CAMERA_TO_XYZ, TEST_AS_SHOT)
+    }
+
+    /** A standard normal sample (Box-Muller), deterministic for a seeded [random]. */
+    private fun gaussian(random: Random): Float {
+        val u = random.nextDouble().coerceAtLeast(1e-12)
+        val v = random.nextDouble()
+        return (sqrt(-2.0 * StrictMath.log(u)) * StrictMath.cos(2.0 * PI * v)).toFloat()
+    }
+
+    /**
      * Clipped highlights as a decoded RAW would deliver them (saturation 1.0, every channel clipped at 1.0): a dim
      * blue-grey background with two Gaussian light blobs in raw camera units. The left blob's colour (raw
      * `HIGHLIGHT_COLOUR`) peaks at 2.4x the clip in green, so green and red clip in its core while blue survives;

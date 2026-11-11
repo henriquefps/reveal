@@ -157,4 +157,6 @@ class EditorActions(
     val onExport: () -> Unit = {},
     /** One-tap Auto (docs/adr/0010): the strip's Auto sets [AutoScope.ALL], the Light panel's [AutoScope.LIGHT]. */
     val onAuto: (AutoScope) -> Unit = {},
+    /** Detail panel: shows (`true`) or hides the sharpening mask on the photo (while Masking is dragged). */
+    val onDetailMask: (Boolean) -> Unit = {},
 )

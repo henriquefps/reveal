@@ -29,6 +29,16 @@ enum class HistoryField(val group: RecipeGroup) {
     FLIP_H(RecipeGroup.GEOMETRY),
     FLIP_V(RecipeGroup.GEOMETRY),
     ASPECT(RecipeGroup.GEOMETRY),
+    SHARPEN_AMOUNT(RecipeGroup.DETAIL),
+    SHARPEN_RADIUS(RecipeGroup.DETAIL),
+    SHARPEN_DETAIL(RecipeGroup.DETAIL),
+    SHARPEN_MASKING(RecipeGroup.DETAIL),
+    NR_LUMINANCE(RecipeGroup.DETAIL),
+    NR_LUMINANCE_DETAIL(RecipeGroup.DETAIL),
+    NR_LUMINANCE_CONTRAST(RecipeGroup.DETAIL),
+    NR_COLOUR(RecipeGroup.DETAIL),
+    NR_COLOUR_DETAIL(RecipeGroup.DETAIL),
+    NR_COLOUR_SMOOTHNESS(RecipeGroup.DETAIL),
 }
 
 /**
@@ -50,6 +60,7 @@ object RecipeDiff {
         profile(before.profile, after.profile)
         light(before.light, after.light)
         colour(before.colour, after.colour)
+        detail(before.detail, after.detail)
         geometry(before.geometry, after.geometry)
     }
 
@@ -88,6 +99,30 @@ object RecipeDiff {
         scalar(HistoryField.REL_TINT, RecipeRanges.relTint, wbBefore.relTint, wbAfter.relTint)
         scalar(HistoryField.VIBRANCE, RecipeRanges.vibrance, before.vibrance, after.vibrance)
         scalar(HistoryField.SATURATION, RecipeRanges.saturation, before.saturation, after.saturation)
+    }
+
+    private fun MutableList<HistoryStep>.detail(before: Detail, after: Detail) {
+        val r = RecipeRanges
+        scalar(HistoryField.NR_LUMINANCE, r.nrLuminance, before.nrLuminance, after.nrLuminance)
+        scalar(HistoryField.NR_LUMINANCE_DETAIL, r.nrLuminanceDetail, before.nrLuminanceDetail, after.nrLuminanceDetail)
+        scalar(
+            HistoryField.NR_LUMINANCE_CONTRAST,
+            r.nrLuminanceContrast,
+            before.nrLuminanceContrast,
+            after.nrLuminanceContrast,
+        )
+        scalar(HistoryField.NR_COLOUR, r.nrColour, before.nrColour, after.nrColour)
+        scalar(HistoryField.NR_COLOUR_DETAIL, r.nrColourDetail, before.nrColourDetail, after.nrColourDetail)
+        scalar(
+            HistoryField.NR_COLOUR_SMOOTHNESS,
+            r.nrColourSmoothness,
+            before.nrColourSmoothness,
+            after.nrColourSmoothness,
+        )
+        scalar(HistoryField.SHARPEN_AMOUNT, r.sharpenAmount, before.sharpenAmount, after.sharpenAmount)
+        scalar(HistoryField.SHARPEN_RADIUS, r.sharpenRadius, before.sharpenRadius, after.sharpenRadius)
+        scalar(HistoryField.SHARPEN_DETAIL, r.sharpenDetail, before.sharpenDetail, after.sharpenDetail)
+        scalar(HistoryField.SHARPEN_MASKING, r.sharpenMasking, before.sharpenMasking, after.sharpenMasking)
     }
 
     private fun MutableList<HistoryStep>.geometry(before: Geometry, after: Geometry) {

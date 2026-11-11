@@ -21,6 +21,21 @@ void main() {
 }
 """
 
+    /**
+     * `q16(x)`: [dev.hfps.reveal.pipeline.cpu.Half.round] on the GPU, the nearest float16 by integer operations on the
+     * bits, so an RGBA16F target stores the value exactly whatever the driver's own rounding (docs/adr/0012).
+     */
+    const val Q16: String = """
+float q16(float x) {
+    uint u = floatBitsToUint(x);
+    return uintBitsToFloat((u + 0x0FFFu + ((u >> 13) & 1u)) & 0xFFFFE000u);
+}
+
+vec3 q16(vec3 v) {
+    return vec3(q16(v.x), q16(v.y), q16(v.z));
+}
+"""
+
     /** The `Develop` uniform block (std140, binding 0), declared by both develop stages. */
     private const val DEVELOP_BLOCK = """
 // One block, one sub-struct per operator (std140): each operator's parameters are uploaded from DevelopParams.
@@ -66,16 +81,19 @@ void main() {
     /**
      * Stage 2, develop (slots 5b-9): highlights/shadows on scene-linear light, the profile (base look, slot 6,
      * [ColourShaders]), contrast/whites/blacks on display-referred light, then vibrance/saturation (slot 9). Reads
-     * the scene texture 1:1 and writes the working-space texture (RGBA16F, mip-mapped) the output pass reads.
+     * the scene texture 1:1 and writes the working-space texture (RGBA16F, mip-mapped) the output pass reads, or, when
+     * the Detail operator runs, its OkLab input ([DetailShaders]).
      */
     val DEVELOP_FRAG: String = HEADER + DEVELOP_BLOCK + LightShaders.COMMON + """
 uniform sampler2D uScene;
 uniform sampler2D uCoef;
 uniform sampler2D uMoments;
 uniform ivec2 uOrigin;   // see SCENE_FRAG
+// 1 when the Detail operator (slot 11, DetailShaders) follows: write OkLab with a zero luminance accumulator in a.
+uniform int uLabOut;
 out vec4 outColor;
 
-""" + ColourShaders.BLOCK + ColourShaders.FUNCTIONS + LightShaders.TONE + """
+""" + ColourShaders.BLOCK + ColourShaders.FUNCTIONS + LightShaders.TONE + Q16 + """
 void main() {
     ivec2 p = ivec2(gl_FragCoord.xy);
     vec3 c = texelFetch(uScene, p, 0).rgb;
@@ -87,7 +105,7 @@ void main() {
         c = globalTone(c);
     }
     c = vibranceSaturation(c);
-    outColor = vec4(c, 1.0);
+    outColor = uLabOut == 1 ? vec4(q16(toOkLab(c)), 0.0) : vec4(c, 1.0);
 }
 """
 
@@ -139,9 +157,18 @@ layout(std140) uniform Output {
     vec4 geomX;              // GeometryMapping.toImage: image x = dot(xy, output) + z; w = output width
     vec4 geomY;              // image y = dot(xy, output) + z; w = output height
     uvec4 geomFlags;         // x = 1 snaps to output pixel centres, y = 1 when empty means the surround
+    // Full-resolution zoom tiles (ZoomTiles, docs/adr/0012); tileView.y = 0 when this pane shows none.
+    vec4 tileView;           // x = full-res pixels per proxy pixel (k), y = tiles on, zw = full-res output size
+    vec4 tileGeomX;          // full-res GeometryMapping.toImage row x (xy, z); w = proxy output width
+    vec4 tileGeomY;          // row y; w = proxy output height
+    vec4 tileAtlas;          // x = tile core, y = slot border, z = slot size, w = explicit LOD (0..1)
+    vec4 tileImage;          // xy = full-res image size, zw = atlas size
+    uvec4 tileFlags;         // x = sampling mode (as dither.z), y = 1 snaps to full-res output pixel centres
 };
 
 uniform sampler2D uStage;
+uniform sampler2D uAtlas;      // zoom tiles: RGBA16F slots, levels 0-1
+uniform sampler2D uTileIndex;  // zoom tiles: RGBA8 per tile, rg = slot, b = fade-in alpha, a = ready
 out vec4 outColor;
 
 """ + OUTPUT_FUNCTIONS + """
@@ -174,11 +201,42 @@ vec3 catmullRom(vec2 ip) {
     return sum;
 }
 
+// A zoom tile's colour at full-resolution image point fp of tile t, from the atlas slot the index names: the same
+// three samplings as the proxy (exact texel at 1:1, Catmull-Rom when straightened, textureLod at the explicit LOD),
+// taps clamped to the image; the slot's border holds the neighbours (or the repeated edge).
+vec3 sampleTile(vec2 fp, ivec2 t, vec4 idx) {
+    vec2 slot = floor(idx.rg * 255.0 + 0.5) * tileAtlas.z;
+    ivec2 base = ivec2(slot) + ivec2(tileAtlas.y) - t * ivec2(tileAtlas.x);
+    ivec2 hi = ivec2(tileImage.xy) - 1;
+    if (tileFlags.x == 0u) {
+        return texelFetch(uAtlas, base + clamp(ivec2(floor(fp)), ivec2(0), hi), 0).rgb;
+    }
+    if (tileFlags.x == 2u) {
+        vec2 s = fp - 0.5;
+        vec2 f = floor(s);
+        vec4 wx = catmullRomWeights(s.x - f.x);
+        vec4 wy = catmullRomWeights(s.y - f.y);
+        ivec2 b = ivec2(f) - 1;
+        vec3 sum = vec3(0.0);
+        for (int j = 0; j < 4; j++) {
+            vec3 row = vec3(0.0);
+            for (int i = 0; i < 4; i++) {
+                row += wx[i] * texelFetch(uAtlas, base + clamp(b + ivec2(i, j), ivec2(0), hi), 0).rgb;
+            }
+            sum += wy[j] * row;
+        }
+        return sum;
+    }
+    vec2 ap = vec2(base) + clamp(fp, vec2(0.0), tileImage.xy);
+    return textureLod(uAtlas, ap / tileImage.zw, tileAtlas.w).rgb;
+}
+
 void main() {
     // Screen pixel centre, origin top-left (image row 0 is the top).
     vec2 sp = vec2(gl_FragCoord.x, viewport.w - gl_FragCoord.y);
     // Output point (geometry operator's output), then the working-texture point through the geometry mapping.
-    vec2 op = (sp - viewport.zw * 0.5) / image.z + viewport.xy;
+    vec2 op0 = (sp - viewport.zw * 0.5) / image.z + viewport.xy;
+    vec2 op = op0;
     if (geomFlags.x != 0u) {
         op = floor(op) + 0.5;
     }
@@ -197,6 +255,21 @@ void main() {
     }
     if (!insideImage) {
         c = vec3(0.0);
+    }
+    if (tileView.y != 0.0) {
+        // The full-resolution output point of the same screen pixel (ZoomView.fullOutput), then its image point.
+        vec2 fo = (op0 - vec2(tileGeomX.w, tileGeomY.w) * 0.5) * tileView.x + tileView.zw * 0.5;
+        if (tileFlags.y != 0u) {
+            fo = floor(fo) + 0.5;
+        }
+        vec2 fp = vec2(dot(tileGeomX.xy, fo) + tileGeomX.z, dot(tileGeomY.xy, fo) + tileGeomY.z);
+        if (all(greaterThanEqual(fp, vec2(0.0))) && all(lessThan(fp, tileImage.xy))) {
+            ivec2 t = ivec2(floor(fp / tileAtlas.x));
+            vec4 idx = texelFetch(uTileIndex, t, 0);
+            if (idx.a > 0.5) {
+                c = mix(c, sampleTile(fp, t, idx), idx.b);
+            }
+        }
     }
     c = clamp(mat3(workingToOutput) * c, 0.0, 1.0);
     vec3 e = srgbOetf(c);

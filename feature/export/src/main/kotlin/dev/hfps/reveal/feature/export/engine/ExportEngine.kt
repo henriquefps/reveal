@@ -26,6 +26,7 @@ import dev.hfps.reveal.feature.export.model.ExportDestination
 import dev.hfps.reveal.feature.export.model.ExportFormat
 import dev.hfps.reveal.feature.export.model.ExportNaming
 import dev.hfps.reveal.feature.export.model.ExportOptions
+import dev.hfps.reveal.pipeline.cpu.DetailParams
 import dev.hfps.reveal.pipeline.cpu.OutputSettings
 import dev.hfps.reveal.pipeline.cpu.OutputSpace
 import dev.hfps.reveal.pipeline.export.ExportPlan
@@ -133,8 +134,16 @@ class ExportEngine(private val context: Context, private val destinations: Desti
         val sink: BitmapSink
         val stats: TiledRenderStats
         try {
-            plan =
-                ExportPlan.of(source.width, source.height, item.recipe.geometry, options.size, renderer.tileSize)
+            // Detail (slot 11) reads a neighbourhood: each tile's input carries its apron (docs/adr/0012).
+            val reach = DetailParams.from(item.recipe.detail, 1f).reach
+            plan = ExportPlan.of(
+                source.width,
+                source.height,
+                item.recipe.geometry,
+                options.size,
+                renderer.tileSize,
+                reach,
+            )
             checkStorage(plan, options)
             sink = try {
                 BitmapSink(plan.output.width, plan.output.height, colourSpace(colour.space))

@@ -1,7 +1,12 @@
 package dev.hfps.reveal.pipeline.input
 
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.BitmapRegionDecoder
 import android.graphics.ColorSpace
+import android.graphics.Rect
+import android.os.Build
+import android.os.ParcelFileDescriptor
 import dev.hfps.image.LinearImage
 import dev.hfps.image.NativeLinearImage
 import dev.hfps.image.color.ColorInfo
@@ -149,34 +154,163 @@ class BitmapTileSource(private val bitmap: Bitmap, private val orientation: Int 
     }
 
     override fun read(x: Int, y: Int, w: Int, h: Int, out: FloatArray) {
-        // The stored rectangle that holds the upright one, copied without colour conversion (same space, no scaling).
-        val corners = listOf(x to y, x + w - 1 to y + h - 1).map { (cx, cy) ->
-            PipelineInputMapper.storedPixel(cx, cy, bitmap.width, bitmap.height, orientation)
-        }
-        val sx0 = minOf(corners[0].first, corners[1].first)
-        val sy0 = minOf(corners[0].second, corners[1].second)
-        val sw = maxOf(corners[0].first, corners[1].first) - sx0 + 1
-        val sh = maxOf(corners[0].second, corners[1].second) - sy0 + 1
-        val part = Bitmap.createBitmap(bitmap, sx0, sy0, sw, sh)
-        val bytes = ByteArray(part.rowBytes * sh)
-        part.copyPixelsToBuffer(ByteBuffer.wrap(bytes))
-        val stride = part.rowBytes
-        if (part !== bitmap) part.recycle()
-        var o = 0
-        for (r in y until y + h) {
-            for (col in x until x + w) {
-                val (px, py) = PipelineInputMapper.storedPixel(col, r, bitmap.width, bitmap.height, orientation)
-                val i = (py - sy0) * stride + (px - sx0) * RGBA
-                out[o] = (lut[bytes[i].toInt() and BYTE].toInt() and MASK) * SCALE
-                out[o + 1] = (lut[bytes[i + 1].toInt() and BYTE].toInt() and MASK) * SCALE
-                out[o + 2] = (lut[bytes[i + 2].toInt() and BYTE].toInt() and MASK) * SCALE
-                out[o + RGBA - 1] = 1f
-                o += RGBA
-            }
+        val stored = storedBounds(x, y, w, h, bitmap.width, bitmap.height, orientation)
+        val part = Bitmap.createBitmap(bitmap, stored.left, stored.top, stored.width, stored.height)
+        try {
+            linearise(part, stored.left, stored.top, x, y, w, h, out, bitmap.width, bitmap.height, orientation, lut)
+        } finally {
+            if (part !== bitmap) part.recycle()
         }
     }
 
     override fun close() = bitmap.recycle()
+}
+
+/**
+ * A standard image (JPEG, HEIF, PNG, WebP) read in regions through a [BitmapRegionDecoder] on its [descriptor], as the
+ * library viewer's 100 % zoom does: no full-size bitmap in memory, a region of a few hundred pixels decoded per read
+ * (the editor's zoom tiles, docs/adr/0012). Regions are decoded with a [MARGIN] of stored pixels around them so the
+ * decoder's chroma upsampling sees the same neighbours as a full decode. Pixels are linearised exactly like
+ * [BitmapTileSource]. [onClose] runs on [close] (closes the document).
+ */
+class RegionTileSource(
+    descriptor: ParcelFileDescriptor,
+    private val orientation: Int = 1,
+    private val onClose: () -> Unit = {},
+) : TileSource {
+    private val decoder: BitmapRegionDecoder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        BitmapRegionDecoder.newInstance(descriptor)
+    } else {
+        @Suppress("DEPRECATION")
+        BitmapRegionDecoder.newInstance(descriptor.fileDescriptor, false)
+    } ?: throw java.io.IOException("No region decoder")
+    private val storedWidth = decoder.width
+    private val storedHeight = decoder.height
+    private val space: ColorSpace.Rgb = decoder.decodeRegion(Rect(0, 0, 1, 1), BitmapFactory.Options()).let {
+        val cs = it.colorSpace as? ColorSpace.Rgb ?: ColorSpace.get(ColorSpace.Named.SRGB) as ColorSpace.Rgb
+        it.recycle()
+        cs
+    }
+    private val info: ColorInfo = StandardDecoder.colorInfoOf(space)
+    private val lut: ShortArray = space.eotf.let { eotf -> Linearize.lut { eotf.applyAsDouble(it) } }
+    private val size = PipelineInputMapper.orientedSize(storedWidth, storedHeight, orientation)
+    override val width: Int = size.first
+    override val height: Int = size.second
+    override val colour: PipelineInput = PipelineInput(
+        InputKind.DISPLAY_REFERRED,
+        1,
+        1,
+        FloatArray(PipelineInput.CHANNELS),
+        @Suppress("SpreadOperator") Mat3(*info.toXyz.values.toDoubleArray()),
+        null,
+    )
+
+    private var block: Bitmap? = null
+    private var blockLeft = 0
+    private var blockTop = 0
+
+    /**
+     * Readers ask for a tile in bands of a few dozen rows: the first band decodes the stored block holding the next
+     * [BLOCK_ROWS] upright rows of those columns (one region decode per tile), later bands are cut from it.
+     */
+    @Synchronized
+    override fun read(x: Int, y: Int, w: Int, h: Int, out: FloatArray) {
+        val stored = storedBounds(x, y, w, h, storedWidth, storedHeight, orientation)
+        val cached = block?.takeIf {
+            stored.left >= blockLeft && stored.top >= blockTop &&
+                stored.left + stored.width <= blockLeft + it.width && stored.top + stored.height <= blockTop + it.height
+        } ?: decodeBlock(x, y, w, h)
+        linearise(cached, blockLeft, blockTop, x, y, w, h, out, storedWidth, storedHeight, orientation, lut)
+    }
+
+    private fun decodeBlock(x: Int, y: Int, w: Int, h: Int): Bitmap {
+        block?.recycle()
+        block = null
+        val rows = minOf(height - y, maxOf(h, BLOCK_ROWS))
+        val stored = storedBounds(x, y, w, rows, storedWidth, storedHeight, orientation)
+        val left = maxOf(0, stored.left - MARGIN)
+        val top = maxOf(0, stored.top - MARGIN)
+        val right = minOf(storedWidth, stored.left + stored.width + MARGIN)
+        val bottom = minOf(storedHeight, stored.top + stored.height + MARGIN)
+        val options = BitmapFactory.Options().apply {
+            inPreferredConfig = Bitmap.Config.ARGB_8888
+            inPreferredColorSpace = space
+        }
+        val part = decoder.decodeRegion(Rect(left, top, right, bottom), options)
+            ?: throw java.io.IOException("Region decode failed")
+        block = part
+        blockLeft = left
+        blockTop = top
+        return part
+    }
+
+    @Synchronized
+    override fun close() {
+        block?.recycle()
+        block = null
+        decoder.recycle()
+        onClose()
+    }
+
+    private companion object {
+        /** Stored pixels decoded around a region (JPEG MCUs are at most 16 px; chroma upsampling reads 1). */
+        const val MARGIN = 16
+
+        /** Upright rows decoded at once (a zoom tile with its apron is 672). */
+        const val BLOCK_ROWS = 1024
+    }
+}
+
+/** A stored-orientation rectangle. */
+private class StoredBox(val left: Int, val top: Int, val width: Int, val height: Int)
+
+/** The stored rectangle of a [sw] x [sh] image that holds the upright region ([x], [y], [w] x [h]). */
+@Suppress("LongParameterList")
+private fun storedBounds(x: Int, y: Int, w: Int, h: Int, sw: Int, sh: Int, orientation: Int): StoredBox {
+    val corners = listOf(x to y, x + w - 1 to y + h - 1).map { (cx, cy) ->
+        PipelineInputMapper.storedPixel(cx, cy, sw, sh, orientation)
+    }
+    val sx0 = minOf(corners[0].first, corners[1].first)
+    val sy0 = minOf(corners[0].second, corners[1].second)
+    val sx1 = maxOf(corners[0].first, corners[1].first)
+    val sy1 = maxOf(corners[0].second, corners[1].second)
+    return StoredBox(sx0, sy0, sx1 - sx0 + 1, sy1 - sy0 + 1)
+}
+
+/**
+ * Writes the upright region ([x], [y], [w] x [h]) of an image of stored size [sw] x [sh] as linear RGBA floats into
+ * [out], reading [part] (an `ARGB_8888` bitmap whose pixel (0, 0) is stored pixel ([px0], [py0])) through [lut].
+ */
+@Suppress("LongParameterList")
+private fun linearise(
+    part: Bitmap,
+    px0: Int,
+    py0: Int,
+    x: Int,
+    y: Int,
+    w: Int,
+    h: Int,
+    out: FloatArray,
+    sw: Int,
+    sh: Int,
+    orientation: Int,
+    lut: ShortArray,
+) {
+    val bytes = ByteArray(part.rowBytes * part.height)
+    part.copyPixelsToBuffer(ByteBuffer.wrap(bytes))
+    val stride = part.rowBytes
+    var o = 0
+    for (r in y until y + h) {
+        for (col in x until x + w) {
+            val (px, py) = PipelineInputMapper.storedPixel(col, r, sw, sh, orientation)
+            val i = (py - py0) * stride + (px - px0) * RGBA
+            out[o] = (lut[bytes[i].toInt() and BYTE].toInt() and MASK) * SCALE
+            out[o + 1] = (lut[bytes[i + 1].toInt() and BYTE].toInt() and MASK) * SCALE
+            out[o + 2] = (lut[bytes[i + 2].toInt() and BYTE].toInt() and MASK) * SCALE
+            out[o + RGBA - 1] = 1f
+            o += RGBA
+        }
+    }
 }
 
 /** The same input without its pixels (one black pixel): enough for `DevelopParams.from`. */

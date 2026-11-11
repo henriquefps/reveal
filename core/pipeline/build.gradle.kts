@@ -24,5 +24,15 @@ tasks.withType<Test>().configureEach {
     environment("REVEAL_RENDER_OUT", System.getenv("REVEAL_RENDER_OUT") ?: "")
     environment("REVEAL_AUTO_FIT", System.getenv("REVEAL_AUTO_FIT") ?: "")
     environment("REVEAL_AUTO_SHEET_DIR", System.getenv("REVEAL_AUTO_SHEET_DIR") ?: "")
+    // Opt-in Detail 100 % crops on public CC0 RAWs (docs/adr/0012).
+    for (name in listOf(
+        "REVEAL_DETAIL_DUMP",
+        "REVEAL_DETAIL_OUT",
+        "REVEAL_DETAIL_CROP",
+        "REVEAL_DETAIL_EV",
+        "REVEAL_DETAIL_SWEEP",
+    )) {
+        environment(name, System.getenv(name) ?: "")
+    }
     maxHeapSize = "2g"
 }

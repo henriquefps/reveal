@@ -20,6 +20,12 @@ enum class ValueKind {
 
     /** Degrees with one decimal, minus only when negative: `1.5°`, `−3.0°`. */
     DEGREES,
+
+    /** Unsigned integer: `40`. */
+    INT,
+
+    /** Unsigned number with one decimal: `1.0`. */
+    DECIMAL1,
 }
 
 /** Every scalar control the editor sliders and the operators share. */
@@ -38,6 +44,16 @@ enum class ControlId {
     VIBRANCE,
     SATURATION,
     ANGLE,
+    SHARPEN_AMOUNT,
+    SHARPEN_RADIUS,
+    SHARPEN_DETAIL,
+    SHARPEN_MASKING,
+    NR_LUMINANCE,
+    NR_LUMINANCE_DETAIL,
+    NR_LUMINANCE_CONTRAST,
+    NR_COLOUR,
+    NR_COLOUR_DETAIL,
+    NR_COLOUR_SMOOTHNESS,
 }
 
 /**
@@ -90,6 +106,12 @@ object RecipeRanges {
     private const val KELVIN_FINE = 10f
     private const val ANGLE_STEP = 0.1f
     private const val EV_STEP = 0.01f
+    private const val SHARPEN_MAX = 150f
+    private const val SHARPEN_DETAIL_DEFAULT = 25f
+    private const val RADIUS_MIN = 0.5f
+    private const val RADIUS_MAX = 3f
+    private const val RADIUS_STEP = 0.1f
+    private const val HALF = 50f
 
     private fun bipolar(id: ControlId, max: Float, step: Float, fine: Float, kind: ValueKind) =
         ControlRange(id, -max, max, 0f, step, fine, bipolar = true, neutral = 0f, kind = kind)
@@ -117,10 +139,29 @@ object RecipeRanges {
     val saturation = signedInt(ControlId.SATURATION)
     val angle = bipolar(ControlId.ANGLE, ANGLE_MAX, ANGLE_STEP, ANGLE_STEP, ValueKind.DEGREES)
 
+    private fun unipolar(id: ControlId, max: Float, neutral: Float) =
+        ControlRange(id, 0f, max, neutral, 1f, 1f, bipolar = false, neutral = neutral, kind = ValueKind.INT)
+
+    val sharpenAmount = unipolar(ControlId.SHARPEN_AMOUNT, SHARPEN_MAX, 0f)
+    val sharpenRadius = ControlRange(
+        ControlId.SHARPEN_RADIUS, RADIUS_MIN, RADIUS_MAX, 1f, RADIUS_STEP, RADIUS_STEP, bipolar = false, neutral = 1f,
+        kind = ValueKind.DECIMAL1,
+    )
+    val sharpenDetail = unipolar(ControlId.SHARPEN_DETAIL, TONE, SHARPEN_DETAIL_DEFAULT)
+    val sharpenMasking = unipolar(ControlId.SHARPEN_MASKING, TONE, 0f)
+    val nrLuminance = unipolar(ControlId.NR_LUMINANCE, TONE, 0f)
+    val nrLuminanceDetail = unipolar(ControlId.NR_LUMINANCE_DETAIL, TONE, HALF)
+    val nrLuminanceContrast = unipolar(ControlId.NR_LUMINANCE_CONTRAST, TONE, 0f)
+    val nrColour = unipolar(ControlId.NR_COLOUR, TONE, 0f)
+    val nrColourDetail = unipolar(ControlId.NR_COLOUR_DETAIL, TONE, HALF)
+    val nrColourSmoothness = unipolar(ControlId.NR_COLOUR_SMOOTHNESS, TONE, HALF)
+
     /** All descriptors in panel order. */
     val all: List<ControlRange> = listOf(
         profileAmount, exposure, contrast, highlights, shadows, whites, blacks,
         temperature, tint, relTemperature, relTint, vibrance, saturation, angle,
+        sharpenAmount, sharpenRadius, sharpenDetail, sharpenMasking,
+        nrLuminance, nrLuminanceDetail, nrLuminanceContrast, nrColour, nrColourDetail, nrColourSmoothness,
     )
 
     private val byId = all.associateBy { it.id }
@@ -141,6 +182,8 @@ object ValueFormat {
         ValueKind.KELVIN -> "${value.roundToInt()} K"
         ValueKind.PERCENT -> "${value.roundToInt()} %"
         ValueKind.DEGREES -> degrees(value)
+        ValueKind.INT -> fixed(abs(value), 0)
+        ValueKind.DECIMAL1 -> fixed(abs(value), 1)
     }
 
     /** Explicit sign (none for zero), U+2212 for negatives, [decimals] fixed decimals. */

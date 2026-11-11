@@ -19,6 +19,7 @@ object EditorMetrics {
     private const val TAG = "RevealEditor"
     private const val BYTES_PER_MB = 1024f * 1024f
     private const val MAX_FRAMES = 2_000
+    private const val BENCH = "REVEAL_BENCH"
 
     /** When true, the editor's renderer ends every frame with `glFinish` so [FrameStats.gpuWallMs] is meaningful. */
     @Volatile
@@ -44,6 +45,10 @@ object EditorMetrics {
 
     /** First developed frame presented (the editable GPU proxy). */
     @Volatile var developedMs: Long = -1
+        private set
+
+    /** Full-resolution source decoded and handed to the renderer (the zoom's tiles can start). */
+    @Volatile var fullResolutionMs: Long = -1
         private set
 
     /** Peak Java heap in use (MB) sampled at each step of the open. */
@@ -88,6 +93,7 @@ object EditorMetrics {
         gpuReadyMs = -1
         uploadedMs = -1
         developedMs = -1
+        fullResolutionMs = -1
         peakHeapMb = 0f
         peakNativeMb = 0f
         error = null
@@ -113,6 +119,12 @@ object EditorMetrics {
     internal fun uploaded() {
         uploadedMs = since()
         sampleMemory()
+    }
+
+    internal fun fullResolution(decodeMs: Long, width: Int, height: Int) {
+        fullResolutionMs = since()
+        sampleMemory()
+        Log.i(BENCH, "full-resolution source ${width}x$height: decode $decodeMs ms, ready at $fullResolutionMs ms")
     }
 
     internal fun frame(stats: FrameStats) {

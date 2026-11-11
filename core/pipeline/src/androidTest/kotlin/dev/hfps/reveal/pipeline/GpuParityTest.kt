@@ -10,6 +10,7 @@ import dev.hfps.reveal.pipeline.gl.GpuDevelopRenderer
 import dev.hfps.reveal.pipeline.recipe.BaseLook
 import dev.hfps.reveal.pipeline.recipe.Colour
 import dev.hfps.reveal.pipeline.recipe.CropRect
+import dev.hfps.reveal.pipeline.recipe.Detail
 import dev.hfps.reveal.pipeline.recipe.Geometry
 import dev.hfps.reveal.pipeline.recipe.Light
 import dev.hfps.reveal.pipeline.recipe.Profile
@@ -64,7 +65,7 @@ class GpuParityTest {
     private fun recipes(count: Int): List<Recipe> {
         val random = Random(1234)
         fun slider() = if (random.nextBoolean()) random.nextFloat() * 200f - 100f else 0f
-        return listOf(Recipe()) + LIGHT_EXTREMES + COLOUR_EXTREMES + GEOMETRY + List(count) {
+        return listOf(Recipe()) + LIGHT_EXTREMES + COLOUR_EXTREMES + GEOMETRY + DETAIL + List(count) {
             Recipe(
                 light = Light(
                     random.nextFloat() * 6f - 3f,
@@ -105,11 +106,13 @@ class GpuParityTest {
                 val gpu = renderer.renderLinear(recipe)
                 val light = recipe.light.hasTone() || name in RECONSTRUCTING
                 val colour = recipe.hasColour()
+                val detail = recipe.hasDetail()
                 for (p in 0 until image.width * image.height) {
                     val scale = maxOf(abs(cpu[p * 3]), abs(cpu[p * 3 + 1]), abs(cpu[p * 3 + 2]))
                     for (c in 0 until 3) {
                         val error = abs(gpu[p * 3 + c] - cpu[p * 3 + c])
                         val allowed = when {
+                            detail -> DETAIL_ABS + DETAIL_REL * scale
                             light && colour -> LIGHT_ABS + COLOUR_LIGHT_REL * scale
                             light -> LIGHT_ABS + LIGHT_REL * scale
                             colour -> COLOUR_ABS + COLOUR_REL * scale
@@ -200,6 +203,8 @@ class GpuParityTest {
 
     /** The 8-bit limit for [recipe] on image [name]: the image's own, raised for colour and noise+tone cases. */
     private fun outputAllowed(name: String, recipe: Recipe, imageAllowed: Int): Int = when {
+        name == "rawNoise" && recipe.hasDetail() -> OUTPUT_MAX_LEVELS_NOISE_DETAIL
+        recipe.hasDetail() -> maxOf(imageAllowed, OUTPUT_MAX_LEVELS_DETAIL)
         recipe.hasColour() -> maxOf(imageAllowed, OUTPUT_MAX_LEVELS_COLOUR)
         name == "rawNoise" && recipe.light.hasTone() -> OUTPUT_MAX_LEVELS_NOISE_TONE
         else -> imageAllowed
@@ -234,6 +239,52 @@ class GpuParityTest {
         Log.i(TAG, "geometry: max diff $worst levels, mean diff ${sum.toDouble() / count}")
         assertThat(worst).isAtMost(OUTPUT_MAX_LEVELS)
         assertThat(sum.toDouble() / count).isAtMost(OUTPUT_MEAN_LEVELS)
+    }
+
+    /**
+     * Detail (slot 11, docs/adr/0012) on a proxy: the operator's lengths scaled by the proxy's pixel scale (wavelet
+     * levels skipped or re-stepped, the blur radius divided) give the same result on both sides.
+     */
+    @Test
+    fun detailAtAProxyScaleMatchesCpuReference() = runBlocking {
+        var worst = 0
+        var sum = 0L
+        var count = 0L
+        for (name in listOf("scene", "checker", "stepEdge", "rawNoise")) {
+            val image = images.getValue(name)
+            for (scale in listOf(2.5f, 4f)) {
+                renderer.upload(image, scale)
+                for (recipe in DETAIL) {
+                    val settings = OutputSettings(dither = false)
+                    val cpu = CpuDevelop.render(image, recipe, settings, scale)
+                    val gpu = renderer.renderOutput(recipe, settings)
+                    var max = 0
+                    for (i in cpu.indices) {
+                        val diff = abs((gpu[i].toInt() and 0xff) - (cpu[i].toInt() and 0xff))
+                        max = maxOf(max, diff)
+                        sum += diff
+                        count++
+                    }
+                    worst = maxOf(worst, max)
+                    val allowed = if (name == "rawNoise") OUTPUT_MAX_LEVELS_NOISE_DETAIL else OUTPUT_MAX_LEVELS_DETAIL
+                    assertThat(max).isAtMost(allowed)
+                }
+            }
+        }
+        Log.i(TAG, "detail at proxy scales: max diff $worst levels, mean diff ${sum.toDouble() / count}")
+        assertThat(sum.toDouble() / count).isAtMost(OUTPUT_MEAN_LEVELS)
+    }
+
+    @Test
+    fun detailNeutralIsIdentityAndMaskIsDeterministic() = runBlocking {
+        val image = images.getValue("scene")
+        renderer.setInput(image)
+        val base = Recipe(light = Light(0.3f))
+        // Detail sliders other than the amounts change nothing while every amount is 0 (the passes are skipped).
+        val shaped = base.copy(detail = Detail(sharpenRadius = 2.5f, sharpenDetail = 90f, nrLuminanceDetail = 10f))
+        assertThat(renderer.renderLinear(shaped)).isEqualTo(renderer.renderLinear(base))
+        val edit = base.copy(detail = Detail(sharpenAmount = 80f, nrLuminance = 40f, nrColour = 50f))
+        assertThat(renderer.renderOutput(edit)).isEqualTo(renderer.renderOutput(edit))
     }
 
     @Test
@@ -312,6 +363,24 @@ class GpuParityTest {
             Geometry(crop = CropRect(0.1f, 0.1f, 0.9f, 0.9f), angle = 0.1f, flipH = true),
         ).map { Recipe(light = Light(0.4f), geometry = it) }
 
+        // Detail (slot 11, docs/adr/0012): each part at its end, the shaping sliders, everything together.
+        val DETAIL: List<Recipe> = listOf(
+            Detail(nrLuminance = 100f),
+            Detail(nrLuminance = 60f, nrLuminanceDetail = 100f, nrLuminanceContrast = 100f),
+            Detail(nrColour = 100f),
+            Detail(nrColour = 70f, nrColourDetail = 0f, nrColourSmoothness = 100f),
+            Detail(sharpenAmount = 150f),
+            Detail(sharpenAmount = 120f, sharpenRadius = 3f, sharpenDetail = 0f, sharpenMasking = 60f),
+            Detail(sharpenAmount = 60f, sharpenRadius = 0.5f, sharpenDetail = 100f),
+            Detail(
+                sharpenAmount = 70f,
+                sharpenMasking = 30f,
+                nrLuminance = 45f,
+                nrLuminanceContrast = 20f,
+                nrColour = 50f,
+            ),
+        ).map { Recipe(light = Light(0.2f, contrast = 10f), detail = it) }
+
         val LIGHT_EXTREMES: List<Recipe> = listOf(
             Light(highlights = -100f),
             Light(highlights = 100f),
@@ -385,6 +454,19 @@ class GpuParityTest {
 
         fun Recipe.hasColour() = profile.base != BaseLook.STANDARD || colour.vibrance != 0f ||
             colour.saturation != 0f || colour.whiteBalance.relTemperature != 0f || colour.whiteBalance.relTint != 0f
+
+        fun Recipe.hasDetail() = detail != Detail()
+
+        // Detail (docs/adr/0012): both sides store the same float16 values (Half / q16), so what remains is fp32
+        // arithmetic (exp, cube roots) amplified by sharpening (gain up to 1.8); the random-noise stress image gets
+        // the noise + tone allowance. Measured on the emulator, see the ADR.
+        const val DETAIL_ABS = 4e-3f
+        const val DETAIL_REL = 3e-2f
+        const val OUTPUT_MAX_LEVELS_DETAIL = 4
+
+        // Detail on the random-noise stress image: luminance NR 100 on uniform per-channel noise reaches 7 levels on
+        // the Adreno 750 (a few pixels whose edge-stop weights sit at the exp's steepest point); 5 on the host GPU.
+        const val OUTPUT_MAX_LEVELS_NOISE_DETAIL = 8
 
         fun Light.hasTone() = contrast != 0f || highlights != 0f || shadows != 0f || whites != 0f || blacks != 0f
         const val OUTPUT_MEAN_LEVELS = 0.1

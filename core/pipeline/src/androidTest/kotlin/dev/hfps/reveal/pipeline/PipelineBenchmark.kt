@@ -5,6 +5,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import dev.hfps.reveal.pipeline.gl.GpuDevelopRenderer
 import dev.hfps.reveal.pipeline.recipe.BaseLook
 import dev.hfps.reveal.pipeline.recipe.Colour
+import dev.hfps.reveal.pipeline.recipe.Detail
 import dev.hfps.reveal.pipeline.recipe.Light
 import dev.hfps.reveal.pipeline.recipe.Profile
 import dev.hfps.reveal.pipeline.recipe.Recipe
@@ -71,11 +72,41 @@ class PipelineBenchmark {
         }
     }
 
-    private suspend fun drag(name: String, image: PipelineInput, recipeAt: (Float) -> Recipe) {
+    /**
+     * Detail on the editor's proxy (docs/adr/0012): a 24 MP photo's 2400 px proxy (pixel scale 2.5: four wavelet levels
+     * run), dragging luminance noise reduction with colour NR and sharpening on. The develop output is cached, so this
+     * is the Detail passes, the mips and the output pass.
+     */
+    @Test
+    fun detailDragFrameTime(): Unit = runBlocking {
+        drag("detail (luminance NR drag, colour NR + sharpening on, proxy of 24 MP)", noisy(), PROXY_SCALE) {
+            Recipe(
+                light = Light(0.2f, contrast = 15f),
+                detail = Detail(
+                    nrLuminance = 100f * it,
+                    nrColour = 50f,
+                    sharpenAmount = 50f,
+                    sharpenMasking = 30f,
+                ),
+            )
+        }
+    }
+
+    /** Sharpening alone on the proxy, dragging the amount with masking on. */
+    @Test
+    fun sharpenDragFrameTime(): Unit = runBlocking {
+        drag("detail (sharpening drag, masking 30, proxy of 24 MP)", noisy(), PROXY_SCALE) {
+            Recipe(light = Light(0.2f), detail = Detail(sharpenAmount = 150f * it, sharpenMasking = 30f))
+        }
+    }
+
+    private fun noisy() = SyntheticImages.noisyCard(WIDTH, HEIGHT, seed = 5)
+
+    private suspend fun drag(name: String, image: PipelineInput, pixelScale: Float = 1f, recipeAt: (Float) -> Recipe) {
         val renderer = GpuDevelopRenderer.create()
         try {
             val uploadStart = System.nanoTime()
-            renderer.setInput(image)
+            renderer.setInput(image, pixelScale)
             renderer.benchmark(listOf(Recipe()))
             val uploadMs = (System.nanoTime() - uploadStart) / 1e6
             val sweep = List(FRAMES) { recipeAt(it.toFloat() / (FRAMES - 1)) }
@@ -103,5 +134,6 @@ class PipelineBenchmark {
         const val HEIGHT = 1600
         const val FRAMES = 120
         const val WARMUP = 10
+        const val PROXY_SCALE = 2.5f
     }
 }

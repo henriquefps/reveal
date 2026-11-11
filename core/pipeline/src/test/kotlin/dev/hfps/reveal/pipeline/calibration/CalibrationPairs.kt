@@ -217,6 +217,13 @@ class RawDump(val width: Int, val height: Int, private val data: ShortArray, pri
         return PipelineInputMapper.map(LinearImage(w, h, out), info, 1)
     }
 
+    /** The full-resolution region ([x], [y], [w] x [h]) as a pipeline input (100 % crops, docs/adr/0012). */
+    fun crop(x: Int, y: Int, w: Int, h: Int): PipelineInput {
+        val out = ShortArray(w * h * 3)
+        for (row in 0 until h) System.arraycopy(data, ((y + row) * width + x) * 3, out, row * w * 3, w * 3)
+        return PipelineInputMapper.map(LinearImage(w, h, out), info, 1)
+    }
+
     fun value(x: Int, y: Int, c: Int): Double = (data[(y * width + x) * 3 + c].toInt() and 0xffff) / 65535.0
 
     fun blockMean(x0: Int, y0: Int, size: Int): DoubleArray? {

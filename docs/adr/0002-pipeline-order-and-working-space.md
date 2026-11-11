@@ -1,7 +1,8 @@
 # ADR 0002: Pipeline order, working space and GPU/CPU numerics
 
-Status: accepted (M0, W5). Date: 2026-11-10. Amended by ADR 0007 (M1 Light: slots 1, 5, 5b, 8; version 3) and by
-M1/G (slot 13 geometry, version 5; section "Geometry (slot 13)").
+Status: accepted (M0, W5). Date: 2026-11-10. Amended by ADR 0007 (M1 Light: slots 1, 5, 5b, 8; version 3), by
+M1/G (slot 13 geometry, version 5; section "Geometry (slot 13)") and by ADR 0012 (M2: slot 11 Detail, version 6, the
+editor's full-resolution tiles).
 
 ## Fixed operator order
 
@@ -42,7 +43,8 @@ Implemented in M0 are marked **(M0)**; the rest are the reserved slots from `doc
 9. **Colour (M1, ADR 0008: vibrance and saturation in OkLab)**: then HSL, grading, B&W later, in a space where
    saturation is meaningful.
 10. **Local adjustments / masks (later)**: after global colour so masks adjust the globally graded image.
-11. **Detail (later)**: noise reduction then sharpening; NR before sharpening, both before effects.
+11. **Detail (M2, ADR 0012)**: noise reduction then sharpening; NR before sharpening, both before effects. In OkLab,
+    a neighbourhood operator at full resolution (the proxy scales its lengths); export tiles carry its apron.
 12. **Effects (later)**: texture/clarity/dehaze, vignette, grain: grain last so it is not sharpened or denoised.
 13. **Geometry (M1/G)**: crop, straighten, quarter turns and flips as a single resampling, after every pixel operator
     and before the output transform (see "Geometry (slot 13)"); perspective/Upright and lens geometry (slot 3) will
@@ -137,6 +139,7 @@ clip, and the Light operators exist; a second golden CRC pins them. **Version 4*
 replace the M0 Standard curve (RAW renders about 1.3 EV brighter, matching the camera), vibrance/saturation and the
 relative white balance of display-referred input exist; a third golden CRC pins them. **Version 5** (M1/G): the
 geometry operator (slot 13); a recipe without geometry renders as before, a fourth golden CRC pins the operator.
+**Version 6** (M2, ADR 0012): the Detail operator (slot 11), identity at its defaults; a fifth golden CRC pins it.
 
 ## Determinism
 
@@ -195,7 +198,9 @@ tile's view transform. Local operators will be extra passes between stage 1 and 
 working-space texture; stage 1 is already isolated for that. Since M1 (ADR 0007) stage 1 is two full-res stages
 (scene, develop) with the Light group's low-res passes between them; they need no tile overlap, only cell-aligned
 tiles and a grid pre-pass. Export implements this seam (ADR 0009, `TiledRenderer`): a `uOrigin` uniform, image-wide
-grid pre-passes, Lanczos overlap per output tile.
+grid pre-passes, Lanczos overlap per output tile. Since M2 (ADR 0012) the editor uses it too: above 50 % of the full
+resolution the output pass reads developed full-resolution tiles (the export's renderer on a shared context) from an
+atlas instead of the proxy, and the Detail operator gives every tile an apron.
 
 ### Output pass sampling (never from derivatives)
 

@@ -68,7 +68,8 @@ dependencies. Add a Room schema change with a migration and the exported file in
 ## Develop pipeline (`:core:pipeline`, ADR 0002 and 0003)
 
 Packages: `recipe/` (model, codec, diff; pure Kotlin), `cpu/` (CPU reference; pure Kotlin), `gl/` (GLES renderer on its
-own thread), `synthetic/` (generated test images). `PipelineInput` is the pipeline's input type.
+own thread), `synthetic/` (generated test images), `zoom/` (the editor's tile grid maths). `PipelineInput` is the
+pipeline's input type.
 
 **Adding an operator** (one pattern, every time):
 1. Recipe: add the field(s) to the group in `recipe/Recipe.kt` (default = no change; additive, so no `RECIPE_VERSION`
@@ -233,6 +234,37 @@ adb -s emulator-<port> shell am instrument -w -e class dev.hfps.reveal.export.Ex
 #   -e large <file in files/samples> exports a ~60 MP RAW (memory); logs: adb logcat -d -s REVEAL_EXPORT RevealExport
 # kill/restart: -e class '...ExportFlowTest#startBatchForKill' -e kill start, then am start the app, then
 #               -e class '...ExportFlowTest#killedBatchFinished' -e kill check
+```
+
+## Detail and full-resolution zoom (`:core:pipeline`, `:feature:editor`, M2/Z, ADR 0012)
+
+Detail is slot 11: `cpu/DetailOp.kt` (`DetailParams.from(detail, pixelScale)`: lengths are full-resolution pixels,
+`pixelScale` = full pixels per rendered pixel, the proxy's downscale or 1), GLSL in `gl/DetailShaders.kt`, passes in
+`gl/DetailPasses.kt` (the caller owns the textures). The develop stage writes OkLab when Detail runs (`uLabOut`). Every
+value a pass stores in RGBA16F goes through `q16` / `Half.round` (explicit float16 rounding, same on CPU and GPU):
+keep that for any new stored intermediate, a driver's own rounding biased the cascade by half a level. A neighbourhood
+operator needs an apron in tiles: export plans take `reach` (`ExportPlan.of(..., reach)`, `DetailParams.reach`).
+The panel is `panels/DetailPanel.kt`; the Masking drag shows the mask (`GpuDevelopRenderer.setDetailMask`).
+
+Zoom: `EditorViewModel.loadFullResolution` decodes the original after the proxy (`PhotoOpener.openFullResolution`:
+`NativeRawTileSource`, `BitmapTileSource` up to 40 MP, `RegionTileSource` above) and hands it to
+`GpuDevelopRenderer.setFullResolution(source, k)`. `gl/ZoomTiles.kt` keeps the atlas (8 x 6 slots of 512 px + 8 px
+border, levels 0-1), the index texture and the scheduling (settled edit + 150 ms, centre first, grids prefetched);
+the tiles are developed by a `TiledRenderer` on a shared EGL context (`prepareZoom`, `developTile`); the output pass
+reads them where the index says so (`OUTPUT_FRAG`, `sampleTile`). Pure maths in `zoom/ZoomGrid.kt` (`ZoomView`).
+Tests/APIs: `renderer.awaitZoom(...)`, `renderView(view, w, h, settings)`, `renderShown(settings)`, `zoomStats`.
+
+```sh
+./gradlew :core:pipeline:testDebugUnitTest --tests '*DetailOpTest*' --tests '*ZoomGridTest*'
+adb -s emulator-<port> shell am instrument -w -e class dev.hfps.reveal.pipeline.ZoomTilesTest,dev.hfps.reveal.pipeline.TiledRendererTest dev.hfps.reveal.pipeline.test/androidx.test.runner.AndroidJUnitRunner
+adb -s emulator-<port> shell am instrument -w -e class dev.hfps.reveal.pipeline.PipelineBenchmark dev.hfps.reveal.pipeline.test/androidx.test.runner.AndroidJUnitRunner   # Detail drag cost
+# editor: tile at 100 % vs CPU (synthetic JPEG), and the zoom measurement on files/samples/sony-zv-e10.arw
+adb -s emulator-<port> shell am instrument -w -e class dev.hfps.reveal.editor.EditorZoomTest dev.hfps.reveal.debug.test/androidx.test.runner.AndroidJUnitRunner
+adb -s emulator-<port> logcat -d -s REVEAL_BENCH REVEAL_ZOOM REVEAL_EDITOR_TEST RevealZoom
+# 100 % crops for docs/screenshots/detail (CC0 high-ISO RAWs from scripts/fetch-samples.sh, full-size dump):
+scripts/calibration/rawdump.sh core/image/build/samples/sony-a7c-iso12800.arw build/calibration/a7c.rdump full
+REVEAL_DETAIL_DUMP=$PWD/build/calibration/a7c.rdump REVEAL_DETAIL_OUT=$PWD/build/calibration/a7c REVEAL_DETAIL_CROP=4000,1650,480,480 \
+  ./gradlew :core:pipeline:testDebugUnitTest --tests '*DetailRenderSheetTest*' --rerun
 ```
 
 ## Auto (`:core:pipeline/auto`, ADR 0010)

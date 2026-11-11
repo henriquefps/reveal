@@ -19,7 +19,7 @@ data class Recipe(
     @SerialName("light") val light: Light = Light(),
     @SerialName("colour") val colour: Colour = Colour(),
     @SerialName("effects") val effects: Effects = Effects,
-    @SerialName("detail") val detail: Detail = Detail,
+    @SerialName("detail") val detail: Detail = Detail(),
     @SerialName("optics") val optics: Optics = Optics,
     @SerialName("geometry") val geometry: Geometry = Geometry(),
     @SerialName("masks") val masks: List<Mask> = emptyList(),
@@ -178,9 +178,46 @@ data class WhiteBalance(
 @Serializable
 data object Effects
 
-/** Detail (noise reduction, sharpening). Reserved. */
+/**
+ * Detail (slot 11, docs/adr/0012): luminance and colour noise reduction, then sharpening. Every amount defaults to 0
+ * (no change); the other sliders shape the operator once its amount is on. Ranges and steps live in [RecipeRanges].
+ * Lengths are in pixels of the **full-resolution** image, so the edit means the same at 100 % and in a proxy (the
+ * operators scale them, docs/adr/0012 "Scale").
+ *
+ * The JSON group was an empty object (`{}`) before these fields existed; it reads as the defaults (additive).
+ */
 @Serializable
-data object Detail
+data class Detail(
+    /** Sharpening amount, 0..150 (0 = off). */
+    @SerialName("sharpenAmount") val sharpenAmount: Float = 0f,
+    /** Sharpening radius in full-resolution pixels, 0.5..3.0. */
+    @SerialName("sharpenRadius") val sharpenRadius: Float = 1f,
+    /** Sharpening detail, 0..100: low sharpens edges only (halo suppression), high also fine texture. */
+    @SerialName("sharpenDetail") val sharpenDetail: Float = 25f,
+    /** Sharpening masking, 0..100: 0 sharpens everywhere, higher restricts it to edges. */
+    @SerialName("sharpenMasking") val sharpenMasking: Float = 0f,
+    /** Luminance noise reduction, 0..100 (0 = off). */
+    @SerialName("nrLuminance") val nrLuminance: Float = 0f,
+    /** Luminance detail, 0..100: higher keeps more fine detail (and more noise). */
+    @SerialName("nrLuminanceDetail") val nrLuminanceDetail: Float = 50f,
+    /** Luminance contrast, 0..100: higher keeps more local contrast at the coarse scales (can look blotchy). */
+    @SerialName("nrLuminanceContrast") val nrLuminanceContrast: Float = 0f,
+    /** Colour noise reduction, 0..100 (0 = off). */
+    @SerialName("nrColour") val nrColour: Float = 0f,
+    /** Colour detail, 0..100: higher protects thin colour edges (less bleeding, some speckles remain). */
+    @SerialName("nrColourDetail") val nrColourDetail: Float = 50f,
+    /** Colour smoothness, 0..100: higher also smooths large, low-frequency colour blotches. */
+    @SerialName("nrColourSmoothness") val nrColourSmoothness: Float = 50f,
+) {
+    init {
+        require(
+            listOf(
+                sharpenAmount, sharpenRadius, sharpenDetail, sharpenMasking, nrLuminance, nrLuminanceDetail,
+                nrLuminanceContrast, nrColour, nrColourDetail, nrColourSmoothness,
+            ).all { it.isFinite() },
+        ) { "detail values must be finite" }
+    }
+}
 
 /** Optics (lens profile corrections, chromatic aberration, defringe). Reserved. */
 @Serializable

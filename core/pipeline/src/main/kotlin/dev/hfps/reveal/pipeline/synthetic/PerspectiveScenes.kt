@@ -78,9 +78,15 @@ object PerspectiveScenes {
         val out = FloatArray(width * height * 3)
         val cx = width / 2.0
         val cy = height / 2.0
-        fun checker(px: Double, py: Double): Double {
-            val v = (floor(px / square) + floor(py / square)).toInt() and 1
-            return if (v == 0) 0.05 else 0.8
+        // Exact box-filter coverage (supersampling would quantise sub-pixel edge positions): along one axis, the
+        // share of [a, b] in the "even" squares.
+        fun even(a: Double, b: Double): Double {
+            fun f(v: Double): Double {
+                val k = floor(v / square)
+                val inEven = if (k.toLong() % 2 == 0L) v - k * square else 0.0
+                return floor(k / 2 + 0.5).let { pairs -> pairs * square } + inEven
+            }
+            return (f(b) - f(a)) / (b - a)
         }
         for (y in 0 until height) {
             for (x in 0 until width) {
@@ -91,16 +97,11 @@ object PerspectiveScenes {
                         2 -> blueScale
                         else -> 1.0
                     }
-                    var sum = 0.0
-                    for (j in 0 until SS) {
-                        for (i in 0 until SS) {
-                            // The channel shows the scene at radius r where green shows it at r / m.
-                            val px = cx + (x + (i + 0.5) / SS - cx) / m
-                            val py = cy + (y + (j + 0.5) / SS - cy) / m
-                            sum += checker(px, py)
-                        }
-                    }
-                    out[o + c] = (sum / (SS * SS)).toFloat()
+                    // The channel shows the scene at radius r where green shows it at r / m.
+                    val ex = even(cx + (x - cx) / m, cx + (x + 1 - cx) / m)
+                    val ey = even(cy + (y - cy) / m, cy + (y + 1 - cy) / m)
+                    val same = ex * ey + (1 - ex) * (1 - ey)
+                    out[o + c] = (0.8 - 0.75 * same).toFloat()
                 }
             }
         }

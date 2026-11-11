@@ -6,15 +6,14 @@ import kotlin.math.abs
 import kotlin.math.floor
 import kotlin.math.hypot
 import kotlin.math.max
-import kotlin.math.min
 import kotlin.math.sqrt
 
 /**
  * The automatic lateral chromatic aberration estimate (docs/adr/0015, "Chromatic aberration") for photos whose
  * profile has no CA data: red and blue are modelled as copies of green scaled about the centre by `m_c` (what the lens
  * does to them). On edges that run across the radius, the radial profiles of green and of the channel are compared;
- * the shift `s` (pixels, outward positive) that best aligns them at radius `r` gives `m = 1 + s / r`, and the
- * gradient-weighted median over the image is the estimate. Returned as the recipe's `caRed` / `caBlue`
+ * the channel's scale `m` (searched from `1 - 0.004` to `1 + 0.004` in steps of 1e-4, then a parabola) is the one
+ * that best aligns them over the whole image. Returned as the recipe's `caRed` / `caBlue`
  * (`(m - 1) * 1e4`); the correction reads channel `c` at `m_c` times the radius.
  */
 object CaEstimator {
@@ -23,8 +22,9 @@ object CaEstimator {
     private const val RADIAL_COS = 0.9
     private const val HALF_PROFILE = 4.0
     private const val PROFILE_STEP = 0.5
-    private const val MAX_SHIFT = 2.0
-    private const val SHIFT_STEP = 0.05
+    private const val MAX_FIT_POINTS = 1500
+    private const val SEARCH = 40
+    private const val MIN_SPREAD = 1e-3
     private const val MAX_POINTS = 4000
     private const val MIN_POINTS = 40
     private const val MIN_GRADIENT = 0.02f
@@ -38,7 +38,9 @@ object CaEstimator {
         val cy = height / 2.0
         val half = hypot(cx, cy)
         // Perceptual-ish channels so edges in shadows count too.
-        val ch = Array(3) { c -> FloatArray(width * height) { i -> sqrt(max(0f, rgb[i * 3 + c])) } }
+        // A light blur (sigma 1 px) first: on very sharp edges sub-pixel shifts would otherwise read through the
+        // interpolation's phase bias (towards whole pixels).
+        val ch = Array(3) { c -> blur(FloatArray(width * height) { i -> sqrt(max(0f, rgb[i * 3 + c])) }, width, height) }
         val points = ArrayList<DoubleArray>()
         for (y in 2 until height - 2 step STEP) {
             for (x in 2 until width - 2 step STEP) {
@@ -63,54 +65,60 @@ object CaEstimator {
         return ((red - 1) * UNIT).toFloat() to ((blue - 1) * UNIT).toFloat()
     }
 
+    /**
+     * The scale `m` of channel [c] relative to [g]: the minimum over `m` of the summed mismatch between each point's
+     * radial profile of green and the channel's profile read at the same points scaled by `m` about the centre (each
+     * profile normalised to zero mean and unit spread, so colour and exposure differences do not count). A global
+     * fit: per-edge shifts of a tenth of a pixel are too small to measure one by one.
+     */
     private fun scale(c: FloatArray, g: FloatArray, points: List<DoubleArray>, width: Int, height: Int): Double? {
-        val ratios = ArrayList<Pair<Double, Double>>()
+        val cx = width / 2.0
+        val cy = height / 2.0
         val n = (2 * HALF_PROFILE / PROFILE_STEP).toInt() + 1
-        val gp = DoubleArray(n)
-        val cp = DoubleArray(n)
-        for (p in points) {
-            val (x, y, ux, uy) = p
-            val r = p[4]
-            for (k in 0 until n) {
+        val greens = ArrayList<DoubleArray>()
+        val used = ArrayList<DoubleArray>()
+        for (p in points.take(MAX_FIT_POINTS)) {
+            val profile = DoubleArray(n) { k ->
                 val t = -HALF_PROFILE + k * PROFILE_STEP
-                gp[k] = sample(g, width, height, x + t * ux, y + t * uy)
+                sample(g, width, height, p[0] + t * p[2], p[1] + t * p[3])
             }
-            if (!normalise(gp)) continue
-            var bestS = 0.0
-            var bestE = Double.MAX_VALUE
-            val errors = ArrayList<Double>()
-            var s = -MAX_SHIFT
-            while (s <= MAX_SHIFT + 1e-9) {
+            if (!normalise(profile)) continue
+            greens += profile
+            used += p
+        }
+        if (used.size < MIN_POINTS) return null
+        val cp = DoubleArray(n)
+        fun error(m: Double): Double {
+            var e = 0.0
+            for ((i, p) in used.withIndex()) {
                 for (k in 0 until n) {
-                    val t = -HALF_PROFILE + k * PROFILE_STEP + s
-                    cp[k] = sample(c, width, height, x + t * ux, y + t * uy)
+                    val t = -HALF_PROFILE + k * PROFILE_STEP
+                    val x = p[0] + t * p[2]
+                    val y = p[1] + t * p[3]
+                    cp[k] = sample(c, width, height, cx + m * (x - cx), cy + m * (y - cy))
                 }
-                val e = if (normalise(cp)) (0 until n).sumOf { (cp[it] - gp[it]).let { d -> d * d } } else Double.MAX_VALUE
-                errors += e
-                if (e < bestE) {
-                    bestE = e
-                    bestS = s
-                }
-                s += SHIFT_STEP
+                if (!normalise(cp)) continue
+                val gp = greens[i]
+                for (k in 0 until n) e += (cp[k] - gp[k]).let { it * it }
             }
-            val i = errors.indexOf(bestE)
-            if (i == 0 || i == errors.lastIndex || bestE > n * 0.2) continue
-            val a = errors[i - 1]
-            val b = errors[i + 1]
-            val den = a - 2 * bestE + b
-            val refined = if (den > 0) bestS + 0.5 * (a - b) / den * SHIFT_STEP else bestS
-            // The channel matches green's profile at t + s: its content sits s further out than green's.
-            ratios += 1 + refined / r to p[5]
+            return e
         }
-        if (ratios.size < MIN_POINTS / 2) return null
-        val sorted = ratios.sortedBy { it.first }
-        val total = sorted.sumOf { it.second }
-        var acc = 0.0
-        for ((v, w) in sorted) {
-            acc += w
-            if (acc >= total / 2) return v
+        var bestK = 0
+        var bestE = Double.MAX_VALUE
+        val errors = DoubleArray(2 * SEARCH + 1) { j ->
+            error(1 + (j - SEARCH) / UNIT).also {
+                if (it < bestE) {
+                    bestE = it
+                    bestK = j
+                }
+            }
         }
-        return sorted.last().first
+        if (bestK == 0 || bestK == errors.lastIndex) return null
+        val a = errors[bestK - 1]
+        val b = errors[bestK + 1]
+        val den = a - 2 * bestE + b
+        val k = if (den > 0) bestK + 0.5 * (a - b) / den else bestK.toDouble()
+        return 1 + (k - SEARCH) / UNIT
     }
 
     private fun normalise(v: DoubleArray): Boolean {
@@ -118,22 +126,63 @@ object CaEstimator {
         var sd = 0.0
         for (x in v) sd += (x - mean) * (x - mean)
         sd = sqrt(sd / v.size)
-        if (sd < 1e-4) return false
+        if (sd < MIN_SPREAD) return false
         for (i in v.indices) v[i] = (v[i] - mean) / sd
         return true
     }
 
+    private fun blur(img: FloatArray, width: Int, height: Int): FloatArray {
+        val k = FloatArray(2 * BLUR_RADIUS + 1) { i ->
+            val d = (i - BLUR_RADIUS).toFloat()
+            kotlin.math.exp(-d * d / 2f)
+        }
+        val sum = k.sum()
+        for (i in k.indices) k[i] /= sum
+        val tmp = FloatArray(img.size)
+        for (y in 0 until height) {
+            for (x in 0 until width) {
+                var acc = 0f
+                for (j in k.indices) acc += k[j] * img[y * width + (x + j - BLUR_RADIUS).coerceIn(0, width - 1)]
+                tmp[y * width + x] = acc
+            }
+        }
+        val out = FloatArray(img.size)
+        for (y in 0 until height) {
+            for (x in 0 until width) {
+                var acc = 0f
+                for (j in k.indices) acc += k[j] * tmp[(y + j - BLUR_RADIUS).coerceIn(0, height - 1) * width + x]
+                out[y * width + x] = acc
+            }
+        }
+        return out
+    }
+
+    private const val BLUR_RADIUS = 3
+
+    /** Catmull-Rom sample at pixel position ([x], [y]) (pixel centres at `i + 0.5`), taps clamped to the image. */
     private fun sample(img: FloatArray, width: Int, height: Int, x: Double, y: Double): Double {
-        val sx = (x - 0.5).coerceIn(0.0, width - 1.0)
-        val sy = (y - 0.5).coerceIn(0.0, height - 1.0)
+        val sx = x - 0.5
+        val sy = y - 0.5
         val x0 = floor(sx).toInt()
         val y0 = floor(sy).toInt()
-        val x1 = min(x0 + 1, width - 1)
-        val y1 = min(y0 + 1, height - 1)
-        val fx = sx - x0
-        val fy = sy - y0
-        val top = img[y0 * width + x0] * (1 - fx) + img[y0 * width + x1] * fx
-        val bottom = img[y1 * width + x0] * (1 - fx) + img[y1 * width + x1] * fx
-        return top * (1 - fy) + bottom * fy
+        val wx = weights(sx - x0)
+        val wy = weights(sy - y0)
+        var acc = 0.0
+        for (j in 0 until TAPS) {
+            val row = (y0 - 1 + j).coerceIn(0, height - 1) * width
+            var r = 0.0
+            for (i in 0 until TAPS) r += wx[i] * img[row + (x0 - 1 + i).coerceIn(0, width - 1)]
+            acc += wy[j] * r
+        }
+        return acc
     }
+
+    private fun weights(t: Double): DoubleArray = doubleArrayOf(
+        ((-0.5 * t + 1) * t - 0.5) * t,
+        (1.5 * t - 2.5) * t * t + 1,
+        ((-1.5 * t + 2) * t + 0.5) * t,
+        (0.5 * t - 0.5) * t * t,
+    )
+
+    private const val TAPS = 4
 }

@@ -75,9 +75,14 @@ class RecipeCodecTest {
                 """"grainAmount":0.0,"grainSize":25.0,"grainRoughness":50.0},""" +
                 """"detail":{"sharpenAmount":0.0,"sharpenRadius":1.0,"sharpenDetail":25.0,""" +
                 """"sharpenMasking":0.0,"nrLuminance":0.0,"nrLuminanceDetail":50.0,"nrLuminanceContrast":0.0,""" +
-                """"nrColour":0.0,"nrColourDetail":50.0,"nrColourSmoothness":50.0},"optics":{},""" +
+                """"nrColour":0.0,"nrColourDetail":50.0,"nrColourSmoothness":50.0},""" +
+                """"optics":{"lensCorrections":false,"distortion":100.0,"vignetting":100.0,"removeCa":false,""" +
+                """"caRed":0.0,"caBlue":0.0,"purpleAmount":0.0,"purpleHueLow":30.0,"purpleHueHigh":70.0,""" +
+                """"greenAmount":0.0,"greenHueLow":40.0,"greenHueHigh":60.0},""" +
                 """"geometry":{"crop":null,"angle":0.0,"rotate":0,"flipH":false,"flipV":false,""" +
-                """"aspect":{"preset":"free","w":1,"h":1,"locked":false},"constrain":true},"masks":[],"heals":[]}""",
+                """"aspect":{"preset":"free","w":1,"h":1,"locked":false},"constrain":true,""" +
+                """"transform":{"vertical":0.0,"horizontal":0.0,"rotate":0.0,"aspect":0.0,"scale":100.0,"offsetX":0.0,""" +
+                """"offsetY":0.0,"upright":"off","guides":[]}},"masks":[],"heals":[]}""",
         )
         assertThat(codec.decode(text)).isEqualTo(Recipe())
     }

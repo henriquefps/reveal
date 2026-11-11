@@ -2,7 +2,7 @@
 <resources>
     <string name="app_name">Reveal</string>
 
-    <!-- Galeria do design system (destino inicial de debug até a biblioteca substituir) -->
+    <!-- Galeria do design system (menu da biblioteca) -->
     <string name="gallery_title">Design system</string>
     <string name="gallery_back">Voltar</string>
     <string name="gallery_more">Mais</string>
@@ -80,14 +80,6 @@
     <string name="tool_crop">Cortar</string>
     <string name="tool_masks">Máscaras</string>
     <string name="tool_heal">Corrigir</string>
-    <!-- Tela inicial (temporária até a biblioteca, M1) -->
-    <string name="start_eyebrow">Versão de prévia</string>
-    <string name="start_title">Revele uma foto</string>
-    <string name="start_body">Abra um arquivo RAW (ARW, DNG, CR3, NEF…) ou um JPEG ou HEIF. O Reveal lê o arquivo onde ele está e nunca altera o original.</string>
-    <string name="start_open">Abrir foto</string>
-    <string name="start_menu">Mais</string>
-    <string name="start_menu_gallery">Design system</string>
-    <string name="start_menu_about">Sobre</string>
 
     <!-- Sobre -->
     <string name="about_title">Sobre</string>

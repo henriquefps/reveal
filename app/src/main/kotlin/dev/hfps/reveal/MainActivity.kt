@@ -20,6 +20,7 @@ import dev.hfps.reveal.designsystem.theme.RevealTheme
 import dev.hfps.reveal.designsystem.theme.isDark
 import dev.hfps.reveal.feature.editor.EditorRoute
 import dev.hfps.reveal.feature.editor.navigateToEditor
+import dev.hfps.reveal.feature.library.ViewerRoute
 import dev.hfps.reveal.navigation.OpenIntents
 import dev.hfps.reveal.navigation.RevealNavHost
 import dev.hfps.reveal.theme.ThemeModeStore
@@ -46,8 +47,10 @@ class MainActivity : ComponentActivity() {
             val mode by themeModeStore.mode.collectAsStateWithLifecycle()
             val navController = rememberNavController()
             val entry by navController.currentBackStackEntryAsState()
-            // The editor is always dark (docs/plan/ux.md): its system bars follow it, not the theme.
-            val inEditor = entry?.destination?.hasRoute<EditorRoute>() == true
+            // The editor and the viewer are always dark (docs/plan/ux.md): their bars follow them, not the theme.
+            val destination = entry?.destination
+            val inEditor = destination?.hasRoute<EditorRoute>() == true ||
+                destination?.hasRoute<ViewerRoute>() == true
             val dark = mode.isDark()
             val darkBars = dark || inEditor
             DisposableEffect(darkBars) {

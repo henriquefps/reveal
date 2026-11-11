@@ -15,7 +15,6 @@ import dev.hfps.reveal.feature.editor.EditorUiState
 import dev.hfps.reveal.feature.editor.open.OpenError
 import dev.hfps.reveal.ui.about.AboutContent
 import dev.hfps.reveal.ui.about.LicenceEntry
-import dev.hfps.reveal.ui.start.StartContent
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -23,7 +22,7 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 
 /**
- * Goldens of the M0 screens under `app/src/test/screenshots/screens/`: start, About, and the editor's loading and
+ * Goldens of the M0 screens under `app/src/test/screenshots/screens/`: About, and the editor's loading and
  * error states (the developed canvas needs a GPU and is covered by the instrumented tests).
  */
 @RunWith(AndroidJUnit4::class)
@@ -32,10 +31,6 @@ import org.robolectric.annotation.GraphicsMode
 class ScreenScreenshotTest {
     @get:Rule
     val composeRule = createComposeRule()
-
-    @Test fun startLight() = shoot("start_light") { RevealTheme(darkTheme = false) { StartContent({}, {}, {}) } }
-
-    @Test fun startDark() = shoot("start_dark") { RevealTheme(darkTheme = true) { StartContent({}, {}, {}) } }
 
     @Test fun about() = shoot("about_light") {
         RevealTheme(darkTheme = false) {

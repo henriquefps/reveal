@@ -8,6 +8,20 @@
             android:exported="true"
             android:label="@string/debug_pipeline_label"
             android:theme="@style/Theme.Reveal" />
+
+        <!-- Debug builds only: a SAF provider over generated files (files/saf-test) for the library's instrumented
+             tests and measurements. Its own process, so reads cross a binder like a real provider. -->
+        <provider
+            android:name=".debug.SyntheticDocumentsProvider"
+            android:authorities="dev.hfps.reveal.debug.synthetic"
+            android:exported="true"
+            android:grantUriPermissions="true"
+            android:permission="android.permission.MANAGE_DOCUMENTS"
+            android:process=":documents">
+            <intent-filter>
+                <action android:name="android.provider.action.DOCUMENTS_PROVIDER" />
+            </intent-filter>
+        </provider>
     </application>
 
 </manifest>

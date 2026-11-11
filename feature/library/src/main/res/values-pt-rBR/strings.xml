@@ -1,0 +1,141 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="library_title">Biblioteca</string>
+    <string name="library_back">Voltar</string>
+    <string name="library_menu">Mais opções</string>
+    <string name="library_menu_open_photo">Abrir uma foto…</string>
+    <string name="library_menu_gallery">Design system</string>
+    <string name="library_menu_about">Sobre</string>
+
+    <string name="library_section_library">Biblioteca</string>
+    <string name="library_section_folders">Pastas</string>
+    <string name="library_all_photos">Todas as fotos</string>
+    <string name="library_recent">Recentes</string>
+    <string name="library_recent_subtitle">Fotos que você abriu no editor</string>
+    <string name="library_from_apps">Abertas de outros apps</string>
+    <string name="library_from_apps_subtitle">Fotos que o Hoard e outros apps enviam ao Reveal</string>
+    <string name="library_add_folder">Adicionar pasta</string>
+    <string name="library_source_unplugged">Desconectado</string>
+    <string name="library_source_permission_lost">Acesso perdido: adicione a pasta de novo</string>
+    <string name="library_source_rescan">Verificar de novo</string>
+    <string name="library_source_remove">Remover pasta</string>
+    <string name="library_source_actions">Ações de %1$s</string>
+    <string name="library_source_indexing">Indexando…</string>
+    <string name="library_source_read_only">Somente leitura</string>
+    <plurals name="library_photo_count">
+        <item quantity="one">%1$s foto</item>
+        <item quantity="many">%1$s fotos</item>
+        <item quantity="other">%1$s fotos</item>
+    </plurals>
+    <string name="library_source_subtitle">%1$s · %2$s</string>
+    <string name="library_remove_folder_title">Remover “%1$s”?</string>
+    <string name="library_remove_folder_body">O Reveal esquece esta pasta, as miniaturas e as edições feitas aqui. Os arquivos no aparelho não são tocados.</string>
+    <string name="library_remove_folder_confirm">Remover</string>
+    <string name="library_cancel">Cancelar</string>
+    <string name="library_add_folder_failed">Não foi possível ler essa pasta.</string>
+    <string name="library_add_folder_exists">Essa pasta já está na biblioteca.</string>
+
+    <string name="library_search">Buscar</string>
+    <string name="library_search_hint">Nome do arquivo</string>
+    <string name="library_search_close">Fechar busca</string>
+    <string name="library_sort">Ordenar</string>
+    <string name="library_sort_newest">Mais recentes primeiro</string>
+    <string name="library_sort_oldest">Mais antigas primeiro</string>
+    <string name="library_sort_name">Nome do arquivo</string>
+    <string name="library_filter_all">Todas</string>
+    <string name="library_filter_edited">Editadas</string>
+    <string name="library_filter_not_edited">Não editadas</string>
+    <string name="library_filter_picked">Escolhidas</string>
+    <string name="library_filter_rated">%1$d★ ou mais</string>
+    <string name="library_filter_rated_short">Com estrelas</string>
+    <string name="library_filter_raw">RAW</string>
+    <string name="library_filter_jpeg">JPEG</string>
+    <string name="library_indexing">Procurando fotos… %1$s encontradas</string>
+    <string name="library_indexing_metadata">Lendo os detalhes das fotos… %1$s de %2$s</string>
+    <string name="library_unplugged_banner">%1$s está desconectado. Conecte de novo para abrir estas fotos.</string>
+    <string name="library_unplugged_volume">Esta unidade</string>
+    <string name="library_permission_banner">O Reveal perdeu o acesso a esta pasta. Remova e adicione de novo.</string>
+
+    <string name="library_badge_raw_jpg">RAW+JPG</string>
+    <string name="library_badge_raw">RAW</string>
+    <string name="library_format_raw_pair">RAW e JPEG</string>
+    <string name="library_format_raw">RAW</string>
+    <string name="library_format_jpeg">JPEG</string>
+    <string name="library_format_heif">HEIF</string>
+    <string name="library_format_png">PNG</string>
+    <string name="library_format_webp">WebP</string>
+    <plurals name="library_stars">
+        <item quantity="one">%1$d estrela</item>
+        <item quantity="many">%1$d estrelas</item>
+        <item quantity="other">%1$d estrelas</item>
+    </plurals>
+    <string name="library_flag_picked">Escolhida</string>
+    <string name="library_flag_rejected">Rejeitada</string>
+    <string name="library_edited">Editada</string>
+    <string name="library_cell_select">Selecionar</string>
+
+    <plurals name="library_selected">
+        <item quantity="one">%1$d selecionada</item>
+        <item quantity="many">%1$d selecionadas</item>
+        <item quantity="other">%1$d selecionadas</item>
+    </plurals>
+    <string name="library_selection_close">Limpar seleção</string>
+    <string name="library_selection_all">Selecionar todas</string>
+    <string name="library_action_rate">Dar estrelas</string>
+    <string name="library_action_pick">Escolher</string>
+    <string name="library_action_reject">Rejeitar</string>
+    <string name="library_action_unflag">Tirar marcação</string>
+    <string name="library_action_remove">Remover da biblioteca</string>
+    <string name="library_action_copy_edits">Copiar edições</string>
+    <string name="library_action_paste_edits">Colar edições</string>
+    <string name="library_action_preset">Aplicar predefinição</string>
+    <string name="library_action_export">Exportar</string>
+    <string name="library_action_coming">Em breve</string>
+    <string name="library_rating_none">Sem estrelas</string>
+    <string name="library_saved_database_only">Salvo só no Reveal: a pasta é somente leitura, então nenhum arquivo XMP foi gravado.</string>
+    <plurals name="library_removed">
+        <item quantity="one">%1$d foto removida da biblioteca. O arquivo continua no aparelho.</item>
+        <item quantity="many">%1$d fotos removidas da biblioteca. Os arquivos continuam no aparelho.</item>
+        <item quantity="other">%1$d fotos removidas da biblioteca. Os arquivos continuam no aparelho.</item>
+    </plurals>
+
+    <string name="library_empty_title">Adicione suas fotos</string>
+    <string name="library_empty_body">Adicione uma pasta deste celular, de um cartão SD ou de um pendrive. O Reveal lê as fotos onde elas estão e nunca as copia nem altera.</string>
+    <string name="library_empty_open">Abrir uma única foto</string>
+    <string name="library_folder_empty_title">Nenhuma foto aqui</string>
+    <string name="library_folder_empty_body">Esta pasta não tem fotos JPEG, HEIF ou RAW.</string>
+    <string name="library_folder_indexing_title">Procurando fotos</string>
+    <string name="library_no_match_title">Nenhuma foto corresponde</string>
+    <string name="library_no_match_body">Tente outro filtro ou outra busca.</string>
+    <string name="library_clear_filters">Limpar filtros</string>
+    <string name="library_recent_empty_title">Nada aberto ainda</string>
+    <string name="library_recent_empty_body">As fotos que você abre no editor aparecem aqui.</string>
+    <string name="library_from_apps_empty_title">Nada recebido ainda</string>
+    <string name="library_from_apps_empty_body">As fotos que o Hoard ou outro app envia ao Reveal aparecem aqui.</string>
+    <string name="library_pick_source">Escolha uma pasta à esquerda.</string>
+
+    <string name="viewer_position">%1$d de %2$d</string>
+    <string name="viewer_info">Informações</string>
+    <string name="viewer_edit">Editar</string>
+    <string name="viewer_unavailable">A pasta desta foto não está disponível agora.</string>
+    <string name="viewer_load_failed">Não foi possível mostrar esta foto.</string>
+    <string name="viewer_zoom_hint">Toque duas vezes para ampliar a 100 %</string>
+    <string name="info_title">Informações da foto</string>
+    <string name="info_camera">Câmera</string>
+    <string name="info_lens">Lente</string>
+    <string name="info_exposure">Exposição</string>
+    <string name="info_shutter">Velocidade</string>
+    <string name="info_aperture">Abertura</string>
+    <string name="info_iso">ISO</string>
+    <string name="info_focal_length">Distância focal</string>
+    <string name="info_date">Capturada em</string>
+    <string name="info_dimensions">Dimensões</string>
+    <string name="info_files">Arquivos</string>
+    <string name="info_rating">Classificação</string>
+    <string name="info_unknown">Desconhecido</string>
+    <string name="info_focal_value">%1$s mm</string>
+    <string name="info_focal_value_35">%1$s mm (%2$d mm em 35 mm)</string>
+    <string name="info_shutter_value">%1$s s</string>
+    <string name="info_dimensions_value">%1$d × %2$d · %3$s MP</string>
+    <string name="info_file_value">%1$s · %2$s</string>
+</resources>

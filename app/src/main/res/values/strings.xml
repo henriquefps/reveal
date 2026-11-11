@@ -2,7 +2,7 @@
 <resources>
     <string name="app_name">Reveal</string>
 
-    <!-- Design-system gallery (debug start destination until the library replaces it) -->
+    <!-- Design-system gallery (from the library menu) -->
     <string name="gallery_title">Design system</string>
     <string name="gallery_back">Back</string>
     <string name="gallery_more">More</string>
@@ -80,14 +80,6 @@
     <string name="tool_crop">Crop</string>
     <string name="tool_masks">Masks</string>
     <string name="tool_heal">Heal</string>
-    <!-- Start screen (temporary until the library, M1) -->
-    <string name="start_eyebrow">Preview build</string>
-    <string name="start_title">Develop a photo</string>
-    <string name="start_body">Open a RAW file (ARW, DNG, CR3, NEF…) or a JPEG or HEIF. Reveal reads it in place and never changes the original.</string>
-    <string name="start_open">Open photo</string>
-    <string name="start_menu">More</string>
-    <string name="start_menu_gallery">Design system</string>
-    <string name="start_menu_about">About</string>
 
     <!-- About -->
     <string name="about_title">About</string>

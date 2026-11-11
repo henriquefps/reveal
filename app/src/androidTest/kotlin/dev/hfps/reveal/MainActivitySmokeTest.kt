@@ -1,18 +1,22 @@
 package dev.hfps.reveal
 
+import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
-import dev.hfps.reveal.ui.start.StartTags
+import dev.hfps.reveal.feature.library.LibraryTags
+import dev.hfps.reveal.feature.library.R as LibraryR
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 
-/** The app launches, Hilt builds its graph, the start screen offers "Open photo" and its menu reaches the gallery. */
+/** The app launches, Hilt builds its graph, the library is the start screen; its menu reaches the gallery and About. */
+@OptIn(ExperimentalTestApi::class)
 @RunWith(AndroidJUnit4::class)
 class MainActivitySmokeTest {
     @get:Rule
@@ -22,18 +26,23 @@ class MainActivitySmokeTest {
     private fun text(id: Int): String = InstrumentationRegistry.getInstrumentation().targetContext.getString(id)
 
     @Test
-    fun startScreenOffersOpenPhoto() {
-        composeRule.onNodeWithTag(StartTags.OPEN).assertIsDisplayed()
+    fun theLibraryIsTheStartScreen() {
+        // An empty library offers "Add folder"; one with folders lists them (and still offers it).
+        composeRule.waitUntilAtLeastOneExists(
+            hasTestTag(LibraryTags.ADD_FOLDER) or hasTestTag(LibraryTags.SOURCES),
+            10_000,
+        )
+        composeRule.onNodeWithTag(LibraryTags.MENU).assertIsDisplayed()
     }
 
     @Test
     fun menuReachesTheGalleryAndAbout() {
-        composeRule.onNodeWithTag(StartTags.MENU).performClick()
-        composeRule.onNodeWithText(text(R.string.start_menu_gallery)).performClick()
+        composeRule.onNodeWithTag(LibraryTags.MENU).performClick()
+        composeRule.onNodeWithText(text(LibraryR.string.library_menu_gallery)).performClick()
         composeRule.onNodeWithText(text(R.string.gallery_page_foundations)).assertIsDisplayed()
         composeRule.activityRule.scenario.onActivity { it.onBackPressedDispatcher.onBackPressed() }
-        composeRule.onNodeWithTag(StartTags.MENU).performClick()
-        composeRule.onNodeWithText(text(R.string.start_menu_about)).performClick()
+        composeRule.onNodeWithTag(LibraryTags.MENU).performClick()
+        composeRule.onNodeWithText(text(LibraryR.string.library_menu_about)).performClick()
         composeRule.onNodeWithText("LibRaw 0.22.3").assertIsDisplayed()
     }
 }

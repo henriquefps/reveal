@@ -9,5 +9,8 @@ fun NavGraphBuilder.editorScreen(onBack: () -> Unit) {
     composable<EditorRoute> { EditorScreen(onBack = onBack) }
 }
 
-/** Opens the editor on [uri] (a content URI string). */
-fun NavController.navigateToEditor(uri: String) = navigate(EditorRoute(uri))
+/** Opens the editor on [uri] (a content URI string from another app or the picker). */
+fun NavController.navigateToEditor(uri: String) = navigate(EditorRoute(uri = uri))
+
+/** Opens the editor on a library photo's version. */
+fun NavController.navigateToEditor(versionId: Long) = navigate(EditorRoute(versionId = versionId))

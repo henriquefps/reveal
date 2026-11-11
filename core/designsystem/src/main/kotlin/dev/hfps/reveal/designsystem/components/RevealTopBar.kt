@@ -35,6 +35,7 @@ fun RevealTopBar(
     onBack: (() -> Unit)? = null,
     backContentDescription: String = "",
     titleStyle: TextStyle = RevealTheme.typography.title,
+    titleOverflow: TextOverflow = TextOverflow.Ellipsis,
     actions: @Composable RowScope.() -> Unit = {},
 ) {
     Row(
@@ -62,7 +63,7 @@ fun RevealTopBar(
             style = titleStyle,
             color = RevealTheme.colors.foreground,
             maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
+            overflow = titleOverflow,
         )
         Row(
             horizontalArrangement = Arrangement.spacedBy(0.dp),

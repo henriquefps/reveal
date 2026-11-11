@@ -2,7 +2,6 @@ package dev.hfps.reveal.feature.editor
 
 import android.content.Context
 import android.net.Uri
-import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.core.net.toUri
 import androidx.lifecycle.SavedStateHandle
@@ -15,16 +14,24 @@ import dev.hfps.image.proxy.ProxyStep
 import dev.hfps.image.source.CancelToken
 import dev.hfps.image.source.CancelledException
 import dev.hfps.reveal.data.library.LibraryRepository
+import dev.hfps.reveal.feature.editor.edit.AsShot
+import dev.hfps.reveal.feature.editor.edit.RecipeControls
 import dev.hfps.reveal.feature.editor.open.OpenError
 import dev.hfps.reveal.feature.editor.open.OpenEvent
 import dev.hfps.reveal.feature.editor.open.OpenException
 import dev.hfps.reveal.feature.editor.open.PhotoOpener
+import dev.hfps.reveal.pipeline.PipelineInput
 import dev.hfps.reveal.pipeline.cpu.WhiteBalanceModel
+import dev.hfps.reveal.pipeline.cpu.WhiteBalancePicker
+import dev.hfps.reveal.pipeline.gl.ClippingWarnings
+import dev.hfps.reveal.pipeline.gl.CompareMode
 import dev.hfps.reveal.pipeline.gl.GpuDevelopRenderer
-import dev.hfps.reveal.pipeline.recipe.Colour
-import dev.hfps.reveal.pipeline.recipe.Light
+import dev.hfps.reveal.pipeline.recipe.BaseLook
+import dev.hfps.reveal.pipeline.recipe.ControlId
 import dev.hfps.reveal.pipeline.recipe.Recipe
-import dev.hfps.reveal.pipeline.recipe.WhiteBalance
+import dev.hfps.reveal.pipeline.recipe.RecipeGroup
+import dev.hfps.reveal.pipeline.recipe.RecipeRanges
+import dev.hfps.reveal.pipeline.recipe.WbMode
 import javax.inject.Inject
 import kotlin.math.roundToInt
 import kotlinx.coroutines.CancellationException
@@ -36,58 +43,15 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.flow.updateAndGet
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-/** Where the photo is in its life on screen. */
-sealed interface EditorPhase {
-    /** Decoding: [progress] 0..1 over the proxy steps. */
-    data class Loading(val progress: Float) : EditorPhase
-
-    /** The proxy is on the GPU; [renderer] draws it. [hundredPercentScale] = full-size pixels per proxy pixel. */
-    data class Ready(
-        val renderer: GpuDevelopRenderer,
-        val width: Int,
-        val height: Int,
-        val hundredPercentScale: Float,
-    ) : EditorPhase
-
-    data class Failed(val error: OpenError) : EditorPhase
-}
-
-/** The M0 debug controls: exposure and white balance. `null` temperature/tint = as shot. */
-data class DevelopControls(
-    val exposureEv: Float = 0f,
-    val temperatureK: Float? = null,
-    val tint: Float? = null,
-    val asShotTemperatureK: Float = DEFAULT_TEMPERATURE,
-    val asShotTint: Float = 0f,
-) {
-    val recipe: Recipe
-        get() = Recipe(
-            light = Light(exposureEv = exposureEv),
-            colour = Colour(WhiteBalance(temperatureK = temperatureK, tint = tint)),
-        )
-
-    companion object {
-        const val DEFAULT_TEMPERATURE = 6500f
-    }
-}
-
-data class EditorUiState(
-    val fileName: String = "",
-    /** The instant preview shown until the first developed frame, then dropped. */
-    val preview: ImageBitmap? = null,
-    val phase: EditorPhase = EditorPhase.Loading(0f),
-    val controls: DevelopControls = DevelopControls(),
-    /** True once a developed frame is on screen (the preview fades out). */
-    val developed: Boolean = false,
-)
-
 /**
- * The editor of one photo (M0 shape): shows the embedded preview immediately, decodes the screen proxy off the main
- * thread with progress, uploads it to the GPU renderer (dropping the CPU copy), and keeps the recipe of the debug
- * controls. Survives configuration changes; leaving the screen cancels the decode and closes the renderer.
+ * The editor of one photo: shows the embedded preview immediately, decodes the screen proxy off the main thread with
+ * progress, uploads it to the GPU renderer (dropping the CPU copy), and owns the edit (working and committed recipe)
+ * and the view options, pushing both to the renderer. Survives configuration changes; leaving the screen cancels the
+ * decode and closes the renderer.
  */
 @HiltViewModel
 class EditorViewModel @Inject constructor(
@@ -130,23 +94,28 @@ class EditorViewModel @Inject constructor(
                     opener.open(uri, proxyLongEdge, screenLong, cancel, ::onEvent)
                 }
                 EditorMetrics.proxy()
-                val asShot = WhiteBalanceModel.asShot(photo.input)
+                val input = photo.input
+                val asShot = WhiteBalanceModel.asShot(input).let {
+                    AsShot(it.temperatureK.roundToInt().toFloat(), it.tint.roundToInt().toFloat())
+                }
+                // Grey-world "Auto" white balance, measured while the proxy is still on the heap.
+                val autoWb = withContext(Dispatchers.Default) { WhiteBalancePicker.grayWorld(input) }?.let {
+                    AsShot(RecipeRanges.temperature.snap(it.temperatureK.toFloat()), it.tint.roundToInt().toFloat())
+                }
                 val ready = gpu.await()
-                ready.upload(photo.input)
+                ready.upload(input)
                 EditorMetrics.uploaded()
                 EditorMetrics.renderer = ready
-                val scale = maxOf(photo.fullWidth, photo.fullHeight).toFloat() /
-                    maxOf(photo.input.width, photo.input.height)
+                photoInput = colourOnly(input)
+                val scale = maxOf(photo.fullWidth, photo.fullHeight).toFloat() / maxOf(input.width, input.height)
                 _state.update {
                     it.copy(
                         fileName = photo.name,
-                        phase = EditorPhase.Ready(ready, photo.input.width, photo.input.height, scale),
-                        controls = it.controls.copy(
-                            asShotTemperatureK = asShot.temperatureK.roundToInt().toFloat(),
-                            asShotTint = asShot.tint.roundToInt().toFloat(),
-                        ),
+                        phase = EditorPhase.Ready(ready, input.width, input.height, scale),
+                        edit = it.edit.copy(isRaw = input.isRaw, asShot = asShot, autoWb = autoWb),
                     )
                 }
+                attach(ready)
             } catch (e: CancellationException) {
                 cancel.cancel()
                 throw e
@@ -219,23 +188,108 @@ class EditorViewModel @Inject constructor(
         _state.update { it.copy(preview = null) }
     }
 
-    fun setExposure(ev: Float) = updateControls { it.copy(exposureEv = ev) }
+    // ------------------------------------------------------------------ edits
 
-    fun setTemperature(kelvin: Float) = updateControls { it.copy(temperatureK = kelvin) }
+    /** Per drag frame: the working recipe changes and goes to the renderer (coalesced there); nothing is stored. */
+    fun setControl(id: ControlId, value: Float) = edit { RecipeControls.set(it, id, value) }
 
-    fun setTint(tint: Float) = updateControls { it.copy(tint = tint) }
-
-    fun resetControls() = updateControls {
-        DevelopControls(asShotTemperatureK = it.asShotTemperatureK, asShotTint = it.asShotTint)
+    /**
+     * Commits the working recipe (slider release, numeric input, chips, resets).
+     * TODO(history worker): compute RecipeDiff.between(committed, working), append the step and store the recipe.
+     */
+    fun commit() {
+        _state.update { it.copy(edit = it.edit.copy(committed = it.edit.recipe)) }
     }
 
-    private fun updateControls(change: (DevelopControls) -> DevelopControls) {
-        _state.update { it.copy(controls = change(it.controls)) }
+    fun resetControl(id: ControlId) = editAndCommit { RecipeControls.reset(it, id) }
+
+    fun resetGroup(group: RecipeGroup) = editAndCommit { group.reset(it) }
+
+    fun setLook(look: BaseLook) = editAndCommit { RecipeControls.withLook(it, look) }
+
+    fun setWbMode(mode: WbMode) = editAndCommit { RecipeControls.withWbMode(it, mode, _state.value.edit.autoWb) }
+
+    // ------------------------------------------------------------------ view options
+
+    fun setHistogram(on: Boolean) {
+        updateView { it.copy(histogram = on) }
+        renderer()?.histogramEnabled = on
+    }
+
+    fun setClipping(warnings: ClippingWarnings) {
+        updateView { it.copy(clipping = warnings) }
+        renderer()?.setClippingWarnings(warnings)
+    }
+
+    fun setCompare(mode: CompareMode) {
+        updateView { it.copy(compare = mode, lastCompare = if (mode == CompareMode.Off) it.lastCompare else mode) }
+        renderer()?.setCompare(mode)
+    }
+
+    fun setShowOriginal(show: Boolean) {
+        if (_state.value.view.showOriginal == show) return
+        updateView { it.copy(showOriginal = show) }
+        renderer()?.setShowOriginal(show)
+    }
+
+    fun setEyedropper(on: Boolean) = updateView { it.copy(eyedropper = on) }
+
+    /**
+     * Eyedropper: reads the mean raw colour around the proxy pixel ([imageX], [imageY]) from the renderer's source
+     * and sets the white balance that makes it neutral (Custom). Leaves the mode either way.
+     */
+    fun pickNeutral(imageX: Float, imageY: Float) {
+        val renderer = renderer()
+        val input = photoInput
+        updateView { it.copy(eyedropper = false) }
+        if (renderer == null || input == null) return
+        viewModelScope.launch {
+            val mean = renderer.sampleSource(imageX.roundToInt(), imageY.roundToInt(), EYEDROPPER_RADIUS)
+            val cct = WhiteBalancePicker.fromNeutral(input, mean) ?: return@launch
+            editAndCommit {
+                val wb = it.colour.whiteBalance.copy(
+                    temperatureK = RecipeRanges.temperature.snap(
+                        cct.temperatureK.toFloat(),
+                        RecipeRanges.temperature.fineStep,
+                    ),
+                    tint = cct.tint.roundToInt().toFloat(),
+                    mode = WbMode.CUSTOM,
+                )
+                it.copy(colour = it.colour.copy(whiteBalance = wb))
+            }
+        }
+    }
+
+    private fun edit(change: (Recipe) -> Recipe) {
+        val next = _state.updateAndGet { it.copy(edit = it.edit.copy(recipe = change(it.edit.recipe))) }
+        renderer()?.setRecipe(next.edit.recipe)
+    }
+
+    private fun editAndCommit(change: (Recipe) -> Recipe) {
+        edit(change)
+        commit()
+    }
+
+    private fun updateView(change: (ViewOptions) -> ViewOptions) {
+        _state.update { it.copy(view = change(it.view)) }
+    }
+
+    private fun renderer(): GpuDevelopRenderer? = (_state.value.phase as? EditorPhase.Ready)?.renderer
+
+    /** Pushes the current edit and view options to a renderer that just became ready, and listens to histograms. */
+    private fun attach(renderer: GpuDevelopRenderer) {
+        val current = _state.value
+        renderer.setRecipe(current.edit.recipe)
+        renderer.setClippingWarnings(current.view.clipping)
+        renderer.setCompare(current.view.compare)
+        renderer.onHistogram = { histogram -> _state.update { it.copy(histogram = histogram) } }
+        renderer.histogramEnabled = current.view.histogram
     }
 
     @OptIn(ExperimentalCoroutinesApi::class)
     override fun onCleared() {
         cancel.cancel()
+        renderer()?.onHistogram = null
         EditorMetrics.renderer = null
         // Closes the renderer once it exists (a creation cancelled half-way closes itself).
         gpu.invokeOnCompletion { failure -> if (failure == null) gpu.getCompleted().close() }
@@ -243,9 +297,26 @@ class EditorViewModel @Inject constructor(
 
     private fun PhotoOpener.displayNameOrEmpty(uri: Uri): String = runCatching { displayName(uri) }.getOrDefault("")
 
+    /** The proxy's colour metadata without its pixels (for the eyedropper maths); set once uploaded. */
+    @Volatile
+    private var photoInput: PipelineInput? = null
+
+    private fun colourOnly(input: PipelineInput) = PipelineInput(
+        input.kind,
+        1,
+        1,
+        FloatArray(PipelineInput.CHANNELS),
+        input.cameraToXyz,
+        input.asShotMultipliers?.copyOf(),
+        input.saturation,
+    )
+
     private companion object {
         /** Screen proxy bounds (ADR 0002 "Proxies and tiles"): about the screen's long edge. */
         const val MIN_PROXY_EDGE = 2400
         const val MAX_PROXY_EDGE = 3000
+
+        /** Half-size of the eyedropper's sampled square, in proxy pixels (a 9x9 average). */
+        const val EYEDROPPER_RADIUS = 4
     }
 }

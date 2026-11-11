@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="slider_increase">Aumentar</string>
+    <string name="slider_decrease">Diminuir</string>
+    <string name="slider_increase_fine">Aumentar pouco</string>
+    <string name="slider_decrease_fine">Diminuir pouco</string>
+    <string name="slider_reset">Redefinir</string>
+    <string name="slider_type_value">Digitar um valor</string>
+    <string name="slider_range">%1$s a %2$s</string>
+    <string name="slider_input_invalid">Não é um número</string>
+    <string name="slider_input_cancel">Cancelar</string>
+    <string name="slider_input_done">Concluir</string>
+</resources>

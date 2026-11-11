@@ -17,9 +17,12 @@ SAMPLES=(
   "google-pixel-4a.dng|Google/Pixel%204a/PXL_20201121_100251397.dng|11b38186ee3455376291bcdb3049728a3f9dcd94b9e82ff76855d9f3430e44be"
   "nikon-d5600.nef|Nikon/D5600/DSC_0027.NEF|82e15f02c4037820e80f14bacfacdc52ea29721b3c70d2cf08b237b50ce8db05"
   "canon-eos-r6.cr3|Canon/EOS%20R6/Canon_EOS_R6_RAW_ISO_100_nocrop_nodual.CR3|81fab349ae9080fd0172583b7fd5ea36806e95ffa434909d2ccc6527dde34ee6"
+  # High ISO (Detail: noise reduction and sharpening judged at 100 %, docs/adr/0012). Sony A7C, 24 MP like the ZV-E10.
+  "sony-a7c-iso12800.arw|Sony/ILCE-7C/DSC00107%5b1%5d.ARW|386ce0122687b802e8e57151d36643b830f87e59eed15b65c690d1032eb3b763"
+  "sony-a7c-iso2000.arw|Sony/ILCE-7C/DSC00018.ARW|6bfac3286f0e931e949b23e1bb236b737bb9e4117b8b42fa09e36f40f0fa8408"
 )
 
-sha() { shasum -a 256 "$1" | cut -d' ' -f1; }
+sha() { if command -v shasum >/dev/null; then shasum -a 256 "$1"; else sha256sum "$1"; fi | cut -d' ' -f1; }
 
 if [ "${1:-}" = "--print" ]; then
   for entry in "${SAMPLES[@]}"; do

@@ -24,6 +24,16 @@
     <string name="history_crop_reset">Crop reset</string>
     <string name="history_angle">Straighten %1$s</string>
     <string name="history_rotate">Rotate %1$s</string>
+    <string name="history_sharpen_amount">Sharpening %1$s</string>
+    <string name="history_sharpen_radius">Sharpening radius %1$s</string>
+    <string name="history_sharpen_detail">Sharpening detail %1$s</string>
+    <string name="history_sharpen_masking">Sharpening masking %1$s</string>
+    <string name="history_nr_luminance">Luminance noise reduction %1$s</string>
+    <string name="history_nr_luminance_detail">Luminance detail %1$s</string>
+    <string name="history_nr_luminance_contrast">Luminance contrast %1$s</string>
+    <string name="history_nr_colour">Colour noise reduction %1$s</string>
+    <string name="history_nr_colour_detail">Colour detail %1$s</string>
+    <string name="history_nr_colour_smoothness">Colour smoothness %1$s</string>
     <string name="history_flip_h">Flip horizontal</string>
     <string name="history_flip_v">Flip vertical</string>
     <string name="history_aspect">Aspect: %1$s</string>

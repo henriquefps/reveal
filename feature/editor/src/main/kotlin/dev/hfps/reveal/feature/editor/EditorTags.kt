@@ -13,6 +13,7 @@ object EditorTags {
     const val PREVIEW = "editor-preview"
     const val LOADING = "editor-loading"
     const val DEVELOPED = "editor-developed"
+    const val DETAIL_HINT = "editor-detail-hint"
     const val ERROR = "editor-error"
     const val TOP_BAR = "editor-top-bar"
     const val COMPARE = "editor-compare"

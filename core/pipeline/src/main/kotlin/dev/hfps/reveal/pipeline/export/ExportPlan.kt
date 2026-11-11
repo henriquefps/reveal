@@ -31,7 +31,9 @@ data class OutputTile(val output: PixelBox, val geometry: PixelBox, val input: P
  *   of a whole-image render (ADR 0007, "Tile seam").
  * - **Output tiles** cover the output. Each one's geometry box is what its Lanczos taps reach (the box itself without
  *   resizing), and its input region is what the geometry operator reads for that box
- *   ([GeometryMapping.sourceRegion], filter margin included). Tiles are sized so the input region fits in [maxTile].
+ *   ([GeometryMapping.sourceRegion], filter margin included), grown by the Detail operator's [reach] (slot 11 reads a
+ *   neighbourhood: docs/adr/0012, "Tiles") and clamped to the image. Tiles are sized so the input region fits in
+ *   [maxTile].
  */
 class ExportPlan(
     val imageWidth: Int,
@@ -39,6 +41,7 @@ class ExportPlan(
     val mapping: GeometryMapping,
     val output: PixelSize,
     val maxTile: Int = DEFAULT_MAX_TILE,
+    val reach: Int = 0,
 ) {
     /** Size of the geometry operator's output (the crop's size, swapped for odd quarter turns). */
     val geometrySize: PixelSize = PixelSize(mapping.outputWidth, mapping.outputHeight)
@@ -50,13 +53,20 @@ class ExportPlan(
             "exports never upscale"
         }
         require(maxTile >= MIN_TILE) { "tiles below $MIN_TILE px" }
+        require(reach >= 0 && maxTile - 2 * reach >= MIN_CORE) { "reach $reach too large for tiles of $maxTile" }
     }
 
     /** True when the output is smaller than the geometry output (the Lanczos passes run). */
     val resamples: Boolean get() = output.width != geometrySize.width || output.height != geometrySize.height
 
-    /** True when the geometry operator changes anything (its pass runs). */
+    /** True when the geometry operator changes anything. */
     val transforms: Boolean get() = !mapping.isIdentity
+
+    /**
+     * True when the geometry pass runs: the geometry changes something, or the input regions carry the Detail apron
+     * (the identity mapping then cuts the box out of the developed region, an exact texel copy).
+     */
+    val geometryPass: Boolean get() = transforms || reach > 0
 
     /** Geometry-output pixels per output pixel along x and y (1 without resampling). */
     val scaleX: Float get() = geometrySize.width.toFloat() / output.width
@@ -84,9 +94,9 @@ class ExportPlan(
      */
     val geometryBudget: Int
         get() = when {
-            !transforms -> maxTile
-            mapping.axisAligned -> maxTile - 2 * GeometryMapping.FILTER_MARGIN - SLACK
-            else -> floor((maxTile - 2 * GeometryMapping.FILTER_MARGIN - SLACK) / SQRT2).toInt()
+            !transforms -> maxTile - 2 * reach
+            mapping.axisAligned -> maxTile - 2 * (GeometryMapping.FILTER_MARGIN + reach) - SLACK
+            else -> floor((maxTile - 2 * (GeometryMapping.FILTER_MARGIN + reach) - SLACK) / SQRT2).toInt()
         }
 
     /** Output pixels per tile edge so that the geometry box (and so the input region) fits. */
@@ -111,12 +121,15 @@ class ExportPlan(
         return out
     }
 
-    private fun inputOf(box: PixelBox): PixelBox? = if (transforms) {
-        mapping.sourceRegion(box.x, box.y, box.width, box.height)?.let {
-            PixelBox(it.left, it.top, it.width, it.height)
+    private fun inputOf(box: PixelBox): PixelBox? {
+        val region = if (transforms) {
+            mapping.sourceRegion(box.x, box.y, box.width, box.height)?.let {
+                PixelBox(it.left, it.top, it.width, it.height)
+            }
+        } else {
+            box
         }
-    } else {
-        box
+        return region?.let { grow(it, reach, imageWidth, imageHeight) }
     }
 
     private fun outputTile(scale: Float): Int {
@@ -138,19 +151,36 @@ class ExportPlan(
         const val MIN_TILE: Int = 256
 
         private const val SLACK = 6
+
+        /** Smallest tile core left once the Detail apron is taken off both sides. */
+        private const val MIN_CORE = 64
         private const val SQRT2 = 1.4142135623730951
 
-        /** The plan for an upright [width] x [height] image with the recipe's [geometry] at [size]. */
+        /**
+         * The plan for an upright [width] x [height] image with the recipe's [geometry] at [size]; [reach] is the
+         * Detail operator's apron at full resolution (`DetailParams.reach`).
+         */
+        @Suppress("LongParameterList")
         fun of(
             width: Int,
             height: Int,
             geometry: Geometry,
             size: ExportSize,
             maxTile: Int = DEFAULT_MAX_TILE,
+            reach: Int = 0,
         ): ExportPlan {
             val mapping = GeometryMapping.of(geometry, width, height)
             val output = size.outputSize(mapping.outputWidth, mapping.outputHeight)
-            return ExportPlan(width, height, mapping, output, maxTile)
+            return ExportPlan(width, height, mapping, output, maxTile, reach)
+        }
+
+        /** [box] grown by [margin] on every side, clamped to the [width] x [height] image. */
+        fun grow(box: PixelBox, margin: Int, width: Int, height: Int): PixelBox {
+            val x0 = maxOf(0, box.x - margin)
+            val y0 = maxOf(0, box.y - margin)
+            val x1 = minOf(width, box.right + margin)
+            val y1 = minOf(height, box.bottom + margin)
+            return PixelBox(x0, y0, x1 - x0, y1 - y0)
         }
     }
 }

@@ -17,8 +17,14 @@ internal class EglCore {
     private var pbuffer: EGLSurface = EGL14.EGL_NO_SURFACE
     private var window: EGLSurface = EGL14.EGL_NO_SURFACE
 
-    /** Creates the context and makes it current on the calling thread. */
-    fun create() {
+    /** The context (valid after [create]); another [EglCore] can share its textures ([create] with `share`). */
+    val eglContext: EGLContext get() = context
+
+    /**
+     * Creates the context and makes it current on the calling thread. With [share], the new context shares textures
+     * and sync objects with that context (EGL share group): the zoom tile worker renders into the editor's atlas.
+     */
+    fun create(share: EGLContext = EGL14.EGL_NO_CONTEXT) {
         display = EGL14.eglGetDisplay(EGL14.EGL_DEFAULT_DISPLAY)
         check(display != EGL14.EGL_NO_DISPLAY) { "No EGL display" }
         val version = IntArray(2)
@@ -39,7 +45,7 @@ internal class EglCore {
         }
         config = configs[0]
         val contextAttributes = intArrayOf(EGL14.EGL_CONTEXT_CLIENT_VERSION, 3, EGL14.EGL_NONE)
-        context = EGL14.eglCreateContext(display, config, EGL14.EGL_NO_CONTEXT, contextAttributes, 0)
+        context = EGL14.eglCreateContext(display, config, share, contextAttributes, 0)
         if (context == EGL14.EGL_NO_CONTEXT) {
             throw GlesRequirementException("Could not create an OpenGL ES 3 context (EGL error ${EGL14.eglGetError()})")
         }

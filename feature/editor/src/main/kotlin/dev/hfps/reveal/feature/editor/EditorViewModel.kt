@@ -152,7 +152,8 @@ class EditorViewModel @Inject constructor(
                 val ready = gpu.await()
                 // The renderer starts on the stored recipe (attach() pushes it).
                 storedHistory.await()
-                ready.upload(input)
+                val scale = maxOf(photo.fullWidth, photo.fullHeight).toFloat() / maxOf(input.width, input.height)
+                ready.upload(input, scale)
                 EditorMetrics.uploaded()
                 EditorMetrics.renderer = ready
                 EditorMetrics.setControl = { id, value ->
@@ -161,7 +162,6 @@ class EditorViewModel @Inject constructor(
                 }
                 EditorMetrics.recipes = { _state.value.edit.let { it.recipe to it.committed } }
                 photoInput = colourOnly(input)
-                val scale = maxOf(photo.fullWidth, photo.fullHeight).toFloat() / maxOf(input.width, input.height)
                 _state.update {
                     it.copy(
                         fileName = photo.name,
@@ -170,6 +170,7 @@ class EditorViewModel @Inject constructor(
                     )
                 }
                 attach(ready)
+                if (scale > 1f) loadFullResolution(uri, ready, scale)
             } catch (e: CancellationException) {
                 cancel.cancel()
                 throw e
@@ -192,6 +193,31 @@ class EditorViewModel @Inject constructor(
                 cancel.cancel()
                 _state.update { it.copy(phase = EditorPhase.Failed(PhotoOpener.classify(failure)), preview = null) }
             }
+        }
+    }
+
+    /**
+     * Decodes the photo's full resolution in the background once the proxy is on screen and hands it to the renderer,
+     * whose zoom then shows developed full-resolution tiles above 50 % (docs/adr/0012). Best effort: a failure (memory,
+     * an unreadable region) leaves the proxy-only zoom of M1.
+     */
+    private fun loadFullResolution(uri: Uri, renderer: GpuDevelopRenderer, scale: Float) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val start = SystemClock.elapsedRealtime()
+            val source = try {
+                opener.openFullResolution(uri, cancel)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (@Suppress("TooGenericExceptionCaught") e: Throwable) {
+                // Includes OutOfMemoryError: the editor keeps working on the proxy.
+                android.util.Log.w("RevealEditor", "full resolution unavailable: $e")
+                return@launch
+            }
+            if (!renderer.setFullResolution(source, scale)) {
+                source.close()
+                return@launch
+            }
+            EditorMetrics.fullResolution(SystemClock.elapsedRealtime() - start, source.width, source.height)
         }
     }
 
@@ -404,6 +430,11 @@ class EditorViewModel @Inject constructor(
     }
 
     fun setEyedropper(on: Boolean) = updateView { it.copy(eyedropper = on) }
+
+    /** The Detail panel's masking overlay: the photo shows the sharpening mask while Masking is dragged. */
+    fun setDetailMask(show: Boolean) {
+        renderer()?.setDetailMask(show)
+    }
 
     // ------------------------------------------------------------------ crop mode
 

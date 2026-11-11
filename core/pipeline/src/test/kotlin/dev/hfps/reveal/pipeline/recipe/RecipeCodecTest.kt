@@ -45,11 +45,23 @@ class RecipeCodecTest {
                 """"whites":0.0,"blacks":0.0},""" +
                 """"colour":{"whiteBalance":{"temperature":null,"tint":null,"mode":"as_shot",""" +
                 """"relTemperature":0.0,"relTint":0.0},"vibrance":0.0,"saturation":0.0},""" +
-                """"effects":{},"detail":{},"optics":{},""" +
+                """"effects":{},"detail":{"sharpenAmount":0.0,"sharpenRadius":1.0,"sharpenDetail":25.0,""" +
+                """"sharpenMasking":0.0,"nrLuminance":0.0,"nrLuminanceDetail":50.0,"nrLuminanceContrast":0.0,""" +
+                """"nrColour":0.0,"nrColourDetail":50.0,"nrColourSmoothness":50.0},"optics":{},""" +
                 """"geometry":{"crop":null,"angle":0.0,"rotate":0,"flipH":false,"flipV":false,""" +
                 """"aspect":{"preset":"free","w":1,"h":1,"locked":false},"constrain":true},"masks":[],"heals":[]}""",
         )
         assertThat(codec.decode(text)).isEqualTo(Recipe())
+    }
+
+    @Test
+    fun `a recipe stored before Detail had fields reads its defaults`() {
+        // Detail was an empty reserved object until M2 (docs/adr/0012): additive, no RECIPE_VERSION bump.
+        val recipe = codec.decode("""{"v":1,"light":{"exposure":0.5},"detail":{}}""")
+
+        assertThat(recipe).isEqualTo(Recipe(light = Light(0.5f)))
+        val edited = Recipe(detail = Detail(sharpenAmount = 40f, nrLuminance = 25f, nrColourSmoothness = 70f))
+        assertThat(codec.decode(codec.encode(edited))).isEqualTo(edited)
     }
 
     @Test

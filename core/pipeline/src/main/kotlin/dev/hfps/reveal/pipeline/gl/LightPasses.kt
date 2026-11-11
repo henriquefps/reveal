@@ -23,7 +23,9 @@ internal class LightPasses {
     private var guideRowsProgram = 0
     private var boxProgram = 0
 
-    private var grid: LowResGrid? = null
+    /** The grid of the last [allocate]. */
+    var grid: LowResGrid? = null
+        private set
     private val pushLevels = mutableListOf<Target>()
     private val pullLevels = mutableListOf<Target>()
     private var rows = Target.NONE

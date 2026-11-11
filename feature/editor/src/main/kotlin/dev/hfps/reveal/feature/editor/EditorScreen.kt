@@ -127,6 +127,7 @@ fun EditorScreen(onBack: () -> Unit, modifier: Modifier = Modifier, viewModel: E
             onCropDone = viewModel::cropDone,
             onCropCancel = viewModel::cropCancel,
             onExport = { exportRequest = viewModel.exportRequest() },
+            onDetailMask = viewModel::setDetailMask,
         )
     }
     EditorTheme {

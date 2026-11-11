@@ -130,6 +130,16 @@ object HistoryLabels {
         HistoryField.SATURATION to R.string.history_saturation,
         HistoryField.ANGLE to R.string.history_angle,
         HistoryField.ROTATE to R.string.history_rotate,
+        HistoryField.SHARPEN_AMOUNT to R.string.history_sharpen_amount,
+        HistoryField.SHARPEN_RADIUS to R.string.history_sharpen_radius,
+        HistoryField.SHARPEN_DETAIL to R.string.history_sharpen_detail,
+        HistoryField.SHARPEN_MASKING to R.string.history_sharpen_masking,
+        HistoryField.NR_LUMINANCE to R.string.history_nr_luminance,
+        HistoryField.NR_LUMINANCE_DETAIL to R.string.history_nr_luminance_detail,
+        HistoryField.NR_LUMINANCE_CONTRAST to R.string.history_nr_luminance_contrast,
+        HistoryField.NR_COLOUR to R.string.history_nr_colour,
+        HistoryField.NR_COLOUR_DETAIL to R.string.history_nr_colour_detail,
+        HistoryField.NR_COLOUR_SMOOTHNESS to R.string.history_nr_colour_smoothness,
     )
 
     private val VALUE_NAMES: Map<String, Int> = mapOf(

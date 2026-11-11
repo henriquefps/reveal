@@ -3,14 +3,18 @@
 // RGB, no white balance, no matrix, no curve, 16 bit, half size. It writes a small text header with the colour
 // data RawInfoMapper reads, then the packed RGB16 samples (little endian). Never run on files that are not copies.
 //
-// Build and run: scripts/calibration/rawdump.sh <in.ARW> <out.rdump>
+// Build and run: scripts/calibration/rawdump.sh <in.ARW> <out.rdump> [full]
+// "full" decodes the whole sensor with AHD like the app's full-resolution decode (export, 100 % tiles) instead of
+// the half-size proxy decode (Detail tuning and 100 % crops, docs/adr/0012).
 #include <cstdio>
 #include <cstdint>
 #include <cmath>
+#include <string>
 #include "libraw/libraw.h"
 
 int main(int argc, char **argv) {
-    if (argc != 3) { fprintf(stderr, "usage: rawdump in.raw out.rdump\n"); return 2; }
+    if (argc != 3 && argc != 4) { fprintf(stderr, "usage: rawdump in.raw out.rdump [full]\n"); return 2; }
+    const bool full = argc == 4 && std::string(argv[3]) == "full";
     LibRaw raw;
     auto &p = raw.imgdata.params;
     p.use_camera_wb = 0;
@@ -26,8 +30,8 @@ int main(int argc, char **argv) {
     p.highlight = 0;
     p.adjust_maximum_thr = 0.0f;
     p.bright = 1.0f;
-    p.half_size = 1;
-    p.user_qual = 0;
+    p.half_size = full ? 0 : 1;
+    p.user_qual = full ? 3 : 0;
     p.user_flip = 0;
     p.med_passes = 0;
     p.fbdd_noiserd = 0;

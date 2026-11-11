@@ -15,7 +15,10 @@ import dev.hfps.image.source.CancelToken
 import dev.hfps.image.source.CancelledException
 import dev.hfps.reveal.pipeline.PipelineInput
 import dev.hfps.reveal.pipeline.gl.GlesRequirementException
+import dev.hfps.reveal.pipeline.input.NativeRawTileSource
 import dev.hfps.reveal.pipeline.input.PipelineInputMapper
+import dev.hfps.reveal.pipeline.input.RegionTileSource
+import dev.hfps.reveal.pipeline.input.TileSource
 import dev.hfps.reveal.pipeline.input.UnsupportedCameraException
 import java.io.FileNotFoundException
 import java.io.IOException
@@ -116,6 +119,36 @@ class PhotoOpener(private val resolver: ContentResolver) {
         throw OpenException(OpenError.PERMISSION_LOST, e)
     } catch (e: IllegalArgumentException) {
         throw OpenException(OpenError.PERMISSION_LOST, e)
+    }
+
+    /**
+     * The full-resolution source of [uri] for the editor's zoom (docs/adr/0012): a RAW decoded once into native
+     * memory with the export's LibRaw path ([NativeRawTileSource], about 6 bytes per pixel while the editor is open), a
+     * standard image read in regions ([RegionTileSource], the document stays open until the source is closed). Upright,
+     * the same size the proxy was mapped from. Blocking, cancellable; the caller owns (closes) the result.
+     */
+    @Suppress("ThrowsCount")
+    fun openFullResolution(uri: Uri, cancel: CancelToken): TileSource {
+        val image = openInput(uri, displayName(uri))
+        try {
+            val type = image.type
+            if (type.isRaw) {
+                if (!RawDecoder.isAvailable) throw OpenException(OpenError.UNSUPPORTED_FORMAT)
+                val decoded = image.use { RawDecoder.decodeNative(it.descriptor, cancel = cancel) }
+                return try {
+                    NativeRawTileSource(decoded.image, decoded.info)
+                } catch (e: UnsupportedCameraException) {
+                    decoded.image.close()
+                    throw e
+                }
+            }
+            if (type.kind == ImageKind.OTHER) throw OpenException(OpenError.UNSUPPORTED_FORMAT)
+            val orientation = runCatching { image.inspection.metadata.orientation }.getOrNull() ?: 1
+            return RegionTileSource(image.descriptor, orientation) { image.close() }
+        } catch (@Suppress("TooGenericExceptionCaught") e: Throwable) {
+            image.close()
+            throw e
+        }
     }
 
     private fun decode(

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Builds (once) and runs the host RAW dump used by the Camera JPEG match calibration (docs/adr/0008).
-# Usage: scripts/calibration/rawdump.sh <in.ARW> <out.rdump>
+# Usage: scripts/calibration/rawdump.sh <in.ARW> <out.rdump> [full]   (full: whole-sensor AHD decode, docs/adr/0012)
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
 root="$(cd "$here/../.." && pwd)"
@@ -21,4 +21,4 @@ if [[ ! -x "$bin" || "$here/rawdump.cpp" -nt "$bin" ]]; then
   wait
   c++ -std=c++17 -O2 -DLIBRAW_NODLL -I"$libraw" "$here/rawdump.cpp" "${objs[@]}" -o "$bin"
 fi
-"$bin" "$1" "$2"
+"$bin" "$@"

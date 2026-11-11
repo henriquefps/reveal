@@ -36,24 +36,50 @@ import kotlin.math.roundToInt
  */
 @Suppress("ReturnCount")
 @Stable
-class PhotoController(val renderer: GpuDevelopRenderer?, val zoom: ZoomState?) {
+class PhotoController {
     private var root: LayoutCoordinates? = null
+    private var slot: LayoutCoordinates? = null
+
+    /** The renderer of the ready photo, `null` before (and in screenshot tests). */
+    var renderer: GpuDevelopRenderer? = null
+        private set
+
+    /** Zoom and pan of the ready photo, wired to [renderer]. */
+    var zoom: ZoomState? = null
+        private set
 
     /** The eyedropper's finger and loupe position, in slot pixels. */
     val loupe: LoupeState = LoupeState()
 
     /** The frame in surface (root) pixels; `null` until the slot is placed. */
-    var frame: ViewFrame? by mutableStateOf(null)
+    var frame: ViewFrame? = null
         private set
+
+    /**
+     * Binds the photo of [ready] (or none): a new zoom wired to its renderer, fitted to the frame already known, so
+     * the renderer gets the frame even when the slot does not move when the photo arrives.
+     */
+    fun bind(ready: EditorPhase.Ready?) {
+        val r = ready?.renderer
+        renderer = r
+        zoom = r?.let { renderer ->
+            ZoomState(hundredPercentScale = ready.hundredPercentScale, onChange = renderer::setView).also {
+                it.setImageSize(ready.width, ready.height)
+            }
+        }
+        frame = null
+        slot?.let(::onSlotPlaced)
+    }
 
     fun onRootPlaced(coordinates: LayoutCoordinates) {
         root = coordinates
     }
 
-    fun onSlotPlaced(slot: LayoutCoordinates) {
+    fun onSlotPlaced(coordinates: LayoutCoordinates) {
+        slot = coordinates
         val r = root ?: return
-        if (!r.isAttached || !slot.isAttached) return
-        val b = r.localBoundingBoxOf(slot, clipBounds = false)
+        if (!r.isAttached || !coordinates.isAttached) return
+        val b = r.localBoundingBoxOf(coordinates, clipBounds = false)
         val next = ViewFrame(b.left, b.top, b.width, b.height)
         if (next == frame) return
         frame = next
@@ -101,27 +127,25 @@ class LoupeState {
     var at: Offset by mutableStateOf(Offset.Zero)
 }
 
-/** A [PhotoController] for [phase]: a zoom wired to the renderer once the photo is ready. */
+/** One [PhotoController] for the screen, bound to the photo of [phase] whenever it changes. */
 @Composable
 fun rememberPhotoController(phase: EditorPhase): PhotoController {
+    val controller = remember { PhotoController() }
     val ready = phase as? EditorPhase.Ready
-    val renderer = ready?.renderer
-    return remember(renderer, ready?.width, ready?.height) {
-        val zoom = renderer?.let { r ->
-            ZoomState(hundredPercentScale = ready.hundredPercentScale, onChange = r::setView)
-        }
-        zoom?.setImageSize(ready.width, ready.height)
-        PhotoController(renderer, zoom)
+    remember(ready?.renderer, ready?.width, ready?.height) {
+        controller.bind(ready)
+        ready
     }
+    return controller
 }
 
 /**
- * The full-screen GPU surface of the [controller]'s renderer, drawn behind the editor chrome. Reports frames to
- * [EditorMetrics] and the first presented frame through [onFirstFrame] (main thread).
+ * The full-screen GPU surface of [renderer] (the [PhotoController]'s), drawn behind the editor chrome. Reports frames
+ * to [EditorMetrics] and the first presented frame through [onFirstFrame] (main thread).
  */
 @Composable
-fun PhotoSurface(controller: PhotoController, onFirstFrame: () -> Unit, modifier: Modifier = Modifier) {
-    val renderer = controller.renderer ?: return
+fun PhotoSurface(renderer: GpuDevelopRenderer?, onFirstFrame: () -> Unit, modifier: Modifier = Modifier) {
+    if (renderer == null) return
     val currentOnFirstFrame by rememberUpdatedState(onFirstFrame)
     val currentRenderer = rememberUpdatedState(renderer)
     LaunchedEffect(renderer) { renderer.setSurround(EditorNeutrals.Surround.toArgb() and RGB_MASK) }

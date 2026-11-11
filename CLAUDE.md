@@ -157,6 +157,20 @@ Release check without the keystore: `./gradlew :app:assembleRelease`, then sign 
 install it on an emulator (`zipalign -p 4` + `apksigner sign --ks ~/.android/debug.keystore --ks-pass pass:android`);
 open a RAW through it to prove R8 kept the JNI (`core/image/consumer-rules.pro`) and the serializable routes.
 
+## Editor layout (`:feature:editor`, M1/E)
+
+`EditorContent` picks `EditorLayoutKind` (portrait / landscape phone / tablet >= 840dp). The GL surface fills the
+screen behind the chrome (`PhotoSurface`); the chrome leaves an empty `PhotoSlot` whose bounds become the renderer's
+frame (`PhotoController`), so panel snaps and the slider-drag shrink move the photo without resizing the surface.
+Tools live in `tools/EditorTools.kt` (`EditorTool` + `ToolBehaviour.Panel / Mode / Action / Unavailable`): add or
+enable a tool there, never in the layout. Panels get a `PanelHost` (state, actions, `SliderFocus`, `PanelNavigator`
+for sub-panels); bind a slider with `ControlSlider(host, ControlId.X, R.string.label)` (`RecipeControls` maps ids to
+recipe fields, `RecipeRanges` gives range/step/format). The ViewModel owns the working/committed recipe and pushes
+it, the compare mode, clipping and histogram flags to the renderer; `commit()` is the history/Room seam (TODO).
+Goldens: `app/src/test/screenshots/editor/` (`EditorScreenshotTest`, `SliderScreenshotTest`; the photo is the
+pipeline's synthetic scene developed on the CPU). Instrumented: `EditorInteractionTest` (synthetic JPEG, any
+emulator), `:core:pipeline` `ReadbackApisTest` (clipping flag, source sample).
+
 ## `:core:image` harness (ADR 0004)
 
 ```sh

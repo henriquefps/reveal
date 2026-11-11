@@ -82,6 +82,19 @@ content description + long-press tooltip), `PrimaryButton`/`SecondaryButton`/`Gh
 `RevealChip`, `RevealListRow` (56 dp min), `Eyebrow`, `RevealBottomSheet` (Material modal sheet with drag handle and
 hfps radius). Motion: `RevealMotion` (150 / 200 / 250 ms, ease-out `tween`s, so every change is interruptible).
 
+## RevealSlider (M1)
+
+`components/slider/`: the editor slider of `docs/plan/ux.md`. `SliderSpec` mirrors a recipe `ControlRange` (this
+module cannot depend on `:core:pipeline`); `SliderDrag` is the pure relative-drag maths (JVM-tested): the value moves
+by `dx / trackWidth * span * fineFactor`, an internal raw value is clamped (reversing at an end responds at once),
+the emitted value snaps to `step` (or `fineStep` in fine mode, anchored at neutral so neutral is exact) and is held at
+neutral inside an 8 dp snap zone. Fine control (`FineControl`) depends only on how far the finger is vertically from
+where the drag started: full speed within 40 dp, then the speed halves every 80 dp, never below 1/20; velocity plays
+no part. Haptics: `SegmentTick` crossing neutral, `SegmentFrequentTick` at the ends. Double-tap resets, a tap on the
+value opens `NumericInputSheet` (locale decimal separator, tolerant `NumericInput.parse`, ± by `step`). TalkBack:
+label, "value, range" state, `setProgress`, custom actions for step / fine step / reset / type a value. Gradient
+tracks: `SliderGradients` (content colours, like `HistogramColors`).
+
 ## Verification
 
 Roborazzi goldens for the gallery (`app/src/test/screenshots/gallery`): phone 390x844 dp and tablet 1280x800 dp,

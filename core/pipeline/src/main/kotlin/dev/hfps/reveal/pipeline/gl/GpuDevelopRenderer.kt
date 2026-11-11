@@ -119,6 +119,7 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
     private val histogram = HistogramReadback()
     private var histogramDirty = false
     private var histogramPosted = false
+    private var histogramPollPosted = false
     private var frames = 0L
     private var lastStats = FrameStats(0, 0, 0f, 0f)
 
@@ -201,8 +202,14 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
             }
         }
 
-    /** Wall milliseconds of the last histogram readback, for measurements. */
+    /** GL-thread milliseconds of the last histogram (request draw + map + binning), for measurements. */
     val histogramMs: Float get() = histogram.lastMs
+
+    /** GL-thread milliseconds of the last histogram request alone (draw + readback issue). */
+    val histogramRequestMs: Float get() = histogram.lastRequestMs
+
+    /** Milliseconds from the last histogram request to its result (GPU latency included). */
+    val histogramLatencyMs: Float get() = histogram.lastLatencyMs
 
     /** Histogram readbacks so far. */
     val histogramCount: Long get() = histogram.count
@@ -705,18 +712,26 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         originalValid = false
     }
 
-    /** After a presented frame: measures the histogram now, or once the rate limit allows (trailing update). */
+    /**
+     * After a presented frame: starts a histogram readback of the displayed stage now, or once the rate limit allows
+     * (trailing update); a readback in flight is polled until the GPU finished it.
+     */
     private fun maybeMeasureHistogram() {
-        if (!histogramEnabled || !histogramDirty || onHistogram == null) return
+        if (!histogramEnabled || onHistogram == null) return
+        if (histogram.pending) {
+            scheduleHistogramPoll()
+            return
+        }
+        if (!histogramDirty) return
+        val image = input ?: return
         val wait = histogram.waitMs()
         if (wait == 0L) {
-            val image = input ?: return
-            val result = histogram.measure(image.width, image.height) { scale, w, h ->
+            histogram.request(image.width, image.height) { scale, w, h ->
                 val view = ViewTransform(scale, image.width / 2f, image.height / 2f)
                 drawOutput(image, view, w, h, OutputSettings(dither = false), surround)
             }
             histogramDirty = false
-            onHistogram?.invoke(result)
+            scheduleHistogramPoll()
         } else if (!histogramPosted) {
             histogramPosted = true
             handler.postDelayed({
@@ -724,6 +739,24 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
                 requestFrame()
             }, wait)
         }
+    }
+
+    private fun scheduleHistogramPoll() {
+        if (histogramPollPosted) return
+        histogramPollPosted = true
+        handler.postDelayed({
+            histogramPollPosted = false
+            val result = histogram.poll()
+            when {
+                result != null -> {
+                    onHistogram?.invoke(result)
+                    // The photo changed meanwhile: the next frame (re-rendered if needed) measures it.
+                    if (histogramDirty) requestFrame()
+                }
+
+                histogram.pending -> scheduleHistogramPoll()
+            }
+        }, HistogramReadback.POLL_MS)
     }
 
     private fun readSourceMean(x: Int, y: Int, radius: Int): FloatArray {

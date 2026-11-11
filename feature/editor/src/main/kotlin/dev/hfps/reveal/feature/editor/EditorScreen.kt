@@ -135,7 +135,7 @@ fun EditorContent(
         val select: (EditorTool) -> Unit = { tool ->
             chrome.select(tool, kind, actions) { snap -> scope.launch { chrome.sheet.animateTo(snap) } }
         }
-        PhotoSurface(photo, onFirstFrame = actions.onDeveloped, modifier = Modifier.fillMaxSize())
+        PhotoSurface(photo.renderer, onFirstFrame = actions.onDeveloped, modifier = Modifier.fillMaxSize())
         if (kind == EditorLayoutKind.PORTRAIT) {
             PortraitLayout(state, actions, photo, chrome, host, select, onToggleChrome, maxHeight.value)
         } else {

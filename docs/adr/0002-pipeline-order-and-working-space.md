@@ -164,6 +164,32 @@ Only on-screen pixels at minification can change, so this has no cache key impac
 readback at 1:1 on a conforming GPU (the emulator, where LOD was already exactly 0) is bit-identical to before, and
 the fix makes other GPUs match it. `GpuParityTest.hardEdgedPatchesMatchCpuWithinOneLevelAtOneToOne` guards it.
 
+### Editor additions to the output pass (M1/E)
+
+All in their own files under `gl/` and additive (no operator, no `PIPELINE_VERSION` change, readback and export
+untouched unless a flag is passed):
+
+- **Frame** (`ViewFrame`, `GpuDevelopRenderer.setFrame`): the editor's `SurfaceView` fills the screen behind the
+  chrome; the frame is the visible rectangle between the panels. The zoom (`ViewTransform`) is in frame terms and
+  `CompareLayout` shifts the centre (`c - (frameCentre - windowCentre) / scale`), so a panel snap re-fits the photo
+  without resizing the surface.
+- **Compare panes** (`CompareMode`, `setCompare`): split = the edit full-frame, then the original scissored to the
+  "before" side; side by side = two scissored panes, each keeping the zoom relative to its own fit. The original is a
+  second mip-mapped RGBA16F texture filled by running stage 1 with the defaults and blitting the stage texture
+  (stage 1 stays a black box for the operator workers); it is freed as soon as no pane shows it.
+- **Loupe** (`Loupe`, `setLoupe`): one more scissored pane at a higher scale, for the eyedropper.
+- **Clipping warnings** (`ClippingWarnings`, `setClippingWarnings`, `dither.w` bits of the output block): on the
+  encoded value before dithering, highlight = any channel quantises to 255 (`max(e) >= 254.5/255`, red
+  `255,26,26`), shadow = every channel quantises to 0 (`max(e) < 0.5/255`, blue `0,102,255`). JVM test of the
+  classification, GPU test (`ReadbackApisTest`) against the CPU render.
+- **Histogram** (`HistogramReadback`, `histogramEnabled`/`onHistogram`): after a presented frame whose stage
+  changed, the output pass is drawn into a 256 px RGBA8 target (explicit LOD) and read back synchronously, binned on
+  the GL thread (RGB + Rec.709 luma, clipped shares). Rate-limited to one per 100 ms while the photo keeps changing,
+  plus a trailing one, so it stays live while dragging.
+- **Source sample** (`sampleSource(x, y, radius)`): mean of the uploaded (un-balanced) pixels around a point, read
+  through a framebuffer on the source texture; `WhiteBalancePicker` turns it into temperature/tint
+  (`W = M * cam`, then `cctAndTint`). The grey-world "Auto" estimate runs on the CPU proxy before upload.
+
 ## Output transforms
 
 `OutputSpace.SRGB` and `OutputSpace.DISPLAY_P3` (sRGB curve on P3 primaries): one 3x3 from the working space,

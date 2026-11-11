@@ -147,7 +147,7 @@ private fun CompareMode.sameKind(other: CompareMode): Boolean = when (this) {
 /**
  * Before/after ◐: **hold** shows the original while the finger is down; a **long press** (still holding) also opens
  * the compare views, and releasing over one picks it (press-drag-release; releasing elsewhere leaves the menu open
- * for a normal tap). A **tap** toggles the last compare view on and off.
+ * for a normal tap). A **tap** (released within [TAP_MS]) toggles the last compare view on and off.
  */
 @Suppress("LongMethod", "CyclomaticComplexMethod")
 @Composable
@@ -191,10 +191,16 @@ private fun CompareButton(state: EditorUiState, actions: EditorActions, modifier
                 awaitEachGesture {
                     awaitFirstDown()
                     currentActions.onShowOriginal(true)
-                    val upEarly = withTimeoutOrNull(longPressMs) { waitForUpOrCancellation() }
-                    if (upEarly != null) {
+                    // A short press is a tap (toggle the last compare view); a longer one only peeks at the original.
+                    val tap = withTimeoutOrNull(TAP_MS) { waitForUpOrCancellation() }
+                    if (tap != null) {
                         currentActions.onShowOriginal(false)
                         toggle()
+                        return@awaitEachGesture
+                    }
+                    val upEarly = withTimeoutOrNull(longPressMs - TAP_MS) { waitForUpOrCancellation() }
+                    if (upEarly != null) {
+                        currentActions.onShowOriginal(false)
                         return@awaitEachGesture
                     }
                     haptics.performHapticFeedback(HapticFeedbackType.LongPress)
@@ -335,3 +341,6 @@ private fun CheckItem(text: Int, checked: Boolean, tag: String, onClick: () -> U
             .semantics { toggleableState = ToggleableState(checked) },
     )
 }
+
+/** Longest press that still counts as a tap on ◐ (longer = peek at the original). */
+private const val TAP_MS = 200L

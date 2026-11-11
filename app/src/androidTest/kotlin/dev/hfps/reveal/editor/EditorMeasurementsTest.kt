@@ -62,6 +62,7 @@ class EditorMeasurementsTest {
         }
     }
 
+    @Suppress("LongMethod")
     private fun measure(file: File, label: String, private: Boolean) {
         val name = if (private) "photo.ARW" else file.name
         val uri = TestPhotos.insert(name, "image/x-sony-arw", file)
@@ -78,6 +79,8 @@ class EditorMeasurementsTest {
                 Thread.sleep(SETTLE_MS)
                 val opened = EditorMetrics.summary()
                 val before = EditorMetrics.frames.size
+                val renderer = checkNotNull(EditorMetrics.renderer)
+                val histogramsBefore = renderer.histogramCount
                 val slider = exposureSliderBounds(scenario)
                 dragInRealTime(
                     slider.left + slider.width() * 0.1f,
@@ -113,6 +116,17 @@ class EditorMeasurementsTest {
                     EditorMetrics.peakNativeMb,
                 )
                 Log.i(TAG, line)
+                Log.i(
+                    TAG,
+                    String.format(
+                        Locale.ROOT,
+                        "%s histogram on: %d histograms during the drag, last: GL thread %.2f ms, latency %.1f ms",
+                        label,
+                        renderer.histogramCount - histogramsBefore,
+                        renderer.histogramMs,
+                        renderer.histogramLatencyMs,
+                    ),
+                )
             }
         } finally {
             sampling = false

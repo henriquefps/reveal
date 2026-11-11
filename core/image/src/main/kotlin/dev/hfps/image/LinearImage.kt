@@ -36,26 +36,48 @@ class LinearImage(val width: Int, val height: Int, val data: ShortArray) {
 }
 
 /**
- * The same pixels as [LinearImage] in a direct [ByteBuffer] (native memory, native byte order): it does not count
- * against the Java heap and uploads to a GL texture without a copy. A full-size 24 MP RAW is 144 MB: prefer this
+ * The same pixels as [LinearImage] in **native memory** owned by the decoder (a zero-copy view of LibRaw's buffer):
+ * it does not count against the Java heap (a Java `allocateDirect` buffer does on Android) and uploads to a GL texture
+ * without a copy. A full-size 24 MP RAW is 144 MB, more than a default app heap allows as a [ShortArray]: use this
  * for full-size decodes and [LinearImage] for proxies.
+ *
+ * [buffer] (native byte order, `width * height * 3` unsigned 16-bit samples) is valid until [close]; using it
+ * afterwards is a bug. Always close, ideally in `use { }`.
  */
-class DirectLinearImage(val width: Int, val height: Int, val buffer: ByteBuffer) {
+class NativeLinearImage(val width: Int, val height: Int, buffer: ByteBuffer, private val release: () -> Unit) :
+    AutoCloseable {
+    private var open = true
+
+    /** The samples as bytes; throws once closed. */
+    val buffer: ByteBuffer = buffer.order(ByteOrder.nativeOrder())
+        get() {
+            check(open) { "NativeLinearImage is closed" }
+            return field
+        }
+
     init {
         require(buffer.isDirect) { "Buffer must be direct" }
         require(buffer.capacity().toLong() == width.toLong() * height * LinearImage.CHANNELS * Short.SIZE_BYTES) {
             "Buffer has ${buffer.capacity()} bytes for ${width}x$height"
         }
-        buffer.order(ByteOrder.nativeOrder())
     }
 
-    /** A view of the samples (shares the memory). */
+    /** A view of the samples (shares the memory); throws once closed. */
     val samples: ShortBuffer get() = buffer.duplicate().order(ByteOrder.nativeOrder()).asShortBuffer()
 
-    /** Copies into a heap [LinearImage]. */
+    /** Copies into a heap [LinearImage] (144 MB at 24 MP: may exceed the Java heap). */
     fun toLinearImage(): LinearImage {
         val data = ShortArray(width * height * LinearImage.CHANNELS)
         samples.get(data)
         return LinearImage(width, height, data)
+    }
+
+    /** Frees the native memory. Idempotent. */
+    @Synchronized
+    override fun close() {
+        if (open) {
+            open = false
+            release()
+        }
     }
 }

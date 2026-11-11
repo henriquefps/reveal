@@ -7,15 +7,13 @@ import android.content.ContentResolver
 import android.net.Uri
 import android.os.ParcelFileDescriptor
 import android.util.Log
-import dev.hfps.image.DirectLinearImage
 import dev.hfps.image.LinearImage
+import dev.hfps.image.NativeLinearImage
 import dev.hfps.image.color.RawColorInfo
 import dev.hfps.image.source.CancelToken
 import dev.hfps.image.source.CancelledException
 import java.io.File
 import java.io.FileNotFoundException
-import java.nio.ByteBuffer
-import java.nio.ByteOrder
 import java.util.concurrent.Semaphore
 
 /** LibRaw demosaic algorithms (`user_qual`). */
@@ -96,17 +94,21 @@ object RawDecoder {
         LinearImage(w, h, data)
     }
 
-    /** Decodes into a direct buffer (native memory, no Java heap): right for full-size images headed for the GPU. */
-    fun decodeDirect(
+    /**
+     * Decodes into native memory owned by the result (no Java heap, no copy): right for full-size images headed for
+     * the GPU. The caller must close the returned image. One full-size image is about 150-350 MB of native memory
+     * while alive: keep few open.
+     */
+    fun decodeNative(
         descriptor: ParcelFileDescriptor,
         options: RawDecodeOptions = RawDecodeOptions(),
         cancel: CancelToken = CancelToken.NONE,
-    ): RawDecodeResult<DirectLinearImage> = decodeInternal(descriptor, options, cancel) { handle, w, h ->
-        val buffer = ByteBuffer.allocateDirect(
-            w * h * LinearImage.CHANNELS * Short.SIZE_BYTES,
-        ).order(ByteOrder.nativeOrder())
-        RawNative.nativeCopyToBuffer(handle, buffer)
-        DirectLinearImage(w, h, buffer)
+    ): RawDecodeResult<NativeLinearImage> = decodeInternal(descriptor, options, cancel, keepSession = true) {
+            handle,
+            w,
+            h,
+        ->
+        NativeLinearImage(w, h, RawNative.nativeSessionBuffer(handle)) { RawNative.nativeRelease(handle) }
     }
 
     /** [decode] for a local file. */
@@ -132,18 +134,22 @@ object RawDecoder {
         descriptor: ParcelFileDescriptor,
         options: RawDecodeOptions,
         cancel: CancelToken,
+        keepSession: Boolean = false,
         copy: (handle: Long, width: Int, height: Int) -> T,
     ): RawDecodeResult<T> {
         check(loaded) { "LibRaw is not available on this device" }
         val (result, stats) = gated(cancel) { listener ->
             val handle = RawNative.nativeDecode(descriptor.fd, options.halfSize, options.demosaic.code, listener)
+            var transferred = false
             try {
                 val size = RawNative.nativeSessionSize(handle)
                 val info = RawInfoMapper.map(RawNative.nativeSessionInfo(handle), lensCorrectionOf(descriptor))
                 listener.onProgress(OUTPUT_STAGE, 0, 1)
-                copy(handle, size[0], size[1]) to info
+                val image = copy(handle, size[0], size[1])
+                transferred = keepSession
+                image to info
             } finally {
-                RawNative.nativeRelease(handle)
+                if (!transferred) RawNative.nativeRelease(handle)
             }
         }
         return RawDecodeResult(result.first, result.second, stats)

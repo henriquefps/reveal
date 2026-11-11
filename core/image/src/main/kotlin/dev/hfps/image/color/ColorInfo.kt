@@ -61,8 +61,11 @@ data class RawLevels(
      * not adjusted to the data).
      */
     val white: Int,
-    /** Largest raw value found in the file (including black): below [white] when nothing clips. */
-    val dataMaximum: Int,
+    /**
+     * Largest sample found in the file after black subtraction, in raw units: compare with `white - black`
+     * (0 when the data has not been read, see [isFinal]).
+     */
+    val dataMaximumAboveBlack: Int,
     /**
      * Saturation point per channel in raw units (`linear_max` when the camera/file defines it, else [white]).
      * Highlight reconstruction treats a channel at or above this as clipped.
@@ -70,6 +73,11 @@ data class RawLevels(
     val saturation: List<Int>,
     /** Bits per raw sample as stored in the file (12, 14, ...), 0 when unknown. */
     val bitsPerSample: Int,
+    /**
+     * False when read from the header only ([dev.hfps.image.raw.RawDecoder.readInfo]): many cameras only set their
+     * real black and white levels while unpacking, so these are then the file's/table's first guess.
+     */
+    val isFinal: Boolean,
 ) {
     /**
      * [saturation] expressed in the output encoding (0..65535, after black subtraction and scaling by

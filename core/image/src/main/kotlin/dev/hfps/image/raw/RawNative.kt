@@ -83,7 +83,7 @@ internal object RawNative {
 
     @JvmStatic external fun nativeCopyToArray(handle: Long, out: ShortArray)
 
-    @JvmStatic external fun nativeCopyToBuffer(handle: Long, buffer: ByteBuffer)
+    @JvmStatic external fun nativeSessionBuffer(handle: Long): ByteBuffer
 
     @JvmStatic external fun nativeRelease(handle: Long)
 }

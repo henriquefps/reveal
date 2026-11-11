@@ -76,7 +76,14 @@ internal object RawInfoMapper {
             val linearMax = n[L.LINEAR_MAX0 + c].toInt()
             if (linearMax in 1..white) linearMax else white
         }
-        return RawLevels(black, white, n[L.DATA_MAXIMUM].toInt(), saturation, n[L.RAW_BPS].toInt())
+        return RawLevels(
+            black,
+            white,
+            n[L.DATA_MAXIMUM].toInt(),
+            saturation,
+            n[L.RAW_BPS].toInt(),
+            n[L.LEVELS_FINAL] > 0,
+        )
     }
 
     fun cfaKind(filters: Long, colors: Int): CfaKind = when {

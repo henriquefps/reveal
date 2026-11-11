@@ -362,9 +362,11 @@ Java_dev_hfps_image_raw_RawNative_nativeDecode(JNIEnv *env, jclass, jint fd, jbo
     int rc;
     if ((rc = s->raw.unpack()) != LIBRAW_SUCCESS) { throwRaw(env, rc, "unpack"); delete s; return 0; }
     s->snapshotLevels();
+    s->nums[F_LEVELS_FINAL] = 1;
     if ((rc = s->raw.dcraw_process()) != LIBRAW_SUCCESS) { throwRaw(env, rc, "dcraw_process"); delete s; return 0; }
     if (env->ExceptionCheck()) { delete s; return 0; }
     auto &d = s->raw.imgdata;
+    s->nums[F_DATA_MAXIMUM] = d.color.data_maximum;  // known once the data has been read
     int width = 0, height = 0, colors = 0, bps = 0;
     s->raw.get_mem_image_format(&width, &height, &colors, &bps);
     if (width <= 0 || height <= 0 || !d.image) { throwRaw(env, ERR_NO_IMAGE, "empty image"); delete s; return 0; }
@@ -415,16 +417,15 @@ Java_dev_hfps_image_raw_RawNative_nativeCopyToArray(JNIEnv *env, jclass, jlong h
     env->SetShortArrayRegion(out, 0, values, reinterpret_cast<const jshort *>(s->raw.imgdata.image));
 }
 
-// Copies the packed RGB16 into a direct ByteBuffer (native byte order).
-JNIEXPORT void JNICALL
-Java_dev_hfps_image_raw_RawNative_nativeCopyToBuffer(JNIEnv *env, jclass, jlong handle, jobject buffer) {
+// A zero-copy direct ByteBuffer over the packed RGB16 (width * height * 3 values, native byte order). It is
+// valid until nativeRelease: native memory, not counted against the Java heap (on Android a Java-allocated
+// direct buffer is a heap array and is).
+JNIEXPORT jobject JNICALL
+Java_dev_hfps_image_raw_RawNative_nativeSessionBuffer(JNIEnv *env, jclass, jlong handle) {
     auto *s = reinterpret_cast<Session *>(handle);
-    if (!s || !s->packed) { throwRaw(env, ERR_NO_IMAGE, "no image"); return; }
-    void *dst = env->GetDirectBufferAddress(buffer);
-    const jlong capacity = env->GetDirectBufferCapacity(buffer);
+    if (!s || !s->packed) { throwRaw(env, ERR_NO_IMAGE, "no image"); return nullptr; }
     const size_t bytes = static_cast<size_t>(s->width) * s->height * 3 * sizeof(uint16_t);
-    if (!dst || static_cast<size_t>(capacity) < bytes) { throwRaw(env, ERR_NO_IMAGE, "buffer too small"); return; }
-    memcpy(dst, s->raw.imgdata.image, bytes);
+    return env->NewDirectByteBuffer(s->raw.imgdata.image, static_cast<jlong>(bytes));
 }
 
 JNIEXPORT void JNICALL

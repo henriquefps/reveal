@@ -12,6 +12,7 @@ dependencies {
     implementation(projects.core.pipeline)
     implementation(projects.core.ml)
     implementation(projects.core.data)
+    implementation(projects.feature.export)
 
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
     androidTestImplementation(libs.androidx.test.ext.junit)

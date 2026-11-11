@@ -149,7 +149,7 @@ class EditorActions(
     val onResetAll: () -> Unit = {},
     /** Back to the recipe the photo opens with (default + the user's defaults). */
     val onResetAsOpened: () -> Unit = {},
-    // TODO(export worker): opens the export sheet.
+    /** Opens the export sheet for the photo with its current recipe. */
     val onExport: () -> Unit = {},
     // TODO(auto worker): the panel-level Auto of Light.
     val onAuto: () -> Unit = {},

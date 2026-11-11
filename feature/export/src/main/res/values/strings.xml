@@ -1,0 +1,77 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="export_title">Export</string>
+    <plurals name="export_photos">
+        <item quantity="one">%1$d photo</item>
+        <item quantity="other">%1$d photos</item>
+    </plurals>
+    <string name="export_format">Format</string>
+    <string name="export_heif_note">HEIF is saved as 8-bit sRGB on this device.</string>
+    <string name="export_heif_unsupported">This device has no HEIF encoder: JPEG only.</string>
+    <string name="export_colour">Colour space</string>
+    <string name="export_colour_p3_note">Display P3 keeps more saturated colours; apps without colour management may show them duller.</string>
+    <string name="export_quality">Quality</string>
+    <string name="export_size">Size</string>
+    <string name="export_size_full">Full</string>
+    <string name="export_size_web">Web 2048</string>
+    <string name="export_size_instagram">Instagram 4:5</string>
+    <string name="export_size_long_edge">Long edge</string>
+    <string name="export_size_megapixels">Megapixels</string>
+    <string name="export_size_percent">Percentage</string>
+    <string name="export_size_instagram_fit">This photo is not 4:5: it fits inside 1080 × 1350 without cropping.</string>
+    <string name="export_output_size">Output: %1$d × %2$d px</string>
+    <string name="export_unit_px">px</string>
+    <string name="export_unit_mp">MP</string>
+    <string name="export_metadata">Metadata</string>
+    <string name="export_metadata_all">All</string>
+    <string name="export_metadata_copyright">Copyright only</string>
+    <string name="export_metadata_none">None</string>
+    <string name="export_metadata_remove_location">Remove location</string>
+    <string name="export_metadata_capture_time">Keep capture time</string>
+    <string name="export_metadata_author">Author: %1$s · Copyright: %2$s (from Settings)</string>
+    <string name="export_metadata_author_unset">Set the author and copyright in Settings.</string>
+    <string name="export_destination">Destination</string>
+    <string name="export_destination_pictures">Gallery</string>
+    <string name="export_destination_folder">Folder</string>
+    <string name="export_destination_share">Share</string>
+    <string name="export_destination_pictures_note">Saved to Pictures/Reveal.</string>
+    <string name="export_destination_share_note">Sent to another app; no copy stays on the device.</string>
+    <string name="export_destination_change">Change</string>
+    <string name="export_name">File name</string>
+    <string name="export_name_original">Original</string>
+    <string name="export_name_date">Date</string>
+    <string name="export_name_sequence">Sequence</string>
+    <string name="export_name_suffix">Suffix</string>
+    <string name="export_name_example">For example %1$s</string>
+    <string name="export_estimate">About %1$s</string>
+    <string name="export_estimate_each">About %1$s per photo</string>
+    <string name="export_estimate_pending">Estimating the file size…</string>
+    <string name="export_start">Export</string>
+    <string name="export_progress">Exporting %1$d of %2$d</string>
+    <string name="export_progress_background">You can close this sheet: the export goes on in the background.</string>
+    <string name="export_cancel">Cancel</string>
+    <string name="export_done">Done</string>
+    <plurals name="export_result_done">
+        <item quantity="one">%1$d photo exported</item>
+        <item quantity="other">%1$d photos exported</item>
+    </plurals>
+    <plurals name="export_result_cancelled">
+        <item quantity="one">Cancelled: %1$d photo exported</item>
+        <item quantity="other">Cancelled: %1$d photos exported</item>
+    </plurals>
+    <string name="export_failure_source">the original is no longer readable</string>
+    <string name="export_failure_unsupported">this file or camera is not supported</string>
+    <string name="export_failure_destination">the destination is unavailable (folder or SD card removed?)</string>
+    <string name="export_failure_storage">not enough free storage</string>
+    <string name="export_failure_memory">not enough memory</string>
+    <string name="export_failure_gpu">this device\'s GPU cannot run the export</string>
+    <string name="export_failure_other">the export failed</string>
+    <string name="export_channel">Exports</string>
+    <string name="export_notification_progress">Exporting %1$d of %2$d</string>
+    <plurals name="export_notification_done">
+        <item quantity="one">%1$d photo exported</item>
+        <item quantity="other">%1$d photos exported</item>
+    </plurals>
+    <string name="export_notification_failed">Some photos could not be exported: %1$d/%2$d</string>
+    <string name="export_notification_cancelled">Export cancelled</string>
+</resources>

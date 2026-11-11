@@ -217,6 +217,10 @@ private fun OverflowMenu(actions: LibraryActions) {
                 open = false
                 actions.onGallery()
             }
+            MenuItem(PhosphorRegular.Gear, stringResource(R.string.library_menu_settings)) {
+                open = false
+                actions.onSettings()
+            }
             MenuItem(PhosphorRegular.Info, stringResource(R.string.library_menu_about)) {
                 open = false
                 actions.onAbout()
@@ -383,7 +387,7 @@ private fun SelectionOverflow(state: LibraryUiState, actions: LibraryActions) {
                 open = false
                 actions.onResetEdits()
             }
-            // Placeholders until their workstreams land (presets, export).
+            // Placeholder until its workstream lands (presets).
             val coming = stringResource(R.string.library_action_coming)
             MenuItem(
                 PhosphorRegular.Sparkle,
@@ -391,11 +395,9 @@ private fun SelectionOverflow(state: LibraryUiState, actions: LibraryActions) {
                 enabled = false,
             ) {
             }
-            MenuItem(
-                PhosphorRegular.Export,
-                "${stringResource(R.string.library_action_export)} · $coming",
-                enabled = false,
-            ) {
+            TaggedMenuItem(PhosphorRegular.Export, stringResource(R.string.library_action_export), LibraryTags.EXPORT) {
+                open = false
+                actions.onExport()
             }
         }
     }

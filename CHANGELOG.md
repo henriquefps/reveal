@@ -20,6 +20,13 @@ All notable changes to Reveal are documented here. The format follows
 - Copy and paste edits, in the editor and on a selection in the library, with a chooser of what to paste (light,
   colour, profile, geometry, …); "Previous" applies the last edited photo's settings; reset all, reset a panel,
   reset to as opened, and "Reset edits" for a library selection. Every one of them can be undone.
+- Export from the editor (Export in the top bar) and from a library selection: JPEG (sRGB or Display P3, with the
+  colour profile embedded) or HEIF, quality, size (full, Web 2048, Instagram 4:5, long edge, megapixels,
+  percentage), metadata (all, copyright only or none, remove location, keep capture time), to the gallery
+  (Pictures/Reveal), a folder you choose, or Share (no copy stays behind), with file name templates and a live
+  size estimate. Exports render at full resolution with the same pipeline as the preview and run in the background
+  with a notification: you can close the app, cancel, and an interrupted export resumes where it stopped.
+- Settings: author and copyright written into exported photos.
 
 ## [0.1.1] - 2026-11-10
 

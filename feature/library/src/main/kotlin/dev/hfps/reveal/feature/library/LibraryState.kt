@@ -93,6 +93,9 @@ data class LibraryActions(
     val onPasteDismiss: () -> Unit = {},
     /** Resets the selected photos' edits (one undoable step each). */
     val onResetEdits: () -> Unit = {},
+    /** Opens the export sheet for the selected photos. */
+    val onExport: () -> Unit = {},
+    val onSettings: () -> Unit = {},
     val onGallery: () -> Unit = {},
     val onAbout: () -> Unit = {},
 )

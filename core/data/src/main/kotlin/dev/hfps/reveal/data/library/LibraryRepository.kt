@@ -70,6 +70,12 @@ data class PhotoDetail(
 
 data class DetailFile(val name: String, val size: Long, val role: FileRole, val uri: Uri, val documentId: String)
 
+/**
+ * What an export develops for a version: the RAW of a pair (else the rendering), its name, the photo's rating, and the
+ * rendering (its EXIF fills gaps of the RAW's).
+ */
+data class ExportTarget(val versionId: Long, val uri: Uri, val name: String, val rating: Int, val renderedUri: Uri?)
+
 /** What the editor opens for a version: the RAW of a pair (else the rendering), and the rendering for the preview. */
 data class EditTarget(val photoId: Long, val versionId: Long, val uri: Uri, val name: String, val renderedUri: Uri?)
 
@@ -308,6 +314,15 @@ class LibraryRepository(
         val main = detail.raw ?: detail.rendered ?: return@withContext null
         photoDao.setOpened(photoId, clock())
         EditTarget(photoId, versionId, main.uri, main.name, detail.rendered?.uri?.takeIf { detail.raw != null })
+    }
+
+    /** What an export of [versionId] reads (no side effect, unlike [editTarget]); null when the version is gone. */
+    suspend fun exportTarget(versionId: Long): ExportTarget? = withContext(Dispatchers.IO) {
+        val photoId = photoDao.photoIdOfVersion(versionId) ?: return@withContext null
+        val detail = detail(photoId) ?: return@withContext null
+        val main = detail.raw ?: detail.rendered ?: return@withContext null
+        val pair = detail.rendered?.uri?.takeIf { detail.raw != null }
+        ExportTarget(versionId, main.uri, main.name, detail.photo.rating, pair)
     }
 
     private fun PhotoFileEntity.detail(tree: DocumentTree) =

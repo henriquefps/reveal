@@ -25,6 +25,8 @@ detekt = "1.23.8"
 composeRules = "0.6.8"
 ktlintPlugin = "14.2.0"
 ktlint = "1.8.0"
+work = "2.11.2"
+heifwriter = "1.1.0"
 
 [libraries]
 # Build-logic classpath
@@ -51,6 +53,10 @@ androidx-compose-ui-test-junit4 = { module = "androidx.compose.ui:ui-test-junit4
 androidx-compose-ui-test-manifest = { module = "androidx.compose.ui:ui-test-manifest" }
 androidx-compose-foundation = { module = "androidx.compose.foundation:foundation" }
 androidx-compose-material3 = { module = "androidx.compose.material3:material3" }
+
+androidx-work-runtime-ktx = { module = "androidx.work:work-runtime-ktx", version.ref = "work" }
+androidx-work-testing = { module = "androidx.work:work-testing", version.ref = "work" }
+androidx-heifwriter = { module = "androidx.heifwriter:heifwriter", version.ref = "heifwriter" }
 
 # Kotlin
 kotlinx-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "coroutines" }

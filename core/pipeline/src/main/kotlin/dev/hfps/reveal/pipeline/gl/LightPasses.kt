@@ -85,14 +85,32 @@ internal class LightPasses {
         return g
     }
 
-    /** Builds the filled chroma grid from the raw [source] texture balanced by [mul]. */
+    /** Builds the filled chroma grid from the raw [source] texture (the whole image) balanced by [mul]. */
     fun reconstruct(source: Int, mul: FloatArray, p: HighlightParams) {
+        val g = checkNotNull(grid)
+        reconstructRows(source, mul, p, 0, 0, g.width, g.height)
+        reconstructFinish()
+    }
+
+    /**
+     * Tiled pre-pass, step 1 of the chroma grid: the row segments of the image region ([x], [y], [width] x [height])
+     * whose pixels [source] holds at (0, 0). [x] and [width] must be multiples of the cell size (or reach the
+     * image's right edge), so each row segment lies in one region and the sums keep the whole-image order.
+     */
+    @Suppress("LongParameterList")
+    fun reconstructRows(source: Int, mul: FloatArray, p: HighlightParams, x: Int, y: Int, width: Int, height: Int) {
         val g = checkNotNull(grid)
         GLES30.glUseProgram(reconRowsProgram)
         GLES30.glUniform4f(GLES30.glGetUniformLocation(reconRowsProgram, "uMul"), mul[0], mul[1], mul[2], 1f)
         GLES30.glUniform4f(GLES30.glGetUniformLocation(reconRowsProgram, "uClip"), p.clipR, p.clipG, p.clipB, 1f)
         GLES30.glUniform4i(GLES30.glGetUniformLocation(reconRowsProgram, "uGrid"), g.cell, g.width, g.height, 0)
-        draw(rows, source)
+        GLES30.glUniform2i(GLES30.glGetUniformLocation(reconRowsProgram, "uOrigin"), x, y)
+        drawRows(g, source, x, y, width, height)
+    }
+
+    /** Step 2 of the chroma grid, once all rows are in: cell means, push, pull. */
+    fun reconstructFinish() {
+        val g = checkNotNull(grid)
         cellMean(g, pushLevels[0])
         GLES30.glUseProgram(pushProgram)
         val size = GLES30.glGetUniformLocation(pushProgram, "uSize")
@@ -115,12 +133,25 @@ internal class LightPasses {
         GlSupport.checkError("highlight reconstruction passes")
     }
 
-    /** Builds the guided-filter coefficients from the scene-linear [scene] texture. */
+    /** Builds the guided-filter coefficients from the scene-linear [scene] texture (the whole image). */
     fun guide(scene: Int) {
+        val g = checkNotNull(grid)
+        guideRows(scene, 0, 0, g.width, g.height)
+        guideFinish()
+    }
+
+    /** Tiled pre-pass, step 1 of the guide: row segments of a region (same contract as [reconstructRows]). */
+    fun guideRows(scene: Int, x: Int, y: Int, width: Int, height: Int) {
         val g = checkNotNull(grid)
         GLES30.glUseProgram(guideRowsProgram)
         GLES30.glUniform4i(GLES30.glGetUniformLocation(guideRowsProgram, "uGrid"), g.cell, g.width, g.height, 0)
-        draw(rows, scene)
+        GLES30.glUniform2i(GLES30.glGetUniformLocation(guideRowsProgram, "uOrigin"), x, y)
+        drawRows(g, scene, x, y, width, height)
+    }
+
+    /** Step 2 of the guide, once all rows are in: cell moments, box means and coefficients. */
+    fun guideFinish() {
+        val g = checkNotNull(grid)
         cellMean(g, moments)
         GLES30.glUseProgram(boxProgram)
         GLES30.glUniform2i(GLES30.glGetUniformLocation(boxProgram, "uSize"), g.gridWidth, g.gridHeight)
@@ -131,6 +162,19 @@ internal class LightPasses {
         box(dir, coefMode, 1, 0, coefStep = false, tmpB, tmpA)
         box(dir, coefMode, 0, 1, coefStep = false, tmpA, coef)
         GlSupport.checkError("local tone guide passes")
+    }
+
+    /** Draws the bound rows program into the part of the rows target that covers the image region. */
+    @Suppress("LongParameterList")
+    private fun drawRows(g: LowResGrid, input: Int, x: Int, y: Int, width: Int, height: Int) {
+        require(x % g.cell == 0 && (width % g.cell == 0 || x + width == g.width)) { "region not aligned to cells" }
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, input)
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, rows.fbo)
+        val gx0 = x / g.cell
+        val gx1 = (x + width + g.cell - 1) / g.cell
+        GLES30.glViewport(gx0, y, gx1 - gx0, height)
+        GLES30.glDrawArrays(GLES30.GL_TRIANGLES, 0, FULLSCREEN_VERTICES)
     }
 
     private fun cellMean(g: LowResGrid, dst: Target) {

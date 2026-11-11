@@ -90,6 +90,7 @@
     <string name="about_third_party">Third-party licences</string>
     <!-- Component names and licence identifiers are proper names: not translated. Mirrors docs/licences.md. -->
     <string-array name="about_licences" translatable="false">
+        <item>AndroidX WorkManager, HeifWriter|Apache-2.0</item>
         <item>LibRaw 0.22.3|LGPL-2.1 (chosen from LGPL-2.1 / CDDL-1.0)</item>
         <item>dcraw (inside LibRaw)|dcraw licence (free use and redistribution)</item>
         <item>DCB and FBDD demosaic, Jacek Gozdz (inside LibRaw)|BSD-3-Clause</item>

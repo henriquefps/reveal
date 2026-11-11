@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="settings_title">Settings</string>
+    <string name="settings_back">Back</string>
+    <string name="settings_export">Export</string>
+    <string name="settings_author">Author</string>
+    <string name="settings_copyright">Copyright</string>
+    <string name="settings_authorship_note">Written into exported photos (EXIF and XMP) unless the export\'s metadata is set to None.</string>
+</resources>

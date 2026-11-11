@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="settings_title">Configurações</string>
+    <string name="settings_back">Voltar</string>
+    <string name="settings_export">Exportação</string>
+    <string name="settings_author">Autor</string>
+    <string name="settings_copyright">Direitos autorais</string>
+    <string name="settings_authorship_note">Gravados nas fotos exportadas (EXIF e XMP), a não ser que os metadados da exportação sejam Nenhum.</string>
+</resources>

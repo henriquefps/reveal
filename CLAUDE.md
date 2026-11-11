@@ -201,6 +201,26 @@ emulator), `EditorHistoryTest` (undo/redo/jump/branch, reopen restores from Room
 `ReadbackApisTest` (clipping flag, source sample). Edits persist per photo and a hand-off file with the same name is
 the same photo: give instrumented test photos unique names.
 
+## Export (`:feature:export`, `gl/TiledRenderer`, ADR 0009)
+
+`ExportSheetHost(request)` (editor top bar, library selection) -> `ExportWorker.enqueue` (every export is a WorkManager
+job; job + item states in `files/export-jobs/`, resumable per photo) -> `ExportEngine.export`: full decode
+(`NativeRawTileSource` / `BitmapTileSource`) -> `TiledRenderer` (own GL context; grid pre-passes over cell-aligned tiles,
+then per output tile: develop the input region, geometry operator (slot 13), Lanczos; the preview's shaders with
+`uOrigin`; `ExportPlan` chains image -> geometry output -> output) -> `BitmapSink` -> `ImageEncoders`
+(JPEG = `Bitmap.compress` + `JpegSegments` for EXIF/XMP, HEIF = HeifWriter 8-bit sRGB) -> `Destinations` (MediaStore
+`Pictures/Reveal`, SAF folder, share cache swept at start). Metadata: `ExifSnapshot` (`:core:image`) -> `ExifWriter`.
+Sizes and tiles: `ExportSize`, `ExportPlan` (`:core:pipeline/export`). Author/copyright: Settings (`ExportPreferences`).
+
+```sh
+adb -s emulator-<port> shell am instrument -w -e class dev.hfps.reveal.pipeline.TiledRendererTest dev.hfps.reveal.pipeline.test/androidx.test.runner.AndroidJUnitRunner
+adb -s emulator-<port> shell am instrument -w -e class dev.hfps.reveal.export.ExportFlowTest,dev.hfps.reveal.export.ExportSheetTest dev.hfps.reveal.debug.test/androidx.test.runner.AndroidJUnitRunner
+#   -e keep true leaves the files in Pictures/Reveal and files/saf-test/export (exiftool on the Mac);
+#   -e large <file in files/samples> exports a ~60 MP RAW (memory); logs: adb logcat -d -s REVEAL_EXPORT RevealExport
+# kill/restart: -e class '...ExportFlowTest#startBatchForKill' -e kill start, then am start the app, then
+#               -e class '...ExportFlowTest#killedBatchFinished' -e kill check
+```
+
 ## `:core:image` harness (ADR 0004)
 
 ```sh

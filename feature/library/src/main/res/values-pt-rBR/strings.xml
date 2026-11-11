@@ -159,4 +159,5 @@
         <item quantity="many">Edições redefinidas em %1$d fotos</item>
         <item quantity="other">Edições redefinidas em %1$d fotos</item>
     </plurals>
+    <string name="library_menu_settings">Configurações</string>
 </resources>

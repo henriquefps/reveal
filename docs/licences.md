@@ -12,6 +12,7 @@ with its licence; add a row in the same change that adds the dependency, and mir
 | Jetpack Compose (runtime, UI, foundation, animation, Material 3) | Compose BOM in `gradle/libs.versions.toml` | Apache-2.0 |
 | AndroidX core, activity, lifecycle, navigation, navigationevent, savedstate, fragment, startup, window, emoji2, profileinstaller, tracing, collection, annotation, arch-core, concurrent, customview, autofill, graphics, interpolator, loader, viewpager, versionedparcelable (transitive) | `gradle/libs.versions.toml` and the release runtime classpath | Apache-2.0 |
 | AndroidX Room and SQLite | `gradle/libs.versions.toml` | Apache-2.0 |
+| AndroidX WorkManager (`work-runtime-ktx`) and HeifWriter | `gradle/libs.versions.toml` | Apache-2.0 |
 | Dagger / Hilt, AndroidX Hilt | `gradle/libs.versions.toml` | Apache-2.0 |
 | javax.inject, jakarta.inject (via Dagger) | transitive | Apache-2.0 |
 | Guava ListenableFuture (via AndroidX) | transitive | Apache-2.0 |

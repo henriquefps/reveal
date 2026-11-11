@@ -1,3 +1,6 @@
+// Pixel loops over RGBA bytes.
+@file:Suppress("MagicNumber")
+
 package dev.hfps.image.standard
 
 import dev.hfps.image.LinearImage
@@ -8,7 +11,7 @@ object Linearize {
     private const val LEVELS = 256
     private const val MAX = 65535.0
 
-    /** 256-entry table: encoded 8-bit value to linear 0..65535, for a transfer function `eotf` (encoded 0..1 to linear 0..1). */
+    /** 256-entry table: encoded 8-bit value to linear 0..65535 through `eotf` (encoded 0..1 to linear 0..1). */
     fun lut(eotf: (Double) -> Double): ShortArray = ShortArray(LEVELS) { v ->
         (eotf(v / (LEVELS - 1.0)).coerceIn(0.0, 1.0) * MAX).roundToInt().toShort()
     }
@@ -30,7 +33,7 @@ object Linearize {
         var o = 0
         for (y in 0 until height) {
             var i = y * rowBytes
-            for (x in 0 until width) {
+            repeat(width) {
                 out[o++] = lutR[rgba[i].toInt() and 0xFF]
                 out[o++] = lutG[rgba[i + 1].toInt() and 0xFF]
                 out[o++] = lutB[rgba[i + 2].toInt() and 0xFF]

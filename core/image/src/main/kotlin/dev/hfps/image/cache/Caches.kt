@@ -158,7 +158,7 @@ class DiskCache(val dir: File, private val maxBytes: Long, private val trimEvery
     fun put(name: String, write: (File) -> Unit): File {
         dir.mkdirs()
         val target = File(dir, name)
-        val temp = File(dir, ".$name.${Thread.currentThread().threadId()}.part")
+        val temp = File(dir, ".$name.${System.nanoTime()}.part")
         try {
             write(temp)
             if (!temp.isFile || temp.length() == 0L) throw IOException("Nothing written for $name")

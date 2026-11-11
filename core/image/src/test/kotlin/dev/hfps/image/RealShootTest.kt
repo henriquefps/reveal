@@ -13,7 +13,7 @@ import org.junit.Test
 
 /**
  * Opt-in, read-only checks on a folder of COPIES of real camera files (never committed; the repo is public and these
- * are private photos): `REVEAL_ARW_DIR=/path/to/copies ./gradlew :core:image:testDebugUnitTest --tests '*RealShootTest*' -i`.
+ * are private photos), see CLAUDE.md: `REVEAL_ARW_DIR=/path/to/copies ./gradlew :core:image:testDebugUnitTest -i`.
  *
  * Only aggregates are printed (counts, sizes, byte counts, timings): no file names, no capture times, no pixels.
  */

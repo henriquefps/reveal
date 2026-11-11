@@ -1,3 +1,6 @@
+// Device harness: loops over sample files and algorithms, an explicit GC before measuring memory.
+@file:Suppress("NestedBlockDepth", "LongMethod", "ExplicitGarbageCollectionCall")
+
 package dev.hfps.image
 
 import com.google.common.truth.Truth.assertThat
@@ -14,13 +17,11 @@ class ProxyHarnessTest {
     @Test
     fun firstImageFromTheEmbeddedPreview() {
         for ((index, file) in Harness.samples(*rawExtensions).withIndex()) {
+            val name = Harness.label(file, index)
             ImageInput.fromFile(file).use { raw ->
                 val first = FirstImageLoader.load(raw, null, 1600)
                 Harness.log(
-                    "FIRST ${Harness.label(
-                        file,
-                        index,
-                    )}: ${first.source} ${first.bitmap.width}x${first.bitmap.height} " +
+                    "FIRST $name: ${first.source} ${first.bitmap.width}x${first.bitmap.height} " +
                         "${first.readBytes} bytes of ${file.length()} in ${first.millis}ms",
                 )
                 assertThat(first.source).isEqualTo(FirstImageSource.EMBEDDED_PREVIEW)
@@ -33,15 +34,13 @@ class ProxyHarnessTest {
     @Test
     fun proxiesAtSeveralSizes() {
         for ((index, file) in Harness.samples(*rawExtensions).withIndex()) {
+            val name = Harness.label(file, index)
             ImageInput.fromFile(file).use { input ->
                 for (longEdge in intArrayOf(1024, 2048, 4096)) {
                     val proxy = ProxyBuilder.decodeProxy(input, longEdge)
                     val stats = proxy.stats
                     Harness.log(
-                        "PROXY ${Harness.label(
-                            file,
-                            index,
-                        )} @$longEdge: ${proxy.image.width}x${proxy.image.height} ${stats.source} " +
+                        "PROXY $name @$longEdge: ${proxy.image.width}x${proxy.image.height} ${stats.source} " +
                             "decoded=${stats.decodedWidth}x${stats.decodedHeight} decode=${stats.decodeMs}ms " +
                             "resample=${stats.resampleMs}ms total=${stats.totalMs}ms",
                     )
@@ -72,7 +71,9 @@ class ProxyHarnessTest {
     @Test
     fun nativeDownscaleMatchesTheReference() {
         val random = java.util.Random(7)
-        for ((w, h, tw, th) in listOf(listOf(1000, 700, 333, 233), listOf(7, 5, 3, 2), listOf(640, 480, 640, 100))) {
+        for (sizes in listOf(listOf(1000, 700, 333, 233), listOf(7, 5, 3, 2), listOf(640, 480, 640, 100))) {
+            val (w, h) = sizes
+            val (tw, th) = sizes.drop(2)
             val data = ShortArray(w * h * 3) { random.nextInt(65536).toShort() }
             val buffer = java.nio.ByteBuffer.allocateDirect(data.size * 2).order(java.nio.ByteOrder.nativeOrder())
             buffer.asShortBuffer().put(data)

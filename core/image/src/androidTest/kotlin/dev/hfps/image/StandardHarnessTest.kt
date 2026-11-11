@@ -38,7 +38,7 @@ class StandardHarnessTest {
         val result = decode(fixture("ramps-srgb.jpg"))
         val image = result.image
         Harness.log(
-            "JPEG sRGB ${image.width}x${image.height} ${result.info.colorSpace} sample=${result.sampleSize} ${result.decodeMs}ms",
+            "JPEG sRGB ${image.width}x${image.height} ${result.info.colorSpace} sample=${result.sampleSize}",
         )
         assertThat(result.info.colorSpace).isEqualTo(SourceColorSpace.SRGB)
         assertThat(result.info.toXyz.isCloseTo(ColorMath.rgbToXyzD65(ColorMath.SRGB), 1e-4)).isTrue()

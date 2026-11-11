@@ -1,3 +1,6 @@
+// Device harness: loops over sample files and algorithms, an explicit GC before measuring memory.
+@file:Suppress("NestedBlockDepth", "LongMethod", "ExplicitGarbageCollectionCall")
+
 package dev.hfps.image
 
 import android.os.ParcelFileDescriptor

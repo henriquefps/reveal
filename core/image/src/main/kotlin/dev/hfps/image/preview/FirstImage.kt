@@ -27,6 +27,7 @@ object FirstImageLoader {
     /** Minimum share of the target long edge an embedded preview must cover to be used without the paired rendering. */
     private const val PREVIEW_COVERAGE = 0.75
 
+    @Suppress("ComplexCondition")
     fun load(raw: ImageInput?, rendered: ImageInput?, targetLongEdge: Int): FirstImage {
         val started = System.nanoTime()
         val inspection = raw?.inspection

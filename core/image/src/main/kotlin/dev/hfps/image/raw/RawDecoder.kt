@@ -64,7 +64,8 @@ object RawDecoder {
             true
         } catch (e: UnsatisfiedLinkError) {
             // ABIs without the library (armeabi-v7a, x86): RAW files fall back to embedded previews.
-            Log.w(TAG, "librevealimage unavailable: ${e.message}")
+            // Plain JVM unit tests have no logger and no native library: both are fine, the result is "unavailable".
+            runCatching { Log.w(TAG, "librevealimage unavailable: ${e.message}") }
             false
         }
     }

@@ -1,3 +1,6 @@
+// Colour space primaries are read from fixed positions of the platform arrays.
+@file:Suppress("MagicNumber")
+
 package dev.hfps.image.standard
 
 import android.graphics.Bitmap
@@ -18,7 +21,10 @@ import dev.hfps.image.decode.Sampling
 import java.io.IOException
 import java.nio.ByteBuffer
 
-/** What to decode: the whole image, or [region] (in stored pixels), subsampled (powers of two) to keep about [minLongEdge] on the long edge. */
+/**
+ * What to decode: the whole image, or [region] (in stored pixels), subsampled (powers of two) to keep about
+ * [minLongEdge] on the long edge.
+ */
 data class StandardDecodeOptions(val region: PixelRect? = null, val minLongEdge: Int = 0)
 
 /** A decoded standard image: [image] is linear 16-bit in the file's own primaries, [info] describes them. */
@@ -44,7 +50,6 @@ data class StandardDecodeResult(
  * `ARGB_8888`), and EXIF orientation is not applied (it is reported where the container carries it).
  */
 object StandardDecoder {
-    private const val BYTES_PER_PIXEL = 4
 
     fun decode(
         descriptor: ParcelFileDescriptor,

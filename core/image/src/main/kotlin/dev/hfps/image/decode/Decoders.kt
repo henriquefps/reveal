@@ -72,7 +72,7 @@ object BitmapDecoding {
         hardware: Boolean,
     ): DecodedImage {
         var out = orient(bitmap, orientation)
-        if (hardware && Build.VERSION.SDK_INT >= 26 && out.config != Bitmap.Config.HARDWARE) {
+        if (hardware && out.config != Bitmap.Config.HARDWARE) {
             out.copy(Bitmap.Config.HARDWARE, false)?.let { hw ->
                 out.recycle()
                 out = hw
@@ -85,7 +85,7 @@ object BitmapDecoding {
     private fun options(sample: Int, hardware: Boolean) = BitmapFactory.Options().apply {
         inSampleSize = sample
         inPreferredConfig =
-            if (hardware && Build.VERSION.SDK_INT >= 26) Bitmap.Config.HARDWARE else Bitmap.Config.ARGB_8888
+            if (hardware) Bitmap.Config.HARDWARE else Bitmap.Config.ARGB_8888
     }
 
     /** Rotates/mirrors per EXIF [orientation] (see [Orientation]); recycles the input when it copies. */

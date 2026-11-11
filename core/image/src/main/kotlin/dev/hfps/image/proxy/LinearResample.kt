@@ -21,24 +21,28 @@ object LinearResample {
      * Area-average downscale to [targetWidth] x [targetHeight] (each output pixel is the exact coverage-weighted mean
      * of the source rectangle it covers). Returns [source] when the size is unchanged; never upsamples.
      */
-    fun downscale(source: LinearImage, targetWidth: Int, targetHeight: Int): LinearImage {
-        if (targetWidth == source.width && targetHeight == source.height) return source
-        return downscale(ShortBuffer.wrap(source.data), source.width, source.height, targetWidth, targetHeight)
-    }
+    fun downscale(source: LinearImage, targetWidth: Int, targetHeight: Int): LinearImage =
+        if (targetWidth == source.width && targetHeight == source.height) {
+            source
+        } else {
+            downscale(ShortBuffer.wrap(source.data), source.width, source.height, targetWidth, targetHeight)
+        }
 
     /**
      * [downscale] reading from a native image without copying it first (full-size RAW decodes). Uses the native
      * implementation when the library is loaded (about 8x faster than [downscale] over a [ShortBuffer]); both give the
      * same pixels within one code.
      */
-    fun downscale(source: NativeLinearImage, targetWidth: Int, targetHeight: Int): LinearImage {
-        if (targetWidth == source.width && targetHeight == source.height) return source.toLinearImage()
-        if (RawDecoder.isAvailable) {
+    fun downscale(source: NativeLinearImage, targetWidth: Int, targetHeight: Int): LinearImage = when {
+        targetWidth == source.width && targetHeight == source.height -> source.toLinearImage()
+
+        RawDecoder.isAvailable -> {
             val out = ShortArray(targetWidth * targetHeight * LinearImage.CHANNELS)
             RawNative.nativeDownscale(source.buffer, source.width, source.height, targetWidth, targetHeight, out)
-            return LinearImage(targetWidth, targetHeight, out)
+            LinearImage(targetWidth, targetHeight, out)
         }
-        return downscale(source.samples, source.width, source.height, targetWidth, targetHeight)
+
+        else -> downscale(source.samples, source.width, source.height, targetWidth, targetHeight)
     }
 
     /** [downscale] for the samples in [source] (read through a duplicate: its own position is untouched). */

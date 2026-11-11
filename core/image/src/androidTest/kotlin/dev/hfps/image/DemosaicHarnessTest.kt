@@ -1,3 +1,6 @@
+// Device harness: loops over sample files and algorithms, an explicit GC before measuring memory.
+@file:Suppress("NestedBlockDepth", "LongMethod", "ExplicitGarbageCollectionCall")
+
 package dev.hfps.image
 
 import android.os.ParcelFileDescriptor
@@ -10,7 +13,7 @@ import kotlin.math.sqrt
 import org.junit.Test
 
 /**
- * Times every demosaic algorithm on the sample RAWs and scores each against LibRaw's half-size decode (2x2 binning, which
+ * Times every demosaic algorithm on the sample RAWs and scores each against LibRaw's half-size decode (2x2 binning,
  * has no interpolation): the full-size result averaged down 2x2 should match it, and the error is the interpolation
  * error. Also reports detail (mean absolute Laplacian of green) and colour fringing (high-pass of R-G).
  *

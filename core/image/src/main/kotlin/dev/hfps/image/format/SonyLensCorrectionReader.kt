@@ -1,3 +1,6 @@
+// Binary format parsing: offsets, tag ids and bit widths are the format; early returns are the validation.
+@file:Suppress("MagicNumber", "ReturnCount", "LoopWithTooManyJumpStatements")
+
 package dev.hfps.image.format
 
 import dev.hfps.image.color.SonyLensCorrection
@@ -39,7 +42,7 @@ object SonyLensCorrectionReader {
     private const val KEY_MULTIPLIER = 48828125
     private const val FIRST_POSITION = 127
 
-    /** The three blocks, or null when [source] is not an ARW with SR2 data or carries none of them. Never throws on bad data. */
+    /** The three blocks, or null when [source] is no ARW with SR2 data or carries none. Never throws on bad data. */
     fun read(source: RandomAccessSource): SonyLensCorrection? = try {
         readOrThrow(source)
     } catch (_: TiffException) {
@@ -108,7 +111,7 @@ object SonyLensCorrectionReader {
     private fun swap(v: Long): Long =
         ((v and 0xFF) shl 24) or ((v and 0xFF00) shl 8) or ((v shr 8) and 0xFF00) or ((v shr 24) and 0xFF)
 
-    /** Reads the `SSHORT` arrays of a bare IFD at the start of [block]; value offsets are absolute: [blockStart] is subtracted. */
+    /** `SSHORT` arrays of the bare IFD at the start of [block]; offsets are absolute, [blockStart] is subtracted. */
     private fun parseBareIfd(block: ByteArray, blockStart: Long, tiff: TiffReader): Map<Int, List<Int>>? {
         if (block.size < 2) return null
         val count = tiff.u16(block, 0)

@@ -9,5 +9,6 @@ android {
 dependencies {
     implementation(projects.core.designsystem)
     implementation(projects.core.image)
+    implementation(projects.core.pipeline)
     implementation(projects.core.data)
 }

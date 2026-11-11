@@ -11,12 +11,13 @@ import dev.hfps.reveal.feature.editor.EditorActions
 import dev.hfps.reveal.feature.editor.EditorUiState
 import dev.hfps.reveal.feature.editor.R
 import dev.hfps.reveal.feature.editor.panels.ColourPanel
+import dev.hfps.reveal.feature.editor.panels.HistoryPanel
 import dev.hfps.reveal.feature.editor.panels.LightPanel
 import dev.hfps.reveal.feature.editor.panels.PanelHost
 import dev.hfps.reveal.pipeline.recipe.RecipeGroup
 
 /** The tools of the strip, in strip order (docs/plan/ux.md, "Phone, portrait"). */
-enum class ToolId { PRESETS, AUTO, CROP, LIGHT, COLOUR, EFFECTS, DETAIL, OPTICS, MASKS, HEAL }
+enum class ToolId { PRESETS, AUTO, CROP, LIGHT, COLOUR, EFFECTS, DETAIL, OPTICS, MASKS, HEAL, HISTORY }
 
 /** What a mode (Crop, Masks, Heal) gets from the editor while it is active. */
 @Stable
@@ -26,7 +27,7 @@ class ModeHost(val state: EditorUiState, val actions: EditorActions, val onDone:
 sealed interface ToolBehaviour {
     /**
      * Opens a panel in the panel card: the eyebrow [title], the panel-level reset of [group] (title ⟲ and long-press
-     * on the title), a panel-level Auto when [showAuto], and the [content] rows.
+     * on the title; hidden without a group), a panel-level Auto when [showAuto], and the [content] rows.
      */
     class Panel(
         @param:StringRes val title: Int,
@@ -142,6 +143,15 @@ object EditorTools {
         ),
     )
 
+    /** The history list: a panel opened from More ⋯, not a tool of the strip. */
+    val history: EditorTool = EditorTool(
+        ToolId.HISTORY,
+        R.string.editor_history_title,
+        PhosphorRegular.ClockCounterClockwise,
+        PhosphorFill.ClockCounterClockwise,
+        ToolBehaviour.Panel(R.string.editor_history_title, group = null) { HistoryPanel(it) },
+    )
+
     /** The tool with [id]. */
-    operator fun get(id: ToolId): EditorTool = all.first { it.id == id }
+    operator fun get(id: ToolId): EditorTool = if (id == ToolId.HISTORY) history else all.first { it.id == id }
 }

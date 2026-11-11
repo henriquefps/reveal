@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -79,6 +80,7 @@ fun EditorTopBar(
     compact: Boolean,
     modifier: Modifier = Modifier,
     narrow: Boolean = false,
+    onHistory: () -> Unit = {},
 ) {
     RevealTopBar(
         title = if (compact) "" else state.fileName,
@@ -88,23 +90,23 @@ fun EditorTopBar(
         titleIsFileName = true,
         modifier = modifier.testTag(EditorTags.TOP_BAR),
     ) {
-        // TODO(history worker): enable undo/redo from the history.
+        val history = state.edit.history
         RevealIconButton(
             icon = PhosphorRegular.ArrowUUpLeft,
             contentDescription = stringResource(R.string.editor_undo),
             onClick = actions.onUndo,
-            enabled = false,
+            enabled = state.ready && history.canUndo,
             modifier = Modifier.testTag(EditorTags.UNDO),
         )
         RevealIconButton(
             icon = PhosphorRegular.ArrowUUpRight,
             contentDescription = stringResource(R.string.editor_redo),
             onClick = actions.onRedo,
-            enabled = false,
+            enabled = state.ready && history.canRedo,
             modifier = Modifier.testTag(EditorTags.REDO),
         )
         CompareButton(state, actions)
-        MoreMenu(state, actions)
+        MoreMenu(state, actions, onHistory)
         // TODO(export worker): enable Export (opens the export sheet).
         when {
             compact -> RevealIconButton(
@@ -297,11 +299,21 @@ private fun CompareButton(state: EditorUiState, actions: EditorActions, modifier
     }
 }
 
-/** More ⋯: the histogram toggle and the two clipping overlays (also reachable from the histogram's corners). */
+/**
+ * More ⋯: the history list, copy / paste / Previous, the resets, then the histogram toggle and the two clipping
+ * overlays (also reachable from the histogram's corners).
+ */
+@Suppress("LongMethod")
 @Composable
-private fun MoreMenu(state: EditorUiState, actions: EditorActions, modifier: Modifier = Modifier) {
+private fun MoreMenu(state: EditorUiState, actions: EditorActions, onHistory: () -> Unit, modifier: Modifier = Modifier) {
     var open by remember { mutableStateOf(false) }
     val view = state.view
+    val edit = state.edit
+    val ready = state.ready
+    fun run(action: () -> Unit): () -> Unit = {
+        open = false
+        action()
+    }
     Box(modifier) {
         RevealIconButton(
             icon = PhosphorRegular.DotsThree,
@@ -316,6 +328,19 @@ private fun MoreMenu(state: EditorUiState, actions: EditorActions, modifier: Mod
             containerColor = RevealTheme.colors.card,
             shape = RevealTheme.shapes.control,
         ) {
+            ActionItem(R.string.editor_menu_history, PhosphorRegular.ClockCounterClockwise, EditorTags.MENU_HISTORY,
+                onClick = run(onHistory))
+            ActionItem(R.string.editor_menu_copy, PhosphorRegular.Copy, EditorTags.MENU_COPY,
+                enabled = ready, onClick = run(actions.onCopy))
+            ActionItem(R.string.editor_menu_paste, PhosphorRegular.ClipboardText, EditorTags.MENU_PASTE,
+                enabled = ready && edit.canPaste, onClick = run(actions.onPaste))
+            ActionItem(R.string.editor_menu_previous, PhosphorRegular.ArrowBendUpLeft, EditorTags.MENU_PREVIOUS,
+                enabled = ready && edit.hasPrevious, onClick = run(actions.onPrevious))
+            ActionItem(R.string.editor_menu_reset_all, PhosphorRegular.ArrowCounterClockwise, EditorTags.MENU_RESET_ALL,
+                enabled = ready && !edit.committed.isDefault(), onClick = run(actions.onResetAll))
+            ActionItem(R.string.editor_menu_reset_as_opened, PhosphorRegular.ArrowCounterClockwise,
+                EditorTags.MENU_RESET_AS_OPENED, enabled = ready, onClick = run(actions.onResetAsOpened))
+            HorizontalDivider(color = RevealTheme.colors.hairline)
             CheckItem(R.string.editor_menu_histogram, view.histogram, EditorTags.MENU_HISTOGRAM) {
                 actions.onHistogram(!view.histogram)
             }
@@ -327,6 +352,19 @@ private fun MoreMenu(state: EditorUiState, actions: EditorActions, modifier: Mod
             }
         }
     }
+}
+
+@Composable
+private fun ActionItem(text: Int, icon: ImageVector, tag: String, enabled: Boolean = true, onClick: () -> Unit) {
+    val colors = RevealTheme.colors
+    val tint = if (enabled) colors.foreground else colors.mutedForeground
+    DropdownMenuItem(
+        text = { Text(stringResource(text), style = RevealTheme.typography.ui, color = tint) },
+        onClick = onClick,
+        enabled = enabled,
+        leadingIcon = { Icon(imageVector = icon, contentDescription = null, tint = tint, modifier = Modifier.size(20.dp)) },
+        modifier = Modifier.testTag(tag),
+    )
 }
 
 @Composable

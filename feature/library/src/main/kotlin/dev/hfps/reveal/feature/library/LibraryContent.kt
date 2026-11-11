@@ -107,6 +107,11 @@ fun LibraryContent(
             }
             SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter))
         }
+        val pasteGroups = state.pasteChooser
+        val copied = state.clipboard
+        if (pasteGroups != null && copied != null) {
+            PasteEditsSheet(copied, pasteGroups, state.selected.size, actions)
+        }
     }
 }
 
@@ -344,20 +349,34 @@ private fun SelectionOverflow(state: LibraryUiState, actions: LibraryActions) {
                 open = false
                 actions.onRemovePhotos()
             }
-            // Placeholders until their workstreams land (copy/paste edits, presets, export).
-            val coming = stringResource(R.string.library_action_coming)
             MenuItem(
                 PhosphorRegular.Copy,
-                "${stringResource(R.string.library_action_copy_edits)} · $coming",
-                enabled = false,
+                stringResource(R.string.library_action_copy_edits),
+                enabled = state.selected.size == 1,
+                modifier = Modifier.testTag(LibraryTags.COPY_EDITS),
             ) {
+                open = false
+                actions.onCopyEdits()
             }
             MenuItem(
                 PhosphorRegular.ClipboardText,
-                "${stringResource(R.string.library_action_paste_edits)} · $coming",
-                enabled = false,
+                stringResource(R.string.library_action_paste_edits_choose),
+                enabled = state.clipboard != null,
+                modifier = Modifier.testTag(LibraryTags.PASTE_EDITS),
             ) {
+                open = false
+                actions.onPasteEdits()
             }
+            MenuItem(
+                PhosphorRegular.ArrowCounterClockwise,
+                stringResource(R.string.library_action_reset_edits),
+                modifier = Modifier.testTag(LibraryTags.RESET_EDITS),
+            ) {
+                open = false
+                actions.onResetEdits()
+            }
+            // Placeholders until their workstreams land (presets, export).
+            val coming = stringResource(R.string.library_action_coming)
             MenuItem(
                 PhosphorRegular.Sparkle,
                 "${stringResource(R.string.library_action_preset)} · $coming",

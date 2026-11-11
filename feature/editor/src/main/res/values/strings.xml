@@ -83,4 +83,20 @@
     <string name="editor_eyedropper_hint">Tap a neutral grey or white area</string>
     <string name="editor_eyedropper_cancel">Cancel</string>
     <string name="editor_eyedropper_raw_only">The eyedropper works on RAW photos</string>
+    <string name="editor_menu_history">History</string>
+    <string name="editor_menu_copy">Copy edits</string>
+    <string name="editor_menu_paste">Paste edits…</string>
+    <string name="editor_menu_previous">Previous (last photo\'s edits)</string>
+    <string name="editor_menu_reset_all">Reset all</string>
+    <string name="editor_menu_reset_as_opened">Reset to as opened from camera</string>
+    <string name="editor_history_title">History</string>
+    <string name="editor_history_empty">No edits yet. Each change you make appears here; tap one to go back to it.</string>
+    <string name="editor_history_current">Current step</string>
+    <string name="editor_history_undone">Undone</string>
+    <string name="editor_paste_title">Paste which edits</string>
+    <string name="editor_paste_all">All</string>
+    <string name="editor_paste_confirm">Paste</string>
+    <string name="editor_paste_no_change">No change (pasting resets it)</string>
+    <string name="editor_cancel">Cancel</string>
+    <string name="editor_copied">Edits copied</string>
 </resources>

@@ -137,13 +137,15 @@ fun PanelCardContent(
                             enabled = false,
                         )
                     }
-                    RevealIconButton(
-                        icon = PhosphorRegular.ArrowCounterClockwise,
-                        contentDescription = stringResource(R.string.editor_panel_reset, title),
-                        onClick = ::resetGroup,
-                        enabled = canReset,
-                        modifier = Modifier.testTag(EditorTags.PANEL_RESET),
-                    )
+                    if (group != null || sub != null) {
+                        RevealIconButton(
+                            icon = PhosphorRegular.ArrowCounterClockwise,
+                            contentDescription = stringResource(R.string.editor_panel_reset, title),
+                            onClick = ::resetGroup,
+                            enabled = canReset,
+                            modifier = Modifier.testTag(EditorTags.PANEL_RESET),
+                        )
+                    }
                 }
             }
         }

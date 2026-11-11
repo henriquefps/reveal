@@ -6,6 +6,8 @@ import dev.hfps.reveal.data.library.SourceItem
 import dev.hfps.reveal.data.model.LibraryScope
 import dev.hfps.reveal.data.model.PhotoQuery
 import dev.hfps.reveal.data.model.PhotoSort
+import dev.hfps.reveal.pipeline.recipe.Recipe
+import dev.hfps.reveal.pipeline.recipe.RecipeGroup
 
 /** The pseudo-sources of the sources list besides the added folders. */
 enum class SpecialSource { ALL, RECENT, FROM_APPS }
@@ -50,6 +52,10 @@ data class LibraryUiState(
     val photosLoaded: Boolean = false,
     val selected: Set<Long> = emptySet(),
     val searchOpen: Boolean = false,
+    /** The copied edit (from the editor or here), null when nothing was copied. */
+    val clipboard: Recipe? = null,
+    /** The paste chooser is open with these groups ticked; null = closed. */
+    val pasteChooser: Set<RecipeGroup>? = null,
 ) {
     val selecting: Boolean get() = selected.isNotEmpty()
 
@@ -78,6 +84,15 @@ data class LibraryActions(
     val onRate: (Int) -> Unit = {},
     val onFlag: (dev.hfps.reveal.data.model.PickFlag) -> Unit = {},
     val onRemovePhotos: () -> Unit = {},
+    /** Copies the edit of the one selected photo. */
+    val onCopyEdits: () -> Unit = {},
+    /** Opens the paste chooser for the selection. */
+    val onPasteEdits: () -> Unit = {},
+    val onPasteGroups: (Set<RecipeGroup>) -> Unit = {},
+    val onPasteConfirm: () -> Unit = {},
+    val onPasteDismiss: () -> Unit = {},
+    /** Resets the selected photos' edits (one undoable step each). */
+    val onResetEdits: () -> Unit = {},
     val onGallery: () -> Unit = {},
     val onAbout: () -> Unit = {},
 )

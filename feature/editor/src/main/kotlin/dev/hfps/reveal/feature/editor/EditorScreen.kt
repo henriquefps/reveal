@@ -1,5 +1,6 @@
 package dev.hfps.reveal.feature.editor
 
+import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandHorizontally
@@ -39,6 +40,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.onPlaced
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
@@ -66,6 +68,7 @@ import dev.hfps.reveal.feature.editor.layout.ToolStrip
 import dev.hfps.reveal.feature.editor.layout.rememberEditorChrome
 import dev.hfps.reveal.feature.editor.panels.PanelCardContent
 import dev.hfps.reveal.feature.editor.panels.PanelHost
+import dev.hfps.reveal.feature.editor.panels.PasteChooserSheet
 import dev.hfps.reveal.feature.editor.tools.EditorTool
 import dev.hfps.reveal.feature.editor.tools.EditorTools
 import dev.hfps.reveal.feature.editor.tools.ModeHost
@@ -78,8 +81,9 @@ import kotlinx.coroutines.launch
 @Composable
 fun EditorScreen(onBack: () -> Unit, modifier: Modifier = Modifier, viewModel: EditorViewModel = hiltViewModel()) {
     val state by viewModel.state.collectAsStateWithLifecycle()
+    val context = LocalContext.current
     BackHandler(onBack = onBack)
-    val actions = remember(viewModel, onBack) {
+    val actions = remember(viewModel, onBack, context) {
         EditorActions(
             onBack = onBack,
             onDeveloped = viewModel::onDeveloped,
@@ -96,6 +100,20 @@ fun EditorScreen(onBack: () -> Unit, modifier: Modifier = Modifier, viewModel: E
             onShowOriginal = viewModel::setShowOriginal,
             onEyedropper = viewModel::setEyedropper,
             onPickNeutral = viewModel::pickNeutral,
+            onUndo = viewModel::undo,
+            onRedo = viewModel::redo,
+            onGoTo = viewModel::goTo,
+            onCopy = {
+                viewModel.copy()
+                Toast.makeText(context, R.string.editor_copied, Toast.LENGTH_SHORT).show()
+            },
+            onPaste = viewModel::openPaste,
+            onPasteGroups = viewModel::setPasteGroups,
+            onPasteConfirm = viewModel::confirmPaste,
+            onPasteDismiss = viewModel::dismissPaste,
+            onPrevious = viewModel::previous,
+            onResetAll = viewModel::resetAll,
+            onResetAsOpened = viewModel::resetAsOpened,
         )
     }
     EditorTheme {
@@ -146,6 +164,17 @@ fun EditorContent(
     BackHandler(enabled = state.view.compare != CompareMode.Off) { actions.onCompare(CompareMode.Off) }
     BackHandler(enabled = chrome.activeMode != null) { chrome.activeMode = null }
     BackHandler(enabled = state.view.eyedropper) { actions.onEyedropper(false) }
+    val pasteGroups = state.edit.pasteChooser
+    val copied = state.edit.clipboard
+    if (pasteGroups != null && copied != null) {
+        PasteChooserSheet(
+            copied = copied,
+            groups = pasteGroups,
+            onGroupsChange = actions.onPasteGroups,
+            onPaste = actions.onPasteConfirm,
+            onDismiss = actions.onPasteDismiss,
+        )
+    }
     LaunchedEffect(state.phase is EditorPhase.Ready) { chrome.focus.dragging = null }
 }
 
@@ -231,7 +260,7 @@ private fun PortraitLayout(
                         WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal),
                     ),
             ) {
-                EditorTopBar(state, actions, compact = false, narrow = true)
+                EditorTopBar(state, actions, compact = false, narrow = true, onHistory = { select(EditorTools.history) })
             }
         }
         PhotoSlot(
@@ -343,7 +372,12 @@ private fun SideLayout(
                             WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Start),
                         ),
                 ) {
-                    EditorTopBar(state, actions, compact = kind == EditorLayoutKind.LANDSCAPE)
+                    EditorTopBar(
+                        state,
+                        actions,
+                        compact = kind == EditorLayoutKind.LANDSCAPE,
+                        onHistory = { select(EditorTools.history) },
+                    )
                 }
             }
             PhotoSlot(

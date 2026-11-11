@@ -7,6 +7,9 @@ import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dev.hfps.reveal.data.edit.EditClipboard
+import dev.hfps.reveal.data.edit.EditRepository
+import dev.hfps.reveal.data.edit.HistoryWriter
 import dev.hfps.reveal.data.library.AddSourceResult
 import dev.hfps.reveal.data.library.LibraryRepository
 import dev.hfps.reveal.data.library.SidecarOutcome
@@ -14,6 +17,9 @@ import dev.hfps.reveal.data.model.PhotoQuery
 import dev.hfps.reveal.data.model.PickFlag
 import dev.hfps.reveal.data.storage.StorageVolumes
 import dev.hfps.reveal.data.thumb.ThumbnailRepository
+import dev.hfps.reveal.pipeline.recipe.HistoryAction
+import dev.hfps.reveal.pipeline.recipe.Recipe
+import dev.hfps.reveal.pipeline.recipe.RecipeGroup
 import javax.inject.Inject
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -43,6 +49,14 @@ sealed interface LibraryMessage {
     data object AddFailed : LibraryMessage
 
     data object AlreadyAdded : LibraryMessage
+
+    data object Copied : LibraryMessage
+
+    /** Edits pasted onto [count] photos (the others already had them). */
+    data class Pasted(val count: Int) : LibraryMessage
+
+    /** Edits reset on [count] photos. */
+    data class Reset(val count: Int) : LibraryMessage
 }
 
 /**
@@ -57,6 +71,8 @@ class LibraryViewModel @Inject constructor(
     private val library: LibraryRepository,
     val thumbnails: ThumbnailRepository,
     private val volumes: StorageVolumes,
+    private val edits: EditRepository,
+    private val writer: HistoryWriter,
 ) : ViewModel() {
     /** True when the route asked to open on "Opened from other apps" (a hand-off of several photos, ADR 0011). */
     private val fromApps: Boolean = savedState.get<Boolean>(KEY_FROM_APPS) == true
@@ -121,6 +137,61 @@ class LibraryViewModel @Inject constructor(
             volumes.changes().drop(1).debounce(VOLUME_DEBOUNCE_MS).collect { library.refresh() }
         }
         viewModelScope.launch { library.refresh() }
+        viewModelScope.launch { edits.clipboard().collect { clip -> _state.update { it.copy(clipboard = clip?.recipe) } } }
+    }
+
+    // ------------------------------------------------------------------ copy / paste edits
+
+    /** Copies the whole edit of the one selected photo (the paste chooser picks the groups). */
+    fun copyEdits() {
+        val photoId = _state.value.selected.singleOrNull() ?: return
+        viewModelScope.launch {
+            writer.flush()
+            val versionId = edits.versionsOf(listOf(photoId)).firstOrNull() ?: return@launch
+            edits.copy(edits.recipe(versionId))
+            messages.send(LibraryMessage.Copied)
+        }
+    }
+
+    /** Resets every selected photo to the original: one "Reset all" history step per edited photo (undoable). */
+    fun resetEdits() {
+        val ids = _state.value.selected.toList()
+        if (ids.isEmpty()) return
+        viewModelScope.launch {
+            writer.flush()
+            val all = RecipeGroup.entries.toSet()
+            val changed = edits.paste(edits.versionsOf(ids), EditClipboard(Recipe.DEFAULT), all, HistoryAction.RESET_ALL)
+            messages.send(LibraryMessage.Reset(changed))
+        }
+    }
+
+    /** Opens the paste chooser on the last choice of groups. */
+    fun openPaste() {
+        if (_state.value.clipboard == null || _state.value.selected.isEmpty()) return
+        viewModelScope.launch {
+            val groups = edits.pasteGroups()
+            _state.update { it.copy(pasteChooser = groups) }
+        }
+    }
+
+    fun setPasteGroups(groups: Set<RecipeGroup>) =
+        _state.update { it.copy(pasteChooser = groups.takeIf { _ -> it.pasteChooser != null }) }
+
+    fun dismissPaste() = _state.update { it.copy(pasteChooser = null) }
+
+    /** Pastes the chosen groups onto every selected photo: one history step per photo the paste changes. */
+    fun confirmPaste() {
+        val groups = _state.value.pasteChooser ?: return
+        val ids = _state.value.selected.toList()
+        dismissPaste()
+        if (groups.isEmpty() || ids.isEmpty()) return
+        viewModelScope.launch {
+            val clip = edits.currentClipboard() ?: return@launch
+            edits.setPasteGroups(groups)
+            writer.flush()
+            val changed = edits.paste(edits.versionsOf(ids), clip, groups)
+            messages.send(LibraryMessage.Pasted(changed))
+        }
     }
 
     fun select(selection: LibrarySelection?) {

@@ -27,6 +27,9 @@ All notable changes to Reveal are documented here. The format follows
   size estimate. Exports render at full resolution with the same pipeline as the preview and run in the background
   with a notification: you can close the app, cancel, and an interrupted export resumes where it stopped.
 - Settings: author and copyright written into exported photos.
+- Auto: one tap in the tool strip sets exposure, contrast, highlights, shadows, whites, blacks and vibrance (and the
+  white balance when it is on Auto) from an analysis of the photo; the Light panel's Auto sets the Light sliders
+  only. The result is ordinary slider values, one undoable step, and the same every time you tap it.
 
 ## [0.1.1] - 2026-11-10
 

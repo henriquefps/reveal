@@ -4,6 +4,7 @@ import androidx.compose.runtime.Immutable
 import androidx.compose.ui.graphics.ImageBitmap
 import dev.hfps.reveal.feature.editor.edit.AsShot
 import dev.hfps.reveal.feature.editor.open.OpenError
+import dev.hfps.reveal.pipeline.auto.AutoScope
 import dev.hfps.reveal.pipeline.gl.ClippingWarnings
 import dev.hfps.reveal.pipeline.gl.CompareMode
 import dev.hfps.reveal.pipeline.gl.GpuDevelopRenderer
@@ -15,6 +16,7 @@ import dev.hfps.reveal.pipeline.recipe.Geometry
 import dev.hfps.reveal.pipeline.recipe.Recipe
 import dev.hfps.reveal.pipeline.recipe.RecipeGroup
 import dev.hfps.reveal.pipeline.recipe.WbMode
+import dev.hfps.reveal.pipeline.recipe.WhiteBalance
 
 /** Where the photo is in its life on screen. */
 sealed interface EditorPhase {
@@ -42,7 +44,8 @@ sealed interface EditorPhase {
  *
  * @property isRaw RAW input shows absolute white balance (kelvin/tint); display-referred input the relative pair.
  * @property asShot the camera's white balance, shown while the recipe holds `null`.
- * @property autoWb the grey-world estimate behind the "Auto" white-balance chip, `null` when unavailable.
+ * @property autoWb the Auto white balance (ADR 0008) behind the "Auto" chip as recipe values, `null` when unavailable.
+ * @property autoReady the Auto analysis sample is in memory: the Auto tool and the Light panel's Auto can run.
  */
 @Immutable
 data class EditState(
@@ -50,7 +53,8 @@ data class EditState(
     val history: EditHistory = EditHistory(),
     val isRaw: Boolean = true,
     val asShot: AsShot = AsShot(),
-    val autoWb: AsShot? = null,
+    val autoWb: WhiteBalance? = null,
+    val autoReady: Boolean = false,
     /** The copied edit (from here or the library), null when nothing was copied: Paste is available. */
     val clipboard: Recipe? = null,
     /** Another photo has an edit: "Previous" is available. */
@@ -151,6 +155,6 @@ class EditorActions(
     val onResetAsOpened: () -> Unit = {},
     /** Opens the export sheet for the photo with its current recipe. */
     val onExport: () -> Unit = {},
-    // TODO(auto worker): the panel-level Auto of Light.
-    val onAuto: () -> Unit = {},
+    /** One-tap Auto (docs/adr/0010): the strip's Auto sets [AutoScope.ALL], the Light panel's [AutoScope.LIGHT]. */
+    val onAuto: (AutoScope) -> Unit = {},
 )

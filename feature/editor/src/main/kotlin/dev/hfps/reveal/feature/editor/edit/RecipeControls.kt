@@ -85,13 +85,23 @@ object RecipeControls {
         else -> get(recipe, id) == RecipeRanges[id].neutral
     }
 
-    /** The white balance a mode chip writes: presets set fixed values, as-shot clears, auto uses [auto]. */
-    fun withWbMode(recipe: Recipe, mode: WbMode, auto: AsShot?): Recipe {
+    /** The white balance a mode chip writes: presets set fixed values, as-shot clears, auto copies [auto]'s values. */
+    fun withWbMode(recipe: Recipe, mode: WbMode, auto: WhiteBalance?): Recipe {
         val wb = recipe.colour.whiteBalance
         val next = when (mode) {
             WbMode.AS_SHOT -> wb.copy(temperatureK = null, tint = null, relTemperature = 0f, relTint = 0f)
-            WbMode.AUTO -> auto?.let { wb.copy(temperatureK = it.temperatureK, tint = it.tint) } ?: return recipe
+
+            WbMode.AUTO -> auto?.let {
+                wb.copy(
+                    temperatureK = it.temperatureK,
+                    tint = it.tint,
+                    relTemperature = it.relTemperature,
+                    relTint = it.relTint,
+                )
+            } ?: return recipe
+
             WbMode.CUSTOM -> wb
+
             else -> wb.copy(temperatureK = WbPresets.temperature(mode), tint = 0f)
         }
         return recipe.withWb(next.copy(mode = mode))

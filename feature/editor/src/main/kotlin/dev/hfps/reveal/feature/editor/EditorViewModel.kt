@@ -2,6 +2,7 @@ package dev.hfps.reveal.feature.editor
 
 import android.content.Context
 import android.net.Uri
+import android.os.SystemClock
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.core.net.toUri
 import androidx.lifecycle.SavedStateHandle
@@ -26,6 +27,11 @@ import dev.hfps.reveal.feature.editor.open.OpenException
 import dev.hfps.reveal.feature.editor.open.PhotoOpener
 import dev.hfps.reveal.feature.export.ui.ExportRequest
 import dev.hfps.reveal.pipeline.PipelineInput
+import dev.hfps.reveal.pipeline.auto.AutoAnalyser
+import dev.hfps.reveal.pipeline.auto.AutoRules
+import dev.hfps.reveal.pipeline.auto.AutoScope
+import dev.hfps.reveal.pipeline.cpu.AutoWhiteBalance
+import dev.hfps.reveal.pipeline.cpu.WbAnalysis
 import dev.hfps.reveal.pipeline.cpu.WhiteBalanceModel
 import dev.hfps.reveal.pipeline.cpu.WhiteBalancePicker
 import dev.hfps.reveal.pipeline.gl.ClippingWarnings
@@ -41,12 +47,14 @@ import dev.hfps.reveal.pipeline.recipe.RecipeGroup
 import dev.hfps.reveal.pipeline.recipe.RecipePaste
 import dev.hfps.reveal.pipeline.recipe.RecipeRanges
 import dev.hfps.reveal.pipeline.recipe.WbMode
+import dev.hfps.reveal.pipeline.recipe.WhiteBalance
 import javax.inject.Inject
 import kotlin.math.roundToInt
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -140,10 +148,7 @@ class EditorViewModel @Inject constructor(
                 val asShot = WhiteBalanceModel.asShot(input).let {
                     AsShot(it.temperatureK.roundToInt().toFloat(), it.tint.roundToInt().toFloat())
                 }
-                // Grey-world "Auto" white balance, measured while the proxy is still on the heap.
-                val autoWb = withContext(Dispatchers.Default) { WhiteBalancePicker.grayWorld(input) }?.let {
-                    AsShot(RecipeRanges.temperature.snap(it.temperatureK.toFloat()), it.tint.roundToInt().toFloat())
-                }
+                val autoWb = prepareAuto(input)
                 val ready = gpu.await()
                 // The renderer starts on the stored recipe (attach() pushes it).
                 storedHistory.await()
@@ -161,7 +166,7 @@ class EditorViewModel @Inject constructor(
                     it.copy(
                         fileName = photo.name,
                         phase = EditorPhase.Ready(ready, input.width, input.height, scale),
-                        edit = it.edit.copy(isRaw = input.isRaw, asShot = asShot, autoWb = autoWb),
+                        edit = it.edit.copy(isRaw = input.isRaw, asShot = asShot, autoWb = autoWb, autoReady = true),
                     )
                 }
                 attach(ready)
@@ -326,6 +331,46 @@ class EditorViewModel @Inject constructor(
 
     fun setLook(look: BaseLook) = editAndCommit { RecipeControls.withLook(it, look) }
 
+    /**
+     * One-tap Auto (docs/adr/0010): analyses the photo as the current profile and white balance render it (off the
+     * main thread, on the CPU reference, so the result is the same on every device), then sets the sliders of
+     * [scope] as one history step. Idempotent: the analysis ignores the values Auto sets. Taps while a run is in
+     * flight are ignored.
+     */
+    fun auto(scope: AutoScope) {
+        val inputs = autoInputs ?: return
+        if (autoJob?.isActive == true) return
+        val base = _state.value.edit.recipe
+        autoJob = viewModelScope.launch {
+            val next = withContext(Dispatchers.Default) {
+                val start = SystemClock.elapsedRealtime()
+                AutoRules.run(inputs.sample, base, scope, inputs.wb).also {
+                    EditorMetrics.auto(scope.name, SystemClock.elapsedRealtime() - start)
+                }
+            }
+            val groups = if (scope ==
+                AutoScope.ALL
+            ) {
+                listOf(RecipeGroup.LIGHT, RecipeGroup.COLOUR)
+            } else {
+                listOf(RecipeGroup.LIGHT)
+            }
+            editAndCommit(HistoryAction.AUTO, groups) { current ->
+                val lit = current.copy(light = next.light)
+                if (scope == AutoScope.LIGHT) {
+                    lit
+                } else {
+                    lit.copy(
+                        colour = lit.colour.copy(
+                            vibrance = next.colour.vibrance,
+                            whiteBalance = next.colour.whiteBalance,
+                        ),
+                    )
+                }
+            }
+        }
+    }
+
     fun setWbMode(mode: WbMode) = editAndCommit { RecipeControls.withWbMode(it, mode, _state.value.edit.autoWb) }
 
     /** What the export sheet exports: this photo with the recipe on screen; null until the photo is open. */
@@ -470,6 +515,27 @@ class EditorViewModel @Inject constructor(
     }
 
     private fun PhotoOpener.displayNameOrEmpty(uri: Uri): String = runCatching { displayName(uri) }.getOrDefault("")
+
+    /**
+     * Auto's inputs (ADR 0008/0010), taken while the proxy is still on the heap: the Auto WB analysis and a small
+     * point-sampled copy for the tone analysis (about 2 MB; the proxy itself is dropped after the upload). Returns the
+     * Auto white balance for the chip, `null` when it cannot be estimated.
+     */
+    private suspend fun prepareAuto(input: PipelineInput): WhiteBalance? {
+        val (wbAnalysis, sample) = withContext(Dispatchers.Default) {
+            runCatching { AutoWhiteBalance.analyse(input) }.getOrNull() to AutoAnalyser.sample(input)
+        }
+        autoInputs = AutoInputs(sample, wbAnalysis)
+        return wbAnalysis?.let { runCatching { AutoRules.whiteBalance(it) }.getOrNull() }
+    }
+
+    /** What Auto needs once the proxy is gone: the analysis sample and the Auto WB analysis (null if it failed). */
+    private class AutoInputs(val sample: PipelineInput, val wb: WbAnalysis?)
+
+    @Volatile
+    private var autoInputs: AutoInputs? = null
+
+    private var autoJob: Job? = null
 
     /** The proxy's colour metadata without its pixels (for the eyedropper maths); set once uploaded. */
     @Volatile

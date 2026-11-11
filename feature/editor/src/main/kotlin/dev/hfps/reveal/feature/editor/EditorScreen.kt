@@ -101,6 +101,7 @@ fun EditorScreen(onBack: () -> Unit, modifier: Modifier = Modifier, viewModel: E
             onResetGroup = viewModel::resetGroup,
             onLook = viewModel::setLook,
             onWbMode = viewModel::setWbMode,
+            onAuto = viewModel::auto,
             onHistogram = viewModel::setHistogram,
             onClipping = viewModel::setClipping,
             onCompare = viewModel::setCompare,

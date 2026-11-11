@@ -22,5 +22,7 @@ tasks.withType<Test>().configureEach {
     environment("REVEAL_CALIBRATION_DIR", System.getenv("REVEAL_CALIBRATION_DIR") ?: "")
     environment("REVEAL_RENDER_DUMP", System.getenv("REVEAL_RENDER_DUMP") ?: "")
     environment("REVEAL_RENDER_OUT", System.getenv("REVEAL_RENDER_OUT") ?: "")
+    environment("REVEAL_AUTO_FIT", System.getenv("REVEAL_AUTO_FIT") ?: "")
+    environment("REVEAL_AUTO_SHEET_DIR", System.getenv("REVEAL_AUTO_SHEET_DIR") ?: "")
     maxHeapSize = "2g"
 }

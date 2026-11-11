@@ -132,6 +132,11 @@ object EditorMetrics {
         Log.w(TAG, "open failed: $reason")
     }
 
+    /** One Auto run (analysis + rules), logged for ADR 0010's cost figure. */
+    fun auto(scope: String, millis: Long) {
+        Log.i(TAG, "auto $scope: $millis ms")
+    }
+
     /** Samples the Java heap in use and the native heap. Also called by tests while they drive the UI. */
     fun sampleMemory() {
         val runtime = Runtime.getRuntime()

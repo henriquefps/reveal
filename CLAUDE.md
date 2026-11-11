@@ -221,6 +221,21 @@ adb -s emulator-<port> shell am instrument -w -e class dev.hfps.reveal.export.Ex
 #               -e class '...ExportFlowTest#killedBatchFinished' -e kill check
 ```
 
+## Auto (`:core:pipeline/auto`, ADR 0010)
+
+`AutoAnalyser.sample(proxy)` (512 px, point-sampled, kept by `EditorViewModel` from the open) -> `AutoAnalyser.analyse
+(sample, recipe)` (Light/colour sliders neutral, so Auto is idempotent) -> `AutoRules.compute(analysis, AutoParams())`
+(pure, every constant in `AutoParams`) -> `AutoRules.applyTo(recipe, result, AutoScope.ALL | LIGHT)`; `AutoRules.run`
+does all of it plus Auto WB (`AutoRules.whiteBalance`, also behind the Auto WB chip). The editor commits it as one
+`HistoryAction.AUTO` step. Tests: `AutoRulesTest` (JVM fixtures), `dev.hfps.reveal.editor.EditorAutoTest`
+(instrumented, CC0 ZV-E10 in `files/samples` + synthetic JPEG). Opt-in, never committed:
+
+```sh
+REVEAL_CALIBRATION_DIR=<work dir with rdump+JPG copies> ./gradlew :core:pipeline:testDebugUnitTest --tests '*AutoCalibrationTest*' --rerun -i   # + REVEAL_AUTO_FIT=1
+REVEAL_AUTO_SHEET_DIR=$PWD/build/calibration REVEAL_RENDER_OUT=$PWD/docs/screenshots/auto/auto \
+  ./gradlew :core:pipeline:testDebugUnitTest --tests '*AutoRenderSheetTest*' --rerun   # CC0 before/after sheets
+```
+
 ## `:core:image` harness (ADR 0004)
 
 ```sh

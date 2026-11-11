@@ -11,6 +11,7 @@ import dev.hfps.reveal.pipeline.gl.Histogram
 import dev.hfps.reveal.pipeline.recipe.BaseLook
 import dev.hfps.reveal.pipeline.recipe.ControlId
 import dev.hfps.reveal.pipeline.recipe.EditHistory
+import dev.hfps.reveal.pipeline.recipe.Geometry
 import dev.hfps.reveal.pipeline.recipe.Recipe
 import dev.hfps.reveal.pipeline.recipe.RecipeGroup
 import dev.hfps.reveal.pipeline.recipe.WbMode
@@ -75,6 +76,11 @@ data class ViewOptions(
     val showOriginal: Boolean = false,
     /** "Tap a neutral area" mode of the white-balance eyedropper. */
     val eyedropper: Boolean = false,
+    /**
+     * The Crop mode is open: the photo shows the whole image straightened and oriented (the editing plane of
+     * `GeometryMapping.editing`) under the crop frame; elsewhere the editor shows the cropped result.
+     */
+    val cropping: Boolean = false,
 )
 
 @Immutable
@@ -117,6 +123,14 @@ class EditorActions(
     val onCompare: (CompareMode) -> Unit = {},
     val onShowOriginal: (Boolean) -> Unit = {},
     val onEyedropper: (Boolean) -> Unit = {},
+    /** Crop mode: the working geometry changes (per gesture frame, not committed). */
+    val onGeometry: (Geometry) -> Unit = {},
+    /** Crop mode opened (`true`) or closed (`false`): the renderer shows the editing plane while open. */
+    val onCropMode: (Boolean) -> Unit = {},
+    /** Crop mode's Done: the geometry edit becomes one committed step. */
+    val onCropDone: () -> Unit = {},
+    /** Crop mode's Cancel (and back): the geometry returns to what it was when the mode opened. */
+    val onCropCancel: () -> Unit = {},
     /** Eyedropper result: the neutral point in proxy image pixels. */
     val onPickNeutral: (imageX: Float, imageY: Float) -> Unit = { _, _ -> },
     val onUndo: () -> Unit = {},

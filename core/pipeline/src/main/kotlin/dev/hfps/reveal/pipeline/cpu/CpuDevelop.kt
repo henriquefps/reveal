@@ -1,10 +1,12 @@
 package dev.hfps.reveal.pipeline.cpu
 
 import dev.hfps.reveal.pipeline.PipelineInput
+import dev.hfps.reveal.pipeline.geometry.GeometryMapping
 import dev.hfps.reveal.pipeline.recipe.Recipe
 
 /**
- * The CPU reference pipeline: the operators in their fixed order (docs/adr/0002, docs/adr/0007). Pure Kotlin over
+ * The CPU reference pipeline: the operators in their fixed order (docs/adr/0002, docs/adr/0007; geometry is
+ * slot 13). Pure Kotlin over
  * float arrays, deterministic (no threads, no platform-dependent maths), the oracle for unit tests and GPU parity.
  */
 object CpuDevelop {
@@ -35,7 +37,34 @@ object CpuDevelop {
         return rgb
     }
 
-    /** Full render to RGBA8 (top row first) in the requested output space. */
-    fun render(input: PipelineInput, recipe: Recipe, output: OutputSettings = OutputSettings()): ByteArray =
-        OutputTransformOp.apply(renderLinear(input, recipe), input.width, input.height, output)
+    /**
+     * Slots 1-13: [renderLinear] then the geometry operator (crop, straighten, quarter turns, flips; [GeometryOp]).
+     * The result is [mapping]'s output size (`outputWidth*outputHeight*3`).
+     */
+    fun renderGeometry(
+        input: PipelineInput,
+        recipe: Recipe,
+        mapping: GeometryMapping = mapping(input, recipe),
+    ): FloatArray {
+        val linear = renderLinear(input, recipe)
+        return if (mapping.isIdentity) linear else GeometryOp.apply(linear, mapping)
+    }
+
+    /** The geometry mapping of [recipe] on [input]: its output size is the size of [render]'s result. */
+    fun mapping(input: PipelineInput, recipe: Recipe): GeometryMapping =
+        GeometryMapping.of(recipe.geometry, input.width, input.height)
+
+    /**
+     * Full render to RGBA8 (top row first) in the requested output space, [mapping]`(input, recipe)`'s output size
+     * (the input's size when the recipe has no geometry).
+     */
+    fun render(input: PipelineInput, recipe: Recipe, output: OutputSettings = OutputSettings()): ByteArray {
+        val mapping = mapping(input, recipe)
+        return OutputTransformOp.apply(
+            renderGeometry(input, recipe, mapping),
+            mapping.outputWidth,
+            mapping.outputHeight,
+            output,
+        )
+    }
 }

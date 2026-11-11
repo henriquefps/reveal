@@ -40,7 +40,7 @@ class ClippingWarningsTest {
     }
 
     @Test
-    fun theOutputBlockCarriesTheBitsInTheLastWord() {
+    fun theOutputBlockCarriesTheBitsInTheDitherWord() {
         val block = GpuDevelopRenderer.outputBlock(
             4,
             4,
@@ -51,6 +51,11 @@ class ClippingWarningsTest {
             FloatArray(3),
             3,
         ).order(ByteOrder.nativeOrder())
-        assertThat(block.getInt(block.limit() - Int.SIZE_BYTES)).isEqualTo(3)
+        // dither uvec4 ends at float 32 (mat4 16 + image, viewport, surround 12 + dither 4); geometry follows.
+        assertThat(block.getInt(DITHER_END * Float.SIZE_BYTES - Int.SIZE_BYTES)).isEqualTo(3)
+    }
+
+    private companion object {
+        const val DITHER_END = 32
     }
 }

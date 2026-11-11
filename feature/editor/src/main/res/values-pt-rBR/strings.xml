@@ -99,4 +99,27 @@
     <string name="editor_paste_no_change">Sem alteração (colar redefine)</string>
     <string name="editor_cancel">Cancelar</string>
     <string name="editor_copied">Edições copiadas</string>
+    <string name="editor_mode_cancel">Cancelar</string>
+    <string name="editor_crop_frame">Moldura do corte: arraste as alças para cortar, arraste a foto para movê-la, faça pinça para ampliar</string>
+    <string name="editor_crop_straighten">Endireitar</string>
+    <string name="editor_crop_auto">Automático</string>
+    <string name="editor_crop_aspect_free">Livre</string>
+    <string name="editor_crop_aspect_original">Original</string>
+    <string name="editor_crop_aspect_custom">Personalizada</string>
+    <string name="editor_crop_rotate_left">Girar para a esquerda</string>
+    <string name="editor_crop_rotate_right">Girar para a direita</string>
+    <string name="editor_crop_flip_h">Espelhar na horizontal</string>
+    <string name="editor_crop_flip_v">Espelhar na vertical</string>
+    <string name="editor_crop_horizon">Desenhar uma linha no horizonte</string>
+    <string name="editor_crop_lock">Travar a proporção</string>
+    <string name="editor_crop_unlock">Destravar a proporção</string>
+    <string name="editor_crop_swap">Trocar retrato e paisagem</string>
+    <string name="editor_crop_constrain">Restringir à imagem</string>
+    <string name="editor_crop_reset">Redefinir corte e rotação</string>
+    <string name="editor_crop_custom_title">Proporção personalizada</string>
+    <string name="editor_crop_custom_width">Largura</string>
+    <string name="editor_crop_custom_height">Altura</string>
+    <string name="editor_crop_custom_apply">Aplicar</string>
+    <string name="editor_crop_custom_less">Diminuir %1$s</string>
+    <string name="editor_crop_custom_more">Aumentar %1$s</string>
 </resources>

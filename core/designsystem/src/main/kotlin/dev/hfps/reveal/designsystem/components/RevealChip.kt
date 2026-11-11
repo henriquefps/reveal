@@ -16,6 +16,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
 import dev.hfps.reveal.designsystem.theme.RevealMotion
@@ -23,7 +24,7 @@ import dev.hfps.reveal.designsystem.theme.RevealTheme
 
 /**
  * Fully rounded toggle chip (aspect ratios, channels, filters). 36dp visible, 48dp touch target. Selected = accent
- * fill. Sentence case.
+ * fill. Sentence case. A disabled chip (a feature of a later milestone) is dimmed and not clickable.
  */
 @Composable
 fun RevealChip(
@@ -32,6 +33,7 @@ fun RevealChip(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     icon: ImageVector? = null,
+    enabled: Boolean = true,
 ) {
     val c = RevealTheme.colors
     val container by animateColorAsState(if (selected) c.primary else c.card, RevealMotion.fast(), label = "chip")
@@ -43,7 +45,10 @@ fun RevealChip(
     Surface(
         selected = selected,
         onClick = onClick,
-        modifier = modifier.minimumInteractiveComponentSize(),
+        enabled = enabled,
+        modifier = modifier
+            .minimumInteractiveComponentSize()
+            .alpha(if (enabled) 1f else DISABLED_ALPHA),
         shape = RevealTheme.shapes.chip,
         color = container,
         contentColor = content,
@@ -61,3 +66,5 @@ fun RevealChip(
         }
     }
 }
+
+private const val DISABLED_ALPHA = 0.4f

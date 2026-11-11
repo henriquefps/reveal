@@ -6,6 +6,7 @@ import android.util.Log
 import dev.hfps.reveal.pipeline.gl.FrameStats
 import dev.hfps.reveal.pipeline.gl.GpuDevelopRenderer
 import dev.hfps.reveal.pipeline.recipe.ControlId
+import dev.hfps.reveal.pipeline.recipe.Recipe
 import java.util.Collections
 import java.util.Locale
 
@@ -61,6 +62,10 @@ object EditorMetrics {
 
     /** For tests only: sets and commits a recipe control of the open photo, as a slider release would. */
     @Volatile var setControl: ((ControlId, Float) -> Unit)? = null
+        internal set
+
+    /** For tests only: the working and committed recipes of the open photo. */
+    @Volatile var recipes: (() -> Pair<Recipe, Recipe>)? = null
         internal set
 
     /** Last error, if the open failed. */

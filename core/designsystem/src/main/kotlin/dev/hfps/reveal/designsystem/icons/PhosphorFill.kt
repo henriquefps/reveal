@@ -539,4 +539,76 @@ object PhosphorFill {
             )
         }.build()
     }
+    val ArrowArcLeft: ImageVector by lazy {
+        ImageVector.Builder("FillArrowArcLeft", 24.dp, 24.dp, 256f, 256f).apply {
+            addPath(
+                PathParser().parsePathString("M232,184a8,8,0,0,1-16,0A88,88,0,0,0,67.47,120.16l26.19,26.18A8,8,0,0,1,88,160H24a8,8,0,0,1-8-8V88a8,8,0,0,1,13.66-5.66l26.48,26.48A104,104,0,0,1,232,184Z").toNodes(),
+                fill = SolidColor(Color.Black),
+            )
+        }.build()
+    }
+    val ArrowArcRight: ImageVector by lazy {
+        ImageVector.Builder("FillArrowArcRight", 24.dp, 24.dp, 256f, 256f).apply {
+            addPath(
+                PathParser().parsePathString("M240,88v64a8,8,0,0,1-8,8H168a8,8,0,0,1-5.66-13.66l26.19-26.18A88,88,0,0,0,40,184a8,8,0,0,1-16,0,104,104,0,0,1,175.86-75.18l26.48-26.48A8,8,0,0,1,240,88Z").toNodes(),
+                fill = SolidColor(Color.Black),
+            )
+        }.build()
+    }
+    val FlipHorizontal: ImageVector by lazy {
+        ImageVector.Builder("FillFlipHorizontal", 24.dp, 24.dp, 256f, 256f).apply {
+            addPath(
+                PathParser().parsePathString("M120,40V200a16,16,0,0,1-16,16H40a16,16,0,0,1-14.78-22.15l64-159.93.06-.14A16,16,0,0,1,120,40ZM229.33,208.84A16,16,0,0,1,216,216H152a16,16,0,0,1-16-16V40a16,16,0,0,1,30.74-6.23l.06.14,64,159.93A16,16,0,0,1,229.33,208.84ZM216,200l-.06-.15L152,40V200Z").toNodes(),
+                fill = SolidColor(Color.Black),
+            )
+        }.build()
+    }
+    val FlipVertical: ImageVector by lazy {
+        ImageVector.Builder("FillFlipVertical", 24.dp, 24.dp, 256f, 256f).apply {
+            addPath(
+                PathParser().parsePathString("M56,120H216a16,16,0,0,0,6.23-30.74l-.14-.06-159.93-64A16,16,0,0,0,40,40v64A16,16,0,0,0,56,120Zm0-80,.15.06L216,104H56l0-64ZM231.67,148.82a15.85,15.85,0,0,1-9.45,17.92l-.14.06-159.93,64A16,16,0,0,1,40,216V152a16,16,0,0,1,16-16H216A15.85,15.85,0,0,1,231.67,148.82Z").toNodes(),
+                fill = SolidColor(Color.Black),
+            )
+        }.build()
+    }
+    val LineSegment: ImageVector by lazy {
+        ImageVector.Builder("FillLineSegment", 24.dp, 24.dp, 256f, 256f).apply {
+            addPath(
+                PathParser().parsePathString("M211.81,83.79a28,28,0,0,1-33.12,4.83L88.62,178.69a28,28,0,1,1-44.43-6.48h0a28,28,0,0,1,33.12-4.83l90.07-90.07a28,28,0,1,1,44.43,6.48Z").toNodes(),
+                fill = SolidColor(Color.Black),
+            )
+        }.build()
+    }
+    val LockSimple: ImageVector by lazy {
+        ImageVector.Builder("FillLockSimple", 24.dp, 24.dp, 256f, 256f).apply {
+            addPath(
+                PathParser().parsePathString("M208,80H176V56a48,48,0,0,0-96,0V80H48A16,16,0,0,0,32,96V208a16,16,0,0,0,16,16H208a16,16,0,0,0,16-16V96A16,16,0,0,0,208,80ZM96,56a32,32,0,0,1,64,0V80H96Z").toNodes(),
+                fill = SolidColor(Color.Black),
+            )
+        }.build()
+    }
+    val LockSimpleOpen: ImageVector by lazy {
+        ImageVector.Builder("FillLockSimpleOpen", 24.dp, 24.dp, 256f, 256f).apply {
+            addPath(
+                PathParser().parsePathString("M224,96V208a16,16,0,0,1-16,16H48a16,16,0,0,1-16-16V96A16,16,0,0,1,48,80H80V56A48.05,48.05,0,0,1,128,8c23.2,0,43.32,16.15,47.84,38.41a8,8,0,0,1-15.68,3.18C157.2,35,143.37,24,128,24A32,32,0,0,0,96,56V80H208A16,16,0,0,1,224,96Z").toNodes(),
+                fill = SolidColor(Color.Black),
+            )
+        }.build()
+    }
+    val Swap: ImageVector by lazy {
+        ImageVector.Builder("FillSwap", 24.dp, 24.dp, 256f, 256f).apply {
+            addPath(
+                PathParser().parsePathString("M224,48V152a16,16,0,0,1-16,16H112v16a8,8,0,0,1-13.66,5.66l-24-24a8,8,0,0,1,0-11.32l24-24A8,8,0,0,1,112,136v16h96V48H96v8a8,8,0,0,1-16,0V48A16,16,0,0,1,96,32H208A16,16,0,0,1,224,48ZM168,192a8,8,0,0,0-8,8v8H48V104h96v16a8,8,0,0,0,13.66,5.66l24-24a8,8,0,0,0,0-11.32l-24-24A8,8,0,0,0,144,72V88H48a16,16,0,0,0-16,16V208a16,16,0,0,0,16,16H160a16,16,0,0,0,16-16v-8A8,8,0,0,0,168,192Z").toNodes(),
+                fill = SolidColor(Color.Black),
+            )
+        }.build()
+    }
+    val FrameCorners: ImageVector by lazy {
+        ImageVector.Builder("FillFrameCorners", 24.dp, 24.dp, 256f, 256f).apply {
+            addPath(
+                PathParser().parsePathString("M216,40H40A16,16,0,0,0,24,56V200a16,16,0,0,0,16,16H216a16,16,0,0,0,16-16V56A16,16,0,0,0,216,40ZM88,192H56a8,8,0,0,1-8-8V152a8,8,0,0,1,16,0v24H88a8,8,0,0,1,0,16Zm120-88a8,8,0,0,1-16,0V80H168a8,8,0,0,1,0-16h32a8,8,0,0,1,8,8Z").toNodes(),
+                fill = SolidColor(Color.Black),
+            )
+        }.build()
+    }
 }

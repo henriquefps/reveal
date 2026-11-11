@@ -6,6 +6,8 @@ import dev.hfps.reveal.pipeline.PIPELINE_VERSION
 import dev.hfps.reveal.pipeline.PipelineInput
 import dev.hfps.reveal.pipeline.recipe.BaseLook
 import dev.hfps.reveal.pipeline.recipe.Colour
+import dev.hfps.reveal.pipeline.recipe.CropRect
+import dev.hfps.reveal.pipeline.recipe.Geometry
 import dev.hfps.reveal.pipeline.recipe.Light
 import dev.hfps.reveal.pipeline.recipe.Profile
 import dev.hfps.reveal.pipeline.recipe.Recipe
@@ -184,8 +186,9 @@ class CpuDevelopTest {
         // reconstruction and added the Light tone operators (pinned below); version 4 replaced the M0 Standard knee
         // curve with the profiles of docs/adr/0008, which changes this scene-referred render.
         // If this fails the pipeline output changed: that is only legitimate together with a PIPELINE_VERSION bump
-        // (docs/adr/0002, "PIPELINE_VERSION rules"); update both here.
-        assertThat(PIPELINE_VERSION).isEqualTo(4)
+        // (docs/adr/0002, "PIPELINE_VERSION rules"); update both here. Version 5 added geometry (slot 13), which a
+        // recipe without geometry leaves out: same CRC.
+        assertThat(PIPELINE_VERSION).isEqualTo(5)
         assertThat(crc).isEqualTo(GOLDEN_CRC_V4)
     }
 
@@ -211,7 +214,7 @@ class CpuDevelopTest {
 
         // Version 3: highlight reconstruction, highlights/shadows, contrast/whites/blacks (docs/adr/0007); version 4
         // the new Standard under them (docs/adr/0008).
-        assertThat(PIPELINE_VERSION).isEqualTo(4)
+        assertThat(PIPELINE_VERSION).isEqualTo(5)
         assertThat(crc).isEqualTo(GOLDEN_CRC_LIGHT_V4)
     }
 
@@ -231,13 +234,33 @@ class CpuDevelopTest {
         }.value
 
         // Version 4: profiles, vibrance/saturation, relative white balance (docs/adr/0008).
-        assertThat(PIPELINE_VERSION).isEqualTo(4)
+        assertThat(PIPELINE_VERSION).isEqualTo(5)
         assertThat(crc).isEqualTo(GOLDEN_CRC_COLOUR_V4)
+    }
+
+    @Test
+    fun `golden checksum pins the geometry operator to PIPELINE_VERSION`() {
+        val scene = SyntheticImages.scene(64, 48)
+        val straightened = Recipe(
+            light = Light(0.3f),
+            geometry = Geometry(crop = CropRect(0.1f, 0.15f, 0.85f, 0.9f), angle = 7.3f, rotate = 1, flipH = true),
+        )
+        val turned = Recipe(geometry = Geometry(crop = CropRect(0.2f, 0f, 0.7f, 0.6f), rotate = 3, flipV = true))
+
+        val crc = CRC32().apply {
+            update(CpuDevelop.render(scene, straightened))
+            update(CpuDevelop.render(scene, turned))
+        }.value
+
+        // Version 5: crop, straighten (Catmull-Rom), quarter turns and flips as one resampling (docs/adr/0002).
+        assertThat(PIPELINE_VERSION).isEqualTo(5)
+        assertThat(crc).isEqualTo(GOLDEN_CRC_GEOMETRY_V5)
     }
 
     private companion object {
         const val GOLDEN_CRC_V4: Long = 3273411752L
         const val GOLDEN_CRC_LIGHT_V4: Long = 2469709740L
         const val GOLDEN_CRC_COLOUR_V4: Long = 3805206770L
+        const val GOLDEN_CRC_GEOMETRY_V5: Long = 341663594L
     }
 }

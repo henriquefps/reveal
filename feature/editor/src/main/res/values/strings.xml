@@ -99,4 +99,34 @@
     <string name="editor_paste_no_change">No change (pasting resets it)</string>
     <string name="editor_cancel">Cancel</string>
     <string name="editor_copied">Edits copied</string>
+    <string name="editor_mode_cancel">Cancel</string>
+    <string name="editor_crop_frame">Crop frame: drag the handles to crop, drag the photo to move it, pinch to zoom</string>
+    <string name="editor_crop_straighten">Straighten</string>
+    <string name="editor_crop_auto">Auto</string>
+    <string name="editor_crop_aspect_free">Free</string>
+    <string name="editor_crop_aspect_original">Original</string>
+    <string name="editor_crop_aspect_1_1" translatable="false">1:1</string>
+    <string name="editor_crop_aspect_4_5" translatable="false">4:5</string>
+    <string name="editor_crop_aspect_5_4" translatable="false">5:4</string>
+    <string name="editor_crop_aspect_3_2" translatable="false">3:2</string>
+    <string name="editor_crop_aspect_2_3" translatable="false">2:3</string>
+    <string name="editor_crop_aspect_16_9" translatable="false">16:9</string>
+    <string name="editor_crop_aspect_9_16" translatable="false">9:16</string>
+    <string name="editor_crop_aspect_custom">Custom</string>
+    <string name="editor_crop_rotate_left">Rotate left</string>
+    <string name="editor_crop_rotate_right">Rotate right</string>
+    <string name="editor_crop_flip_h">Flip horizontally</string>
+    <string name="editor_crop_flip_v">Flip vertically</string>
+    <string name="editor_crop_horizon">Draw a line along the horizon</string>
+    <string name="editor_crop_lock">Lock the aspect ratio</string>
+    <string name="editor_crop_unlock">Unlock the aspect ratio</string>
+    <string name="editor_crop_swap">Swap portrait and landscape</string>
+    <string name="editor_crop_constrain">Constrain to the image</string>
+    <string name="editor_crop_reset">Reset crop and rotation</string>
+    <string name="editor_crop_custom_title">Custom aspect ratio</string>
+    <string name="editor_crop_custom_width">Width</string>
+    <string name="editor_crop_custom_height">Height</string>
+    <string name="editor_crop_custom_apply">Apply</string>
+    <string name="editor_crop_custom_less">Decrease %1$s</string>
+    <string name="editor_crop_custom_more">Increase %1$s</string>
 </resources>

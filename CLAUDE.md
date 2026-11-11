@@ -110,6 +110,11 @@ adb -s emulator-<port> logcat -d -s REVEAL_PARITY REVEAL_BENCH     # measured er
 Debug canvas: `adb -s emulator-<port> shell am start -n dev.hfps.reveal.debug/dev.hfps.reveal.debug.PipelineDebugActivity`
 (debug build only: `app/src/debug`, hosting `EditorDebugScreen` on a synthetic image).
 
+Geometry (slot 13, ADR 0002 "Geometry"): `geometry/GeometryMapping` (output <-> image, used by `cpu/GeometryOp`, the
+output pass and the export tiles via `sourceRegion`), `geometry/CropEditing` (crop mode gesture maths in the editing
+plane). Crop/turn/flip copy pixels; straightening is Catmull-Rom. Renderer: `setGeometryEditing(true)` shows the editing
+plane; `renderOutput` returns the operator's output size (`CpuDevelop.mapping(input, recipe)`).
+
 ## Library (`:core:data`, `:feature:library`, M1, ADR 0006)
 
 Room `RevealDatabase` v2 (sources, photos, photo_files, versions, recipes, history, history_cursor, cache_entries);
@@ -181,7 +186,8 @@ open a RAW through it to prove R8 kept the JNI (`core/image/consumer-rules.pro`)
 screen behind the chrome (`PhotoSurface`); the chrome leaves an empty `PhotoSlot` whose bounds become the renderer's
 frame (`PhotoController`), so panel snaps and the slider-drag shrink move the photo without resizing the surface.
 Tools live in `tools/EditorTools.kt` (`EditorTool` + `ToolBehaviour.Panel / Mode / Action / Unavailable`): add or
-enable a tool there, never in the layout. Panels get a `PanelHost` (state, actions, `SliderFocus`, `PanelNavigator`
+enable a tool there, never in the layout. A `Mode` (Crop: `crop/`) gets a `ModeHost` (state, actions, photo controller,
+Done/Cancel) and edits the working recipe only; Done commits one step, Cancel/back restores the committed geometry. Panels get a `PanelHost` (state, actions, `SliderFocus`, `PanelNavigator`
 for sub-panels); bind a slider with `ControlSlider(host, ControlId.X, R.string.label)` (`RecipeControls` maps ids to
 recipe fields, `RecipeRanges` gives range/step/format). The ViewModel owns the working/committed recipe and pushes
 it, the compare mode, clipping and histogram flags to the renderer. History (ADR 0003 "History engine", ADR 0006):

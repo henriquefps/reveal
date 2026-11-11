@@ -66,3 +66,12 @@ columns
 square
 check-square
 arrow-bend-up-left
+arrow-arc-left
+arrow-arc-right
+flip-horizontal
+flip-vertical
+line-segment
+lock-simple
+lock-simple-open
+swap
+frame-corners

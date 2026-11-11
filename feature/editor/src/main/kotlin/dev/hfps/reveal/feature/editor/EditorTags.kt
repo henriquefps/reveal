@@ -1,6 +1,7 @@
 package dev.hfps.reveal.feature.editor
 
 import dev.hfps.reveal.feature.editor.tools.ToolId
+import dev.hfps.reveal.pipeline.recipe.AspectPreset
 import dev.hfps.reveal.pipeline.recipe.BaseLook
 import dev.hfps.reveal.pipeline.recipe.ControlId
 import dev.hfps.reveal.pipeline.recipe.RecipeGroup
@@ -44,6 +45,21 @@ object EditorTags {
     const val MENU_RESET_AS_OPENED = "editor-menu-reset-as-opened"
     const val PASTE_CHOOSER = "editor-paste"
     const val PASTE_CONFIRM = "$PASTE_CHOOSER-confirm"
+    const val MODE_CONTROLS = "editor-mode-controls"
+    const val MODE_DONE = "editor-mode-done"
+    const val MODE_CANCEL = "editor-mode-cancel"
+    const val CROP_OVERLAY = "editor-crop-overlay"
+    const val CROP_DIAL = "editor-crop-dial"
+    const val CROP_ROTATE_LEFT = "editor-crop-rotate-left"
+    const val CROP_ROTATE_RIGHT = "editor-crop-rotate-right"
+    const val CROP_FLIP_H = "editor-crop-flip-h"
+    const val CROP_FLIP_V = "editor-crop-flip-v"
+    const val CROP_HORIZON = "editor-crop-horizon"
+    const val CROP_LOCK = "editor-crop-lock"
+    const val CROP_SWAP = "editor-crop-swap"
+    const val CROP_CONSTRAIN = "editor-crop-constrain"
+    const val CROP_RESET = "editor-crop-reset"
+    const val CROP_AUTO = "editor-crop-auto"
 
     /** The slider row of recipe control [id], e.g. `editor-control-exposure`. */
     fun control(id: ControlId): String = "editor-control-${id.name.lowercase()}"
@@ -64,4 +80,6 @@ object EditorTags {
 
     /** A group's row in the paste chooser. */
     fun pasteGroup(group: RecipeGroup): String = "$PASTE_CHOOSER-$group"
+
+    fun aspect(preset: AspectPreset): String = "editor-crop-aspect-${preset.name.lowercase()}"
 }

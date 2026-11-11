@@ -9,6 +9,8 @@ import dev.hfps.reveal.pipeline.cpu.OutputSpace
 import dev.hfps.reveal.pipeline.gl.GpuDevelopRenderer
 import dev.hfps.reveal.pipeline.recipe.BaseLook
 import dev.hfps.reveal.pipeline.recipe.Colour
+import dev.hfps.reveal.pipeline.recipe.CropRect
+import dev.hfps.reveal.pipeline.recipe.Geometry
 import dev.hfps.reveal.pipeline.recipe.Light
 import dev.hfps.reveal.pipeline.recipe.Profile
 import dev.hfps.reveal.pipeline.recipe.Recipe
@@ -62,7 +64,7 @@ class GpuParityTest {
     private fun recipes(count: Int): List<Recipe> {
         val random = Random(1234)
         fun slider() = if (random.nextBoolean()) random.nextFloat() * 200f - 100f else 0f
-        return listOf(Recipe()) + LIGHT_EXTREMES + COLOUR_EXTREMES + List(count) {
+        return listOf(Recipe()) + LIGHT_EXTREMES + COLOUR_EXTREMES + GEOMETRY + List(count) {
             Recipe(
                 light = Light(
                     random.nextFloat() * 6f - 3f,
@@ -162,6 +164,9 @@ class GpuParityTest {
                     val settings = OutputSettings(space = space)
                     val cpu = CpuDevelop.render(image, recipe, settings)
                     val gpu = renderer.renderOutput(recipe, settings)
+                    // Geometry: both sides render the operator's output size.
+                    assertThat(gpu.size).isEqualTo(cpu.size)
+                    val outWidth = CpuDevelop.mapping(image, recipe).outputWidth
                     for (i in cpu.indices) {
                         if (i % 4 == 3) {
                             assertThat(gpu[i]).isEqualTo(cpu[i])
@@ -175,8 +180,8 @@ class GpuParityTest {
                         recipeMax = maxOf(recipeMax, diff)
                         if (diff > imageMax) {
                             imageMax = diff
-                            where = "recipe #$r ${recipe.light} ${recipe.profile} ${recipe.colour}, " +
-                                "pixel ${i / 4 % image.width}, ${i / 4 / image.width}"
+                            where = "recipe #$r ${recipe.light} ${recipe.profile} ${recipe.colour} " +
+                                "${recipe.geometry}, pixel ${i / 4 % outWidth}, ${i / 4 / outWidth}"
                         }
                     }
                     if (recipeMax > allowed) failures += "$space $name recipe #$r"
@@ -198,6 +203,37 @@ class GpuParityTest {
         recipe.hasColour() -> maxOf(imageAllowed, OUTPUT_MAX_LEVELS_COLOUR)
         name == "rawNoise" && recipe.light.hasTone() -> OUTPUT_MAX_LEVELS_NOISE_TONE
         else -> imageAllowed
+    }
+
+    @Test
+    fun geometryMatchesCpuReferenceIn8Bit() = runBlocking {
+        // Slot 13 alone: same size, exact copies without straightening, Catmull-Rom within the 8-bit tolerance.
+        var worst = 0
+        var sum = 0L
+        var count = 0L
+        for (name in listOf("checker", "scene", "srgbChart", "stepEdge")) {
+            val image = images.getValue(name)
+            renderer.setInput(image)
+            for (recipe in GEOMETRY) {
+                val settings = OutputSettings(dither = false)
+                val cpu = CpuDevelop.render(image, recipe, settings)
+                val gpu = renderer.renderOutput(recipe, settings)
+                assertThat(gpu.size).isEqualTo(cpu.size)
+                var max = 0
+                for (i in cpu.indices) {
+                    val diff = abs((gpu[i].toInt() and 0xff) - (cpu[i].toInt() and 0xff))
+                    max = maxOf(max, diff)
+                    sum += diff
+                    count++
+                }
+                Log.i(TAG, "geometry $name ${recipe.geometry}: max diff $max levels")
+                worst = maxOf(worst, max)
+                if (recipe.geometry.angle == 0f) assertThat(max).isAtMost(1)
+            }
+        }
+        Log.i(TAG, "geometry: max diff $worst levels, mean diff ${sum.toDouble() / count}")
+        assertThat(worst).isAtMost(OUTPUT_MAX_LEVELS)
+        assertThat(sum.toDouble() / count).isAtMost(OUTPUT_MEAN_LEVELS)
     }
 
     @Test
@@ -263,6 +299,19 @@ class GpuParityTest {
         const val TAG = "REVEAL_PARITY"
 
         /** The Light sliders at their ends, alone and together (always in the parity set). */
+
+        // Geometry (slot 13): pixel-exact crops, quarter turns and flips, Catmull-Rom straightening (constrained and
+        // with black empty corners), a tiny angle; with an exposure so the stage is not the identity.
+        val GEOMETRY: List<Recipe> = listOf(
+            Geometry(crop = CropRect(0.1f, 0.2f, 0.8f, 0.9f)),
+            Geometry(crop = CropRect(0.05f, 0f, 0.6f, 0.75f), rotate = 1, flipH = true),
+            Geometry(rotate = 2, flipV = true),
+            Geometry(rotate = 3),
+            Geometry(crop = CropRect(0.2f, 0.2f, 0.8f, 0.8f), angle = 7.3f),
+            Geometry(angle = -31.7f, rotate = 1, constrain = false),
+            Geometry(crop = CropRect(0.1f, 0.1f, 0.9f, 0.9f), angle = 0.1f, flipH = true),
+        ).map { Recipe(light = Light(0.4f), geometry = it) }
+
         val LIGHT_EXTREMES: List<Recipe> = listOf(
             Light(highlights = -100f),
             Light(highlights = 100f),

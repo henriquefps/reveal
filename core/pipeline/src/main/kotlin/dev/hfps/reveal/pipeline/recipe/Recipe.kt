@@ -204,6 +204,11 @@ data class Geometry(
     @SerialName("flipV") val flipV: Boolean = false,
     /** The crop frame's aspect constraint (UI state that belongs to the edit, so undo restores it). */
     @SerialName("aspect") val aspect: Aspect = Aspect(),
+    /**
+     * Constrain the crop to the image: straightening and handle drags shrink/stop the frame so no empty corner
+     * enters it. An editing option stored with the edit (like [aspect]); it never changes pixels by itself.
+     */
+    @SerialName("constrain") val constrain: Boolean = true,
 ) {
     init {
         require(angle.isFinite()) { "angle must be finite" }

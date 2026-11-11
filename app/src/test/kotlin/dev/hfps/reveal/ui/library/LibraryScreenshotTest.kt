@@ -264,3 +264,43 @@ class TabletLibraryScreenshotTest : LibraryScreenshotBase("tablet") {
         ).copy(entries = emptyList(), photoCount = 0),
     )
 }
+
+/** The two-pane library on a Galaxy Tab S9 (M2/E): selection with its actions inline, 200 % font. */
+@RunWith(AndroidJUnit4::class)
+@GraphicsMode(GraphicsMode.Mode.NATIVE)
+@Config(sdk = [35], qualifiers = "w1495dp-h934dp-mdpi")
+class TabletS9LibraryScreenshotTest : LibraryScreenshotBase("tablet_s9") {
+    @Test fun twoPaneDark() = shoot("two_pane_dark", dark = true, state = LibrarySamples.grid())
+
+    @Test fun selecting() =
+        shoot("selecting_light", dark = false, state = LibrarySamples.grid(selected = setOf(2L, 3L, 4L, 7L)))
+
+    @Test fun fontScale200() = shoot(
+        "two_pane_light_font200",
+        dark = false,
+        state = LibrarySamples.grid(),
+        fontScale = 2f,
+    )
+}
+
+/** Tablet portrait (934 dp wide) and a foldable's inner screen (852 dp): still two panes. */
+@RunWith(AndroidJUnit4::class)
+@GraphicsMode(GraphicsMode.Mode.NATIVE)
+@Config(sdk = [35], qualifiers = "w934dp-h1495dp-mdpi")
+class TabletPortraitLibraryScreenshotTest : LibraryScreenshotBase("tablet_portrait") {
+    @Test fun twoPaneLight() = shoot("two_pane_light", dark = false, state = LibrarySamples.grid())
+}
+
+@RunWith(AndroidJUnit4::class)
+@GraphicsMode(GraphicsMode.Mode.NATIVE)
+@Config(sdk = [35], qualifiers = "w852dp-h883dp-mdpi")
+class FoldableLibraryScreenshotTest : LibraryScreenshotBase("foldable") {
+    @Test fun twoPaneDark() = shoot("two_pane_dark", dark = true, state = LibrarySamples.grid())
+
+    @Test fun fontScale200() = shoot(
+        "two_pane_dark_font200",
+        dark = true,
+        state = LibrarySamples.grid(),
+        fontScale = 2f,
+    )
+}

@@ -246,4 +246,26 @@
     <string name="editor_transform_scale">Scale</string>
     <string name="editor_transform_offset_x">Offset X</string>
     <string name="editor_transform_offset_y">Offset Y</string>
+
+    <!-- Tablet layout (M2/E) -->
+    <plurals name="editor_filmstrip">
+        <item quantity="one">Filmstrip, %d photo</item>
+        <item quantity="other">Filmstrip, %d photos</item>
+    </plurals>
+    <plurals name="editor_filmstrip_stars">
+        <item quantity="one">%d star</item>
+        <item quantity="other">%d stars</item>
+    </plurals>
+    <string name="editor_filmstrip_picked">Picked</string>
+    <string name="editor_filmstrip_rejected">Rejected</string>
+    <string name="editor_filmstrip_edited">Edited</string>
+    <string name="editor_filmstrip_show">Show filmstrip</string>
+    <string name="editor_filmstrip_hide">Hide filmstrip</string>
+    <string name="editor_panel_resize">Panel width</string>
+    <string name="editor_panel_wider">Wider panel</string>
+    <string name="editor_panel_narrower">Narrower panel</string>
+    <string name="editor_hover_curve_point">In %1$d · Out %2$d</string>
+    <string name="editor_hover_crop_size">%1$d × %2$d px</string>
+    <string name="editor_hover_guide">Guide %1$s°</string>
+    <string name="editor_hover_targeted">%1$s · %2$s</string>
 </resources>

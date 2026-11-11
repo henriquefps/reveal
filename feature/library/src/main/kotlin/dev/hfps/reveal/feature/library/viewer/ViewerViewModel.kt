@@ -10,6 +10,7 @@ import dev.hfps.image.format.PhotoMetadata
 import dev.hfps.reveal.data.db.PhotoEntity
 import dev.hfps.reveal.data.library.LibraryRepository
 import dev.hfps.reveal.data.library.PhotoDetail
+import dev.hfps.reveal.data.model.PhotoListCodec
 import dev.hfps.reveal.data.model.PhotoQuery
 import dev.hfps.reveal.data.model.PickFlag
 import dev.hfps.reveal.data.thumb.DisplayImage
@@ -58,6 +59,11 @@ class ViewerViewModel @Inject constructor(
     private val route = savedState.toRoute<ViewerRoute>()
     private val _state = MutableStateFlow(ViewerUiState())
     val state: StateFlow<ViewerUiState> = _state.asStateFlow()
+
+    /** The grid's query with its scope (`PhotoListCodec`), for the editor's filmstrip; `null` without a scope. */
+    val strip: String? = LibraryViewModel.decodeSelection(route.selection)?.scope()?.let { scope ->
+        PhotoListCodec.encode((LibraryViewModel.decodeQuery(route.query) ?: PhotoQuery()).copy(scope = scope))
+    }
 
     init {
         viewModelScope.launch {

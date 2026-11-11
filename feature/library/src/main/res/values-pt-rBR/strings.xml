@@ -115,6 +115,7 @@
     <string name="library_pick_source">Escolha uma pasta à esquerda.</string>
 
     <string name="viewer_position">%1$d de %2$d</string>
+    <string name="viewer_info_close">Fechar informações</string>
     <string name="viewer_info">Informações</string>
     <string name="viewer_edit">Editar</string>
     <string name="viewer_unavailable">A pasta desta foto não está disponível agora.</string>

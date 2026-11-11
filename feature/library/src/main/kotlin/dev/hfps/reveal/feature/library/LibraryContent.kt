@@ -121,7 +121,7 @@ fun LibraryContent(
 @Composable
 private fun LibraryTopBar(state: LibraryUiState, actions: LibraryActions, wide: Boolean) {
     when {
-        state.selecting -> SelectionTopBar(state, actions)
+        state.selecting -> SelectionTopBar(state, actions, wide)
 
         state.searchOpen -> SearchTopBar(state.query, actions)
 
@@ -266,8 +266,9 @@ private fun SearchTopBar(query: PhotoQuery, actions: LibraryActions) {
     }
 }
 
+/** The selection bar; [wide] (two panes) shows copy, paste, reset and export as buttons instead of in the menu. */
 @Composable
-private fun SelectionTopBar(state: LibraryUiState, actions: LibraryActions) {
+private fun SelectionTopBar(state: LibraryUiState, actions: LibraryActions, wide: Boolean) {
     val count = state.selected.size
     Row(
         modifier = Modifier
@@ -300,8 +301,39 @@ private fun SelectionTopBar(state: LibraryUiState, actions: LibraryActions) {
             contentDescription = stringResource(R.string.library_action_reject),
             onClick = { actions.onFlag(PickFlag.REJECT) },
         )
-        SelectionOverflow(state, actions)
+        if (wide) WideSelectionActions(state, actions)
+        SelectionOverflow(state, actions, wide)
     }
+}
+
+@Composable
+private fun WideSelectionActions(state: LibraryUiState, actions: LibraryActions) {
+    RevealIconButton(
+        icon = PhosphorRegular.Copy,
+        contentDescription = stringResource(R.string.library_action_copy_edits),
+        onClick = actions.onCopyEdits,
+        enabled = state.selected.size == 1,
+        modifier = Modifier.testTag(LibraryTags.COPY_EDITS),
+    )
+    RevealIconButton(
+        icon = PhosphorRegular.ClipboardText,
+        contentDescription = stringResource(R.string.library_action_paste_edits_choose),
+        onClick = actions.onPasteEdits,
+        enabled = state.clipboard != null,
+        modifier = Modifier.testTag(LibraryTags.PASTE_EDITS),
+    )
+    RevealIconButton(
+        icon = PhosphorRegular.ArrowCounterClockwise,
+        contentDescription = stringResource(R.string.library_action_reset_edits),
+        onClick = actions.onResetEdits,
+        modifier = Modifier.testTag(LibraryTags.RESET_EDITS),
+    )
+    RevealIconButton(
+        icon = PhosphorRegular.Export,
+        contentDescription = stringResource(R.string.library_action_export),
+        onClick = actions.onExport,
+        modifier = Modifier.testTag(LibraryTags.EXPORT),
+    )
 }
 
 @Composable
@@ -338,7 +370,7 @@ private fun TaggedMenuItem(icon: ImageVector, text: String, tag: String, enabled
 
 @Suppress("LongMethod")
 @Composable
-private fun SelectionOverflow(state: LibraryUiState, actions: LibraryActions) {
+private fun SelectionOverflow(state: LibraryUiState, actions: LibraryActions, wide: Boolean) {
     var open by remember { mutableStateOf(false) }
     Box {
         RevealIconButton(
@@ -361,31 +393,33 @@ private fun SelectionOverflow(state: LibraryUiState, actions: LibraryActions) {
                 open = false
                 actions.onRemovePhotos()
             }
-            TaggedMenuItem(
-                PhosphorRegular.Copy,
-                stringResource(R.string.library_action_copy_edits),
-                LibraryTags.COPY_EDITS,
-                enabled = state.selected.size == 1,
-            ) {
-                open = false
-                actions.onCopyEdits()
-            }
-            TaggedMenuItem(
-                PhosphorRegular.ClipboardText,
-                stringResource(R.string.library_action_paste_edits_choose),
-                LibraryTags.PASTE_EDITS,
-                enabled = state.clipboard != null,
-            ) {
-                open = false
-                actions.onPasteEdits()
-            }
-            TaggedMenuItem(
-                PhosphorRegular.ArrowCounterClockwise,
-                stringResource(R.string.library_action_reset_edits),
-                LibraryTags.RESET_EDITS,
-            ) {
-                open = false
-                actions.onResetEdits()
+            if (!wide) {
+                TaggedMenuItem(
+                    PhosphorRegular.Copy,
+                    stringResource(R.string.library_action_copy_edits),
+                    LibraryTags.COPY_EDITS,
+                    enabled = state.selected.size == 1,
+                ) {
+                    open = false
+                    actions.onCopyEdits()
+                }
+                TaggedMenuItem(
+                    PhosphorRegular.ClipboardText,
+                    stringResource(R.string.library_action_paste_edits_choose),
+                    LibraryTags.PASTE_EDITS,
+                    enabled = state.clipboard != null,
+                ) {
+                    open = false
+                    actions.onPasteEdits()
+                }
+                TaggedMenuItem(
+                    PhosphorRegular.ArrowCounterClockwise,
+                    stringResource(R.string.library_action_reset_edits),
+                    LibraryTags.RESET_EDITS,
+                ) {
+                    open = false
+                    actions.onResetEdits()
+                }
             }
             // Placeholder until its workstream lands (presets).
             val coming = stringResource(R.string.library_action_coming)
@@ -395,9 +429,15 @@ private fun SelectionOverflow(state: LibraryUiState, actions: LibraryActions) {
                 enabled = false,
             ) {
             }
-            TaggedMenuItem(PhosphorRegular.Export, stringResource(R.string.library_action_export), LibraryTags.EXPORT) {
-                open = false
-                actions.onExport()
+            if (!wide) {
+                TaggedMenuItem(
+                    PhosphorRegular.Export,
+                    stringResource(R.string.library_action_export),
+                    LibraryTags.EXPORT,
+                ) {
+                    open = false
+                    actions.onExport()
+                }
             }
         }
     }

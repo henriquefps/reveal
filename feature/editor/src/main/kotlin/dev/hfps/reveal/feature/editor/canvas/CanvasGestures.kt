@@ -25,6 +25,7 @@ import androidx.compose.ui.input.pointer.positionChanged
 import androidx.compose.ui.input.pointer.util.VelocityTracker
 import androidx.compose.ui.platform.LocalViewConfiguration
 import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.dp
 import kotlin.math.abs
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -37,25 +38,34 @@ internal const val HOLD_ORIGINAL_DELAY_MS: Long = 350L
 private const val DOUBLE_TAP_ZOOM_MS = 260
 private const val MIN_FLING_SPEED = 80f
 
+/** A swipe to the next photo: at least this far, and mostly horizontal. */
+private val SWIPE_DISTANCE = 96.dp
+private const val SWIPE_RATIO = 2f
+
 /**
  * Pinch zoom, one-finger pan when zoomed, fling, double-tap fit <-> 100 %, hold-to-show-original and tap for the
  * photo canvas. [onHold] is called with `true` when the hold starts and `false` when it ends; [onTap] on a single
- * tap (after the double-tap timeout).
+ * tap (after the double-tap timeout). With [onSwipe] (the tablet filmstrip), a one-finger horizontal swipe at fit
+ * moves to the next (`1`, swipe left) or previous (`-1`) photo: at fit a drag does not pan, so nothing is lost.
  */
 @Composable
 internal fun Modifier.canvasGestures(
     state: ZoomState,
     scope: CoroutineScope,
     onTap: () -> Unit = {},
+    onSwipe: ((Int) -> Unit)? = null,
     onHold: (Boolean) -> Unit,
 ): Modifier {
     val density = androidx.compose.ui.platform.LocalDensity.current
     val slop = LocalViewConfiguration.current.touchSlop
     val currentHold by rememberUpdatedState(onHold)
     val currentTap by rememberUpdatedState(onTap)
+    val currentSwipe by rememberUpdatedState(onSwipe)
     return this
         .pointerInput(state) { detectDoubleTap(state, scope, { currentTap() }) { currentHold(it) } }
-        .pointerInput(state, density) { detectZoomPanFling(state, scope, slop, density) }
+        .pointerInput(state, density) {
+            detectZoomPanFling(state, scope, slop, density) { step -> currentSwipe?.invoke(step) }
+        }
 }
 
 /** Animates the double-tap zoom (fit <-> 100 %) around the view pixel ([focusX], [focusY]). */
@@ -99,9 +109,11 @@ private suspend fun PointerInputScope.detectZoomPanFling(
     scope: CoroutineScope,
     slop: Float,
     density: Density,
+    onSwipe: (Int) -> Unit,
 ) {
     var fling: Job? = null
     val decay = splineBasedDecay<Float>(density)
+    val swipeDistance = with(density) { SWIPE_DISTANCE.toPx() }
     awaitEachGesture {
         awaitFirstDown(requireUnconsumed = false)
         fling?.cancel()
@@ -109,14 +121,19 @@ private suspend fun PointerInputScope.detectZoomPanFling(
         var pastSlop = false
         var zoom = 1f
         var pan = Offset.Zero
+        val fitAtStart = state.isFit
+        var oneFinger = true
+        var travel = Offset.Zero
         var lastEvent: PointerEvent
         do {
             val event = awaitPointerEvent()
             lastEvent = event
             val consumedElsewhere = event.changes.any { it.isConsumed }
+            if (event.changes.size > 1) oneFinger = false
             if (!consumedElsewhere) {
                 val zoomChange = event.calculateZoom()
                 val panChange = event.calculatePan()
+                travel += panChange
                 if (!pastSlop) {
                     zoom *= zoomChange
                     pan += panChange
@@ -132,7 +149,12 @@ private suspend fun PointerInputScope.detectZoomPanFling(
                 }
             }
         } while (!consumedElsewhere && event.changes.any { it.pressed })
-        if (pastSlop && lastEvent.changes.size == 1 && lastEvent.changes[0].changedToUp()) {
+        val ended = lastEvent.changes.size == 1 && lastEvent.changes[0].changedToUp()
+        val swiped = ended && pastSlop && oneFinger && fitAtStart && state.isFit &&
+            abs(travel.x) > swipeDistance && abs(travel.x) > SWIPE_RATIO * abs(travel.y)
+        if (swiped) {
+            onSwipe(if (travel.x < 0f) 1 else -1)
+        } else if (pastSlop && ended) {
             val velocity = tracker.calculateVelocity()
             if (abs(velocity.x) > MIN_FLING_SPEED || abs(velocity.y) > MIN_FLING_SPEED) {
                 fling = scope.launch {

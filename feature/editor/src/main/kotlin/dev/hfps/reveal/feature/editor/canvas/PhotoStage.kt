@@ -12,6 +12,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.saveable.Saver
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -50,6 +52,15 @@ class PhotoController {
     var zoom: ZoomState? = null
         private set
 
+    /**
+     * A pen has touched or hovered the photo in this editor: from then on the targeted adjustment answers the pen
+     * and the finger pans and zooms (docs/adr/0016).
+     */
+    var penSeen: Boolean by mutableStateOf(false)
+
+    /** Where a pen hovers over the photo (slot pixels) while a tool shows hover feedback, `null` otherwise. */
+    var penHover: Offset? by mutableStateOf(null)
+
     /** The eyedropper's finger and loupe position, in slot pixels. */
     val loupe: LoupeState = LoupeState()
 
@@ -69,6 +80,28 @@ class PhotoController {
 
     private var contentWidth = 0
     private var contentHeight = 0
+
+    /**
+     * A zoomed view to show again once the photo, its content size and the frame are known (after a rotation or a
+     * fold the activity is recreated; the ViewModel and renderer survive, the controller does not).
+     */
+    private var pending: Pending? = null
+
+    private data class Pending(val contentWidth: Int, val contentHeight: Int, val memory: ZoomMemory)
+
+    /** What [Saver] keeps: the content size and the zoomed view, `null` at fit or before the photo. */
+    private fun saved(): FloatArray? {
+        val m = zoom?.takeIf { cropView == null }?.memory() ?: return null
+        return floatArrayOf(contentWidth.toFloat(), contentHeight.toFloat(), m.scale, m.centerX, m.centerY)
+    }
+
+    private fun applyPending() {
+        val p = pending ?: return
+        val z = zoom ?: return
+        if (frame == null || p.contentWidth != contentWidth || p.contentHeight != contentHeight) return
+        pending = null
+        z.restore(p.memory)
+    }
 
     /**
      * Binds the photo of [ready] (or none): a new zoom wired to its renderer, fitted to the frame already known, so
@@ -104,6 +137,7 @@ class PhotoController {
         } else {
             renderer?.setView(ViewTransform(z.scale, z.centerX, z.centerY))
         }
+        applyPending()
     }
 
     /** Shows [view] (editing-plane pixels) for the Crop mode. */
@@ -126,6 +160,7 @@ class PhotoController {
         frame = next
         renderer?.setFrame(next)
         zoom?.setViewSize(b.width.roundToInt(), b.height.roundToInt())
+        applyPending()
     }
 
     /**
@@ -180,9 +215,26 @@ class PhotoController {
         r.setLoupe(Loupe(f.left + at.x, f.top + at.y, sizePx, px, py, scale))
     }
 
-    private companion object {
-        const val LOUPE_ZOOM = 4f
-        const val LOUPE_MAX_SCALE = 8f
+    companion object {
+        private const val LOUPE_ZOOM = 4f
+        private const val LOUPE_MAX_SCALE = 8f
+        private const val SAVED_SIZE = 5
+
+        /** Keeps the zoomed view across configuration changes. */
+        val Saver: Saver<PhotoController, FloatArray> = Saver(
+            save = { it.saved() },
+            restore = { values ->
+                PhotoController().apply {
+                    if (values.size == SAVED_SIZE) {
+                        pending = Pending(
+                            values[0].toInt(),
+                            values[1].toInt(),
+                            ZoomMemory(values[2], values[3], values[4]),
+                        )
+                    }
+                }
+            },
+        )
     }
 }
 
@@ -196,7 +248,7 @@ class LoupeState {
 /** One [PhotoController] for the screen, bound to the photo of [phase] whenever it changes. */
 @Composable
 fun rememberPhotoController(phase: EditorPhase): PhotoController {
-    val controller = remember { PhotoController() }
+    val controller = rememberSaveable(saver = PhotoController.Saver) { PhotoController() }
     val ready = phase as? EditorPhase.Ready
     remember(ready?.renderer, ready?.width, ready?.height) {
         controller.bind(ready)

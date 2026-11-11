@@ -71,7 +71,8 @@ import kotlinx.coroutines.withTimeoutOrNull
  * The editor's top bar (56dp): back, file name (13sp mono, ellipsised in the middle so the extension stays), undo,
  * redo, before/after ◐, more ⋯ and the primary Export. [compact] (landscape phone) keeps only the icons: no file
  * name, Export as an icon; [narrow] (phone portrait) shows Export as an icon-sized primary pill so the name gets the
- * width the icons do not need.
+ * width the icons do not need. [filmstrip] (tablet, opened from the library) adds the filmstrip's show/hide toggle:
+ * `true` = shown; `null` = no toggle.
  */
 @Composable
 fun EditorTopBar(
@@ -81,6 +82,7 @@ fun EditorTopBar(
     modifier: Modifier = Modifier,
     narrow: Boolean = false,
     onHistory: () -> Unit = {},
+    filmstrip: Boolean? = null,
 ) {
     RevealTopBar(
         title = if (compact) "" else state.fileName,
@@ -91,6 +93,17 @@ fun EditorTopBar(
         modifier = modifier.testTag(EditorTags.TOP_BAR),
     ) {
         val history = state.edit.history
+        if (filmstrip != null) {
+            RevealIconButton(
+                icon = if (filmstrip) PhosphorFill.FilmStrip else PhosphorRegular.FilmStrip,
+                contentDescription = stringResource(
+                    if (filmstrip) R.string.editor_filmstrip_hide else R.string.editor_filmstrip_show,
+                ),
+                onClick = { actions.onFilmstrip(!filmstrip) },
+                active = filmstrip,
+                modifier = Modifier.testTag(EditorTags.FILMSTRIP_TOGGLE),
+            )
+        }
         RevealIconButton(
             icon = PhosphorRegular.ArrowUUpLeft,
             contentDescription = stringResource(R.string.editor_undo),

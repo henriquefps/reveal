@@ -3,6 +3,7 @@ package dev.hfps.reveal
 import android.content.Intent
 import android.graphics.Color
 import android.os.Bundle
+import android.view.MotionEvent
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
@@ -21,12 +22,16 @@ import dagger.hilt.android.AndroidEntryPoint
 import dev.hfps.reveal.data.handoff.HandoffIntents
 import dev.hfps.reveal.data.handoff.HandoffOutcome
 import dev.hfps.reveal.data.handoff.HandoffRepository
+import dev.hfps.reveal.data.model.LibraryScope
+import dev.hfps.reveal.data.model.PhotoListCodec
+import dev.hfps.reveal.data.model.PhotoQuery
 import dev.hfps.reveal.designsystem.theme.RevealTheme
 import dev.hfps.reveal.designsystem.theme.isDark
 import dev.hfps.reveal.feature.editor.EditorRoute
 import dev.hfps.reveal.feature.editor.navigateToEditor
 import dev.hfps.reveal.feature.library.LibraryRoute
 import dev.hfps.reveal.feature.library.ViewerRoute
+import dev.hfps.reveal.input.PalmRejection
 import dev.hfps.reveal.navigation.RevealNavHost
 import dev.hfps.reveal.theme.ThemeModeStore
 import javax.inject.Inject
@@ -43,6 +48,9 @@ class MainActivity : ComponentActivity() {
 
     /** What the last hand-off from another app (ADR 0011) resolved to, until navigated to. */
     private val openRequest = MutableStateFlow<HandoffOutcome?>(null)
+
+    /** Ignores finger touches while a pen is down (palm rejection, docs/adr/0016). */
+    private val palmRejection = PalmRejection()
 
     /** True while the editor shows a photo another app sent: leaving it returns to that app. */
     private var openedFromIntent = false
@@ -103,7 +111,13 @@ class MainActivity : ComponentActivity() {
                         popUpTo<LibraryRoute> { inclusive = true }
                     }
                 }
-                navController.navigateToEditor(outcome.versionId)
+                // Several photos handed over: the tablet filmstrip shows them ("Opened from other apps").
+                val strip = if (outcome.libraryBehind) {
+                    PhotoListCodec.encode(PhotoQuery(scope = LibraryScope.FromApps))
+                } else {
+                    null
+                }
+                navController.navigateToEditor(outcome.versionId, strip)
             }
 
             is HandoffOutcome.OpenUri -> navController.navigateToEditor(outcome.uri.toString())
@@ -114,6 +128,16 @@ class MainActivity : ComponentActivity() {
 
             HandoffOutcome.Nothing -> Toast.makeText(this, R.string.handoff_unreadable, Toast.LENGTH_LONG).show()
         }
+    }
+
+    override fun dispatchTouchEvent(event: MotionEvent): Boolean {
+        val events = palmRejection.filter(event)
+        var handled = false
+        for (e in events) {
+            handled = super.dispatchTouchEvent(e) || handled
+            if (e !== event) e.recycle()
+        }
+        return handled || events.isEmpty()
     }
 
     override fun onNewIntent(intent: Intent) {

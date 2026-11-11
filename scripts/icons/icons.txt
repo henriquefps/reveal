@@ -78,3 +78,4 @@ frame-corners
 crosshair-simple
 perspective
 line-segments
+film-strip

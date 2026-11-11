@@ -12,6 +12,7 @@ import dev.hfps.reveal.data.db.MetaDao
 import dev.hfps.reveal.data.db.RevealDatabase
 import dev.hfps.reveal.data.edit.EditRepository
 import dev.hfps.reveal.data.edit.HistoryWriter
+import dev.hfps.reveal.data.editor.EditorLayoutPreferences
 import dev.hfps.reveal.data.export.ExportPreferences
 import dev.hfps.reveal.data.handoff.HandoffRepository
 import dev.hfps.reveal.data.handoff.HandoffTree
@@ -103,6 +104,11 @@ object DataModule {
     @Provides
     @Singleton
     fun provideExportPreferences(@ApplicationContext context: Context): ExportPreferences = ExportPreferences(context)
+
+    @Provides
+    @Singleton
+    fun provideEditorLayoutPreferences(@ApplicationContext context: Context): EditorLayoutPreferences =
+        EditorLayoutPreferences(context)
 
     @Provides
     @Singleton

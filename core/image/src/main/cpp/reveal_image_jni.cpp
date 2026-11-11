@@ -333,6 +333,24 @@ Session *openSession(JNIEnv *env, jint fd, bool halfSize, jint demosaic, Callbac
     return s;
 }
 
+// Area-average weights of output index `index` over a source axis of `sourceSize` pixels scaled by `scale`.
+struct Span {
+    int start = 0;
+    std::vector<float> weights;
+};
+
+Span spanOf(int index, double scale, int sourceSize) {
+    const double from = index * scale;
+    const double to = std::min((index + 1) * scale, static_cast<double>(sourceSize));
+    Span span;
+    span.start = static_cast<int>(std::floor(from));
+    const int last = std::min(static_cast<int>(std::ceil(to)), sourceSize) - 1;
+    for (int i = span.start; i <= last; i++) {
+        span.weights.push_back(static_cast<float>(std::min(i + 1.0, to) - std::max(static_cast<double>(i), from)));
+    }
+    return span;
+}
+
 }  // namespace
 
 extern "C" {
@@ -426,6 +444,57 @@ Java_dev_hfps_image_raw_RawNative_nativeSessionBuffer(JNIEnv *env, jclass, jlong
     if (!s || !s->packed) { throwRaw(env, ERR_NO_IMAGE, "no image"); return nullptr; }
     const size_t bytes = static_cast<size_t>(s->width) * s->height * 3 * sizeof(uint16_t);
     return env->NewDirectByteBuffer(s->raw.imgdata.image, static_cast<jlong>(bytes));
+}
+
+// Area-average downscale of packed RGB16 (the Kotlin LinearResample is the reference; this is the fast path for
+// full-size native images). `out` receives targetWidth * targetHeight * 3 values.
+JNIEXPORT void JNICALL
+Java_dev_hfps_image_raw_RawNative_nativeDownscale(JNIEnv *env, jclass, jobject buffer, jint width, jint height,
+                                                  jint targetWidth, jint targetHeight, jshortArray out) {
+    const auto *src = static_cast<const uint16_t *>(env->GetDirectBufferAddress(buffer));
+    const jlong capacity = env->GetDirectBufferCapacity(buffer);
+    const size_t rowValues = static_cast<size_t>(width) * 3;
+    if (!src || capacity < static_cast<jlong>(rowValues * height * sizeof(uint16_t)) || targetWidth < 1 ||
+        targetHeight < 1 || targetWidth > width || targetHeight > height ||
+        env->GetArrayLength(out) < static_cast<jsize>(static_cast<size_t>(targetWidth) * targetHeight * 3)) {
+        throwRaw(env, ERR_NO_IMAGE, "downscale arguments");
+        return;
+    }
+    const double xScale = static_cast<double>(width) / targetWidth;
+    const double yScale = static_cast<double>(height) / targetHeight;
+    std::vector<Span> columns(targetWidth);
+    for (int x = 0; x < targetWidth; x++) columns[x] = spanOf(x, xScale, width);
+    std::vector<uint16_t> result(static_cast<size_t>(targetWidth) * targetHeight * 3);
+    std::vector<float> rowSum(rowValues);
+    size_t o = 0;
+    for (int ty = 0; ty < targetHeight; ty++) {
+        Span rows = spanOf(ty, yScale, height);
+        std::fill(rowSum.begin(), rowSum.end(), 0.0f);
+        float rowTotal = 0.0f;
+        for (size_t r = 0; r < rows.weights.size(); r++) {
+            const uint16_t *line = src + static_cast<size_t>(rows.start + r) * rowValues;
+            const float wy = rows.weights[r];
+            for (size_t i = 0; i < rowValues; i++) rowSum[i] += wy * line[i];
+            rowTotal += wy;
+        }
+        for (int tx = 0; tx < targetWidth; tx++) {
+            const Span &cols = columns[tx];
+            float r = 0, g = 0, b = 0, colTotal = 0;
+            for (size_t c = 0; c < cols.weights.size(); c++) {
+                const float w = cols.weights[c];
+                const float *p = &rowSum[(static_cast<size_t>(cols.start) + c) * 3];
+                r += w * p[0];
+                g += w * p[1];
+                b += w * p[2];
+                colTotal += w;
+            }
+            const float norm = rowTotal * colTotal;
+            result[o++] = static_cast<uint16_t>(std::min(65535.0f, std::floor(r / norm + 0.5f)));
+            result[o++] = static_cast<uint16_t>(std::min(65535.0f, std::floor(g / norm + 0.5f)));
+            result[o++] = static_cast<uint16_t>(std::min(65535.0f, std::floor(b / norm + 0.5f)));
+        }
+    }
+    env->SetShortArrayRegion(out, 0, static_cast<jsize>(result.size()), reinterpret_cast<const jshort *>(result.data()));
 }
 
 JNIEXPORT void JNICALL

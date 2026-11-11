@@ -19,7 +19,7 @@ object Harness {
         val args = InstrumentationRegistry.getArguments()
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val dir = args.getString("dir")?.let(::File) ?: File(context.filesDir, "samples")
-        log("samples dir $dir exists=${dir.isDirectory} files=${dir.list()?.size}")
+        if (!anonymize) log("samples dir $dir exists=${dir.isDirectory} files=${dir.list()?.size}")
         assumeTrue(
             "No samples in $dir (run scripts/fetch-samples.sh and push them, see CLAUDE.md)",
             dir.isDirectory && !dir.list().isNullOrEmpty(),
@@ -31,6 +31,12 @@ object Harness {
     fun samples(vararg extensions: String): List<File> = samplesDir().listFiles().orEmpty().filter { f ->
         extensions.any { f.name.lowercase().endsWith(".$it") }
     }.sortedBy { it.name }
+
+    /** `-e anonymize true`: log aggregates only, never file names (opt-in runs on private photos). */
+    val anonymize: Boolean get() = InstrumentationRegistry.getArguments().getString("anonymize") == "true"
+
+    /** A file's name for logs, or `file#N` when [anonymize] is on. */
+    fun label(file: File, index: Int): String = if (anonymize) "file#$index" else file.name
 
     fun log(message: String) {
         Log.i(TAG, message)

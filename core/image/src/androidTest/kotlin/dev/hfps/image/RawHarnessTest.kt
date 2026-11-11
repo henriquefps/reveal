@@ -21,18 +21,31 @@ class RawHarnessTest {
 
     @Test
     fun readInfoReportsColorData() {
-        for (file in Harness.samples(*rawExtensions)) {
+        for ((index, file) in Harness.samples(*rawExtensions).withIndex()) {
             ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY).use { fd ->
                 val info = RawDecoder.readInfo(fd)
                 Harness.log(
-                    "INFO ${file.name}: ${info.make} ${info.model} cfa=${info.cfa}/${info.cfaPattern} " +
+                    "INFO ${Harness.label(
+                        file,
+                        index,
+                    )}: ${info.make} ${info.model} cfa=${info.cfa}/${info.cfaPattern} " +
                         "sensor=${info.sensorWidth}x${info.sensorHeight} active=${info.activeArea} " +
                         "crop=${info.defaultCrop} orient=${info.orientation} " +
                         "asShot=${info.asShotWhiteBalance} daylight=${info.daylightWhiteBalance} " +
                         "levels=${info.levels} baseline=${info.baselineExposureEv} dng=${info.isDng} iso=${info.iso}",
                 )
-                Harness.log("MATRIX ${file.name}: ${info.cameraToXyz}")
+                Harness.log("MATRIX ${Harness.label(file, index)}: ${info.cameraToXyz}")
                 assertThat(info.make).isNotNull()
+                if (file.name.startsWith("sony-zv-e10")) {
+                    // Values read from the public sample (a ZV-E10 ARW): knot count first, then the knots.
+                    val lens = info.lensCorrection
+                    assertThat(lens?.vignetting?.take(4)).containsExactly(11, 0, 0, 128).inOrder()
+                    assertThat(lens?.distortion?.take(4)).containsExactly(11, 21, 2, -22).inOrder()
+                    assertThat(lens?.chromaticAberration?.take(3)).containsExactly(22, -512, -512).inOrder()
+                    assertThat(info.levels.black).containsExactly(512, 512, 512, 512)
+                    assertThat(info.levels.white).isEqualTo(16383)
+                    assertThat(info.activeArea.width).isEqualTo(6024)
+                }
                 assertThat(info.activeArea.width).isGreaterThan(1000)
             }
         }
@@ -40,7 +53,7 @@ class RawHarnessTest {
 
     @Test
     fun fullDecodeIsLinearAndConsistent() {
-        for (file in Harness.samples(*rawExtensions)) {
+        for ((index, file) in Harness.samples(*rawExtensions).withIndex()) {
             ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY).use { fd ->
                 val (result, peak) = Harness.measurePeakNativeMb {
                     RawDecoder.decodeNative(fd, RawDecodeOptions(demosaic = Demosaic.AHD))
@@ -49,7 +62,10 @@ class RawHarnessTest {
                     val info = result.info
                     val stats = Statistics.of(image.samples)
                     Harness.log(
-                        "FULL ${file.name}: ${image.width}x${image.height} ${result.stats} peakNative=${peak}MB " +
+                        "FULL ${Harness.label(
+                            file,
+                            index,
+                        )}: ${image.width}x${image.height} ${result.stats} peakNative=${peak}MB " +
                             "min=${stats.min} max=${stats.max} mean=${"%.0f".format(stats.mean)} " +
                             "atMax=${stats.shareAtMax} levels=${info.levels}",
                     )
@@ -74,12 +90,15 @@ class RawHarnessTest {
 
     @Test
     fun halfSizeIsAboutAQuarterOfThePixels() {
-        for (file in Harness.samples(*rawExtensions)) {
+        for ((index, file) in Harness.samples(*rawExtensions).withIndex()) {
             ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY).use { fd ->
                 val result = RawDecoder.decode(fd, RawDecodeOptions(halfSize = true))
                 val area = result.info.activeArea
                 Harness.log(
-                    "HALF ${file.name}: ${result.image.width}x${result.image.height} (active ${area.width}x${area.height}) ${result.stats}",
+                    "HALF ${Harness.label(
+                        file,
+                        index,
+                    )}: ${result.image.width}x${result.image.height} (active ${area.width}x${area.height}) ${result.stats}",
                 )
                 if (result.info.cfa == CfaKind.BAYER) {
                     assertThat(result.image.width).isAtMost((area.width + 1) / 2 + 1)

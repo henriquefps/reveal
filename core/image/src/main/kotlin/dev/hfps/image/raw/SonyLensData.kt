@@ -2,9 +2,12 @@ package dev.hfps.image.raw
 
 import android.os.ParcelFileDescriptor
 import dev.hfps.image.color.SonyLensCorrection
+import dev.hfps.image.format.SonyLensCorrectionReader
+import dev.hfps.image.source.BlockCachedSource
+import dev.hfps.image.source.DescriptorSource
 
-/** Reads Sony lens-correction parameters (placeholder: filled in with the SR2 parser). */
+/** Reads Sony lens-correction parameters through a duplicate of the descriptor (a few small reads). */
 internal object SonyLensData {
-    @Suppress("UNUSED_PARAMETER", "FunctionOnlyReturningConstant")
-    fun read(descriptor: ParcelFileDescriptor): SonyLensCorrection? = null
+    fun read(descriptor: ParcelFileDescriptor): SonyLensCorrection? =
+        DescriptorSource(descriptor.dup()).use { SonyLensCorrectionReader.read(BlockCachedSource(it)) }
 }

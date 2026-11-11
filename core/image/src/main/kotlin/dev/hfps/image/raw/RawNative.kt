@@ -85,5 +85,15 @@ internal object RawNative {
 
     @JvmStatic external fun nativeSessionBuffer(handle: Long): ByteBuffer
 
+    @JvmStatic
+    external fun nativeDownscale(
+        buffer: ByteBuffer,
+        width: Int,
+        height: Int,
+        targetWidth: Int,
+        targetHeight: Int,
+        out: ShortArray,
+    )
+
     @JvmStatic external fun nativeRelease(handle: Long)
 }

@@ -1,4 +1,85 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Reveal</string>
+
+    <!-- Galeria do design system (destino inicial de debug até a biblioteca substituir) -->
+    <string name="gallery_title">Design system</string>
+    <string name="gallery_back">Voltar</string>
+    <string name="gallery_more">Mais</string>
+    <string name="gallery_page_foundations">Fundamentos</string>
+    <string name="gallery_page_icons">Ícones</string>
+    <string name="gallery_page_controls">Controles</string>
+    <string name="gallery_page_editor">Editor</string>
+    <string name="gallery_section_theme">Tema</string>
+    <string name="gallery_section_colour">Cor</string>
+    <string name="gallery_section_type">Escala tipográfica</string>
+    <string name="gallery_section_icons_regular">Phosphor regular</string>
+    <string name="gallery_section_icons_fill">Phosphor fill</string>
+    <string name="gallery_section_buttons">Botões</string>
+    <string name="gallery_section_icon_buttons">Botões de ícone</string>
+    <string name="gallery_section_chips">Chips</string>
+    <string name="gallery_section_list">Lista</string>
+    <string name="gallery_section_sheet">Bottom sheet</string>
+    <string name="theme_system">Sistema</string>
+    <string name="theme_light">Claro</string>
+    <string name="theme_dark">Escuro</string>
+
+    <string name="swatch_background">Fundo</string>
+    <string name="swatch_card">Cartão</string>
+    <string name="swatch_primary">Primária</string>
+    <string name="swatch_muted">Suave</string>
+    <string name="swatch_muted_foreground">Texto suave</string>
+    <string name="swatch_destructive">Destrutiva</string>
+    <string name="swatch_warning">Aviso</string>
+    <string name="swatch_border">Borda</string>
+    <string name="swatch_ring">Foco</string>
+
+    <string name="type_eyebrow">Eyebrow 12</string>
+    <string name="type_ui">UI 14: botões, rótulos, menus</string>
+    <string name="type_body">Corpo 15: valores e títulos de linha</string>
+    <string name="type_body_large">Corpo 16: texto de leitura mais longo</string>
+    <string name="type_title">Título 18 semibold</string>
+    <string name="type_number">20 tabular: 1.284 fotos</string>
+    <string name="type_number_large">24 tabular: +0,70 EV</string>
+    <string name="type_mono">Mono 13: DSC01234.ARW</string>
+    <string name="type_mono_small">Mono 12: 5600 K · f/2.8 · 1/250</string>
+
+    <string name="button_primary">Exportar</string>
+    <string name="button_secondary">Salvar predefinição</string>
+    <string name="button_ghost">Cancelar</string>
+    <string name="button_disabled">Desativado</string>
+    <string name="action_undo">Desfazer</string>
+    <string name="action_redo">Refazer</string>
+    <string name="action_before_after">Antes e depois</string>
+    <string name="action_adjustments">Ajustes</string>
+    <string name="action_export">Exportar</string>
+    <string name="chip_original">Original</string>
+    <string name="chip_square">1:1</string>
+    <string name="chip_portrait">4:5</string>
+    <string name="chip_landscape">16:9</string>
+    <string name="row_library">Biblioteca</string>
+    <string name="row_library_summary">3 pastas · 1.284 fotos</string>
+    <string name="row_theme">Tema</string>
+    <string name="row_export">Padrões de exportação</string>
+    <string name="row_export_summary">JPEG · 92 % · lado maior 4096 px</string>
+    <string name="row_about">Sobre</string>
+    <string name="sheet_open">Abrir a folha</string>
+    <string name="sheet_body">Um formulário ou seletor: alça de arrastar, raio de 16 dp, a superfície do cartão.</string>
+    <string name="sheet_close">Concluído</string>
+
+    <string name="editor_file_name">DSC01234.ARW</string>
+    <string name="editor_photo_area">Área da foto: cinza neutro, croma zero</string>
+    <string name="editor_panel_light">Luz</string>
+    <string name="editor_exposure">Exposição</string>
+    <string name="editor_contrast">Contraste</string>
+    <string name="editor_highlights">Realces</string>
+    <string name="editor_exposure_value">+0,70</string>
+    <string name="editor_contrast_value">−12</string>
+    <string name="editor_highlights_value">−64</string>
+    <string name="tool_light">Luz</string>
+    <string name="tool_colour">Cor</string>
+    <string name="tool_effects">Efeitos</string>
+    <string name="tool_crop">Cortar</string>
+    <string name="tool_masks">Máscaras</string>
+    <string name="tool_heal">Corrigir</string>
 </resources>

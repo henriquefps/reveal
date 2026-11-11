@@ -1,0 +1,34 @@
+# Phosphor icons used by Reveal (one kebab-case name per line; regular and fill weights are generated).
+# Add a name here and run: python3 scripts/icons/generate_icons.py
+arrow-left
+arrow-u-up-left
+arrow-u-up-right
+circle-half
+dots-three
+export
+upload-simple
+sliders-horizontal
+crop
+sun
+palette
+sparkle
+aperture
+magic-wand
+drop
+images
+folder-plus
+gear
+star
+flag
+check
+x
+plus
+minus
+caret-up
+caret-down
+caret-left
+caret-right
+eye
+eye-slash
+chart-bar
+info

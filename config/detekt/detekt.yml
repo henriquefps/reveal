@@ -42,6 +42,7 @@ Compose:
     active: true
   CompositionLocalAllowlist:
     active: true
+    allowedCompositionLocals: LocalRevealColors, LocalRevealTypography, LocalRevealShapes
   CompositionLocalNaming:
     active: true
   ContentEmitterReturningValues:

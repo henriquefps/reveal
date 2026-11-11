@@ -1,5 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- Window theme only; the Compose theme (hfps tokens) is built by the theme workstream. -->
-    <style name="Theme.Reveal" parent="android:Theme.Material.Light.NoActionBar" />
+    <!-- Window theme only (follows the OS day/night while the first frame draws); the Compose theme is RevealTheme. -->
+    <style name="Theme.Reveal" parent="android:Theme.DeviceDefault.DayNight">
+        <item name="android:windowActionBar">false</item>
+        <item name="android:windowNoTitle">true</item>
+    </style>
 </resources>

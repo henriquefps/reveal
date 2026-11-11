@@ -6,6 +6,12 @@ All notable changes to Reveal are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-11-10
+
+### Fixed
+- Colours at sharp edges could be off by a few levels on some phones (Adreno GPUs): the photo is now sampled
+  exactly at 100 % and with a fixed level of detail when zoomed out, so an unedited JPEG matches its original.
+
 ## [0.1.0] - 2026-11-10
 
 The first preview: open a photo and see it developed on the GPU.

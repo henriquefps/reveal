@@ -151,10 +151,22 @@ recovers 30 within 0.5.
 
 ## Parity and performance
 
-See "Measurements" in the PR (emulator, host GPU) for `GpuParityTest` (optics recipes: lens on with CA, defringe, a
-transform with lens and straightening; tolerance of ADR 0002, warped geometry within the geometry tolerance),
-`TiledRendererTest` (a warped export equals the whole-image render) and `PipelineBenchmark` (transform slider drag at
-2400 x 1600, `REVEAL_BENCH`).
+Emulator API 36.1 x86_64, host GPU (RTX 4080 through the translator); to be re-measured on the phone.
+
+- `GpuParityTest.opticsMatchCpuReference` (lens + CA + vignetting at 150-200 %, defringe, defringe + Detail, the
+  Transform with lens, straightening and a quarter turn, an unconstrained Transform; 4 images at 1:1 and at a 2.5x
+  proxy): within ADR 0002's 8-bit tolerance (2 levels; the Detail tolerance of 4 when defringe runs, as its OkLab is
+  stored in float16 like Detail's). Isolated: vignetting, distortion and defringe each within 1 level, linear error
+  about 1e-3.
+- `TiledRendererTest.opticsAndTransformExportLikeThePreview`: a warped export (lens + CA + Transform + straightening +
+  defringe) stitches **bit-identically** at 256 and 1024 px tiles, equals the preview renderer within 1 level and the
+  CPU reference within 4.
+- `ExportFlowTest.transformedPhotoExportMatchesThePreview`: a transformed JPEG exported at full size vs the editor's
+  render: mean 0.06 levels, p99 1, max 2.
+- `PipelineBenchmark.transformDragFrameTime`, 2400 x 1600, ms per frame with `glFinish`: Transform drag with lens and
+  CA on (three Catmull-Rom samples per pixel) mean 1.13 / p95 1.64; distortion amount drag (the lens table rebuilt on
+  the CPU each frame: 32 bisections over 64 border radii) 2.15 / 3.75; defringe amount 1.81 / 2.40; exposure for
+  reference 1.24 / 1.66. All far below a 120 Hz frame (8.3 ms).
 
 ## Alternatives not taken
 

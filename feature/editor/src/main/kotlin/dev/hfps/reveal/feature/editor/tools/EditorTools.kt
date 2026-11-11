@@ -18,6 +18,7 @@ import dev.hfps.reveal.feature.editor.panels.ColourPanel
 import dev.hfps.reveal.feature.editor.panels.HistoryPanel
 import dev.hfps.reveal.feature.editor.panels.LightPanel
 import dev.hfps.reveal.feature.editor.panels.PanelHost
+import dev.hfps.reveal.pipeline.auto.AutoScope
 import dev.hfps.reveal.pipeline.recipe.RecipeGroup
 
 /** The tools of the strip, in strip order (docs/plan/ux.md, "Phone, portrait"). */
@@ -97,13 +98,12 @@ object EditorTools {
             PhosphorFill.SquaresFour,
             ToolBehaviour.Unavailable,
         ),
-        // TODO(auto worker): ToolBehaviour.Action { it.onAuto() }.
         EditorTool(
             ToolId.AUTO,
             R.string.editor_tool_auto,
             PhosphorRegular.MagicWand,
             PhosphorFill.MagicWand,
-            ToolBehaviour.Unavailable,
+            ToolBehaviour.Action { it.onAuto(AutoScope.ALL) },
         ),
         EditorTool(
             ToolId.CROP,

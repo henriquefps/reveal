@@ -6,6 +6,7 @@ import dev.hfps.reveal.pipeline.recipe.ControlId
 import dev.hfps.reveal.pipeline.recipe.Recipe
 import dev.hfps.reveal.pipeline.recipe.RecipeRanges
 import dev.hfps.reveal.pipeline.recipe.WbMode
+import dev.hfps.reveal.pipeline.recipe.WhiteBalance
 import org.junit.Test
 
 class RecipeControlsTest {
@@ -68,7 +69,7 @@ class RecipeControlsTest {
         assertThat(daylight.colour.whiteBalance.temperatureK).isEqualTo(5500f)
         assertThat(daylight.colour.whiteBalance.tint).isEqualTo(0f)
         assertThat(daylight.colour.whiteBalance.mode).isEqualTo(WbMode.DAYLIGHT)
-        val auto = RecipeControls.withWbMode(daylight, WbMode.AUTO, AsShot(4800f, -3f))
+        val auto = RecipeControls.withWbMode(daylight, WbMode.AUTO, WhiteBalance(4800f, -3f, WbMode.AUTO))
         assertThat(auto.colour.whiteBalance.temperatureK).isEqualTo(4800f)
         assertThat(auto.colour.whiteBalance.mode).isEqualTo(WbMode.AUTO)
         assertThat(RecipeControls.withWbMode(daylight, WbMode.AUTO, null)).isEqualTo(daylight)

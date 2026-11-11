@@ -43,6 +43,7 @@ import dev.hfps.reveal.designsystem.theme.RevealTheme
 import dev.hfps.reveal.feature.editor.EditorTags
 import dev.hfps.reveal.feature.editor.R
 import dev.hfps.reveal.feature.editor.tools.ToolBehaviour
+import dev.hfps.reveal.pipeline.auto.AutoScope
 import kotlin.coroutines.cancellation.CancellationException
 
 /**
@@ -130,11 +131,11 @@ fun PanelCardContent(
                             .pointerInput(Unit) { detectTapGestures(onLongPress = { currentReset() }) },
                     )
                     if (panel.showAuto && sub == null) {
-                        // TODO(auto worker): enable and run the panel-level Auto.
                         GhostButton(
                             text = stringResource(R.string.editor_panel_auto),
-                            onClick = host.actions.onAuto,
-                            enabled = false,
+                            onClick = { host.actions.onAuto(AutoScope.LIGHT) },
+                            enabled = host.state.edit.autoReady,
+                            modifier = Modifier.testTag(EditorTags.PANEL_AUTO),
                         )
                     }
                     if (group != null || sub != null) {

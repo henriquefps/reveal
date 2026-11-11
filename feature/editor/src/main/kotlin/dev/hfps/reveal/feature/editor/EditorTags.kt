@@ -24,6 +24,7 @@ object EditorTags {
     const val PANEL_HEADER = "editor-panel-header"
     const val PANEL_RESET = "editor-panel-reset"
     const val PANEL_BACK = "editor-panel-back"
+    const val PANEL_AUTO = "editor-panel-auto"
     const val PROFILE_ROW = "editor-profile-row"
     const val TOOL_STRIP = "editor-tool-strip"
     const val HISTOGRAM = "editor-histogram"

@@ -41,7 +41,13 @@ class GpuEditedThumbnails(private val scope: CoroutineScope) : EditedThumbnails 
             }.getOrNull()
         }
         val proxy = ProxyBuilder.decodeProxy(input, longEdge)
-        val pipelineInput = PipelineInputMapper.map(proxy.image, proxy.info, orientation ?: proxy.info.orientation)
+        val metadata = runCatching { input.inspection.metadata }.getOrNull()
+        val pipelineInput = PipelineInputMapper.map(
+            proxy.image,
+            proxy.info,
+            orientation ?: proxy.info.orientation,
+            metadata,
+        )
         val gpu = renderer ?: GpuDevelopRenderer.create().also { renderer = it }
         // Detail's lengths are full-resolution pixels: a thumbnail is developed at its own scale (ADR 0012).
         val full = maxOf(proxy.stats.fullWidth, proxy.stats.fullHeight).toFloat()

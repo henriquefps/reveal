@@ -5,6 +5,7 @@ import dev.hfps.image.color.ColorInfo
 import dev.hfps.image.color.Matrix3
 import dev.hfps.image.color.RawColorInfo
 import dev.hfps.image.color.WhiteBalance
+import dev.hfps.image.format.PhotoMetadata
 import dev.hfps.reveal.pipeline.InputKind
 import dev.hfps.reveal.pipeline.NoiseInfo
 import dev.hfps.reveal.pipeline.PipelineInput
@@ -27,14 +28,21 @@ class UnsupportedCameraException(val make: String?, val model: String?) :
  * - `saturation`: where the RAW's channels clip (so highlights clip to neutral, not magenta); none for standard images.
  * - `asShotMultipliers`: the file's as-shot multipliers, else the daylight ones derived from the matrix, else
  *   neutral (1, 1, 1); always normalised to green = 1. `null` for standard images (already balanced).
+ * - `lens`: [LensResolver] on the colour info and, when given, the file's EXIF (docs/adr/0015).
  */
 object PipelineInputMapper {
 
     /**
      * @param orientation EXIF orientation 1..8 to apply; defaults to the colour info's. Standard decoders do not
      *   report it, so callers pass the container's (from `ImageInput.inspection`).
+     * @param metadata the file's EXIF, for a lensfun lookup when the file embeds no lens correction data.
      */
-    fun map(image: LinearImage, info: ColorInfo, orientation: Int = info.orientation): PipelineInput {
+    fun map(
+        image: LinearImage,
+        info: ColorInfo,
+        orientation: Int = info.orientation,
+        metadata: PhotoMetadata? = null,
+    ): PipelineInput {
         val raw = info as? RawColorInfo
         val (width, height) = orientedSize(image.width, image.height, orientation)
         val pixels = orientedLinear(image, orientation)
@@ -49,6 +57,7 @@ object PipelineInputMapper {
                 asShotMultipliers = multipliers(raw),
                 saturation = saturation(raw),
                 noise = noise(raw),
+                lens = LensResolver.resolve(raw, metadata),
             )
         } else {
             PipelineInput(
@@ -59,6 +68,7 @@ object PipelineInputMapper {
                 cameraToXyz = info.toXyz.toMat3(),
                 asShotMultipliers = null,
                 noise = noise(info),
+                lens = metadata?.let { LensResolver.resolve(info, it) },
             )
         }
     }

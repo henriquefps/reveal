@@ -99,6 +99,9 @@ class TiledRenderer private constructor(requestedTile: Int, private val share: E
     private var vao = 0
     private val light = LightPasses()
     private val detail = DetailPasses()
+    private val defringe = DefringePasses()
+    private val lensLut = WarpShaders.LutTexture()
+    private val vignetteLut = WarpShaders.LutTexture()
 
     private var sourceTex = 0
     private var sceneTex = 0
@@ -140,7 +143,7 @@ class TiledRenderer private constructor(requestedTile: Int, private val share: E
         require(plan.maxTile <= tileSize) { "plan tiles ${plan.maxTile} exceed the allocated $tileSize" }
         require(plan.imageWidth == source.width && plan.imageHeight == source.height) { "plan is for another image" }
         require(plan.reach >= DevelopParams.from(source.colour, recipe).reach) {
-            "plan apron ${plan.reach} below the reach of Detail and Effects"
+            "plan apron ${plan.reach} below the reach of defringe, Detail and Effects"
         }
         renderOnGl(source, recipe, plan, output, sink, high, cancel, progress)
     }
@@ -159,6 +162,7 @@ class TiledRenderer private constructor(requestedTile: Int, private val share: E
         ensureOutputTarget(high)
         gridKey = null
         val params = DevelopParams.from(source.colour, recipe)
+        sceneImage = source.width to source.height
         val grid = light.allocate(source.width, source.height)
         val prepass = plan.prepassTiles(grid)
         val tiles = plan.outputTiles()
@@ -280,6 +284,7 @@ class TiledRenderer private constructor(requestedTile: Int, private val share: E
     }
 
     private fun uploadParams(params: DevelopParams, reconstruct: Boolean) {
+        sceneParams = params
         uploadUbo(developUbo, GpuDevelopRenderer.developBlock(params))
         uploadUbo(lightUbo, GpuDevelopRenderer.lightBlock(params, checkNotNull(light.grid), reconstruct))
         uploadUbo(lookUbo, ColourShaders.lookBlock(params))
@@ -291,16 +296,24 @@ class TiledRenderer private constructor(requestedTile: Int, private val share: E
      * (the Effects grid must be built: [buildGrids]); returns the texture holding the region's working-space result.
      */
     private fun developRegion(region: PixelBox, params: DevelopParams, imageWidth: Int, imageHeight: Int): Int {
-        developPass(region, params.tone.localActive, labOut = params.localActive)
-        if (!params.localActive) return workTex
+        val fringe = params.defringe
+        val local = params.localActive
+        developPass(region, params.tone.localActive, labOut = local || fringe.active)
+        val area = DetailPasses.Region(region.x, region.y, region.width, region.height, imageWidth, imageHeight)
+        if (fringe.active) {
+            // Defringe (slot 10b, docs/adr/0015) into the scene texture, free once the develop stage has read it.
+            defringe.run(fringe, workTex, GlTarget(sceneTex, sceneFbo), area, rgbOut = !local)
+            if (!local) return sceneTex
+        }
+        if (!local) return workTex
         return detail.run(
             params.detail,
             params.effects,
             grid = if (params.effects.gridActive) effects else null,
-            lab = workTex,
+            lab = if (fringe.active) sceneTex else workTex,
             t = DetailPasses.Targets(
                 lumA = GlTarget(sourceTex, sourceFbo),
-                lumB = GlTarget(sceneTex, sceneFbo),
+                lumB = if (fringe.active) GlTarget(workTex, workFbo) else GlTarget(sceneTex, sceneFbo),
                 lumH = GlTarget(lumHTex, lumHFbo),
                 halfD = GlTarget(halfTex[0], halfFbo[0]),
                 halfA = GlTarget(halfTex[1], halfFbo[1]),
@@ -309,7 +322,7 @@ class TiledRenderer private constructor(requestedTile: Int, private val share: E
                 blurB = GlTarget(colsTex, colsFbo),
             ),
             output = null,
-            region = DetailPasses.Region(region.x, region.y, region.width, region.height, imageWidth, imageHeight),
+            region = area,
         ).texture
     }
 
@@ -323,6 +336,7 @@ class TiledRenderer private constructor(requestedTile: Int, private val share: E
     fun prepareZoom(source: TileSource, recipe: Recipe): Long = onGl {
         var start = System.nanoTime()
         val params = DevelopParams.from(source.colour, recipe)
+        sceneImage = source.width to source.height
         val key = ZoomGridKey(
             source = System.identityHashCode(source),
             wb = params.wbMultipliers.toList(),
@@ -332,6 +346,7 @@ class TiledRenderer private constructor(requestedTile: Int, private val share: E
             local = params.tone.localActive,
             // The Effects grid is built from the develop output: everything before slot 11 (never the amounts).
             develop = if (params.effects.gridActive) params.withoutDetail() else null,
+            vignette = params.vignette,
         )
         if (key != gridKey || zoomSource !== source) {
             if (light.grid?.let { it.width != source.width || it.height != source.height } != false) {
@@ -381,6 +396,7 @@ class TiledRenderer private constructor(requestedTile: Int, private val share: E
         check(zoomSource === source && gridKey != null) { "prepareZoom first" }
         val start = System.nanoTime()
         val params = DevelopParams.from(source.colour, recipe)
+        sceneImage = source.width to source.height
         val region = ExportPlan.grow(core, border + params.reach, source.width, source.height)
         require(region.width <= tileSize && region.height <= tileSize) { "tile region exceeds $tileSize" }
         uploadParams(params, gridReconstruct)
@@ -440,7 +456,12 @@ class TiledRenderer private constructor(requestedTile: Int, private val share: E
         val highlights: Any?,
         val local: Boolean,
         val develop: DevelopParams?,
+        val vignette: Any?,
     )
+
+    /** The parameters and whole-image size the scene pass uses (vignetting is centred on the whole image). */
+    private var sceneParams: DevelopParams? = null
+    private var sceneImage: Pair<Int, Int> = 1 to 1
 
     // ------------------------------------------------------------------ passes
 
@@ -449,6 +470,7 @@ class TiledRenderer private constructor(requestedTile: Int, private val share: E
         GLES30.glViewport(0, 0, region.width, region.height)
         GLES30.glUseProgram(sceneProgram)
         GLES30.glUniform2i(GLES30.glGetUniformLocation(sceneProgram, "uOrigin"), region.x, region.y)
+        bindVignette(sceneProgram, checkNotNull(sceneParams), vignetteLut, sceneImage.first, sceneImage.second)
         bind(sourceTex, if (reconstruct) light.chromaTexture else sourceTex)
         GLES30.glDrawArrays(GLES30.GL_TRIANGLES, 0, 3)
         GlSupport.checkError("export scene stage")
@@ -484,6 +506,22 @@ class TiledRenderer private constructor(requestedTile: Int, private val share: E
         GLES30.glUniform3f(loc("uGeomX"), m[0], m[1], m[2])
         GLES30.glUniform3f(loc("uGeomY"), m[3], m[4], m[5])
         GLES30.glUniform1i(loc("uAxis"), if (plan.mapping.axisAligned) 1 else 0)
+        val warp = plan.mapping.warp
+        GLES30.glUniform3i(
+            loc("uWarp"),
+            if (warp != null) 1 else 0,
+            if (warp?.lens != null) 1 else 0,
+            if (warp?.chromatic == true) 1 else 0,
+        )
+        val norm = WarpShaders.norm(warp)
+        GLES30.glUniform4f(loc("uWarpNorm"), norm[0], norm[1], norm[2], norm[3])
+        val rows = WarpShaders.rows(warp)
+        GLES30.glUniform3f(loc("uWarpRow0"), rows[0], rows[1], rows[2])
+        GLES30.glUniform3f(loc("uWarpRow1"), rows[4], rows[5], rows[6])
+        GLES30.glUniform3f(loc("uWarpRow2"), rows[8], rows[9], rows[10])
+        lensLut.upload(warp?.lens?.table)
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE0 + LENS_UNIT)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, lensLut.texture)
         bind(stage, stage)
         GLES30.glDrawArrays(GLES30.GL_TRIANGLES, 0, 3)
         GlSupport.checkError("export geometry")
@@ -669,6 +707,8 @@ class TiledRenderer private constructor(requestedTile: Int, private val share: E
         sampler(developProgram, "uMoments", 2)
         sampler(resampleProgram, "uSrc", 0)
         sampler(geometryProgram, "uStage", 0)
+        sampler(geometryProgram, "uLensLut", LENS_UNIT)
+        sampler(sceneProgram, "uVignetteLut", LENS_UNIT)
         sampler(outputProgram, "uStage", 0)
         val ids = IntArray(3)
         GLES30.glGenBuffers(3, ids, 0)
@@ -682,6 +722,7 @@ class TiledRenderer private constructor(requestedTile: Int, private val share: E
         light.init()
         detail.init()
         effects.init()
+        defringe.init()
         val vaos = IntArray(1)
         GLES30.glGenVertexArrays(1, vaos, 0)
         vao = vaos[0]
@@ -817,6 +858,9 @@ class TiledRenderer private constructor(requestedTile: Int, private val share: E
                     light.release()
                     detail.release()
                     effects.release()
+                    defringe.release()
+                    lensLut.release()
+                    vignetteLut.release()
                     GLES30.glDeleteFramebuffers(2, intArrayOf(atlasFbo0, atlasFbo1), 0)
                     GLES30.glDeleteProgram(copyProgram)
                     GLES30.glDeleteBuffers(3, intArrayOf(developUbo, lightUbo, lookUbo), 0)

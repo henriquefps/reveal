@@ -24,6 +24,10 @@ import kotlin.math.floor
  *   ```
  *   Interpolating (passes through the samples), sharper than bilinear without Lanczos' 36 taps; its small overshoot
  *   on hard edges stays in float and is clamped only by the output transform.
+ * - with a [GeometryMapping.warp] (Transform, lens corrections; docs/adr/0015) `ip` is a point of the crop's plane:
+ *   outside the plane is black, otherwise [dev.hfps.reveal.pipeline.geometry.Warp.sourcePoint] gives each channel's
+ *   source point; the green one outside the image (or behind the horizon) is black, else each channel is its own
+ *   Catmull-Rom sample (one shared sample when the channels coincide, no CA removal).
  */
 object GeometryOp {
     /** Renders the whole output of [mapping] from [rgb] (`W*H*3`, the mapping's image); `outW*outH*3`. */
@@ -42,6 +46,8 @@ object GeometryOp {
         val m = mapping.toImageFloats()
         val out = FloatArray(w * h * CHANNELS)
         val px = FloatArray(CHANNELS)
+        val warp = mapping.warp
+        val src = FloatArray(2 * CHANNELS)
         for (y in 0 until h) {
             val oy = (y0 + y) + 0.5f
             for (x in 0 until w) {
@@ -50,7 +56,20 @@ object GeometryOp {
                 val iy = m[3] * ox + m[4] * oy + m[5]
                 val o = (y * w + x) * CHANNELS
                 if (!inside(ix, iy, width, height)) continue
-                if (mapping.axisAligned) {
+                if (warp != null) {
+                    if (!warp.sourcePoint(ix, iy, src) || !inside(src[2], src[3], width, height)) continue
+                    if (warp.chromatic) {
+                        for (c in 0 until CHANNELS) {
+                            catmullRom(rgb, width, height, src[c * 2], src[c * 2 + 1], px)
+                            out[o + c] = px[c]
+                        }
+                    } else {
+                        catmullRom(rgb, width, height, src[2], src[3], px)
+                        out[o] = px[0]
+                        out[o + 1] = px[1]
+                        out[o + 2] = px[2]
+                    }
+                } else if (mapping.axisAligned) {
                     val i = (texel(iy, height) * width + texel(ix, width)) * CHANNELS
                     out[o] = rgb[i]
                     out[o + 1] = rgb[i + 1]

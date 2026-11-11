@@ -53,8 +53,8 @@ precision highp sampler2D;
 """
 
     /**
-     * Stage 1, scene-linear (slots 1-5 of ADR 0002): raw white balance, highlight reconstruction, camera matrix and
-     * exposure. Reads the source texture texel by texel and writes the scene texture 1:1 (RGBA16F), which the
+     * Stage 1, scene-linear (slots 1-5 of ADR 0002): raw white balance, highlight reconstruction, camera matrix, the
+     * lens's vignetting correction (slot 3, `VignetteOp`, docs/adr/0015) and exposure. Reads the source texture texel by texel and writes the scene texture 1:1 (RGBA16F), which the
      * local-tone guide passes read.
      */
     val SCENE_FRAG: String = HEADER + DEVELOP_BLOCK + LightShaders.COMMON + """
@@ -63,8 +63,11 @@ uniform sampler2D uChroma;
 // Tiled export (TiledRenderer): image position of this target's pixel (0, 0); 0 for whole-image renders. The tile
 // textures are read at the local position, the low-res grids at the image position.
 uniform ivec2 uOrigin;
+// VignetteOp: x = 1 when on, yz = image centre (pixels of the whole image), w = 1 / half diagonal.
+uniform vec4 uVignette;
+uniform sampler2D uVignetteLut;
 out vec4 outColor;
-""" + LightShaders.RECONSTRUCT + """
+""" + LightShaders.RECONSTRUCT + WarpShaders.FUNCTIONS + """
 void main() {
     ivec2 p = ivec2(gl_FragCoord.xy);
     vec3 c = texelFetch(uSource, p, 0).rgb;
@@ -73,6 +76,11 @@ void main() {
         c = reconstructHighlights(c, p + uOrigin);
     }
     c = mat3(cameraToWorking) * c;
+    if (uVignette.x != 0.0) {
+        float dx = (float(p.x + uOrigin.x) + 0.5) - uVignette.y;
+        float dy = (float(p.y + uOrigin.y) + 0.5) - uVignette.z;
+        c = c * lensLookup(uVignetteLut, 0, sqrt(dx * dx + dy * dy) * uVignette.w);
+    }
     c = c * exposure.x;
     outColor = vec4(c, 1.0);
 }
@@ -172,14 +180,22 @@ layout(std140) uniform Output {
     vec4 post1;              // round, exponent, norm, flags (1 vignette, 2 grain)
     vec4 post2;              // grain, roughness
     vec4 post3;              // lattice cells per output pixel: x = proxy output, y = full-resolution output
+    // Lens corrections and Transform (Warp, docs/adr/0015): the plane point to each channel's source point.
+    vec4 warpNorm;           // centre xy, half diagonal, 1 / half diagonal (this pane's image)
+    vec4 warpRow0;           // plane -> corrected homography rows (normalised coordinates)
+    vec4 warpRow1;
+    vec4 warpRow2;
+    uvec4 warpFlags;         // x = 1 warp on, y = 1 lens table on, z = 1 channels differ (CA)
+    vec4 tileWarpNorm;       // as warpNorm for the full-resolution image
 };
 
 uniform sampler2D uStage;
+uniform sampler2D uLensLut;    // LensWarp table: rgb = per-channel radial scale
 uniform sampler2D uAtlas;      // zoom tiles: RGBA16F slots, levels 0-1
 uniform sampler2D uTileIndex;  // zoom tiles: RGBA8 per tile, rg = slot, b = fade-in alpha, a = ready
 out vec4 outColor;
 
-""" + OUTPUT_FUNCTIONS + EffectsShaders.POST + """
+""" + OUTPUT_FUNCTIONS + EffectsShaders.POST + WarpShaders.FUNCTIONS + """
 // GeometryOp.weights: Catmull-Rom (a = -0.5) for the fraction t.
 vec4 catmullRomWeights(float t) {
     return vec4(
@@ -239,6 +255,18 @@ vec3 sampleTile(vec2 fp, ivec2 t, vec4 idx) {
     return textureLod(uAtlas, ap / tileImage.zw, tileAtlas.w).rgb;
 }
 
+// The proxy's stage texture at image point ip in the pass's sampling mode.
+vec3 sampleStage(vec2 ip) {
+    if (dither.z == 0u) {
+        // Exact texel: 1:1 without straightening (crop, quarter turns and flips land on texel centres).
+        return texelFetch(uStage, clamp(ivec2(floor(ip)), ivec2(0), ivec2(image.xy) - 1), 0).rgb;
+    } else if (dither.z == 2u) {
+        return catmullRom(ip);
+    }
+    // Explicit LOD from the CPU (never from derivatives); magnified views run at LOD 0.
+    return textureLod(uStage, clamp(ip, vec2(0.0), image.xy) / image.xy, image.w).rgb;
+}
+
 void main() {
     // Screen pixel centre, origin top-left (image row 0 is the top).
     vec2 sp = vec2(gl_FragCoord.x, viewport.w - gl_FragCoord.y);
@@ -252,14 +280,21 @@ void main() {
     vec2 ip = vec2(dot(geomX.xy, op) + geomX.z, dot(geomY.xy, op) + geomY.z);
     bool insideImage = all(greaterThanEqual(ip, vec2(0.0))) && all(lessThanEqual(ip, image.xy));
     vec3 c;
-    if (dither.z == 0u) {
-        // Exact texel: 1:1 without straightening (crop, quarter turns and flips land on texel centres).
-        c = texelFetch(uStage, clamp(ivec2(floor(ip)), ivec2(0), ivec2(image.xy) - 1), 0).rgb;
-    } else if (dither.z == 2u) {
-        c = catmullRom(ip);
+    if (warpFlags.x != 0u) {
+        // GeometryOp with a warp: the plane point to each channel's source point (green decides inside/outside).
+        vec2 sR;
+        vec2 sG;
+        vec2 sB;
+        bool front = warpSource(ip, warpNorm, warpRow0.xyz, warpRow1.xyz, warpRow2.xyz, warpFlags.y != 0u,
+            uLensLut, sR, sG, sB);
+        insideImage = insideImage && front && all(greaterThanEqual(sG, vec2(0.0))) && all(lessThanEqual(sG, image.xy));
+        if (warpFlags.z != 0u) {
+            c = vec3(sampleStage(sR).r, sampleStage(sG).g, sampleStage(sB).b);
+        } else {
+            c = sampleStage(sG);
+        }
     } else {
-        // Explicit LOD from the CPU (never from derivatives); magnified views run at LOD 0.
-        c = textureLod(uStage, clamp(ip, vec2(0.0), image.xy) / image.xy, image.w).rgb;
+        c = sampleStage(ip);
     }
     if (!insideImage) {
         c = vec3(0.0);
@@ -272,11 +307,25 @@ void main() {
             fo = floor(fo) + 0.5;
         }
         vec2 fp = vec2(dot(tileGeomX.xy, fo) + tileGeomX.z, dot(tileGeomY.xy, fo) + tileGeomY.z);
-        if (all(greaterThanEqual(fp, vec2(0.0))) && all(lessThan(fp, tileImage.xy))) {
+        vec2 fR = fp;
+        vec2 fB = fp;
+        bool front = true;
+        if (warpFlags.x != 0u) {
+            bool inPlane = all(greaterThanEqual(fp, vec2(0.0))) && all(lessThanEqual(fp, tileImage.xy));
+            vec2 fG = fp;
+            front = inPlane && warpSource(fp, tileWarpNorm, warpRow0.xyz, warpRow1.xyz, warpRow2.xyz,
+                warpFlags.y != 0u, uLensLut, fR, fG, fB);
+            fp = fG;
+        }
+        if (front && all(greaterThanEqual(fp, vec2(0.0))) && all(lessThan(fp, tileImage.xy))) {
             ivec2 t = ivec2(floor(fp / tileAtlas.x));
             vec4 idx = texelFetch(uTileIndex, t, 0);
             if (idx.a > 0.5) {
-                c = mix(c, sampleTile(fp, t, idx), idx.b);
+                // Red and blue sit within a few pixels of green: inside the same slot's border.
+                vec3 tc = warpFlags.z != 0u
+                    ? vec3(sampleTile(fR, t, idx).r, sampleTile(fp, t, idx).g, sampleTile(fB, t, idx).b)
+                    : sampleTile(fp, t, idx);
+                c = mix(c, tc, idx.b);
             }
         }
     }

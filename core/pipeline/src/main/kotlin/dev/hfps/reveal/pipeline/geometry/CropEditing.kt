@@ -7,6 +7,7 @@ import dev.hfps.reveal.pipeline.recipe.AspectPreset
 import dev.hfps.reveal.pipeline.recipe.CropRect
 import dev.hfps.reveal.pipeline.recipe.Geometry
 import dev.hfps.reveal.pipeline.recipe.RecipeRanges
+import dev.hfps.reveal.pipeline.recipe.Transform
 import kotlin.math.abs
 import kotlin.math.atan2
 import kotlin.math.cos
@@ -36,7 +37,9 @@ enum class CropHandle(val hx: Int, val hy: Int) {
  * the recipe itself stays in image coordinates (docs/adr/0003).
  *
  * A frame is **valid** when its image rectangle lies inside the image (the recipe's normalised crop is in 0..1) and,
- * when [Geometry.constrain] is on, its straightened rectangle does too (no empty corner). Gestures move from a valid
+ * when [Geometry.constrain] is on, its straightened rectangle does too (no empty corner) and, with a Transform
+ * (docs/adr/0015), each of its corners maps back into the lens-corrected image (the transformed image is the
+ * projective image of a rectangle: convex, so the corners decide). Gestures move from a valid
  * frame toward the requested one and stop at the last valid position ([limit]).
  */
 @Suppress("TooManyFunctions", "ReturnCount")
@@ -100,8 +103,30 @@ object CropEditing {
         val sn = abs(sin(rad))
         val ex = cs * r.width / 2 + sn * r.height / 2
         val ey = sn * r.width / 2 + cs * r.height / 2
-        return r.centerX - ex >= -tolerance && r.centerX + ex <= width + tolerance &&
+        val straightInside = r.centerX - ex >= -tolerance && r.centerX + ex <= width + tolerance &&
             r.centerY - ey >= -tolerance && r.centerY + ey <= height + tolerance
+        if (!straightInside) return false
+        if (g.transform.isIdentity) return true
+        return cornersInsideTransformed(g, r, width, height, tolerance)
+    }
+
+    /** Whether the corners of [r] straightened by [g]'s angle map back into the corrected image (see the class). */
+    private fun cornersInsideTransformed(g: Geometry, r: Box, width: Int, height: Int, tolerance: Double): Boolean {
+        val toCorrected = Perspective.toCorrected(g.transform)
+        val half = kotlin.math.hypot(width.toDouble(), height.toDouble()) / 2
+        val turn = Affine.rotation(-GeometryMapping.angle(g))
+        val limitX = width / 2.0 / half + tolerance / half
+        val limitY = height / 2.0 / half + tolerance / half
+        for (sx in intArrayOf(-1, 1)) {
+            for (sy in intArrayOf(-1, 1)) {
+                val v = turn.mapVector(sx * r.width / 2, sy * r.height / 2)
+                val px = r.centerX + v.x
+                val py = r.centerY + v.y
+                val q = toCorrected.map((px - width / 2.0) / half, (py - height / 2.0) / half) ?: return false
+                if (abs(q.x) > limitX || abs(q.y) > limitY) return false
+            }
+        }
+        return true
     }
 
     /** The last valid frame on the straight path from the valid [from] to [to] ([to] itself when valid). */
@@ -263,6 +288,17 @@ object CropEditing {
         // Turning by -seen as seen; a mirrored picture turns the other way in recipe terms.
         val recipeDelta = -seen * mirrorSign(g)
         return RecipeRanges.angle.clamp((g.angle + recipeDelta).toFloat())
+    }
+
+    /**
+     * The Transform set to [transform] from [start], the geometry when the gesture began: with the constraint on, the
+     * frame shrinks about its centre so no empty corner enters it (going back regrows it up to [start]'s frame).
+     */
+    fun transform(start: Geometry, transform: Transform, width: Int, height: Int): Geometry {
+        val g = start.copy(transform = transform)
+        if (!g.constrain) return g
+        val box = shrinkToFit(g, frame(start, width, height), width, height)
+        return withFrame(g, box, width, height)
     }
 
     /** -1 when the picture is mirrored (exactly one flip): a clockwise turn as seen is anticlockwise in the recipe. */

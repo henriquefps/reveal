@@ -21,6 +21,8 @@ import dev.hfps.reveal.pipeline.input.NativeRawTileSource
 import dev.hfps.reveal.pipeline.input.PipelineInputMapper
 import dev.hfps.reveal.pipeline.input.RegionTileSource
 import dev.hfps.reveal.pipeline.input.TileSource
+import dev.hfps.reveal.pipeline.input.withLens
+import dev.hfps.reveal.pipeline.optics.LensProfile
 import dev.hfps.reveal.pipeline.input.UnsupportedCameraException
 import java.io.FileNotFoundException
 import java.io.IOException
@@ -128,10 +130,14 @@ class PhotoOpener(private val resolver: ContentResolver) {
      * memory with the export's LibRaw path ([NativeRawTileSource], 6 bytes per pixel while the editor is open), a
      * standard image decoded once like the export ([BitmapTileSource], 4 bytes per pixel) or, above
      * [FULL_DECODE_MAX_PIXELS], read in regions ([RegionTileSource], the document stays open until the source is
-     * closed). Upright, the same size the proxy was mapped from. Blocking, cancellable; the caller owns (closes) it.
+     * closed). Upright, the same size the proxy was mapped from, carrying [lens] (the proxy's profile, docs/adr/0015).
+     * Blocking, cancellable; the caller owns (closes) it.
      */
+    fun openFullResolution(uri: Uri, cancel: CancelToken, lens: LensProfile? = null): TileSource =
+        openFullSource(uri, cancel).withLens(lens)
+
     @Suppress("ThrowsCount", "ReturnCount")
-    fun openFullResolution(uri: Uri, cancel: CancelToken): TileSource {
+    private fun openFullSource(uri: Uri, cancel: CancelToken): TileSource {
         val image = openInput(uri, displayName(uri))
         try {
             val type = image.type
@@ -197,7 +203,8 @@ class PhotoOpener(private val resolver: ContentResolver) {
         val orientation = if (type.isRaw) null else runCatching { image.inspection.metadata.orientation }.getOrNull()
         val proxy = ProxyBuilder.decodeProxy(image, proxyLongEdge, cancel) { onEvent(OpenEvent.Step(it)) }
         cancel.throwIfCancelled()
-        val input = PipelineInputMapper.map(proxy.image, proxy.info, orientation ?: proxy.info.orientation)
+        val metadata = runCatching { image.inspection.metadata }.getOrNull()
+        val input = PipelineInputMapper.map(proxy.image, proxy.info, orientation ?: proxy.info.orientation, metadata)
         val turned = input.width != proxy.image.width
         val stats = proxy.stats
         return OpenedPhoto(

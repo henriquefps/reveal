@@ -71,7 +71,7 @@ void main() {
      * image region starting at `uSrc` (texel 0), which [dev.hfps.reveal.pipeline.geometry.GeometryMapping.sourceRegion]
      * sized to cover every tap. Writes linear working-space RGB (RGBA32F).
      */
-    const val GEOMETRY_FRAG: String = HEADER + """
+    val GEOMETRY_FRAG: String = HEADER + """
 uniform sampler2D uStage;
 uniform ivec2 uSrc;        // image position of the source texture's texel 0
 uniform ivec2 uImage;      // image size
@@ -79,7 +79,15 @@ uniform ivec2 uDst;        // geometry-output position of this target's pixel (0
 uniform vec3 uGeomX;       // GeometryMapping.toImage row x: image x = dot(xy, o) + z
 uniform vec3 uGeomY;       // row y
 uniform int uAxis;         // 1 when nothing is straightened (an exact texel copy)
+// Warp (docs/adr/0015): plane point to each channel's source point; see the output pass.
+uniform ivec3 uWarp;       // x = warp on, y = lens table on, z = channels differ (CA)
+uniform vec4 uWarpNorm;
+uniform vec3 uWarpRow0;
+uniform vec3 uWarpRow1;
+uniform vec3 uWarpRow2;
+uniform sampler2D uLensLut;
 out vec4 outColor;
+""" + WarpShaders.FUNCTIONS + """
 
 vec3 fetch(ivec2 q) {
     return texelFetch(uStage, clamp(q, ivec2(0), uImage - 1) - uSrc, 0).rgb;
@@ -93,19 +101,8 @@ vec4 catmullRomWeights(float t) {
         (0.5 * t - 0.5) * t * t);
 }
 
-void main() {
-    vec2 o = vec2(uDst + ivec2(gl_FragCoord.xy)) + 0.5;
-    float ix = uGeomX.x * o.x + uGeomX.y * o.y + uGeomX.z;
-    float iy = uGeomY.x * o.x + uGeomY.y * o.y + uGeomY.z;
-    if (ix < 0.0 || iy < 0.0 || ix > float(uImage.x) || iy > float(uImage.y)) {
-        outColor = vec4(0.0, 0.0, 0.0, 1.0);
-        return;
-    }
-    if (uAxis == 1) {
-        outColor = vec4(fetch(ivec2(floor(ix), floor(iy))), 1.0);
-        return;
-    }
-    vec2 s = vec2(ix, iy) - 0.5;
+vec3 catmullRom(vec2 ip) {
+    vec2 s = ip - 0.5;
     vec2 f = floor(s);
     vec4 wx = catmullRomWeights(s.x - f.x);
     vec4 wy = catmullRomWeights(s.y - f.y);
@@ -118,7 +115,37 @@ void main() {
         }
         sum += wy[j] * row;
     }
-    outColor = vec4(sum, 1.0);
+    return sum;
+}
+
+void main() {
+    vec2 o = vec2(uDst + ivec2(gl_FragCoord.xy)) + 0.5;
+    float ix = uGeomX.x * o.x + uGeomX.y * o.y + uGeomX.z;
+    float iy = uGeomY.x * o.x + uGeomY.y * o.y + uGeomY.z;
+    if (ix < 0.0 || iy < 0.0 || ix > float(uImage.x) || iy > float(uImage.y)) {
+        outColor = vec4(0.0, 0.0, 0.0, 1.0);
+        return;
+    }
+    if (uWarp.x == 1) {
+        vec2 sR;
+        vec2 sG;
+        vec2 sB;
+        vec2 size = vec2(uImage);
+        bool front = warpSource(vec2(ix, iy), uWarpNorm, uWarpRow0, uWarpRow1, uWarpRow2, uWarp.y == 1, uLensLut,
+            sR, sG, sB);
+        if (!front || sG.x < 0.0 || sG.y < 0.0 || sG.x > size.x || sG.y > size.y) {
+            outColor = vec4(0.0, 0.0, 0.0, 1.0);
+            return;
+        }
+        vec3 c = uWarp.z == 1 ? vec3(catmullRom(sR).r, catmullRom(sG).g, catmullRom(sB).b) : catmullRom(sG);
+        outColor = vec4(c, 1.0);
+        return;
+    }
+    if (uAxis == 1) {
+        outColor = vec4(fetch(ivec2(floor(ix), floor(iy))), 1.0);
+        return;
+    }
+    outColor = vec4(catmullRom(vec2(ix, iy)), 1.0);
 }
 """
 

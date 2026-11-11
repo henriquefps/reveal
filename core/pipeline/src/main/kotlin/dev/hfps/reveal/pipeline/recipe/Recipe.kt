@@ -9,8 +9,8 @@ const val RECIPE_VERSION: Int = 1
 /**
  * The edit model of one photo version: an immutable tree where every default means "no change". Originals are never
  * modified; a photo's look is its recipe. Groups follow the develop pipeline order (docs/adr/0002). Groups without
- * operators yet (optics) are empty placeholders that reserve the JSON name and say what
- * will live there, so adding fields later is an additive, non-breaking change.
+ * operators yet are empty placeholders that reserve the JSON name and say what will live there, so adding
+ * fields later is an additive, non-breaking change.
  */
 @Serializable
 data class Recipe(
@@ -20,7 +20,7 @@ data class Recipe(
     @SerialName("colour") val colour: Colour = Colour(),
     @SerialName("effects") val effects: Effects = Effects(),
     @SerialName("detail") val detail: Detail = Detail(),
-    @SerialName("optics") val optics: Optics = Optics,
+    @SerialName("optics") val optics: Optics = Optics(),
     @SerialName("geometry") val geometry: Geometry = Geometry(),
     @SerialName("masks") val masks: List<Mask> = emptyList(),
     @SerialName("heals") val heals: List<Heal> = emptyList(),
@@ -272,14 +272,76 @@ data class Detail(
     }
 }
 
-/** Optics (lens profile corrections, chromatic aberration, defringe). Reserved. */
+/**
+ * Optics (docs/adr/0015): the lens profile's corrections, lateral chromatic aberration and defringe. Every default is
+ * "no change"; a **new** photo with a lens profile starts from [Optics.forNewPhoto] instead (the default of a new edit
+ * lives in its first recipe, so recipes saved before these fields existed keep their pixels). The JSON group was an
+ * empty object (`{}`) before these fields existed; it reads as the defaults (additive).
+ *
+ * Distortion and lateral CA are coordinate operators folded into the geometry resampling (slot 13); vignetting is a
+ * per-pixel gain right after the camera matrix (slot 3); defringe is a neighbourhood operator on edges (slot 10b).
+ */
 @Serializable
-data object Optics
+data class Optics(
+    /** Apply the photo's lens profile (distortion and vignetting; see [removeCa] for its CA data). */
+    @SerialName("lensCorrections") val lensCorrections: Boolean = false,
+    /** Distortion correction strength in percent, 0..200 (100 = the profile's). */
+    @SerialName("distortion") val distortionPercent: Float = FULL,
+    /** Vignetting correction strength in percent, 0..200 (100 = the profile's). */
+    @SerialName("vignetting") val vignettingPercent: Float = FULL,
+    /**
+     * Remove lateral chromatic aberration: from the profile when it has CA data (whether or not [lensCorrections] is
+     * on), else from the automatic estimate stored in [caRed] / [caBlue].
+     */
+    @SerialName("removeCa") val removeCa: Boolean = false,
+    /** Automatic CA estimate: red's radial scale relative to green, minus one, in units of 1e-4 (derived value). */
+    @SerialName("caRed") val caRed: Float = 0f,
+    /** Automatic CA estimate for blue (see [caRed]). */
+    @SerialName("caBlue") val caBlue: Float = 0f,
+    /** Defringe purple amount, 0..20 (0 = off). */
+    @SerialName("purpleAmount") val purpleAmount: Float = 0f,
+    /** Purple hue range start, 0..100 (0 = blue, 100 = magenta-red). */
+    @SerialName("purpleHueLow") val purpleHueLow: Float = PURPLE_LOW,
+    @SerialName("purpleHueHigh") val purpleHueHigh: Float = PURPLE_HIGH,
+    /** Defringe green amount, 0..20 (0 = off). */
+    @SerialName("greenAmount") val greenAmount: Float = 0f,
+    /** Green hue range start, 0..100 (0 = yellow-green, 100 = cyan-green). */
+    @SerialName("greenHueLow") val greenHueLow: Float = GREEN_LOW,
+    @SerialName("greenHueHigh") val greenHueHigh: Float = GREEN_HIGH,
+) {
+    init {
+        require(
+            listOf(
+                distortionPercent, vignettingPercent, caRed, caBlue, purpleAmount, purpleHueLow, purpleHueHigh,
+                greenAmount, greenHueLow, greenHueHigh,
+            ).all { it.isFinite() },
+        ) { "optics values must be finite" }
+    }
+
+    companion object {
+        private const val FULL = 100f
+        const val PURPLE_LOW: Float = 30f
+        const val PURPLE_HIGH: Float = 70f
+        const val GREEN_LOW: Float = 40f
+        const val GREEN_HIGH: Float = 60f
+
+        /**
+         * The optics a new edit starts with (docs/adr/0015, "Defaults"): lens corrections on for a RAW with a profile,
+         * and CA removal on when that profile carries CA data. JPEG/HEIF were usually corrected by the camera already:
+         * their profile is offered but off.
+         */
+        fun forNewPhoto(hasProfile: Boolean, profileHasCa: Boolean, isRaw: Boolean): Optics {
+            val on = hasProfile && isRaw
+            return Optics(lensCorrections = on, removeCa = on && profileHasCa)
+        }
+    }
+}
 
 /**
- * Geometry: crop, straighten, quarter turns and flips, applied as one resampling. The crop is a normalised rectangle
- * in the **oriented, un-rotated** image (EXIF orientation applied; [angle], [rotate] and the flips are not): the
- * editor shows the full image while cropping and the crop follows the transform. Masks and heals stay in image
+ * Geometry: transform (perspective), crop, straighten, quarter turns and flips, applied as one resampling. The crop is
+ * a normalised rectangle in the **transformed, un-rotated** image plane (EXIF orientation, lens corrections and
+ * [transform] applied; [angle], [rotate] and the flips are not): the editor shows the full plane while cropping and
+ * the crop follows the transform. Masks and heals stay in image
  * coordinates (the same oriented, un-cropped, un-rotated space) so they follow geometry changes (docs/adr/0003).
  */
 @Serializable
@@ -299,6 +361,8 @@ data class Geometry(
      * enters it. An editing option stored with the edit (like [aspect]); it never changes pixels by itself.
      */
     @SerialName("constrain") val constrain: Boolean = true,
+    /** Perspective and the other transform sliders, plus Upright (docs/adr/0015); applied before the crop. */
+    @SerialName("transform") val transform: Transform = Transform(),
 ) {
     init {
         require(angle.isFinite()) { "angle must be finite" }
@@ -307,6 +371,90 @@ data class Geometry(
 
     private companion object {
         const val MAX_QUARTER_TURNS = 3
+    }
+}
+
+/**
+ * The Transform panel (docs/adr/0015): one homography of the lens-corrected image onto the crop's plane (same size),
+ * about the image centre. Every default is "no change". Upright writes these sliders ([upright] records which mode
+ * did, [guides] the lines of the Guided mode) so the user can fine-tune them afterwards.
+ */
+@Serializable
+data class Transform(
+    /** Vertical keystone, -100..+100: a tilt about the horizontal axis (positive = the top grows). */
+    @SerialName("vertical") val vertical: Float = 0f,
+    /** Horizontal keystone, -100..+100: a turn about the vertical axis (positive = the right side grows). */
+    @SerialName("horizontal") val horizontal: Float = 0f,
+    /** Rotation in degrees, -10..+10, positive = clockwise. */
+    @SerialName("rotate") val rotate: Float = 0f,
+    /** Aspect, -100..+100: positive stretches horizontally, negative vertically. */
+    @SerialName("aspect") val aspect: Float = 0f,
+    /** Scale in percent, 50..150 (100 = no change; above 100 zooms in). */
+    @SerialName("scale") val scale: Float = 100f,
+    /** Horizontal offset, -100..+100 (positive moves the image right). */
+    @SerialName("offsetX") val offsetX: Float = 0f,
+    /** Vertical offset, -100..+100 (positive moves the image down). */
+    @SerialName("offsetY") val offsetY: Float = 0f,
+    /** The Upright mode that produced the sliders (or [UprightMode.OFF] when set by hand). */
+    @SerialName("upright") val upright: UprightMode = UprightMode.OFF,
+    /** The Guided mode's lines, in the lens-corrected image (normalised 0..1, y down); at most four. */
+    @SerialName("guides") val guides: List<GuideLine> = emptyList(),
+) {
+    init {
+        require(listOf(vertical, horizontal, rotate, aspect, scale, offsetX, offsetY).all { it.isFinite() }) {
+            "transform values must be finite"
+        }
+        require(guides.size <= MAX_GUIDES) { "at most $MAX_GUIDES guides" }
+    }
+
+    /** True when the transform changes no pixel ([upright] and [guides] alone do not). */
+    val isIdentity: Boolean
+        get() = vertical == 0f && horizontal == 0f && rotate == 0f && aspect == 0f && scale == NEUTRAL_SCALE &&
+            offsetX == 0f && offsetY == 0f
+
+    companion object {
+        const val MAX_GUIDES: Int = 4
+        private const val NEUTRAL_SCALE = 100f
+    }
+}
+
+/** Upright modes (docs/adr/0015, "Upright"). */
+@Serializable
+enum class UprightMode {
+    @SerialName("off")
+    OFF,
+
+    /** Balanced level and perspective corrections. */
+    @SerialName("auto")
+    AUTO,
+
+    /** Level: horizontal lines level (rotation only). */
+    @SerialName("level")
+    LEVEL,
+
+    /** Vertical: converging verticals made parallel and plumb. */
+    @SerialName("vertical")
+    VERTICAL,
+
+    /** Full: vertical and horizontal perspective. */
+    @SerialName("full")
+    FULL,
+
+    /** Guided: the user's 2-4 lines made vertical or horizontal. */
+    @SerialName("guided")
+    GUIDED,
+}
+
+/** A guide line from ([x0], [y0]) to ([x1], [y1]), normalised to the lens-corrected image (y down). */
+@Serializable
+data class GuideLine(
+    @SerialName("x0") val x0: Float,
+    @SerialName("y0") val y0: Float,
+    @SerialName("x1") val x1: Float,
+    @SerialName("y1") val y1: Float,
+) {
+    init {
+        require(listOf(x0, y0, x1, y1).all { it.isFinite() }) { "guide must be finite" }
     }
 }
 

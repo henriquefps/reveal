@@ -69,6 +69,23 @@ enum class ControlId {
     GRAIN_SIZE,
     GRAIN_ROUGHNESS,
 
+    // Optics and transform (docs/adr/0015). Before CURVE_SHADOWS: ColourToolControls handles the ids from there on.
+    LENS_DISTORTION,
+    LENS_VIGNETTING,
+    DEFRINGE_PURPLE_AMOUNT,
+    DEFRINGE_PURPLE_HUE_LOW,
+    DEFRINGE_PURPLE_HUE_HIGH,
+    DEFRINGE_GREEN_AMOUNT,
+    DEFRINGE_GREEN_HUE_LOW,
+    DEFRINGE_GREEN_HUE_HIGH,
+    TRANSFORM_VERTICAL,
+    TRANSFORM_HORIZONTAL,
+    TRANSFORM_ROTATE,
+    TRANSFORM_ASPECT,
+    TRANSFORM_SCALE,
+    TRANSFORM_OFFSET_X,
+    TRANSFORM_OFFSET_Y,
+
     // Tone curve, parametric (docs/adr/0013).
     CURVE_SHADOWS,
     CURVE_DARKS,
@@ -217,6 +234,10 @@ object RecipeRanges {
     private const val SPLIT_MAX = 95f
     private const val HUE_MAX = 360f
     private const val GRAIN_SIZE_DEFAULT = 25f
+    private const val DEFRINGE_MAX = 20f
+    private const val ROTATE_MAX = 10f
+    private const val SCALE_MIN = 50f
+    private const val SCALE_MAX = 150f
 
     private fun bipolar(id: ControlId, max: Float, step: Float, fine: Float, kind: ValueKind) =
         ControlRange(id, -max, max, 0f, step, fine, bipolar = true, neutral = 0f, kind = kind)
@@ -272,6 +293,38 @@ object RecipeRanges {
     val grainSize = unipolar(ControlId.GRAIN_SIZE, TONE, GRAIN_SIZE_DEFAULT)
     val grainRoughness = unipolar(ControlId.GRAIN_ROUGHNESS, TONE, HALF)
 
+    val lensDistortion = ControlRange(
+        ControlId.LENS_DISTORTION, 0f, AMOUNT_MAX, 100f, 1f, 1f, bipolar = false, neutral = 100f,
+        kind = ValueKind.PERCENT,
+    )
+    val lensVignetting = lensDistortion.copy(id = ControlId.LENS_VIGNETTING)
+    val defringePurpleAmount = unipolar(ControlId.DEFRINGE_PURPLE_AMOUNT, DEFRINGE_MAX, 0f)
+    val defringePurpleHueLow = unipolar(ControlId.DEFRINGE_PURPLE_HUE_LOW, TONE, Optics.PURPLE_LOW)
+    val defringePurpleHueHigh = unipolar(ControlId.DEFRINGE_PURPLE_HUE_HIGH, TONE, Optics.PURPLE_HIGH)
+    val defringeGreenAmount = unipolar(ControlId.DEFRINGE_GREEN_AMOUNT, DEFRINGE_MAX, 0f)
+    val defringeGreenHueLow = unipolar(ControlId.DEFRINGE_GREEN_HUE_LOW, TONE, Optics.GREEN_LOW)
+    val defringeGreenHueHigh = unipolar(ControlId.DEFRINGE_GREEN_HUE_HIGH, TONE, Optics.GREEN_HIGH)
+    val transformVertical = signedInt(ControlId.TRANSFORM_VERTICAL)
+    val transformHorizontal = signedInt(ControlId.TRANSFORM_HORIZONTAL)
+    val transformRotate = bipolar(ControlId.TRANSFORM_ROTATE, ROTATE_MAX, ANGLE_STEP, ANGLE_STEP, ValueKind.DEGREES)
+    val transformAspect = signedInt(ControlId.TRANSFORM_ASPECT)
+    val transformScale = ControlRange(
+        ControlId.TRANSFORM_SCALE, SCALE_MIN, SCALE_MAX, 100f, 1f, 1f, bipolar = false, neutral = 100f,
+        kind = ValueKind.PERCENT,
+    )
+    val transformOffsetX = signedInt(ControlId.TRANSFORM_OFFSET_X)
+    val transformOffsetY = signedInt(ControlId.TRANSFORM_OFFSET_Y)
+
+    /** The optics and transform ranges (docs/adr/0015), in panel order. */
+    val optics: List<ControlRange> = listOf(
+        lensDistortion, lensVignetting, defringePurpleAmount, defringePurpleHueLow, defringePurpleHueHigh,
+        defringeGreenAmount, defringeGreenHueLow, defringeGreenHueHigh,
+    )
+    val transform: List<ControlRange> = listOf(
+        transformVertical, transformHorizontal, transformRotate, transformAspect, transformScale, transformOffsetX,
+        transformOffsetY,
+    )
+
     private fun split(id: ControlId, neutral: Float) = ControlRange(
         id, SPLIT_MIN, SPLIT_MAX, neutral, 1f, 1f, bipolar = false, neutral = neutral, kind = ValueKind.PERCENT,
     )
@@ -311,7 +364,7 @@ object RecipeRanges {
         nrLuminance, nrLuminanceDetail, nrLuminanceContrast, nrColour, nrColourDetail, nrColourSmoothness,
         texture, clarity, dehaze, vignetteAmount, vignetteMidpoint, vignetteRoundness, vignetteFeather,
         vignetteHighlights, grainAmount, grainSize, grainRoughness,
-    ) + colourTools
+    ) + optics + transform + colourTools
 
     private val byId = all.associateBy { it.id }
 

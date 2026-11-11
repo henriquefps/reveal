@@ -9,6 +9,7 @@ import dev.hfps.reveal.pipeline.gl.ClippingWarnings
 import dev.hfps.reveal.pipeline.gl.CompareMode
 import dev.hfps.reveal.pipeline.gl.GpuDevelopRenderer
 import dev.hfps.reveal.pipeline.gl.Histogram
+import dev.hfps.reveal.pipeline.optics.LensProfile
 import dev.hfps.reveal.pipeline.recipe.BaseLook
 import dev.hfps.reveal.pipeline.recipe.ColourBand
 import dev.hfps.reveal.pipeline.recipe.ControlId
@@ -16,10 +17,12 @@ import dev.hfps.reveal.pipeline.recipe.CurveChannel
 import dev.hfps.reveal.pipeline.recipe.CurvePoint
 import dev.hfps.reveal.pipeline.recipe.EditHistory
 import dev.hfps.reveal.pipeline.recipe.Geometry
+import dev.hfps.reveal.pipeline.recipe.GuideLine
 import dev.hfps.reveal.pipeline.recipe.MixerProperty
 import dev.hfps.reveal.pipeline.recipe.Recipe
 import dev.hfps.reveal.pipeline.recipe.RecipeGroup
 import dev.hfps.reveal.pipeline.recipe.Treatment
+import dev.hfps.reveal.pipeline.recipe.UprightMode
 import dev.hfps.reveal.pipeline.recipe.WbMode
 import dev.hfps.reveal.pipeline.recipe.WhiteBalance
 
@@ -68,6 +71,10 @@ data class EditState(
     val pasteChooser: Set<RecipeGroup>? = null,
     /** The band the targeted adjustment leads with while a drag on the photo runs (the panel shows it). */
     val targetedBand: ColourBand? = null,
+    /** The photo's lens profile (docs/adr/0015), `null` when none is known. */
+    val lens: LensProfile? = null,
+    /** The last Upright mode that found too few lines (the Transform tab says so), `null` otherwise. */
+    val uprightFailed: UprightMode? = null,
 ) {
     /** The recipe of the current history step. */
     val committed: Recipe get() = history.current
@@ -209,4 +216,13 @@ class EditorActions(
     val onTargetedEnd: () -> Unit = {},
     /** A one-step edit (a sub-panel's own reset): [change] applied to the working recipe and committed. */
     val onEditAndCommit: ((Recipe) -> Recipe) -> Unit = {},
+    /** Optics: "Remove chromatic aberration" on or off (one step; the automatic estimate when needed). */
+    val onRemoveCa: (Boolean) -> Unit = {},
+    /** Crop mode, Transform tab: Upright with a mode (working geometry; Done commits). */
+    val onUpright: (UprightMode) -> Unit = {},
+    /** Crop mode: auto-straighten (working geometry; Done commits). */
+    val onAutoStraighten: () -> Unit = {},
+    /** Crop mode, Guided Upright: a guide was drawn (normalised lens-corrected image coordinates). */
+    val onGuide: (GuideLine) -> Unit = {},
+    val onClearGuides: () -> Unit = {},
 )

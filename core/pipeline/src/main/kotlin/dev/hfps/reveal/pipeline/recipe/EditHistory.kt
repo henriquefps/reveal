@@ -31,6 +31,9 @@ enum class HistoryAction {
 
     /** A tone curve preset (Linear, Medium contrast, Strong contrast) applied to the point curve. */
     CURVE_PRESET,
+
+    /** The lens profile's corrections a new photo starts with (docs/adr/0015, "Defaults"). */
+    LENS_PROFILE,
 }
 
 /**

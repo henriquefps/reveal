@@ -10,6 +10,7 @@ import dev.hfps.reveal.pipeline.cpu.DevelopParams
 import dev.hfps.reveal.pipeline.geometry.GeometryMapping
 import dev.hfps.reveal.pipeline.input.TileSource
 import dev.hfps.reveal.pipeline.recipe.Geometry
+import dev.hfps.reveal.pipeline.recipe.Optics
 import dev.hfps.reveal.pipeline.recipe.Recipe
 import dev.hfps.reveal.pipeline.zoom.ZoomGrid
 import dev.hfps.reveal.pipeline.zoom.ZoomView
@@ -200,6 +201,7 @@ internal class ZoomTiles(
         frameNo++
         // Tiles are in image space: a crop or turn keeps them, but the mapping must follow the geometry at once.
         geometry = recipe.geometry
+        optics = recipe.optics
         val params = DevelopParams.from(src.colour, recipe)
         if (params != genParams) {
             genParams = params
@@ -434,16 +436,17 @@ internal class ZoomTiles(
         ZoomView(k, mapping.outputWidth, mapping.outputHeight, fullMapping(src))
 
     private var geometry: Geometry = Geometry()
-    private var fullGeometry: Geometry? = null
+    private var optics: Optics = Optics()
+    private var fullGeometry: Pair<Geometry, Optics>? = null
     private var fullMappingCache: GeometryMapping? = null
 
     private fun fullMapping(src: TileSource): GeometryMapping {
-        val geometry = geometry
+        val key = geometry to optics
         val cached = fullMappingCache
-        if (cached != null && geometry == fullGeometry) return cached
-        return GeometryMapping.of(geometry, src.width, src.height).also {
+        if (cached != null && key == fullGeometry) return cached
+        return GeometryMapping.of(key.first, src.width, src.height, src.colour.lens, key.second).also {
             fullMappingCache = it
-            fullGeometry = geometry
+            fullGeometry = key
         }
     }
 

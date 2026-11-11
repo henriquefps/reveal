@@ -121,11 +121,12 @@ fun PhotoSlot(
                 .then(gestures),
         )
         if (phase is EditorPhase.Ready && controller.renderer == null) {
-            val geometry = state.edit.recipe.geometry
+            val recipe = state.edit.recipe
+            val lens = state.edit.lens
             val mapping = if (state.view.cropping) {
-                GeometryMapping.editing(geometry, phase.width, phase.height)
+                GeometryMapping.editing(recipe.geometry, phase.width, phase.height, lens, recipe.optics)
             } else {
-                GeometryMapping.of(geometry, phase.width, phase.height)
+                GeometryMapping.of(recipe, lens, phase.width, phase.height)
             }
             if (mapping.isIdentity) {
                 StillPhoto(state.preview, state.stillOriginal, state.view.compare)
@@ -237,7 +238,7 @@ private fun Modifier.eyedropperGestures(
     state: EditorUiState,
     actions: EditorActions,
 ): Modifier {
-    val mapping = GeometryMapping.of(state.edit.recipe.geometry, ready.width, ready.height)
+    val mapping = GeometryMapping.of(state.edit.recipe, state.edit.lens, ready.width, ready.height)
     val density = LocalDensity.current
     val sizePx = with(density) { LOUPE_SIZE.toPx() }
     val liftPx = with(density) { LOUPE_LIFT.toPx() }
@@ -287,7 +288,7 @@ private fun Modifier.targetedGestures(
     state: EditorUiState,
     actions: EditorActions,
 ): Modifier {
-    val mapping = GeometryMapping.of(state.edit.recipe.geometry, ready.width, ready.height)
+    val mapping = GeometryMapping.of(state.edit.recipe, state.edit.lens, ready.width, ready.height)
     val currentActions by rememberUpdatedState(actions)
     return pointerInput(controller, ready, mapping) {
         awaitEachGesture {

@@ -1,4 +1,4 @@
-@file:Suppress("MagicNumber")
+@file:Suppress("MagicNumber", "LoopWithTooManyJumpStatements")
 
 package dev.hfps.reveal.feature.editor.crop
 
@@ -49,6 +49,8 @@ import dev.hfps.reveal.pipeline.geometry.CropEditing
 import dev.hfps.reveal.pipeline.geometry.CropHandle
 import dev.hfps.reveal.pipeline.gl.ViewTransform
 import dev.hfps.reveal.pipeline.recipe.Geometry
+import dev.hfps.reveal.pipeline.recipe.GuideLine
+import dev.hfps.reveal.pipeline.recipe.UprightMode
 import kotlin.math.hypot
 import kotlinx.coroutines.launch
 
@@ -60,8 +62,9 @@ import kotlinx.coroutines.launch
  *
  * Gestures: a handle drags that edge/corner (the photo holds still, then the view eases to the new frame); one finger
  * elsewhere drags the photo under the frame; two fingers pinch to zoom inside the crop; with the horizon tool armed,
- * a drag draws a line that becomes level (or plumb). Every frame of a gesture changes the working geometry only;
- * Done commits it.
+ * a drag draws a line that becomes level (or plumb); with Guided Upright armed, a drag draws a guide (with the loupe
+ * magnifying under the finger) and the guides drawn so far show on the photo. Every frame of a gesture changes the
+ * working geometry only; Done commits it.
  */
 @Suppress("LongMethod", "CyclomaticComplexMethod")
 @Composable
@@ -90,6 +93,7 @@ fun BoxScope.CropOverlay(host: ModeHost, modifier: Modifier = Modifier) {
     val currentGeometry by rememberUpdatedState(geometry)
     val currentView by rememberUpdatedState(shown)
     val onGeometry by rememberUpdatedState(host.actions.onGeometry)
+    val onGuide by rememberUpdatedState(host.actions.onGuide)
     val description = stringResource(R.string.editor_crop_frame)
     val colors = RevealTheme.colors
     val scrim = colors.background.copy(alpha = SCRIM_ALPHA)
@@ -108,7 +112,7 @@ fun BoxScope.CropOverlay(host: ModeHost, modifier: Modifier = Modifier) {
             val frame0 = CropEditing.frame(g0, width, height)
             val slotW = size.width.toFloat()
             val slotH = size.height.toFloat()
-            val handle = if (session.horizonTool) {
+            val handle = if (session.horizonTool || session.guideTool) {
                 null
             } else {
                 hitHandle(
@@ -121,6 +125,31 @@ fun BoxScope.CropOverlay(host: ModeHost, modifier: Modifier = Modifier) {
                 )
             }
             when {
+                session.guideTool -> {
+                    session.grid = CropGrid.FINE
+                    val loupeSize = LOUPE_SIZE.toPx()
+                    val lift = LOUPE_LIFT.toPx()
+                    fun loupe(p: Offset?) = host.photo.showCropLoupe(
+                        p,
+                        p?.let { Offset(it.x, (it.y - lift).coerceAtLeast(loupeSize / 2f)) } ?: Offset.Zero,
+                        loupeSize,
+                        view0,
+                    )
+                    loupe(down.position)
+                    val end = trackFinger(down.id) {
+                        session.guideLine = down.position to it
+                        loupe(it)
+                    }
+                    loupe(null)
+                    session.guideLine = null
+                    session.grid = CropGrid.NONE
+                    if (end != null && (end - down.position).getDistance() >= minLine) {
+                        val a = Guides.toGuide(g0, view0, down.position, slotW, slotH, width, height)
+                        val b = Guides.toGuide(g0, view0, end, slotW, slotH, width, height)
+                        if (a != null && b != null) onGuide(GuideLine(a.x, a.y, b.x, b.y))
+                    }
+                }
+
                 session.horizonTool -> {
                     session.grid = CropGrid.FINE
                     val end = trackFinger(down.id) { session.horizonLine = down.position to it }
@@ -187,6 +216,16 @@ fun BoxScope.CropOverlay(host: ModeHost, modifier: Modifier = Modifier) {
         drawRect(line, r.topLeft, r.size, style = Stroke(1.dp.toPx()))
         drawHandles(r, line)
         session.horizonLine?.let { (a, b) -> drawLine(accent, a, b, 2.dp.toPx()) }
+        if (session.guideTool || geometry.transform.upright == UprightMode.GUIDED) {
+            for (guide in geometry.transform.guides) {
+                val a = Guides.toSlot(geometry, shown, guide.x0, guide.y0, size, width, height) ?: continue
+                val b = Guides.toSlot(geometry, shown, guide.x1, guide.y1, size, width, height) ?: continue
+                drawLine(accent, a, b, 2.dp.toPx())
+                drawCircle(accent, 4.dp.toPx(), a)
+                drawCircle(accent, 4.dp.toPx(), b)
+            }
+        }
+        session.guideLine?.let { (a, b) -> drawLine(accent, a, b, 2.dp.toPx()) }
     }
 }
 
@@ -332,6 +371,8 @@ private fun DrawScope.drawHandles(r: Rect, colour: Color) {
 }
 
 private val FRAME_MARGIN = 28.dp
+private val LOUPE_SIZE = 112.dp
+private val LOUPE_LIFT = 96.dp
 private val HANDLE_TOUCH = 32.dp
 private val HANDLE_THICKNESS = 3.dp
 private val HANDLE_LENGTH = 20.dp

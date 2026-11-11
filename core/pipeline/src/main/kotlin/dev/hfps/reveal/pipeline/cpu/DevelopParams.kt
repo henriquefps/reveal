@@ -2,6 +2,7 @@ package dev.hfps.reveal.pipeline.cpu
 
 import dev.hfps.reveal.pipeline.InputKind
 import dev.hfps.reveal.pipeline.PipelineInput
+import dev.hfps.reveal.pipeline.optics.VignetteTable
 import dev.hfps.reveal.pipeline.recipe.Recipe
 import dev.hfps.reveal.pipeline.recipe.RecipeRanges
 import dev.hfps.reveal.pipeline.recipe.Treatment
@@ -24,6 +25,8 @@ import kotlin.math.max
  * @property tools the colour mixer, black & white and colour grading (slot 9, after vibrance/saturation).
  * @property detail noise reduction and sharpening (slot 11, [DetailOp]) at this render's pixel scale.
  * @property effects texture, clarity, dehaze (slot 12) and the post-crop vignette and grain ([EffectsParams]).
+ * @property vignette the lens profile's vignetting correction (slot 3, [VignetteOp]), `null` when off.
+ * @property defringe defringe (slot 10b, [DefringeOp]) at this render's pixel scale.
  */
 class DevelopParams(
     val wbMultipliers: FloatArray,
@@ -37,7 +40,10 @@ class DevelopParams(
     val tools: ColourToolParams = ColourToolParams.NONE,
     val detail: DetailParams = DetailParams.NONE,
     val effects: EffectsParams = EffectsParams.NONE,
+    val vignette: VignetteTable? = null,
+    val defringe: DefringeParams = DefringeParams.NONE,
 ) {
+
     override fun equals(other: Any?): Boolean = other is DevelopParams &&
         wbMultipliers.contentEquals(other.wbMultipliers) &&
         cameraToWorking.contentEquals(other.cameraToWorking) &&
@@ -49,14 +55,18 @@ class DevelopParams(
         curve == other.curve &&
         tools == other.tools &&
         detail == other.detail &&
-        effects == other.effects
+        effects == other.effects &&
+        vignette == other.vignette &&
+        defringe == other.defringe
 
     /**
      * The same parameters without Detail and Effects: what the stages before slot 11 (and the Effects grid, which is
      * built from the develop output) depend on.
      */
-    fun withoutDetail(): DevelopParams =
-        DevelopParams(wbMultipliers, cameraToWorking, exposureGain, profile, highlights, tone, colour, curve, tools)
+    fun withoutDetail(): DevelopParams = DevelopParams(
+        wbMultipliers, cameraToWorking, exposureGain, profile, highlights, tone, colour, curve, tools,
+        vignette = vignette, defringe = defringe,
+    )
 
     /**
      * The same parameters without the post-crop vignette and grain: what the working texture depends on (they are
@@ -67,7 +77,7 @@ class DevelopParams(
     } else {
         DevelopParams(
             wbMultipliers, cameraToWorking, exposureGain, profile, highlights, tone, colour, curve, tools, detail,
-            effects.copy(post = PostParams.NONE),
+            effects.copy(post = PostParams.NONE), vignette, defringe,
         )
     }
 
@@ -78,7 +88,7 @@ class DevelopParams(
      * How far (rendered pixels) slots 11 and 12 read around a pixel: Detail's levels and the blur shared by sharpening
      * and texture. The apron an export or zoom tile needs (clarity and dehaze need none: they read the grid).
      */
-    val reach: Int get() = detail.reach(max(detail.sharpenReach, effects.textureReach))
+    val reach: Int get() = defringe.reach + detail.reach(max(detail.sharpenReach, effects.textureReach))
 
     override fun hashCode(): Int {
         var h = wbMultipliers.contentHashCode()
@@ -91,6 +101,8 @@ class DevelopParams(
         h = h * HASH + curve.hashCode()
         h = h * HASH + tools.hashCode()
         h = h * HASH + effects.hashCode()
+        h = h * HASH + vignette.hashCode()
+        h = h * HASH + defringe.hashCode()
         return h * HASH + detail.hashCode()
     }
 
@@ -133,6 +145,8 @@ class DevelopParams(
                 ),
                 detail = DetailParams.from(recipe.detail, pixelScale, NoiseModel.factor(input.kind, input.noise)),
                 effects = EffectsParams.from(recipe.effects, pixelScale),
+                vignette = VignetteTable.of(input.lens, recipe.optics),
+                defringe = DefringeParams.from(recipe.optics, pixelScale),
             )
         }
 
@@ -143,7 +157,9 @@ class DevelopParams(
         fun reach(recipe: Recipe, pixelScale: Float = 1f): Int {
             val detail = DetailParams.from(recipe.detail, pixelScale)
             val effects = EffectsParams.from(recipe.effects, pixelScale)
-            return detail.reach(max(detail.sharpenReach, effects.textureReach))
+            // Defringe (slot 10b, docs/adr/0015) runs before Detail: its neighbourhood adds to the apron.
+            return DefringeParams.from(recipe.optics, pixelScale).reach +
+                detail.reach(max(detail.sharpenReach, effects.textureReach))
         }
     }
 }

@@ -11,12 +11,13 @@ import dev.hfps.reveal.pipeline.recipe.Recipe
  */
 object CpuDevelop {
     /**
-     * Runs raw WB, highlight reconstruction, camera matrix, exposure, highlights/shadows, the profile (base look),
-     * contrast/whites/blacks, the tone curve, vibrance/saturation, the colour mixer or black & white, colour grading
-     * (docs/adr/0013), Detail (noise reduction, sharpening) and the local Effects (texture, clarity, dehaze;
-     * docs/adr/0014), returning linear Rec.2020 RGB (`width*height*3`, display-referred below 1.0) before the output
-     * transform. [input] is not modified.
-     * [pixelScale]: full-resolution pixels per pixel of [input] (a proxy's downscale; the Detail operator's scale).
+     * Runs raw WB, highlight reconstruction, camera matrix, vignetting correction (docs/adr/0015), exposure,
+     * highlights/shadows, the profile (base look), contrast/whites/blacks, the tone curve, vibrance/saturation, the
+     * colour mixer or black & white, colour grading (docs/adr/0013), Detail (noise reduction, sharpening) and the local
+     * Effects (texture, clarity, dehaze; docs/adr/0014), returning linear Rec.2020 RGB (`width*height*3`,
+     * display-referred below 1.0) before the output transform. Defringe (docs/adr/0015) runs right before Detail.
+     * [input] is not modified. [pixelScale]: full-resolution pixels per pixel of [input] (a proxy's downscale; the
+     * Detail operator's scale).
      */
     fun renderLinear(input: PipelineInput, recipe: Recipe, pixelScale: Float = 1f): FloatArray {
         val params = DevelopParams.from(input, recipe, pixelScale)
@@ -29,6 +30,7 @@ object CpuDevelop {
             HighlightReconstructionOp.apply(rgb, grid, hp, HighlightReconstructionOp.chroma(rgb, grid, hp))
         }
         CameraMatrixOp.apply(rgb, params.cameraToWorking)
+        params.vignette?.let { VignetteOp.apply(rgb, input.width, input.height, it) }
         ExposureOp.apply(rgb, params.exposureGain)
         if (params.tone.localActive) {
             val moments = LocalToneOp.moments(rgb, grid)
@@ -42,6 +44,7 @@ object CpuDevelop {
         } else {
             VibranceSaturationOp.apply(rgb, params.colour)
         }
+        DefringeOp.apply(rgb, input.width, input.height, params.defringe)
         DetailOp.apply(rgb, input.width, input.height, params.detail, params.effects, grid)
         return rgb
     }
@@ -65,7 +68,7 @@ object CpuDevelop {
 
     /** The geometry mapping of [recipe] on [input]: its output size is the size of [render]'s result. */
     fun mapping(input: PipelineInput, recipe: Recipe): GeometryMapping =
-        GeometryMapping.of(recipe.geometry, input.width, input.height)
+        GeometryMapping.of(recipe, input.lens, input.width, input.height)
 
     /**
      * Full render to RGBA8 (top row first) in the requested output space, [mapping]`(input, recipe)`'s output size

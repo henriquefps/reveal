@@ -9,6 +9,7 @@ import dev.hfps.reveal.pipeline.cpu.EffectsParams
 import dev.hfps.reveal.pipeline.cpu.OutputSettings
 import dev.hfps.reveal.pipeline.cpu.OutputSpace
 import dev.hfps.reveal.pipeline.gl.GpuDevelopRenderer
+import dev.hfps.reveal.pipeline.optics.SonyLensProfile
 import dev.hfps.reveal.pipeline.recipe.BandValues
 import dev.hfps.reveal.pipeline.recipe.BaseLook
 import dev.hfps.reveal.pipeline.recipe.Colour
@@ -22,9 +23,11 @@ import dev.hfps.reveal.pipeline.recipe.Effects
 import dev.hfps.reveal.pipeline.recipe.Geometry
 import dev.hfps.reveal.pipeline.recipe.GradeWheel
 import dev.hfps.reveal.pipeline.recipe.Light
+import dev.hfps.reveal.pipeline.recipe.Optics
 import dev.hfps.reveal.pipeline.recipe.ParametricCurve
 import dev.hfps.reveal.pipeline.recipe.Profile
 import dev.hfps.reveal.pipeline.recipe.Recipe
+import dev.hfps.reveal.pipeline.recipe.Transform
 import dev.hfps.reveal.pipeline.recipe.Treatment
 import dev.hfps.reveal.pipeline.recipe.WhiteBalance
 import dev.hfps.reveal.pipeline.synthetic.SyntheticImages
@@ -349,6 +352,54 @@ class GpuParityTest {
     }
 
     /**
+     * Optics and Transform (docs/adr/0015): vignetting (slot 3), defringe (slot 10b), lens distortion with CA removal
+     * and the Transform folded into slot 13, at 1:1 and at a proxy scale (defringe's radius scales). A warp resamples
+     * every pixel with Catmull-Rom, so the geometry tolerance applies; defringe's float16 OkLab keeps it within the
+     * Detail tolerance.
+     */
+    @Test
+    fun opticsMatchCpuReference() = runBlocking {
+        val failures = mutableListOf<String>()
+        var worst = 0
+        var sum = 0L
+        var count = 0L
+        for (name in listOf("scene", "checker", "stepEdge", "hueSweep")) {
+            val image = images.getValue(name).withLens(PARITY_LENS)
+            for (scale in listOf(1f, 2.5f)) {
+                renderer.upload(image, scale)
+                for (recipe in OPTICS) {
+                    val settings = OutputSettings(dither = false)
+                    val cpu = CpuDevelop.render(image, recipe, settings, scale)
+                    val gpu = renderer.renderOutput(recipe, settings)
+                    assertThat(gpu.size).isEqualTo(cpu.size)
+                    var max = 0
+                    for (i in cpu.indices) {
+                        val diff = abs((gpu[i].toInt() and 0xff) - (cpu[i].toInt() and 0xff))
+                        max = maxOf(max, diff)
+                        sum += diff
+                        count++
+                    }
+                    Log.i(
+                        TAG,
+                        "optics $name x$scale ${recipe.optics} ${recipe.geometry.transform}: max diff $max levels",
+                    )
+                    worst = maxOf(worst, max)
+                    val fringe = recipe.optics.purpleAmount > 0f || recipe.optics.greenAmount > 0f
+                    if (max >
+                        (if (fringe) OUTPUT_MAX_LEVELS_DETAIL else OUTPUT_MAX_LEVELS)
+                    ) {
+                        failures +=
+                            "$name x$scale #${OPTICS.indexOf(recipe)}: $max"
+                    }
+                }
+            }
+        }
+        Log.i(TAG, "optics: max diff $worst levels, mean diff ${sum.toDouble() / count}")
+        assertThat(failures).isEmpty()
+        assertThat(sum.toDouble() / count).isAtMost(OUTPUT_MEAN_LEVELS)
+    }
+
+    /**
      * Detail (slot 11, docs/adr/0012) on a proxy: the operator's lengths scaled by the proxy's pixel scale (wavelet
      * levels skipped or re-stepped, the blur radius divided) give the same result on both sides.
      */
@@ -472,6 +523,51 @@ class GpuParityTest {
 
     internal companion object {
         const val TAG = "REVEAL_PARITY"
+
+        /** The public ZV-E10 sample's embedded lens data (E PZ 16-50mm at 29 mm), with stronger CA for the test. */
+        val PARITY_LENS = checkNotNull(
+            SonyLensProfile.of(
+                "E PZ 16-50mm",
+                listOf(11, 21, 2, -22, -49, -84, -124, -168, -208, -247, -279, -305),
+                listOf(11, 0, 0, 128, 352, 736, 1184, 1920, 3200, 4768, 6528, 8384),
+                listOf(
+                    22, -2048, -2048, -1536, -1536, -1024, -1024, -1024, -512, 0, 512, 1024,
+                    1024, 3072, 4096, 5120, 5632, 5632, 5632, 5120, 4096, 3072, 2048,
+                ),
+            ),
+        )
+
+        val OPTICS: List<Recipe> = listOf(
+            Recipe(optics = Optics(lensCorrections = true)),
+            Recipe(
+                optics = Optics(
+                    lensCorrections = true,
+                    removeCa = true,
+                    distortionPercent = 200f,
+                    vignettingPercent = 150f,
+                ),
+            ),
+            Recipe(optics = Optics(purpleAmount = 15f, greenAmount = 10f), light = Light(exposureEv = 0.3f)),
+            Recipe(
+                optics = Optics(lensCorrections = true, removeCa = true, purpleAmount = 8f),
+                detail = Detail(sharpenAmount = 40f),
+            ),
+            Recipe(
+                optics = Optics(lensCorrections = true),
+                geometry = Geometry(
+                    angle = 3.5f,
+                    rotate = 1,
+                    transform = Transform(vertical = 30f, horizontal = -15f, rotate = 2f, aspect = 12f, scale = 115f),
+                ),
+            ),
+            Recipe(
+                geometry = Geometry(
+                    crop = CropRect(0.1f, 0.1f, 0.85f, 0.9f),
+                    constrain = false,
+                    transform = Transform(vertical = -40f, scale = 70f, offsetX = 20f),
+                ),
+            ),
+        )
 
         /** The Light sliders at their ends, alone and together (always in the parity set). */
 

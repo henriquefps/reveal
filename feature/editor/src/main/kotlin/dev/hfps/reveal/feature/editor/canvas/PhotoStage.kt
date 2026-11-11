@@ -129,7 +129,7 @@ class PhotoController {
     }
 
     /**
-     * The proxy image pixel under slot point [p] through the geometry [mapping] (the zoom frames its output), or
+     * The proxy source pixel under slot point [p] through the geometry [mapping] (the zoom frames its output), or
      * `null` outside the picture.
      */
     fun imagePoint(p: Offset, mapping: GeometryMapping): Offset? {
@@ -138,7 +138,9 @@ class PhotoController {
         val ox = z.centerX + (p.x - f.width / 2f) / z.scale
         val oy = z.centerY + (p.y - f.height / 2f) / z.scale
         if (ox !in 0f..mapping.outputWidth.toFloat() || oy !in 0f..mapping.outputHeight.toFloat()) return null
-        val ip = mapping.outputToImage(ox.toDouble(), oy.toDouble())
+        val plane = mapping.outputToImage(ox.toDouble(), oy.toDouble())
+        // Through the lens corrections and the Transform (docs/adr/0015) to the source pixel the eyedropper reads.
+        val ip = mapping.warp?.let { it.source(plane.x, plane.y, 1) ?: return null } ?: plane
         val inside = ip.x in 0.0..mapping.imageWidth.toDouble() && ip.y in 0.0..mapping.imageHeight.toDouble()
         return if (inside) Offset(ip.x.toFloat(), ip.y.toFloat()) else null
     }
@@ -159,6 +161,23 @@ class PhotoController {
         val iy = z.centerY + (finger.y - f.height / 2f) / z.scale
         val scale = (z.scale * LOUPE_ZOOM).coerceAtMost(LOUPE_MAX_SCALE).coerceAtLeast(z.scale)
         r.setLoupe(Loupe(f.left + at.x, f.top + at.y, sizePx, ix, iy, scale))
+    }
+
+    /**
+     * The Crop mode's magnifier while a guide is drawn (docs/adr/0015): the loupe at slot point [at] magnifies the
+     * editing-plane point under [finger] in the crop [view]; `null` [finger] hides it.
+     */
+    fun showCropLoupe(finger: Offset?, at: Offset, sizePx: Float, view: ViewTransform) {
+        val r = renderer ?: return
+        val f = frame ?: return
+        if (finger == null) {
+            r.setLoupe(null)
+            return
+        }
+        val px = view.centerX + (finger.x - f.width / 2f) / view.scale
+        val py = view.centerY + (finger.y - f.height / 2f) / view.scale
+        val scale = (view.scale * LOUPE_ZOOM).coerceAtMost(LOUPE_MAX_SCALE).coerceAtLeast(view.scale)
+        r.setLoupe(Loupe(f.left + at.x, f.top + at.y, sizePx, px, py, scale))
     }
 
     private companion object {

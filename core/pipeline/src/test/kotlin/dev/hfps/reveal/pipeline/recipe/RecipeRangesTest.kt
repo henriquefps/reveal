@@ -19,7 +19,8 @@ class RecipeRangesTest {
             assertThat(r.fineStep).isAtMost(r.step)
             if (r.bipolar) {
                 assertThat(r.neutral).isEqualTo(r.default)
-                assertThat(r.min).isEqualTo(-r.max)
+                // Symmetric about "no change" (0 for most; 100 % for the Transform's scale).
+                assertThat(r.min - r.neutral).isEqualTo(-(r.max - r.neutral))
             }
         }
     }

@@ -139,6 +139,11 @@ fun EditorScreen(onBack: () -> Unit, modifier: Modifier = Modifier, viewModel: E
             onTargetedDrag = viewModel::targetedDrag,
             onTargetedEnd = viewModel::targetedEnd,
             onEditAndCommit = viewModel::editAndCommitStep,
+            onRemoveCa = viewModel::setRemoveCa,
+            onUpright = viewModel::upright,
+            onAutoStraighten = viewModel::autoStraighten,
+            onGuide = viewModel::addGuide,
+            onClearGuides = viewModel::clearGuides,
         )
     }
     EditorTheme {
@@ -244,7 +249,7 @@ private fun EditorChrome.modeHost(
 @Composable
 private fun PhotoContentSize(photo: PhotoController, state: EditorUiState) {
     val ready = state.phase as? EditorPhase.Ready ?: return
-    val mapping = GeometryMapping.of(state.edit.recipe.geometry, ready.width, ready.height)
+    val mapping = GeometryMapping.of(state.edit.recipe, state.edit.lens, ready.width, ready.height)
     val cropping = state.view.cropping
     LaunchedEffect(photo.zoom, mapping.outputWidth, mapping.outputHeight, cropping) {
         if (!cropping) photo.setContentSize(mapping.outputWidth, mapping.outputHeight)

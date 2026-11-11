@@ -20,6 +20,7 @@ import dev.hfps.reveal.data.edit.HistoryOp
 import dev.hfps.reveal.data.edit.HistoryWriter
 import dev.hfps.reveal.data.library.LibraryRepository
 import dev.hfps.reveal.feature.editor.edit.AsShot
+import dev.hfps.reveal.feature.editor.edit.OpticsAnalysis
 import dev.hfps.reveal.feature.editor.edit.RecipeControls
 import dev.hfps.reveal.feature.editor.open.OpenError
 import dev.hfps.reveal.feature.editor.open.OpenEvent
@@ -40,6 +41,7 @@ import dev.hfps.reveal.pipeline.cpu.WhiteBalancePicker
 import dev.hfps.reveal.pipeline.gl.ClippingWarnings
 import dev.hfps.reveal.pipeline.gl.CompareMode
 import dev.hfps.reveal.pipeline.gl.GpuDevelopRenderer
+import dev.hfps.reveal.pipeline.input.colourOnly
 import dev.hfps.reveal.pipeline.recipe.BaseLook
 import dev.hfps.reveal.pipeline.recipe.ColourBand
 import dev.hfps.reveal.pipeline.recipe.ColourToolControls
@@ -48,12 +50,15 @@ import dev.hfps.reveal.pipeline.recipe.CurveChannel
 import dev.hfps.reveal.pipeline.recipe.CurvePoint
 import dev.hfps.reveal.pipeline.recipe.EditHistory
 import dev.hfps.reveal.pipeline.recipe.Geometry
+import dev.hfps.reveal.pipeline.recipe.GuideLine
 import dev.hfps.reveal.pipeline.recipe.HistoryAction
+import dev.hfps.reveal.pipeline.recipe.Optics
 import dev.hfps.reveal.pipeline.recipe.Recipe
 import dev.hfps.reveal.pipeline.recipe.RecipeGroup
 import dev.hfps.reveal.pipeline.recipe.RecipePaste
 import dev.hfps.reveal.pipeline.recipe.RecipeRanges
 import dev.hfps.reveal.pipeline.recipe.Treatment
+import dev.hfps.reveal.pipeline.recipe.UprightMode
 import dev.hfps.reveal.pipeline.recipe.WbMode
 import dev.hfps.reveal.pipeline.recipe.WhiteBalance
 import javax.inject.Inject
@@ -141,6 +146,7 @@ class EditorViewModel @Inject constructor(
         }
     }
 
+    @Suppress("LongMethod")
     private fun open() {
         val metrics = context.resources.displayMetrics
         val screenLong = maxOf(metrics.widthPixels, metrics.heightPixels)
@@ -157,6 +163,7 @@ class EditorViewModel @Inject constructor(
                     AsShot(it.temperatureK.roundToInt().toFloat(), it.tint.roundToInt().toFloat())
                 }
                 val autoWb = prepareAuto(input)
+                prepareOptics(input)
                 val ready = gpu.await()
                 // The renderer starts on the stored recipe (attach() pushes it).
                 storedHistory.await()
@@ -169,15 +176,23 @@ class EditorViewModel @Inject constructor(
                     commit()
                 }
                 EditorMetrics.recipes = { _state.value.edit.let { it.recipe to it.committed } }
+                EditorMetrics.history = { _state.value.edit.history }
                 photoInput = colourOnly(input)
                 _state.update {
                     it.copy(
                         fileName = photo.name,
                         phase = EditorPhase.Ready(ready, input.width, input.height, scale),
-                        edit = it.edit.copy(isRaw = input.isRaw, asShot = asShot, autoWb = autoWb, autoReady = true),
+                        edit = it.edit.copy(
+                            isRaw = input.isRaw,
+                            asShot = asShot,
+                            autoWb = autoWb,
+                            autoReady = true,
+                            lens = input.lens,
+                        ),
                     )
                 }
                 attach(ready)
+                applyLensDefault(input)
                 if (scale > 1f) loadFullResolution(uri, ready, scale)
             } catch (e: CancellationException) {
                 cancel.cancel()
@@ -213,7 +228,7 @@ class EditorViewModel @Inject constructor(
         viewModelScope.launch(Dispatchers.IO) {
             val start = SystemClock.elapsedRealtime()
             val source = try {
-                opener.openFullResolution(uri, cancel)
+                opener.openFullResolution(uri, cancel, _state.value.edit.lens)
             } catch (e: CancellationException) {
                 throw e
             } catch (@Suppress("TooGenericExceptionCaught") e: Throwable) {
@@ -566,6 +581,98 @@ class EditorViewModel @Inject constructor(
         renderer()?.setDetailMask(show)
     }
 
+    // ------------------------------------------------------------------ optics and transform (docs/adr/0015)
+
+    /**
+     * A new photo (no stored history) with a lens profile starts with its corrections on, as one undoable step
+     * (`HistoryAction.LENS_PROFILE`); photos edited before keep their recipe (docs/adr/0015, "Defaults").
+     */
+    private fun applyLensDefault(input: PipelineInput) {
+        val lens = input.lens ?: return
+        val edit = _state.value.edit
+        val optics = Optics.forNewPhoto(hasProfile = true, profileHasCa = lens.hasChromatic, isRaw = input.isRaw)
+        if (edit.history.entries.isEmpty() && optics != edit.recipe.optics) {
+            editAndCommit(HistoryAction.LENS_PROFILE) { it.copy(optics = optics) }
+        }
+    }
+
+    /** Lines and (without profile CA data) the CA estimate, off the main thread while the proxy is on the heap. */
+    private fun prepareOptics(input: PipelineInput) {
+        val estimateCa = input.lens?.hasChromatic != true
+        opticsAnalysis = viewModelScope.async(Dispatchers.Default) {
+            runCatching { OpticsAnalysis.of(input, estimateCa) }.getOrNull()
+        }
+    }
+
+    @Volatile
+    private var opticsAnalysis: Deferred<OpticsAnalysis?>? = null
+
+    /**
+     * "Remove chromatic aberration" on or off, one step: the profile's CA data when it has some, else the automatic
+     * estimate (written into the recipe so every render, export included, uses the same numbers).
+     */
+    fun setRemoveCa(on: Boolean) {
+        viewModelScope.launch {
+            val lens = _state.value.edit.lens
+            val estimate = if (on && lens?.hasChromatic != true) opticsAnalysis?.await()?.ca else null
+            editAndCommit {
+                val optics = it.optics
+                it.copy(
+                    optics = optics.copy(
+                        removeCa = on,
+                        caRed = estimate?.first ?: 0f,
+                        caBlue = estimate?.second ?: 0f,
+                    ),
+                )
+            }
+        }
+    }
+
+    /** Upright [mode] in the Crop mode's Transform tab: the transform sliders change (committed on Done). */
+    fun upright(mode: UprightMode) {
+        viewModelScope.launch {
+            val analysis = opticsAnalysis?.await() ?: return@launch
+            val recipe = _state.value.edit.recipe
+            val g = withContext(Dispatchers.Default) {
+                analysis.upright(mode, recipe.geometry, _state.value.edit.lens, recipe.optics)
+            }
+            if (g == null) {
+                _state.update { it.copy(edit = it.edit.copy(uprightFailed = mode)) }
+                return@launch
+            }
+            _state.update { it.copy(edit = it.edit.copy(uprightFailed = null)) }
+            setGeometry(g)
+        }
+    }
+
+    /** Auto-straighten (the button next to the angle dial): the straighten angle levels the dominant lines. */
+    fun autoStraighten() {
+        viewModelScope.launch {
+            val analysis = opticsAnalysis?.await() ?: return@launch
+            val recipe = _state.value.edit.recipe
+            val g = withContext(Dispatchers.Default) {
+                analysis.straighten(recipe.geometry, _state.value.edit.lens, recipe.optics)
+            } ?: return@launch
+            setGeometry(g)
+        }
+    }
+
+    /** Guided Upright: a guide was drawn; from two guides on, the transform follows them. */
+    fun addGuide(line: GuideLine) {
+        val recipe = _state.value.edit.recipe
+        val t = recipe.geometry.transform
+        val guides = OpticsAnalysis.withGuide(t, line)
+        val withGuides = recipe.geometry.copy(transform = t.copy(guides = guides, upright = UprightMode.GUIDED))
+        setGeometry(withGuides)
+        if (guides.size >= 2) upright(UprightMode.GUIDED)
+    }
+
+    /** Removes every guide (the transform stays as it is). */
+    fun clearGuides() {
+        val g = _state.value.edit.recipe.geometry
+        setGeometry(g.copy(transform = g.transform.copy(guides = emptyList())))
+    }
+
     // ------------------------------------------------------------------ crop mode
 
     /** Crop mode gesture frame: the working geometry changes; nothing is committed until Done. */
@@ -671,6 +778,7 @@ class EditorViewModel @Inject constructor(
         EditorMetrics.renderer = null
         EditorMetrics.setControl = null
         EditorMetrics.recipes = null
+        EditorMetrics.history = null
         // Closes the renderer once it exists (a creation cancelled half-way closes itself).
         gpu.invokeOnCompletion { failure -> if (failure == null) gpu.getCompleted().close() }
     }
@@ -702,15 +810,7 @@ class EditorViewModel @Inject constructor(
     @Volatile
     private var photoInput: PipelineInput? = null
 
-    private fun colourOnly(input: PipelineInput) = PipelineInput(
-        input.kind,
-        1,
-        1,
-        FloatArray(PipelineInput.CHANNELS),
-        input.cameraToXyz,
-        input.asShotMultipliers?.copyOf(),
-        input.saturation,
-    )
+    private fun colourOnly(input: PipelineInput) = input.colourOnly()
 
     private companion object {
         /** Screen proxy bounds (ADR 0002 "Proxies and tiles"): about the screen's long edge. */

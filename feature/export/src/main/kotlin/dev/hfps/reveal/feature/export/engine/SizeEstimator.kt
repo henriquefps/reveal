@@ -19,6 +19,7 @@ import dev.hfps.reveal.pipeline.export.ExportPlan
 import dev.hfps.reveal.pipeline.export.ExportSize
 import dev.hfps.reveal.pipeline.export.PixelSize
 import dev.hfps.reveal.pipeline.input.PipelineInputMapper
+import dev.hfps.reveal.pipeline.optics.LensProfile
 import dev.hfps.reveal.pipeline.recipe.Recipe
 import java.io.File
 import java.nio.ByteBuffer
@@ -37,14 +38,28 @@ class SizeEstimator private constructor(
     private val width: Int,
     private val height: Int,
     private val recipe: Recipe,
+    private val lens: LensProfile?,
 ) {
     /** Full-resolution size of the picture (the geometry operator's output: cropped, turned). */
     val pictureSize: PixelSize
-        get() = ExportPlan.of(fullSize.width, fullSize.height, recipe.geometry, ExportSize.Original).output
+        get() = ExportPlan.of(
+            fullSize.width,
+            fullSize.height,
+            recipe.geometry,
+            ExportSize.Original,
+            lens = lens,
+            optics = recipe.optics,
+        ).output
 
     /** Output pixel size for [options] (crop and size option applied). */
-    fun outputSize(options: ExportOptions): PixelSize =
-        ExportPlan.of(fullSize.width, fullSize.height, recipe.geometry, options.size).output
+    fun outputSize(options: ExportOptions): PixelSize = ExportPlan.of(
+        fullSize.width,
+        fullSize.height,
+        recipe.geometry,
+        options.size,
+        lens = lens,
+        optics = recipe.optics,
+    ).output
 
     /** Estimated bytes of the exported file. */
     fun estimate(context: Context, options: ExportOptions): Long {
@@ -96,7 +111,8 @@ class SizeEstimator private constructor(
                 }
                 val proxy = ProxyBuilder.decodeProxy(input, PROXY_EDGE)
                 val turn = orientation ?: proxy.info.orientation
-                val pipelineInput: PipelineInput = PipelineInputMapper.map(proxy.image, proxy.info, turn)
+                val metadata = runCatching { input.inspection.metadata }.getOrNull()
+                val pipelineInput: PipelineInput = PipelineInputMapper.map(proxy.image, proxy.info, turn, metadata)
                 val (fw, fh) = PipelineInputMapper.orientedSize(proxy.stats.fullWidth, proxy.stats.fullHeight, turn)
                 // The proxy goes through the geometry operator too: the estimate is of the cropped picture.
                 val mapping = CpuDevelop.mapping(pipelineInput, recipe)
@@ -108,6 +124,7 @@ class SizeEstimator private constructor(
                     mapping.outputWidth,
                     mapping.outputHeight,
                     recipe,
+                    pipelineInput.lens,
                 )
             }
     }

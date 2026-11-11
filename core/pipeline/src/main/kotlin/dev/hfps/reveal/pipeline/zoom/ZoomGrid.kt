@@ -1,3 +1,6 @@
+// Numeric and geometric code: early returns validate, loops mirror the shaders, constants are the maths.
+@file:Suppress("ReturnCount")
+
 package dev.hfps.reveal.pipeline.zoom
 
 import dev.hfps.reveal.pipeline.export.PixelBox
@@ -80,12 +83,18 @@ class ZoomView(val k: Float, val proxyOutputWidth: Int, val proxyOutputHeight: I
     ): List<Pair<Int, Int>> {
         if (fullScale(view.scale) < ZoomGrid.MIN_SCALE) return emptyList()
         val frame = clip ?: ViewFrame.whole(windowWidth, windowHeight)
-        val corners = listOf(
-            frame.left to frame.top,
-            frame.left + frame.width to frame.top,
-            frame.left to frame.top + frame.height,
-            frame.left + frame.width to frame.top + frame.height,
-        ).map { (sx, sy) -> imagePoint(view, windowWidth, windowHeight, sx, sy) }
+        // The frame's border (corners suffice for an affine mapping; a warp bends it, docs/adr/0015).
+        val steps = if (full.warp == null) 1 else WARP_EDGE_STEPS
+        val border = ArrayList<Pair<Float, Float>>()
+        for (k in 0..steps) {
+            val t = k.toFloat() / steps
+            border += frame.left + frame.width * t to frame.top
+            border += frame.left + frame.width * t to frame.top + frame.height
+            border += frame.left to frame.top + frame.height * t
+            border += frame.left + frame.width to frame.top + frame.height * t
+        }
+        val corners = border.mapNotNull { (sx, sy) -> sourcePoint(view, windowWidth, windowHeight, sx, sy) }
+        if (corners.isEmpty()) return emptyList()
         val minX = corners.minOf { it.first }
         val maxX = corners.maxOf { it.first }
         val minY = corners.minOf { it.second }
@@ -96,7 +105,8 @@ class ZoomView(val k: Float, val proxyOutputWidth: Int, val proxyOutputHeight: I
         val ty0 = max(0, floor(minY / grid.tile).toInt() - margin)
         val tx1 = min(grid.columns - 1, floor(maxX / grid.tile).toInt() + margin)
         val ty1 = min(grid.rows - 1, floor(maxY / grid.tile).toInt() + margin)
-        val (cx, cy) = imagePoint(view, windowWidth, windowHeight, frame.centerX, frame.centerY)
+        val (cx, cy) = sourcePoint(view, windowWidth, windowHeight, frame.centerX, frame.centerY)
+            ?: imagePoint(view, windowWidth, windowHeight, frame.centerX, frame.centerY)
         val out = ArrayList<Pair<Int, Int>>()
         for (ty in ty0..ty1) for (tx in tx0..tx1) out += tx to ty
         return out.sortedBy { (tx, ty) ->
@@ -106,7 +116,24 @@ class ZoomView(val k: Float, val proxyOutputWidth: Int, val proxyOutputHeight: I
         }
     }
 
-    /** Full-resolution image point of window pixel ([sx], [sy]) under [view]. */
+    /**
+     * Full-resolution **source** point (where the tiles are) of window pixel ([sx], [sy]): [imagePoint] through the
+     * mapping's warp (green), or `null` behind the horizon.
+     */
+    fun sourcePoint(
+        view: ViewTransform,
+        windowWidth: Int,
+        windowHeight: Int,
+        sx: Float,
+        sy: Float,
+    ): Pair<Float, Float>? {
+        val (x, y) = imagePoint(view, windowWidth, windowHeight, sx, sy)
+        val warp = full.warp ?: return x to y
+        val s = warp.source(x.toDouble(), y.toDouble(), 1) ?: return null
+        return s.x.toFloat() to s.y.toFloat()
+    }
+
+    /** Full-resolution image point (the geometry's plane) of window pixel ([sx], [sy]) under [view]. */
     fun imagePoint(view: ViewTransform, windowWidth: Int, windowHeight: Int, sx: Float, sy: Float): Pair<Float, Float> {
         val ox = (sx - windowWidth / 2f) / view.scale + view.centerX
         val oy = (sy - windowHeight / 2f) / view.scale + view.centerY
@@ -117,5 +144,6 @@ class ZoomView(val k: Float, val proxyOutputWidth: Int, val proxyOutputHeight: I
 
     private companion object {
         const val HALF = 0.5f
+        const val WARP_EDGE_STEPS = 8
     }
 }

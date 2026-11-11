@@ -3,7 +3,9 @@ package dev.hfps.reveal.pipeline
 import android.util.Log
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import dev.hfps.reveal.pipeline.cpu.OutputSettings
 import dev.hfps.reveal.pipeline.gl.GpuDevelopRenderer
+import dev.hfps.reveal.pipeline.gl.ViewTransform
 import dev.hfps.reveal.pipeline.recipe.BandValues
 import dev.hfps.reveal.pipeline.recipe.BaseLook
 import dev.hfps.reveal.pipeline.recipe.Colour
@@ -13,11 +15,14 @@ import dev.hfps.reveal.pipeline.recipe.CurvePoint
 import dev.hfps.reveal.pipeline.recipe.Curves
 import dev.hfps.reveal.pipeline.recipe.Detail
 import dev.hfps.reveal.pipeline.recipe.Effects
+import dev.hfps.reveal.pipeline.recipe.Geometry
 import dev.hfps.reveal.pipeline.recipe.GradeWheel
 import dev.hfps.reveal.pipeline.recipe.Light
+import dev.hfps.reveal.pipeline.recipe.Optics
 import dev.hfps.reveal.pipeline.recipe.ParametricCurve
 import dev.hfps.reveal.pipeline.recipe.Profile
 import dev.hfps.reveal.pipeline.recipe.Recipe
+import dev.hfps.reveal.pipeline.recipe.Transform
 import dev.hfps.reveal.pipeline.recipe.WhiteBalance
 import dev.hfps.reveal.pipeline.synthetic.SyntheticImages
 import kotlinx.coroutines.runBlocking
@@ -214,6 +219,55 @@ class PipelineBenchmark {
         }
     }
 
+    /**
+     * Dragging the Transform's vertical slider (docs/adr/0015) on a photo with lens corrections and CA removal: the
+     * stage is cached, every frame is the output pass through the warp (three Catmull-Rom samples per pixel).
+     */
+    @Test
+    fun transformDragFrameTime(): Unit = runBlocking {
+        val image = SyntheticImages.scene(WIDTH, HEIGHT).withLens(GpuParityTest.PARITY_LENS)
+        val transform = { t: Float ->
+            Recipe(
+                optics = Optics(lensCorrections = true, removeCa = true),
+                geometry = Geometry(transform = Transform(vertical = -40f + 80f * t, scale = 110f)),
+            )
+        }
+        // 1:1 into a 2400 x 1600 target (every pixel three Catmull-Rom samples: the worst case, an export tile).
+        drag("transform vertical 1:1 (lens + CA on)", image, PROXY_SCALE, transform)
+        // As the editor shows it: the whole photo fitted to a phone's photo area (minified, explicit LOD).
+        dragView("transform vertical, fit view (lens + CA on)", image, transform)
+        drag("lens distortion amount", image, PROXY_SCALE) {
+            Recipe(optics = Optics(lensCorrections = true, distortionPercent = 200f * it))
+        }
+        drag("defringe purple amount (proxy scale)", image, PROXY_SCALE) {
+            Recipe(optics = Optics(purpleAmount = 20f * it))
+        }
+    }
+
+    /**
+     * [drag] as the editor draws it: the output pass into a [VIEW_W] x [VIEW_H] target with the photo fitted (a phone's
+     * photo area), stage 1 re-run only when needed, `glFinish` after each frame (no readback).
+     */
+    private suspend fun dragView(name: String, image: PipelineInput, recipeAt: (Float) -> Recipe) {
+        val renderer = GpuDevelopRenderer.create()
+        try {
+            renderer.setInput(image, PROXY_SCALE)
+            val scale = minOf(VIEW_W.toFloat() / image.width, VIEW_H.toFloat() / image.height)
+            val view = ViewTransform(scale, image.width / 2f, image.height / 2f)
+            val sweep = List(FRAMES) { recipeAt(it.toFloat() / (FRAMES - 1)) }
+            renderer.benchmarkView(sweep.take(WARMUP), view, VIEW_W, VIEW_H)
+            val times = renderer.benchmarkView(sweep, view, VIEW_W, VIEW_H).sorted()
+            Log.i(
+                TAG,
+                "$name: ${renderer.info.renderer} ${VIEW_W}x$VIEW_H view of ${image.width}x${image.height}: " +
+                    "frame mean ${"%.2f".format(times.average())} ms, p50 ${"%.2f".format(times[times.size / 2])}, " +
+                    "p95 ${"%.2f".format(times[(times.size * 95) / 100])}, max ${"%.2f".format(times.last())}",
+            )
+        } finally {
+            renderer.close()
+        }
+    }
+
     private fun noisy() = SyntheticImages.noisyCard(WIDTH, HEIGHT, seed = 5)
 
     /** [drag] with `glFinish` after every section (`-e profile true`): mean ms per pass, `REVEAL_BENCH profile`. */
@@ -260,6 +314,8 @@ class PipelineBenchmark {
 
     private companion object {
         const val TAG = "REVEAL_BENCH"
+        const val VIEW_W = 1080
+        const val VIEW_H = 1500
         const val WIDTH = 2400
         const val HEIGHT = 1600
         const val FRAMES = 120

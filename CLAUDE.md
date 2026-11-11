@@ -119,8 +119,9 @@ Slot 12 (Effects, ADR 0014) and the post-crop vignette and grain: see "Effects a
 Debug canvas: `adb -s emulator-<port> shell am start -n dev.hfps.reveal.debug/dev.hfps.reveal.debug.PipelineDebugActivity`
 (debug build only: `app/src/debug`, hosting `EditorDebugScreen` on a synthetic image).
 
-Geometry (slot 13, ADR 0002 "Geometry"): `geometry/GeometryMapping` (output <-> image, used by `cpu/GeometryOp`, the
-output pass and the export tiles via `sourceRegion`), `geometry/CropEditing` (crop mode gesture maths in the editing
+Geometry (slot 13, ADR 0002 "Geometry"; the lens/Transform warp: ADR 0015 below): `geometry/GeometryMapping` (output
+<-> image, used by `cpu/GeometryOp`, the output pass and the export tiles via `sourceRegion`; build it with
+`GeometryMapping.of(recipe, lens, w, h)` so the warp is included), `geometry/CropEditing` (crop mode gesture maths in the editing
 plane). Crop/turn/flip copy pixels; straightening is Catmull-Rom. Renderer: `setGeometryEditing(true)` shows the editing
 plane; `renderOutput` returns the operator's output size (`CpuDevelop.mapping(input, recipe)`).
 
@@ -324,6 +325,35 @@ scripts/calibration/rawdump.sh core/image/build/samples/nikon-d5600.nef build/ca
 REVEAL_EFFECTS_DUMPS=$PWD/build/calibration/nikon-d5600.rdump REVEAL_EFFECTS_OUT=$PWD/build/calibration/fx \
   ./gradlew :core:pipeline:testDebugUnitTest --tests '*EffectsRenderSheetTest*' --rerun
 REVEAL_NOISE_DUMPS=<full-size rdumps, comma separated> ./gradlew :core:pipeline:testDebugUnitTest --tests '*NoiseCalibrationTest*' --rerun -i
+```
+
+## Optics, Transform and Upright (`:core:pipeline`, `:feature:editor`, M2/D, ADR 0015)
+
+Lens profiles: `optics/LensProfile.kt` (`SonyLensProfile` from the ARW's knots, `LensfunProfile`), radius normalised to
+the half diagonal; `input/LensResolver` (embedded first, then `optics/LensfunDatabase.shipped()`), attached as
+`PipelineInput.lens` (`PipelineInputMapper.map(..., metadata)`, `TileSource.withLens`). Recipe: `optics` (switch,
+amounts, `removeCa` + the automatic estimate `caRed/caBlue`, defringe) and `geometry.transform` (sliders, `upright`,
+`guides`); controls in `recipe/OpticsControls.kt`. Operators: `VignetteOp` (slot 3, `SCENE_FRAG` `uVignette`),
+`DefringeOp` (slot 10b, `gl/DefringePasses.kt`, OkLab in, OkLab or RGB out), and the slot 13 **warp**
+(`geometry/Warp.kt`: `Perspective` homography + `optics/LensWarp` per-channel radial table, auto-scaled; GLSL in
+`gl/WarpShaders.kt`, shared by the output pass, the export geometry pass and the zoom tiles). The lens tables are
+`optics/LensTables` (256 entries, explicit interpolation, 256 x 1 RGBA32F textures on unit 3). The crop is in the
+**plane** (corrected + transformed image): `CropEditing.transform` refits a constrained crop, `isValid` checks the
+corners through the homography. New photos get the profile as one `HistoryAction.LENS_PROFILE` step
+(`EditorViewModel.applyLensDefault`, `Recipe.isUnedited`). Analysis: `geometry/LineDetector` (simplified LSD),
+`geometry/Upright` (solve + straightenAngle), `optics/CaEstimator`; the editor's `edit/OpticsAnalysis` runs them on
+the proxy at open. UI: `panels/OpticsPanel.kt`; the Crop mode's Transform tab `crop/TransformControls.kt`, guides in
+`crop/CropOverlay.kt` + `crop/Guides.kt` (stored in the corrected image, normalised). lensfun asset: regenerate with
+`python3 scripts/lensfun/convert_lensfun.py` (`--check`), CC BY-SA 3.0 (docs/licences.md).
+
+```sh
+./gradlew :core:pipeline:testDebugUnitTest --tests '*LensCorrectionTest*' --tests '*WarpTest*' --tests '*UprightTest*' \
+  --tests '*OpticsOpsTest*' --tests '*LensfunDatabaseTest*'   # the last reads the CC0 samples when fetched
+adb -s emulator-<port> shell am instrument -w -e class dev.hfps.reveal.pipeline.GpuParityTest#opticsMatchCpuReference,dev.hfps.reveal.pipeline.TiledRendererTest#opticsAndTransformExportLikeThePreview dev.hfps.reveal.pipeline.test/androidx.test.runner.AndroidJUnitRunner
+adb -s emulator-<port> shell am instrument -w -e class dev.hfps.reveal.pipeline.PipelineBenchmark#transformDragFrameTime dev.hfps.reveal.pipeline.test/androidx.test.runner.AndroidJUnitRunner
+adb -s emulator-<port> shell am instrument -w -e class dev.hfps.reveal.editor.TransformModeTest,dev.hfps.reveal.export.ExportFlowTest#transformedPhotoExportMatchesThePreview dev.hfps.reveal.debug.test/androidx.test.runner.AndroidJUnitRunner
+# CC0 before/after sheets (docs/screenshots/optics): rdumps of the public samples, then
+REVEAL_OPTICS_OUT=$PWD/docs/screenshots/optics ./gradlew :core:pipeline:testDebugUnitTest --tests '*OpticsRenderSheetTest*' --rerun
 ```
 
 ## Auto (`:core:pipeline/auto`, ADR 0010)

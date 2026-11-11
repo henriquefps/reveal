@@ -16,6 +16,7 @@ import dev.hfps.image.standard.StandardDecoder
 import dev.hfps.reveal.pipeline.InputKind
 import dev.hfps.reveal.pipeline.PipelineInput
 import dev.hfps.reveal.pipeline.cpu.Mat3
+import dev.hfps.reveal.pipeline.optics.LensProfile
 import java.nio.ByteBuffer
 import java.nio.ShortBuffer
 
@@ -324,6 +325,7 @@ fun PipelineInput.colourOnly(): PipelineInput = PipelineInput(
     asShotMultipliers?.copyOf(),
     saturation,
     noise,
+    lens,
 )
 
 private const val RGBA = 4
@@ -331,3 +333,16 @@ private const val MASK = 0xFFFF
 private const val BYTE = 0xFF
 private const val ORIENTATIONS = 8
 private const val SCALE = 1f / LinearImage.MAX_VALUE
+
+/** This source with [lens] as its lens profile (the colour metadata carries it; the pixels are unchanged). */
+fun TileSource.withLens(lens: LensProfile?): TileSource = if (lens == null) this else LensTileSource(this, lens)
+
+private class LensTileSource(private val delegate: TileSource, lens: LensProfile) : TileSource {
+    override val width: Int get() = delegate.width
+    override val height: Int get() = delegate.height
+    override val colour: PipelineInput = delegate.colour.withLens(lens)
+
+    override fun read(x: Int, y: Int, w: Int, h: Int, out: FloatArray) = delegate.read(x, y, w, h, out)
+
+    override fun close() = delegate.close()
+}

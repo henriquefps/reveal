@@ -98,6 +98,7 @@
         <item>Hoard image core (dev.hfps.image)|AGPL-3.0-or-later</item>
         <item>Inter 4.1, Rasmus Andersson|SIL Open Font License 1.1</item>
         <item>Phosphor Icons 2.1.1|MIT</item>
+        <item>lensfun lens database (converted, commit 52cf1a7)|CC BY-SA 3.0</item>
         <item>Kotlin standard library|Apache-2.0</item>
         <item>kotlinx.coroutines|Apache-2.0</item>
         <item>kotlinx.serialization|Apache-2.0</item>

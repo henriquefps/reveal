@@ -35,9 +35,11 @@ import dev.hfps.reveal.pipeline.gl.RenderCancelledException
 import dev.hfps.reveal.pipeline.gl.TiledRenderStats
 import dev.hfps.reveal.pipeline.gl.TiledRenderer
 import dev.hfps.reveal.pipeline.input.BitmapTileSource
+import dev.hfps.reveal.pipeline.input.LensResolver
 import dev.hfps.reveal.pipeline.input.NativeRawTileSource
 import dev.hfps.reveal.pipeline.input.TileSource
 import dev.hfps.reveal.pipeline.input.UnsupportedCameraException
+import dev.hfps.reveal.pipeline.input.withLens
 import dev.hfps.reveal.pipeline.recipe.Recipe
 import java.io.File
 import java.io.FileNotFoundException
@@ -134,7 +136,7 @@ class ExportEngine(private val context: Context, private val destinations: Desti
         val sink: BitmapSink
         val stats: TiledRenderStats
         try {
-            // Detail (slot 11) reads a neighbourhood: each tile's input carries its apron (docs/adr/0012).
+            // Defringe, Detail and texture read a neighbourhood: each tile's input carries their apron.
             val reach = DevelopParams.reach(item.recipe)
             plan = ExportPlan.of(
                 source.width,
@@ -143,6 +145,8 @@ class ExportEngine(private val context: Context, private val destinations: Desti
                 options.size,
                 renderer.tileSize,
                 reach,
+                source.colour.lens,
+                item.recipe.optics,
             )
             checkStorage(plan, options)
             sink = try {
@@ -250,7 +254,7 @@ class ExportEngine(private val context: Context, private val destinations: Desti
             if (!RawDecoder.isAvailable) throw ExportException(ExportFailure.UNSUPPORTED)
             val decoded = RawDecoder.decodeNative(image.descriptor)
             return try {
-                NativeRawTileSource(decoded.image, decoded.info)
+                NativeRawTileSource(decoded.image, decoded.info).withLens(LensResolver.resolve(decoded.info, inspected))
             } catch (e: UnsupportedCameraException) {
                 decoded.image.close()
                 throw e
@@ -267,7 +271,8 @@ class ExportEngine(private val context: Context, private val destinations: Desti
             bounds.outColorSpace?.let { inPreferredColorSpace = it }
         }
         val bitmap = BitmapFactory.decodeFileDescriptor(fd, null, options) ?: throw IOException("decode failed")
-        return BitmapTileSource(bitmap, inspected?.orientation ?: 1)
+        // A standard image's lens profile comes from lensfun by its EXIF (docs/adr/0015).
+        return BitmapTileSource(bitmap, inspected?.orientation ?: 1).withLens(LensResolver.resolve(null, inspected))
     }
 
     private fun checkStorage(plan: ExportPlan, options: ExportOptions) {

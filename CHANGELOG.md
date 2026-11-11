@@ -24,7 +24,20 @@ All notable changes to Reveal are documented here. The format follows
 - Noise reduction now knows how noisy the photo should be (ISO and camera from the RAW), so an amount means the same
   at ISO 200 and ISO 12800.
 
+- Optics panel: lens corrections from the profile the camera writes into Sony RAW files (distortion, vignetting and
+  chromatic aberration), or from the lensfun database for other cameras and for JPEGs, with distortion and vignetting
+  amounts; the panel names the profile it found. New RAW photos with a profile open with the corrections on (one
+  "Lens profile applied" step you can undo); photos edited before keep their look.
+- Remove chromatic aberration: from the lens profile, or estimated from the photo when there is none.
+- Defringe: purple and green amounts with adjustable hue ranges, for colour fringes along high-contrast edges.
+- Transform (Crop → Transform): vertical and horizontal perspective, rotate, aspect, scale and offset, with the crop
+  kept free of empty corners; Upright (Auto, Level, Vertical, Full) straightens buildings and horizons from the lines
+  in the photo, and Guided Upright follows 2 to 4 lines you draw on the photo (with a magnifier). Upright sets the
+  sliders, so you can fine-tune them after.
+- Auto straighten: the Auto chip next to the angle dial levels the photo from its own lines.
+
 ### Changed
+- Pipeline version 9: lens corrections, defringe and the Transform (photos without them look exactly as before).
 - Detail sliders respond faster while dragging: sharpening on its own now keeps up with the 120 Hz display, and
   luminance noise reduction drags cost about a quarter less. Colour noise reduction removes slightly more colour noise.
   Photos edited with Detail look marginally different (pipeline version 8).

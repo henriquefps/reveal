@@ -49,12 +49,15 @@ import dev.hfps.reveal.pipeline.geometry.CropEditing
 import dev.hfps.reveal.pipeline.gl.ClippingWarnings
 import dev.hfps.reveal.pipeline.gl.CompareMode
 import dev.hfps.reveal.pipeline.gl.Histogram
+import dev.hfps.reveal.pipeline.optics.LensProfile
+import dev.hfps.reveal.pipeline.optics.SonyLensProfile
 import dev.hfps.reveal.pipeline.recipe.Aspect
 import dev.hfps.reveal.pipeline.recipe.AspectPreset
 import dev.hfps.reveal.pipeline.recipe.BandValues
 import dev.hfps.reveal.pipeline.recipe.Colour
 import dev.hfps.reveal.pipeline.recipe.ColourGrading
 import dev.hfps.reveal.pipeline.recipe.ColourMixer
+import dev.hfps.reveal.pipeline.recipe.CropRect
 import dev.hfps.reveal.pipeline.recipe.CurvePoint
 import dev.hfps.reveal.pipeline.recipe.Curves
 import dev.hfps.reveal.pipeline.recipe.Detail
@@ -65,13 +68,16 @@ import dev.hfps.reveal.pipeline.recipe.GradeRegion
 import dev.hfps.reveal.pipeline.recipe.GradeWheel
 import dev.hfps.reveal.pipeline.recipe.HistoryAction
 import dev.hfps.reveal.pipeline.recipe.Light
+import dev.hfps.reveal.pipeline.recipe.Optics
 import dev.hfps.reveal.pipeline.recipe.ParametricCurve
 import dev.hfps.reveal.pipeline.recipe.Profile
 import dev.hfps.reveal.pipeline.recipe.Recipe
 import dev.hfps.reveal.pipeline.recipe.RecipeGroup
 import dev.hfps.reveal.pipeline.recipe.RecipePaste
 import dev.hfps.reveal.pipeline.recipe.RecipeRanges
+import dev.hfps.reveal.pipeline.recipe.Transform
 import dev.hfps.reveal.pipeline.recipe.Treatment
+import dev.hfps.reveal.pipeline.recipe.UprightMode
 import dev.hfps.reveal.pipeline.recipe.WbMode
 import dev.hfps.reveal.pipeline.recipe.WhiteBalance
 import dev.hfps.reveal.pipeline.synthetic.SyntheticImages
@@ -205,6 +211,28 @@ class EditorPhoneScreenshotTest : EditorScreenshotBase("phone") {
         Scaled(2f) { Editor(tool = ToolId.EFFECTS, effects = Photos.effects) }
     }
 
+    /** Optics (docs/adr/0015): a photo with the camera's lens profile, corrections on (the new-photo default). */
+    @Test fun optics() = shoot("optics") {
+        Editor(tool = ToolId.OPTICS, optics = Photos.lensDefault, lens = Photos.lens)
+    }
+
+    /** Optics edited: amounts, CA removal and purple defringe, the whole panel. */
+    @Test fun opticsEdited() = shoot("optics_edited") {
+        Editor(tool = ToolId.OPTICS, snap = PanelSnap.EXPANDED, optics = Photos.optics, lens = Photos.lens)
+    }
+
+    /** A photo without a profile: the status says so and Lens corrections is disabled. */
+    @Test fun opticsNoProfile() = shoot("optics_no_profile") { Editor(tool = ToolId.OPTICS) }
+
+    @Test fun opticsFontScale200() = shoot("optics_font200") {
+        Scaled(2f) { Editor(tool = ToolId.OPTICS, optics = Photos.optics, lens = Photos.lens) }
+    }
+
+    /** The Crop mode's Transform tab after Upright Vertical. */
+    @Test fun transform() = transformTab("transform")
+
+    @Test fun transformFontScale200() = transformTab("transform_font200", fontScale = 2f)
+
     @Test fun historyPanel() = shoot("history") {
         Editor(tool = ToolId.HISTORY, snap = PanelSnap.EXPANDED, history = Photos.history)
     }
@@ -277,6 +305,12 @@ class EditorLandscapeScreenshotTest : EditorScreenshotBase("landscape") {
     @Test fun grading() = subPanel("grading", ToolId.COLOUR, EditorTags.GRADING_ROW)
 
     @Test fun effects() = shoot("effects") { Editor(tool = ToolId.EFFECTS, effects = Photos.effects) }
+
+    @Test fun optics() = shoot("optics") {
+        Editor(tool = ToolId.OPTICS, optics = Photos.optics, lens = Photos.lens)
+    }
+
+    @Test fun transform() = transformTab("transform")
 }
 
 @RunWith(AndroidJUnit4::class)
@@ -330,8 +364,10 @@ abstract class EditorScreenshotBase(private val size: String) {
         base: Recipe = Photos.recipe,
         preview: ImageBitmap = Photos.edited,
         effects: Effects = Effects(),
+        optics: Optics = Optics(),
+        lens: LensProfile? = null,
     ) {
-        val recipe = base.copy(geometry = geometry, detail = detail, effects = effects)
+        val recipe = base.copy(geometry = geometry, detail = detail, effects = effects, optics = optics)
         EditorTheme {
             EditorContent(
                 state = EditorUiState(
@@ -347,6 +383,7 @@ abstract class EditorScreenshotBase(private val size: String) {
                         asShot = AsShot(5200f, 4f),
                         autoWb = WhiteBalance(5450f, 2f, WbMode.AUTO),
                         autoReady = true,
+                        lens = lens,
                     ),
                     view = view,
                     histogram = Photos.histogram,
@@ -380,6 +417,16 @@ abstract class EditorScreenshotBase(private val size: String) {
         composeRule.waitForIdle()
     }
 
+    /** The Crop mode with its Transform tab open, on an Upright Vertical result. */
+    protected fun transformTab(name: String, fontScale: Float = 1f) {
+        composeRule.setContent {
+            Scaled(fontScale) { CropEditor(geometry = Photos.transformed) }
+        }
+        composeRule.onNodeWithTag(EditorTags.CROP_TAB_TRANSFORM).performClick()
+        composeRule.waitForIdle()
+        capture(name)
+    }
+
     /** The Crop mode open on a straightened 4:5 crop. */
     @Composable
     protected fun CropEditor(geometry: Geometry = Photos.straightened) =
@@ -404,6 +451,29 @@ private object Photos {
 
     /** A typical Effects edit: some presence, a darkening vignette and fine grain. */
     val effects = Effects(texture = 20f, clarity = 25f, dehaze = 10f, vignetteAmount = -30f, grainAmount = 20f)
+
+    /** The public ZV-E10 sample's embedded lens data (E PZ 16-50mm at 29 mm). */
+    val lens: LensProfile = checkNotNull(
+        SonyLensProfile.of(
+            "E PZ 16-50mm F3.5-5.6 OSS",
+            listOf(11, 21, 2, -22, -49, -84, -124, -168, -208, -247, -279, -305),
+            listOf(11, 0, 0, 128, 352, 736, 1184, 1920, 3200, 4768, 6528, 8384),
+            listOf(
+                22, -512, -512, -384, -384, -256, -256, -256, -128, 0, 128, 256,
+                256, 768, 1024, 1280, 1408, 1408, 1408, 1280, 1024, 768, 512,
+            ),
+        ),
+    )
+
+    val lensDefault = Optics.forNewPhoto(hasProfile = true, profileHasCa = true, isRaw = true)
+
+    val optics = lensDefault.copy(distortionPercent = 80f, vignettingPercent = 120f, purpleAmount = 6f)
+
+    /** An Upright Vertical result with a refitted crop (the transform's sliders in the Transform tab). */
+    val transformed = Geometry(
+        crop = CropRect(0.08f, 0.1f, 0.92f, 0.9f),
+        transform = Transform(vertical = 24f, rotate = 1.2f, upright = UprightMode.VERTICAL),
+    )
 
     /** A typical high-ISO Detail edit. */
     val detail = Detail(sharpenAmount = 45f, sharpenMasking = 30f, nrLuminance = 35f, nrColour = 40f)

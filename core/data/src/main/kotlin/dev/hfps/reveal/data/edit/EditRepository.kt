@@ -225,7 +225,7 @@ class EditRepository(private val db: RevealDatabase, private val clock: () -> Lo
     }
 
     private suspend fun store(versionId: Long, recipe: Recipe, json: String) {
-        edits.putRecipe(RecipeEntity(versionId, json, isDefault = recipe.isDefault(), updatedAt = clock()))
+        edits.putRecipe(RecipeEntity(versionId, json, isDefault = recipe.isUnedited(), updatedAt = clock()))
         val photoId = photos.photoIdOfVersion(versionId) ?: return
         photos.setHasEdit(photoId, edits.photoHasEdit(photoId))
     }

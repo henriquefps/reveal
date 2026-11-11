@@ -51,6 +51,25 @@ enum class HistoryField(val group: RecipeGroup) {
     GRAIN_SIZE(RecipeGroup.EFFECTS),
     GRAIN_ROUGHNESS(RecipeGroup.EFFECTS),
 
+    // Optics and Transform (docs/adr/0015); before TREATMENT (HistoryLabels formats the later fields as colour tools).
+    LENS_CORRECTIONS(RecipeGroup.OPTICS),
+    LENS_DISTORTION(RecipeGroup.OPTICS),
+    LENS_VIGNETTING(RecipeGroup.OPTICS),
+    REMOVE_CA(RecipeGroup.OPTICS),
+    DEFRINGE_PURPLE_AMOUNT(RecipeGroup.OPTICS),
+    DEFRINGE_PURPLE_HUE(RecipeGroup.OPTICS),
+    DEFRINGE_GREEN_AMOUNT(RecipeGroup.OPTICS),
+    DEFRINGE_GREEN_HUE(RecipeGroup.OPTICS),
+    UPRIGHT(RecipeGroup.GEOMETRY),
+    GUIDES(RecipeGroup.GEOMETRY),
+    TRANSFORM_VERTICAL(RecipeGroup.GEOMETRY),
+    TRANSFORM_HORIZONTAL(RecipeGroup.GEOMETRY),
+    TRANSFORM_ROTATE(RecipeGroup.GEOMETRY),
+    TRANSFORM_ASPECT(RecipeGroup.GEOMETRY),
+    TRANSFORM_SCALE(RecipeGroup.GEOMETRY),
+    TRANSFORM_OFFSET_X(RecipeGroup.GEOMETRY),
+    TRANSFORM_OFFSET_Y(RecipeGroup.GEOMETRY),
+
     // Colour tools (docs/adr/0013). Scalar fields share their ControlId's name.
     TREATMENT(RecipeGroup.PROFILE),
     CURVE_SHADOWS(RecipeGroup.LIGHT),
@@ -133,6 +152,7 @@ object RecipeDiff {
         colour(before.colour, after.colour)
         detail(before.detail, after.detail)
         effects(before.effects, after.effects)
+        optics(before.optics, after.optics)
         geometry(before.geometry, after.geometry)
     }
 
@@ -240,7 +260,47 @@ object RecipeDiff {
         scalar(HistoryField.GRAIN_ROUGHNESS, r.grainRoughness, before.grainRoughness, after.grainRoughness)
     }
 
+    private fun MutableList<HistoryStep>.optics(before: Optics, after: Optics) {
+        val r = RecipeRanges
+        if (before.lensCorrections != after.lensCorrections) {
+            add(HistoryStep(HistoryField.LENS_CORRECTIONS, onOff(after.lensCorrections)))
+        }
+        scalar(HistoryField.LENS_DISTORTION, r.lensDistortion, before.distortionPercent, after.distortionPercent)
+        scalar(HistoryField.LENS_VIGNETTING, r.lensVignetting, before.vignettingPercent, after.vignettingPercent)
+        // The automatic CA estimate (caRed / caBlue) changes only together with this switch.
+        if (before.removeCa != after.removeCa) add(HistoryStep(HistoryField.REMOVE_CA, onOff(after.removeCa)))
+        scalar(HistoryField.DEFRINGE_PURPLE_AMOUNT, r.defringePurpleAmount, before.purpleAmount, after.purpleAmount)
+        if (changed(before.purpleHueLow, after.purpleHueLow) || changed(before.purpleHueHigh, after.purpleHueHigh)) {
+            add(HistoryStep(HistoryField.DEFRINGE_PURPLE_HUE, hueRange(after.purpleHueLow, after.purpleHueHigh)))
+        }
+        scalar(HistoryField.DEFRINGE_GREEN_AMOUNT, r.defringeGreenAmount, before.greenAmount, after.greenAmount)
+        if (changed(before.greenHueLow, after.greenHueLow) || changed(before.greenHueHigh, after.greenHueHigh)) {
+            add(HistoryStep(HistoryField.DEFRINGE_GREEN_HUE, hueRange(after.greenHueLow, after.greenHueHigh)))
+        }
+    }
+
+    private fun MutableList<HistoryStep>.transform(before: Transform, after: Transform) {
+        val r = RecipeRanges
+        // Upright first: its step label names the mode ("Upright: Vertical and 2 more").
+        if (before.upright != after.upright) add(HistoryStep(HistoryField.UPRIGHT, key(after.upright)))
+        if (before.guides != after.guides) add(HistoryStep(HistoryField.GUIDES, "${after.guides.size}"))
+        scalar(HistoryField.TRANSFORM_VERTICAL, r.transformVertical, before.vertical, after.vertical)
+        scalar(HistoryField.TRANSFORM_HORIZONTAL, r.transformHorizontal, before.horizontal, after.horizontal)
+        scalar(HistoryField.TRANSFORM_ROTATE, r.transformRotate, before.rotate, after.rotate)
+        scalar(HistoryField.TRANSFORM_ASPECT, r.transformAspect, before.aspect, after.aspect)
+        scalar(HistoryField.TRANSFORM_SCALE, r.transformScale, before.scale, after.scale)
+        scalar(HistoryField.TRANSFORM_OFFSET_X, r.transformOffsetX, before.offsetX, after.offsetX)
+        scalar(HistoryField.TRANSFORM_OFFSET_Y, r.transformOffsetY, before.offsetY, after.offsetY)
+    }
+
+    private fun onOff(on: Boolean): String = if (on) "on" else "off"
+
+    private fun hueRange(low: Float, high: Float): String = "${RecipeRanges.defringePurpleHueLow.format(
+        minOf(low, high),
+    )}–${RecipeRanges.defringePurpleHueLow.format(maxOf(low, high))}"
+
     private fun MutableList<HistoryStep>.geometry(before: Geometry, after: Geometry) {
+        transform(before.transform, after.transform)
         if (before.crop != after.crop) add(HistoryStep(HistoryField.CROP, if (after.crop == null) null else "crop"))
         scalar(HistoryField.ANGLE, RecipeRanges.angle, before.angle, after.angle)
         if (before.rotate != after.rotate) {

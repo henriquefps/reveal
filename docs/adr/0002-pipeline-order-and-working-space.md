@@ -3,7 +3,8 @@
 Status: accepted (M0, W5). Date: 2026-11-10. Amended by ADR 0007 (M1 Light: slots 1, 5, 5b, 8; version 3), by
 M1/G (slot 13 geometry, version 5; section "Geometry (slot 13)"), by ADR 0012 (M2: slot 11 Detail, version 6, the
 editor's full-resolution tiles), by ADR 0013 (M2/B: tone curve in slot 8, colour mixer, black & white and colour
-grading in slot 9; version 7) and by ADR 0014 (M2/C: slot 12 Effects and the post-crop finish, version 8).
+grading in slot 9; version 7), by ADR 0014 (M2/C: slot 12 Effects and the post-crop finish, version 8) and by ADR 0015
+(M2/D: slot 3 vignetting, slot 10b defringe, lens geometry and the Transform in slot 13; version 9).
 
 ## Fixed operator order
 
@@ -22,8 +23,8 @@ Implemented in M0 are marked **(M0)**; the rest are the reserved slots from `doc
    any more; highlight reconstruction runs right after this step, in balanced camera space.
 2. **Camera matrix to working space (M0)**: camera RGB to XYZ (D65), Bradford adaptation, XYZ to Rec.2020. Colour
    operators below assume a defined, wide, well-behaved space.
-3. **Lens corrections (later)**: geometry on coordinates, so it is folded into the final resampling (step 13);
-   vignetting/CA gains sit here because they act on scene-linear light.
+3. **Lens corrections (M2/D, ADR 0015)**: the profile's vignetting is a gain here, on scene-linear light right after
+   the matrix; distortion and lateral CA are coordinates, folded into the final resampling (step 13).
 4. **Exposure (M0)**: a linear gain `2^EV` on scene-linear data. Before the tone curve so +EV recovers highlight
    headroom the curve then rolls off, instead of scaling already-compressed values.
 5. **Highlight reconstruction (M1, ADR 0007)**: needs balanced data and the clipped-channel mask from step 1. It runs
@@ -44,14 +45,16 @@ Implemented in M0 are marked **(M0)**; the rest are the reserved slots from `doc
 9. **Colour (M1, ADR 0008: vibrance and saturation in OkLab)**: then the colour mixer (HSL) or black & white, then
    colour grading (M2, ADR 0013), all in OkLab, where hue and saturation are meaningful.
 10. **Local adjustments / masks (later)**: after global colour so masks adjust the globally graded image.
+    **10b. Defringe (M2/D, ADR 0015)**: desaturates purple/green fringes at strong edges, in OkLab, before Detail so
+    noise reduction and sharpening see the clean edge; a neighbourhood operator with an apron in tiles.
 11. **Detail (M2, ADR 0012)**: noise reduction then sharpening; NR before sharpening, both before effects. In OkLab,
     a neighbourhood operator at full resolution (the proxy scales its lengths); export tiles carry its apron.
 12. **Effects (M2/C, ADR 0014)**: texture, clarity, dehaze in Detail's final pass (texture with an apron, clarity and
     dehaze on the low-resolution grid). The **vignette and grain are post-crop**: after slot 13, in the output passes,
     on the geometry operator's output (grain last so it is not sharpened, denoised or resampled away).
-13. **Geometry (M1/G)**: crop, straighten, quarter turns and flips as a single resampling, after every pixel operator
-    and before the output transform (see "Geometry (slot 13)"); perspective/Upright and lens geometry (slot 3) will
-    fold into the same mapping.
+13. **Geometry (M1/G, M2/D)**: crop, straighten, quarter turns and flips as a single resampling, after every pixel
+    operator and before the output transform (see "Geometry (slot 13)"); since ADR 0015 the lens's distortion and
+    lateral CA (per channel) and the Transform's homography are a warp in the same mapping: still one resampling.
 14. **Output transform + dithering (M0)**: working space to sRGB or Display P3, OETF, 8-bit quantisation with
     dither. Always last: every operator works on linear light and the display encoding is a property of the output,
     not of the edit.
@@ -148,6 +151,9 @@ defaults (a recipe without them renders as before), a sixth golden CRC pins them
 **Version 8** (M2/C, ADR 0014 and ADR 0012 "M2/C"): the Effects (identity at their defaults) and the faster Detail
 (separable luminance levels, colour on a half-resolution copy, the noise model): Detail's output changes; the Detail
 CRC is re-pinned and a seventh one pins the Effects.
+**Version 9** (M2/D, ADR 0015): vignetting correction (slot 3), defringe (slot 10b), lens distortion, lateral CA and the
+Transform in slot 13; identity at their defaults (a recipe without them renders as before), an eighth golden CRC pins
+them.
 
 ## Determinism
 

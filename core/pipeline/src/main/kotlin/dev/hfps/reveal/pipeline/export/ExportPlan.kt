@@ -3,7 +3,9 @@ package dev.hfps.reveal.pipeline.export
 import dev.hfps.reveal.pipeline.cpu.LanczosResampleOp
 import dev.hfps.reveal.pipeline.cpu.LowResGrid
 import dev.hfps.reveal.pipeline.geometry.GeometryMapping
+import dev.hfps.reveal.pipeline.optics.LensProfile
 import dev.hfps.reveal.pipeline.recipe.Geometry
+import dev.hfps.reveal.pipeline.recipe.Optics
 import kotlin.math.floor
 
 /** A rectangle in pixels: [x], [y] the top-left corner, [width] x [height]. */
@@ -33,7 +35,8 @@ data class OutputTile(val output: PixelBox, val geometry: PixelBox, val input: P
  *   resizing), and its input region is what the geometry operator reads for that box
  *   ([GeometryMapping.sourceRegion], filter margin included), grown by the [reach] of Detail and texture (slots
  *   11-12 read a neighbourhood: docs/adr/0012, "Tiles") and clamped to the image. Tiles are sized so the input region
- *   fits in [maxTile].
+ *   fits in [maxTile]. With a warp (lens corrections, Transform: docs/adr/0015) a tile's region has no
+ *   closed-form bound: the edge starts from the straightened budget and shrinks until every region fits.
  */
 class ExportPlan(
     val imageWidth: Int,
@@ -100,14 +103,31 @@ class ExportPlan(
         }
 
     /** Output pixels per tile edge so that the geometry box (and so the input region) fits. */
-    val outputTileX: Int get() = outputTile(scaleX)
-    val outputTileY: Int get() = outputTile(scaleY)
+    val outputTileX: Int get() = tileEdges.first
+    val outputTileY: Int get() = tileEdges.second
+
+    private val tileEdges: Pair<Int, Int> by lazy {
+        var tx = outputTile(scaleX)
+        var ty = outputTile(scaleY)
+        if (mapping.warp != null) {
+            while (tx > MIN_WARP_TILE || ty > MIN_WARP_TILE) {
+                val fits = tiles(tx, ty).all { t ->
+                    val input = t.input
+                    input == null || (input.width <= maxTile && input.height <= maxTile)
+                }
+                if (fits) break
+                tx = maxOf(MIN_WARP_TILE, (tx * SHRINK).toInt())
+                ty = maxOf(MIN_WARP_TILE, (ty * SHRINK).toInt())
+            }
+        }
+        tx to ty
+    }
 
     /** The main-pass tiles in row-major order. */
-    fun outputTiles(): List<OutputTile> {
+    fun outputTiles(): List<OutputTile> = tiles(outputTileX, outputTileY)
+
+    private fun tiles(tx: Int, ty: Int): List<OutputTile> {
         val out = ArrayList<OutputTile>()
-        val tx = outputTileX
-        val ty = outputTileY
         for (oy in 0 until output.height step ty) {
             val h = minOf(ty, output.height - oy)
             val rows = span(oy until oy + h, scaleY, geometrySize.height)
@@ -151,14 +171,17 @@ class ExportPlan(
         const val MIN_TILE: Int = 256
 
         private const val SLACK = 6
+        private const val MIN_WARP_TILE = 32
+        private const val SHRINK = 0.8
 
         /** Smallest tile core left once the Detail apron is taken off both sides. */
         private const val MIN_CORE = 64
         private const val SQRT2 = 1.4142135623730951
 
         /**
-         * The plan for an upright [width] x [height] image with the recipe's [geometry] at [size]; [reach] is the
-         * apron of Detail and Effects' texture at full resolution (`DevelopParams.reach`).
+         * The plan for an upright [width] x [height] image with the recipe's [geometry] (and the lens corrections of
+         * [optics] with the photo's [lens] profile) at [size]; [reach] is the apron of defringe, Detail and Effects'
+         * texture at full resolution (`DevelopParams.reach`).
          */
         @Suppress("LongParameterList")
         fun of(
@@ -168,8 +191,10 @@ class ExportPlan(
             size: ExportSize,
             maxTile: Int = DEFAULT_MAX_TILE,
             reach: Int = 0,
+            lens: LensProfile? = null,
+            optics: Optics = Optics(),
         ): ExportPlan {
-            val mapping = GeometryMapping.of(geometry, width, height)
+            val mapping = GeometryMapping.of(geometry, width, height, lens, optics)
             val output = size.outputSize(mapping.outputWidth, mapping.outputHeight)
             return ExportPlan(width, height, mapping, output, maxTile, reach)
         }

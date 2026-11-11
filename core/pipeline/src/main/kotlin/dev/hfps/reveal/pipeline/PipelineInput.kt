@@ -2,6 +2,7 @@ package dev.hfps.reveal.pipeline
 
 import dev.hfps.reveal.pipeline.cpu.ColorSpaces
 import dev.hfps.reveal.pipeline.cpu.Mat3
+import dev.hfps.reveal.pipeline.optics.LensProfile
 
 /** What the pixel values of a [PipelineInput] mean; it decides whether the base look is applied. */
 enum class InputKind {
@@ -37,6 +38,8 @@ enum class InputKind {
  *   (`RawWhiteBalanceOp`). `null` = no known saturation (synthetic or merged data with real headroom): no clip.
  * @property noise what the file says about its noise (ISO, camera) for the Detail operator's noise model
  *   (`cpu/NoiseModel`); `null` = unknown (synthetic images, tests): the model's documented defaults apply.
+ * @property lens the lens correction profile of the photo (embedded in the RAW, or lensfun's), `null` when none is
+ *   known; the recipe's optics decide whether and how strongly it applies (docs/adr/0015).
  */
 class PipelineInput(
     val kind: InputKind,
@@ -47,6 +50,7 @@ class PipelineInput(
     val asShotMultipliers: FloatArray?,
     val saturation: Float? = null,
     val noise: NoiseInfo? = null,
+    val lens: LensProfile? = null,
 ) {
     init {
         require(width > 0 && height > 0) { "image must not be empty" }
@@ -60,6 +64,10 @@ class PipelineInput(
 
     /** True for RAW input (has camera multipliers), false for already-balanced JPEG/HEIF input. */
     val isRaw: Boolean get() = asShotMultipliers != null
+
+    /** The same input (pixels shared, not copied) with [lens] as its lens profile. */
+    fun withLens(lens: LensProfile?): PipelineInput =
+        PipelineInput(kind, width, height, linearRgb, cameraToXyz, asShotMultipliers, saturation, noise, lens)
 
     companion object {
         /** Interleaved channels per pixel. */

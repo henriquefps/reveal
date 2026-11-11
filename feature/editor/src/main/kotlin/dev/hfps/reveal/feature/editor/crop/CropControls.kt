@@ -45,10 +45,10 @@ import dev.hfps.reveal.pipeline.recipe.AspectPreset
 import dev.hfps.reveal.pipeline.recipe.Geometry
 
 /**
- * The Crop mode's controls in place of the tool strip (docs/plan/ux.md): the straighten dial, the aspect chips (with
- * the disabled Auto straighten of M2) and the tool buttons: rotate left/right, flip horizontal/vertical, the horizon
- * line, lock, swap orientation, constrain to image and reset. Portrait lays the chips and buttons out in scrolling
- * rows; the landscape/tablet column wraps them.
+ * The Crop mode's controls in place of the tool strip (docs/plan/ux.md): the Crop | Transform tabs; Crop shows the
+ * straighten dial, the aspect chips (after Auto straighten) and the tool buttons: rotate left/right, flip
+ * horizontal/vertical, the horizon line, lock, swap orientation, constrain to image and reset. Portrait lays the chips
+ * and buttons out in scrolling rows; the landscape/tablet column wraps them.
  */
 @Composable
 fun CropControls(host: ModeHost, modifier: Modifier = Modifier) {
@@ -60,6 +60,11 @@ fun CropControls(host: ModeHost, modifier: Modifier = Modifier) {
     val set = host.actions.onGeometry
     var dialStart by remember { mutableStateOf<Geometry?>(null) }
     Column(modifier.fillMaxWidth().padding(top = 8.dp)) {
+        Tabs(session)
+        if (session.tab == CropTab.TRANSFORM) {
+            TransformControls(host)
+            return@Column
+        }
         StraightenDial(
             value = CropEditing.seenAngle(g),
             onValueChange = { seen ->
@@ -76,7 +81,7 @@ fun CropControls(host: ModeHost, modifier: Modifier = Modifier) {
             },
             onReset = { set(CropEditing.straighten(g, 0f, w, h)) },
         )
-        AspectChips(g, w, h, session, set, host.vertical)
+        AspectChips(g, w, h, session, set, host.vertical, host.actions.onAutoStraighten)
         ToolButtons(g, w, h, session, set, host.vertical)
     }
     if (session.customAspect) {
@@ -87,6 +92,36 @@ fun CropControls(host: ModeHost, modifier: Modifier = Modifier) {
                 session.customAspect = false
                 set(CropEditing.withAspect(g, Aspect(AspectPreset.CUSTOM, cw, ch, locked = true), w, h))
             },
+        )
+    }
+}
+
+/** Crop | Transform. */
+@Composable
+private fun Tabs(session: CropSession) {
+    Row(
+        Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        RevealChip(
+            label = stringResource(R.string.editor_crop_tab_crop),
+            selected = session.tab == CropTab.CROP,
+            onClick = {
+                session.tab = CropTab.CROP
+                session.guideTool = false
+            },
+            icon = PhosphorRegular.Crop,
+            modifier = Modifier.testTag(EditorTags.CROP_TAB_CROP),
+        )
+        RevealChip(
+            label = stringResource(R.string.editor_crop_tab_transform),
+            selected = session.tab == CropTab.TRANSFORM,
+            onClick = {
+                session.tab = CropTab.TRANSFORM
+                session.horizonTool = false
+            },
+            icon = PhosphorRegular.Perspective,
+            modifier = Modifier.testTag(EditorTags.CROP_TAB_TRANSFORM),
         )
     }
 }
@@ -107,20 +142,18 @@ private fun AspectChips(
     session: CropSession,
     set: (Geometry) -> Unit,
     vertical: Boolean,
+    onAutoStraighten: () -> Unit,
 ) = FlowRow(
     Modifier.cropRow(vertical, rememberScrollState()),
     horizontalArrangement = Arrangement.spacedBy(4.dp),
 ) {
-    val unavailable = stringResource(R.string.editor_tool_unavailable, stringResource(R.string.editor_crop_auto))
+    // Auto-straighten (docs/adr/0015): the dial's angle from the photo's own lines.
     RevealChip(
         label = stringResource(R.string.editor_crop_auto),
         selected = false,
-        onClick = {},
+        onClick = onAutoStraighten,
         icon = PhosphorRegular.MagicWand,
-        enabled = false,
-        modifier = Modifier
-            .testTag(EditorTags.CROP_AUTO)
-            .semantics { contentDescription = unavailable },
+        modifier = Modifier.testTag(EditorTags.CROP_AUTO),
     )
     for (preset in AspectPreset.entries) {
         RevealChip(

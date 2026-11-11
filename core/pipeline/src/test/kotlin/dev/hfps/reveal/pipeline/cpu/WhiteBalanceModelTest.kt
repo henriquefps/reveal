@@ -40,8 +40,8 @@ class WhiteBalanceModelTest {
         // Magenta light has less green than the locus point: lower y.
         assertThat(magenta[1] / magenta.sum()).isLessThan(neutral[1] / neutral.sum())
 
-        val asShot = WhiteBalanceModel.solve(jpeg, WhiteBalance())
-        val cool = WhiteBalanceModel.solve(jpeg, WhiteBalance(temperatureK = 4000f))
+        val asShot = WhiteBalanceModel.solve(raw, WhiteBalance())
+        val cool = WhiteBalanceModel.solve(raw, WhiteBalance(temperatureK = 4000f))
         // Telling the pipeline the light was warmer than it was removes red and adds blue.
         assertThat(cool.multipliers[0]).isLessThan(asShot.multipliers[0])
         assertThat(cool.multipliers[2]).isGreaterThan(asShot.multipliers[2])

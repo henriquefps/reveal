@@ -4,7 +4,6 @@ package dev.hfps.reveal.pipeline.cpu
 
 import kotlin.math.floor
 import kotlin.math.min
-import kotlin.math.sqrt
 
 // CPU reference of the develop operators. Each one works in place on interleaved RGB floats (`width*height*3`) and
 // is mirrored line for line by a GLSL ES 3.20 function in `gl/Shaders.kt`; the parity test holds them together.
@@ -56,47 +55,6 @@ object ExposureOp {
     /** Multiplies every value by [gain]. */
     fun apply(rgb: FloatArray, gain: Float) {
         for (i in rgb.indices) rgb[i] *= gain
-    }
-}
-
-/**
- * Stage 4: the "Standard" base tone curve, per channel. Identity up to the knee `k`, then a shoulder that is
- * continuous with slope 1 at the knee (C1; the second derivative also vanishes there) and approaches 1.0 without
- * ever reaching it, so highlights never hard-clip inside the curve:
- *
- * ```
- * f(x) = x                                          for x <= k
- * f(x) = k + (1 - k) * g(u),  u = (x - k)/(1 - k),  g(u) = u / (1 + u^8)^(1/8)      for x > k
- * ```
- *
- * `k = 0.8`, so the linear part keeps almost all of the range untouched (a neutral base look) and an input of 1.0
- * (the reference white after WB) maps to 0.983 (sRGB 252). `(1 + u^8)^(1/8)` is three square roots, which is exact
- * and cheap on both CPU and GPU. Negative inputs (out-of-gamut or noise) pass through unchanged and are handled by
- * the output transform; inputs above 10000 are clamped before the power so it cannot overflow float32.
- */
-object BaseToneOp {
-    /** Knee of the Standard curve, in linear working-space units. */
-    const val KNEE: Float = 0.8f
-
-    /** Knee that makes the curve the identity for every finite input (display-referred images). */
-    const val IDENTITY_KNEE: Float = Float.MAX_VALUE
-
-    private const val MAX_INPUT = 1e4f
-
-    /** The curve for one value. */
-    fun curve(x: Float, knee: Float = KNEE): Float {
-        if (x <= knee) return x
-        val u = (min(x, MAX_INPUT) - knee) / (1f - knee)
-        val u2 = u * u
-        val u4 = u2 * u2
-        val u8 = u4 * u4
-        val denominator = sqrt(sqrt(sqrt(1f + u8)))
-        return knee + (1f - knee) * (u / denominator)
-    }
-
-    /** Applies [curve] to every channel. */
-    fun apply(rgb: FloatArray, knee: Float = KNEE) {
-        for (i in rgb.indices) rgb[i] = curve(rgb[i], knee)
     }
 }
 

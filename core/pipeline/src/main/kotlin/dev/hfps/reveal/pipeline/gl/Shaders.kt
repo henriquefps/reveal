@@ -5,7 +5,7 @@ package dev.hfps.reveal.pipeline.gl
  * line (formulas are documented there); the parity test keeps them equal.
  *
  * Stages: scene (WB, highlight reconstruction, matrix, exposure) -> [low-res Light passes] -> develop (local tone,
- * base look, global tone) -> output. The Light group's GLSL lives in [LightShaders].
+ * profile, global tone, vibrance/saturation) -> output. The Light group's GLSL lives in [LightShaders].
  *
  * Version: `#version 300 es`. The plan asks for OpenGL ES 3.2 as the default target; the shaders only use ES 3.0
  * features (uniform blocks, `texelFetch`, `gl_VertexID`, 32-bit unsigned integer arithmetic, float render targets
@@ -28,7 +28,6 @@ layout(std140) uniform Develop {
     vec4 wbMultiplier;       // RawWhiteBalanceOp: rgb = multipliers
     mat4 cameraToWorking;    // CameraMatrixOp: upper-left 3x3, column-major
     vec4 exposure;           // ExposureOp: x = linear gain 2^EV
-    vec4 baseTone;           // BaseToneOp: x = knee
 };
 """
 
@@ -62,9 +61,9 @@ void main() {
 """
 
     /**
-     * Stage 2, develop (slots 5b-8): highlights/shadows on scene-linear light, the base tone curve, then
-     * contrast/whites/blacks on display-referred light. Reads the scene texture 1:1 and writes the working-space
-     * texture (RGBA16F, mip-mapped) the output pass reads.
+     * Stage 2, develop (slots 5b-9): highlights/shadows on scene-linear light, the profile (base look, slot 6,
+     * [ColourShaders]), contrast/whites/blacks on display-referred light, then vibrance/saturation (slot 9). Reads
+     * the scene texture 1:1 and writes the working-space texture (RGBA16F, mip-mapped) the output pass reads.
      */
     val DEVELOP_FRAG: String = HEADER + DEVELOP_BLOCK + LightShaders.COMMON + """
 uniform sampler2D uScene;
@@ -72,29 +71,18 @@ uniform sampler2D uCoef;
 uniform sampler2D uMoments;
 out vec4 outColor;
 
-float toneCurve(float x) {
-    float k = baseTone.x;
-    if (x <= k) {
-        return x;
-    }
-    float u = (min(x, 10000.0) - k) / (1.0 - k);
-    float u2 = u * u;
-    float u4 = u2 * u2;
-    float u8 = u4 * u4;
-    float d = sqrt(sqrt(sqrt(1.0 + u8)));
-    return k + (1.0 - k) * (u / d);
-}
-""" + LightShaders.TONE + """
+""" + ColourShaders.BLOCK + ColourShaders.FUNCTIONS + LightShaders.TONE + """
 void main() {
     ivec2 p = ivec2(gl_FragCoord.xy);
     vec3 c = texelFetch(uScene, p, 0).rgb;
     if (tone.z != 0.0) {
         c = localTone(c, p);
     }
-    c = vec3(toneCurve(c.r), toneCurve(c.g), toneCurve(c.b));
+    c = profileLook(c);
     if (tone.w != 0.0) {
         c = globalTone(c);
     }
+    c = vibranceSaturation(c);
     outColor = vec4(c, 1.0);
 }
 """

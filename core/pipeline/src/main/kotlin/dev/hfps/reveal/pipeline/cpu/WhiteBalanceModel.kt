@@ -2,7 +2,10 @@
 
 package dev.hfps.reveal.pipeline.cpu
 
+import dev.hfps.reveal.pipeline.InputKind
 import dev.hfps.reveal.pipeline.PipelineInput
+import dev.hfps.reveal.pipeline.recipe.RecipeRanges
+import dev.hfps.reveal.pipeline.recipe.WbMode
 import dev.hfps.reveal.pipeline.recipe.WhiteBalance
 import kotlin.math.sqrt
 
@@ -29,6 +32,13 @@ class WhiteBalanceSolution(
  * The slider's temperature/tint are the CCT and Duv-derived tint of `W`: the Planckian locus in CIE 1960 UCS from
  * Krystek's rational approximation (1985, error below 0.0002 uv for 1000-15000 K), tint is a displacement
  * perpendicular to the locus, `duv = -tint / 3000` (tint +150 is 0.05 Duv towards magenta).
+ *
+ * **Display-referred input** (JPEG/HEIF/PNG, `PipelineInput.kind == DISPLAY_REFERRED`) ignores the absolute pair and
+ * reads the relative one ([WhiteBalance.relTemperature], [WhiteBalance.relTint], -100..+100): a von Kries
+ * (Bradford) adaptation in linear light from a pretended illuminant to the file's white (D65), see [relativeCct].
+ *
+ * Stable API for the editor (docs/adr/0008): [presetCct] / [preset] (WB chips), [neutralFromSample] (eyedropper),
+ * [asShot], and [AutoWhiteBalance] (Auto).
  */
 object WhiteBalanceModel {
     /** Lowest supported colour temperature in kelvin. */
@@ -113,6 +123,7 @@ object WhiteBalanceModel {
         wb: WhiteBalance,
         working: ColorSpaces.Rgb = ColorSpaces.REC2020,
     ): WhiteBalanceSolution {
+        if (input.kind == InputKind.DISPLAY_REFERRED) return solveRelative(input, wb, working)
         val m = input.cameraToXyz
         val asShotMul = input.asShotMultipliers
             ?.let { doubleArrayOf(it[0].toDouble(), it[1].toDouble(), it[2].toDouble()) }
@@ -135,6 +146,130 @@ object WhiteBalanceModel {
             Mat3.diagonal(1.0 / multipliers[0], 1.0 / multipliers[1], 1.0 / multipliers[2])
         return WhiteBalanceSolution(multipliers, balancedToWorking)
     }
+
+    // ------------------------------------------------------------------ display-referred (relative) white balance
+
+    /** Mireds per unit of relative temperature: ±100 moves the pretended light by ∓75 mired from D65. */
+    const val MIRED_PER_REL_UNIT: Double = 0.75
+
+    /** The model's own temperature and tint of D65 (CIE D65 sits slightly above the Planckian locus). */
+    val D65_CCT: Cct by lazy { cctAndTint(ColorSpaces.D65_XYZ) }
+
+    /**
+     * The illuminant the relative sliders pretend the light was, as temperature and tint. A positive
+     * [relTemperature] makes the picture warmer: the pretended light is cooler than D65 by
+     * `0.75 * relTemperature` mired (+100 = 12 690 K, -100 = 4 371 K); a positive [relTint] makes it more magenta:
+     * the pretended light is greener by `relTint` tint units (100 = 0.033 Duv). Mireds are used because equal
+     * mired steps look like equal colour changes (Judd 1960; the scale of most raw converters' temperature slider).
+     */
+    fun relativeCct(relTemperature: Double, relTint: Double): Cct {
+        val mired = MIRED_PER_K / D65_CCT.temperatureK - MIRED_PER_REL_UNIT * relTemperature
+        return Cct(MIRED_PER_K / mired, D65_CCT.tint - relTint)
+    }
+
+    private fun solveRelative(input: PipelineInput, wb: WhiteBalance, working: ColorSpaces.Rgb): WhiteBalanceSolution {
+        val m = input.cameraToXyz
+        val relT = RecipeRanges.relTemperature.clamp(wb.relTemperature).toDouble()
+        val relTint = RecipeRanges.relTint.clamp(wb.relTint).toDouble()
+        val toXyz = if (relT == 0.0 && relTint == 0.0) {
+            m
+        } else {
+            // Adapt from the pretended light to the model's D65 point (not the exact D65 xy), so that the shift is
+            // relative to the same locus model on both sides and 0/0 is exactly the identity.
+            val pretended = relativeCct(relT, relTint)
+            val source = illuminantXyz(pretended.temperatureK, pretended.tint)
+            val dest = illuminantXyz(D65_CCT.temperatureK, D65_CCT.tint)
+            ColorSpaces.bradfordAdaptation(source, dest) * m
+        }
+        return WhiteBalanceSolution(doubleArrayOf(1.0, 1.0, 1.0), working.fromXyz * toXyz)
+    }
+
+    // ------------------------------------------------------------------ presets and eyedropper
+
+    /**
+     * The illuminant of each white-balance preset, as CIE chromaticities (CIE 15:2004): Daylight = D55, Cloudy = D65,
+     * Shade = D75 (the CIE daylight locus at 5503, 6504 and 7504 K), Tungsten = illuminant A (2856 K), Fluorescent =
+     * F2 (cool white, 4230 K, slightly green), Flash = the daylight locus at 5900 K (xenon flash tubes). `null` for
+     * the modes that are not a fixed light (as shot, auto, custom).
+     */
+    fun presetXy(mode: WbMode): ColorSpaces.Xy? = when (mode) {
+        WbMode.DAYLIGHT -> daylightLocus(5503.0)
+        WbMode.CLOUDY -> daylightLocus(6504.0)
+        WbMode.SHADE -> daylightLocus(7504.0)
+        WbMode.TUNGSTEN -> ColorSpaces.Xy(0.44757, 0.40745)
+        WbMode.FLUORESCENT -> ColorSpaces.Xy(0.37208, 0.37529)
+        WbMode.FLASH -> daylightLocus(5900.0)
+        WbMode.AS_SHOT, WbMode.AUTO, WbMode.CUSTOM -> null
+    }
+
+    /** Temperature and tint of a preset ([presetXy]) on this model's scale, or `null`. */
+    fun presetCct(mode: WbMode): Cct? = presetXy(mode)?.let { cctAndTint(ColorSpaces.xyToXyz(it)) }
+
+    /**
+     * The recipe white balance a preset chip writes: as shot clears the override; a light preset writes its
+     * temperature/tint (RAW). Display-referred input has no absolute light, so its presets are as shot and
+     * Auto/Custom only (`null` for the light presets there); Auto and Custom need data ([AutoWhiteBalance],
+     * [neutralFromSample]) and return `null` here.
+     */
+    fun preset(mode: WbMode, input: PipelineInput): WhiteBalance? = when {
+        mode == WbMode.AS_SHOT -> WhiteBalance(mode = WbMode.AS_SHOT)
+        input.kind == InputKind.DISPLAY_REFERRED -> null
+        else -> presetCct(mode)?.let { WhiteBalance(it.temperatureK.toFloat(), it.tint.toFloat(), mode) }
+    }
+
+    /**
+     * Eyedropper: the white balance that makes [rgb] neutral. [rgb] is the input's own linear pixel (or the mean of
+     * a small area) as found in `PipelineInput.linearRgb`: un-balanced camera RGB for a RAW, linear file RGB for a
+     * display-referred image. For a RAW a neutral surface's raw response is the light's, so the light is
+     * `XYZ = cameraToXyz * rgb` and the result is its temperature/tint (clamped to the slider ranges). For a
+     * display-referred image the sample's chromaticity is taken as the pretended light and [relativeCct] is inverted.
+     * `mode` is [WbMode.CUSTOM].
+     */
+    fun neutralFromSample(input: PipelineInput, rgb: FloatArray): WhiteBalance {
+        require(rgb.size == PipelineInput.CHANNELS) { "an RGB sample has 3 values" }
+        val xyz = input.cameraToXyz.times(
+            rgb[0].toDouble().coerceAtLeast(MIN_SAMPLE),
+            rgb[1].toDouble().coerceAtLeast(MIN_SAMPLE),
+            rgb[2].toDouble().coerceAtLeast(MIN_SAMPLE),
+        )
+        return fromIlluminant(input, xyz, WbMode.CUSTOM)
+    }
+
+    /** The recipe white balance for a light with XYZ [xyz] measured in [input]'s colour space. */
+    fun fromIlluminant(input: PipelineInput, xyz: DoubleArray, mode: WbMode): WhiteBalance {
+        val cct = cctAndTint(xyz)
+        return if (input.kind == InputKind.DISPLAY_REFERRED) {
+            val mired = MIRED_PER_K / cct.temperatureK
+            val relT = (MIRED_PER_K / D65_CCT.temperatureK - mired) / MIRED_PER_REL_UNIT
+            val relTint = D65_CCT.tint - cct.tint
+            WhiteBalance(
+                mode = mode,
+                relTemperature = RecipeRanges.relTemperature.clamp(relT.toFloat()),
+                relTint = RecipeRanges.relTint.clamp(relTint.toFloat()),
+            )
+        } else {
+            WhiteBalance(
+                RecipeRanges.temperature.clamp(cct.temperatureK.toFloat()),
+                RecipeRanges.tint.clamp(cct.tint.toFloat()),
+                mode,
+            )
+        }
+    }
+
+    /** CIE daylight locus chromaticity at correlated colour temperature [t] (CIE 15:2004, eq. 3.3/3.4). */
+    fun daylightLocus(t: Double): ColorSpaces.Xy {
+        val t2 = t * t
+        val t3 = t2 * t
+        val x = if (t <= 7000.0) {
+            -4.6070e9 / t3 + 2.9678e6 / t2 + 0.09911e3 / t + 0.244063
+        } else {
+            -2.0064e9 / t3 + 1.9018e6 / t2 + 0.24748e3 / t + 0.237040
+        }
+        return ColorSpaces.Xy(x, -3.0 * x * x + 2.870 * x - 0.275)
+    }
+
+    private const val MIRED_PER_K = 1e6
+    private const val MIN_SAMPLE = 1e-9
 
     private fun asShotWhite(input: PipelineInput): DoubleArray {
         val mul = input.asShotMultipliers

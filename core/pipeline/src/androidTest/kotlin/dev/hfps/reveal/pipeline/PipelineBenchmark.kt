@@ -3,8 +3,10 @@ package dev.hfps.reveal.pipeline
 import android.util.Log
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import dev.hfps.reveal.pipeline.gl.GpuDevelopRenderer
+import dev.hfps.reveal.pipeline.recipe.BaseLook
 import dev.hfps.reveal.pipeline.recipe.Colour
 import dev.hfps.reveal.pipeline.recipe.Light
+import dev.hfps.reveal.pipeline.recipe.Profile
 import dev.hfps.reveal.pipeline.recipe.Recipe
 import dev.hfps.reveal.pipeline.recipe.WhiteBalance
 import dev.hfps.reveal.pipeline.synthetic.SyntheticImages
@@ -50,6 +52,21 @@ class PipelineBenchmark {
             Recipe(
                 light = Light(-1f, highlights = -60f, shadows = 40f),
                 colour = Colour(WhiteBalance(temperatureK = 3000f + 6000f * it)),
+            )
+        }
+    }
+
+    /**
+     * The costliest colour path (docs/adr/0008): Camera JPEG match (matrix, curve, hue treatment: one OkLab round
+     * trip) plus vibrance and saturation (a second one), with Light's tone sliders on, dragging vibrance.
+     */
+    @Test
+    fun colourDragFrameTime(): Unit = runBlocking {
+        drag("colour (camera match + vibrance/saturation drag, light on)", SyntheticImages.scene(WIDTH, HEIGHT)) {
+            Recipe(
+                profile = Profile(BaseLook.CAMERA_MATCH, 120f),
+                light = Light(0.3f, contrast = 20f, highlights = -40f, shadows = 30f),
+                colour = Colour(vibrance = -100f + 200f * it, saturation = 25f),
             )
         }
     }

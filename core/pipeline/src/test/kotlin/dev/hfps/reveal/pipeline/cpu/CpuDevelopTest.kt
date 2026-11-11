@@ -4,8 +4,10 @@ import com.google.common.truth.Truth.assertThat
 import dev.hfps.reveal.pipeline.InputKind
 import dev.hfps.reveal.pipeline.PIPELINE_VERSION
 import dev.hfps.reveal.pipeline.PipelineInput
+import dev.hfps.reveal.pipeline.recipe.BaseLook
 import dev.hfps.reveal.pipeline.recipe.Colour
 import dev.hfps.reveal.pipeline.recipe.Light
+import dev.hfps.reveal.pipeline.recipe.Profile
 import dev.hfps.reveal.pipeline.recipe.Recipe
 import dev.hfps.reveal.pipeline.recipe.WhiteBalance
 import dev.hfps.reveal.pipeline.synthetic.SyntheticImages
@@ -91,7 +93,8 @@ class CpuDevelopTest {
             assertThat(linear[i * 3 + 1]).isAtMost(1f)
             if (i > 0) assertThat(linear[i * 3 + 1]).isAtLeast(linear[(i - 1) * 3 + 1])
         }
-        assertThat(linear[63 * 3 + 1]).isGreaterThan(0.999f)
+        // Standard (ADR 0008) approaches its white asymptote: 16x over white is within a few percent of it.
+        assertThat(linear[63 * 3 + 1]).isGreaterThan(0.97f)
     }
 
     @Test
@@ -178,12 +181,12 @@ class CpuDevelopTest {
         val crc = CRC32().apply { update(CpuDevelop.render(input, recipe)) }.value
 
         // Version 2 added highlight clipping for input with a known saturation, version 3 replaced it with highlight
-        // reconstruction and added the Light tone operators; this scene has no saturation and the recipe no tone
-        // slider, so its CRC is still version 1's. The Light operators are pinned by the test below.
+        // reconstruction and added the Light tone operators (pinned below); version 4 replaced the M0 Standard knee
+        // curve with the profiles of docs/adr/0008, which changes this scene-referred render.
         // If this fails the pipeline output changed: that is only legitimate together with a PIPELINE_VERSION bump
         // (docs/adr/0002, "PIPELINE_VERSION rules"); update both here.
-        assertThat(PIPELINE_VERSION).isEqualTo(3)
-        assertThat(crc).isEqualTo(GOLDEN_CRC_V1)
+        assertThat(PIPELINE_VERSION).isEqualTo(4)
+        assertThat(crc).isEqualTo(GOLDEN_CRC_V4)
     }
 
     @Test
@@ -206,13 +209,35 @@ class CpuDevelopTest {
             update(CpuDevelop.render(scene, recipe))
         }.value
 
-        // Version 3: highlight reconstruction, highlights/shadows, contrast/whites/blacks (docs/adr/0007).
-        assertThat(PIPELINE_VERSION).isEqualTo(3)
-        assertThat(crc).isEqualTo(GOLDEN_CRC_LIGHT_V3)
+        // Version 3: highlight reconstruction, highlights/shadows, contrast/whites/blacks (docs/adr/0007); version 4
+        // the new Standard under them (docs/adr/0008).
+        assertThat(PIPELINE_VERSION).isEqualTo(4)
+        assertThat(crc).isEqualTo(GOLDEN_CRC_LIGHT_V4)
+    }
+
+    @Test
+    fun `golden checksum pins the colour operators to PIPELINE_VERSION`() {
+        val scene = SyntheticImages.scene(64, 48)
+        val (chart, _) = SyntheticImages.srgb8Chart()
+        val crc = CRC32().apply {
+            for (look in BaseLook.entries) update(CpuDevelop.render(scene, Recipe(profile = Profile(look, 140f))))
+            update(CpuDevelop.render(scene, Recipe(colour = Colour(vibrance = 70f, saturation = -20f))))
+            update(
+                CpuDevelop.render(
+                    chart,
+                    Recipe(colour = Colour(WhiteBalance(relTemperature = 30f, relTint = -20f), saturation = 40f)),
+                ),
+            )
+        }.value
+
+        // Version 4: profiles, vibrance/saturation, relative white balance (docs/adr/0008).
+        assertThat(PIPELINE_VERSION).isEqualTo(4)
+        assertThat(crc).isEqualTo(GOLDEN_CRC_COLOUR_V4)
     }
 
     private companion object {
-        const val GOLDEN_CRC_V1: Long = 1568956133L
-        const val GOLDEN_CRC_LIGHT_V3: Long = 757965997L
+        const val GOLDEN_CRC_V4: Long = 3273411752L
+        const val GOLDEN_CRC_LIGHT_V4: Long = 2469709740L
+        const val GOLDEN_CRC_COLOUR_V4: Long = 3805206770L
     }
 }

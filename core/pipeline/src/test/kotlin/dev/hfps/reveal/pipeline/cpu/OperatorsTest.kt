@@ -39,38 +39,6 @@ class OperatorsTest {
     }
 
     @Test
-    fun `tone curve is identity below the knee and passes negatives`() {
-        for (x in listOf(-5f, -0.1f, 0f, 0.18f, 0.5f, BaseToneOp.KNEE)) assertThat(BaseToneOp.curve(x)).isEqualTo(x)
-    }
-
-    @Test
-    fun `tone curve golden values`() {
-        // k = 0.8: f(1.0) = 0.8 + 0.2 * 1/2^(1/8) = 0.98337..., f(2) -> 0.9999.., large -> 1.
-        assertThat(BaseToneOp.curve(1.0f)).isWithin(1e-6f).of(0.9834008f)
-        assertThat(BaseToneOp.curve(1.2f)).isWithin(1e-5f).of(0.99991f)
-        assertThat(BaseToneOp.curve(2.0f)).isWithin(1e-5f).of(1.0f)
-        assertThat(BaseToneOp.curve(1e9f)).isWithin(1e-6f).of(1.0f)
-    }
-
-    @Test
-    fun `tone curve is monotonic, smooth at the knee and never reaches one`() {
-        var previous = BaseToneOp.curve(0f)
-        var x = 0.001f
-        while (x < 50f) {
-            val y = BaseToneOp.curve(x)
-            assertThat(y).isAtLeast(previous)
-            assertThat(y).isAtMost(1f)
-            previous = y
-            x *= 1.01f
-        }
-        val h = 1e-3f
-        val left = (BaseToneOp.curve(BaseToneOp.KNEE) - BaseToneOp.curve(BaseToneOp.KNEE - h)) / h
-        val right = (BaseToneOp.curve(BaseToneOp.KNEE + h) - BaseToneOp.curve(BaseToneOp.KNEE)) / h
-        assertThat(abs(left - right)).isLessThan(5e-3f)
-        assertThat(BaseToneOp.curve(1f)).isLessThan(1f)
-    }
-
-    @Test
     fun `sRGB OETF golden values`() {
         assertThat(OutputTransformOp.oetf(0f)).isEqualTo(0f)
         assertThat(OutputTransformOp.oetf(1f)).isWithin(1e-6f).of(1f)

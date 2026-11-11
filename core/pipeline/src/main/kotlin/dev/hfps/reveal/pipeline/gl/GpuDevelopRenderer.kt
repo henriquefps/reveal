@@ -104,6 +104,7 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
     private var outputProgram = 0
     private var developUbo = 0
     private var outputUbo = 0
+    private var lookUbo = 0
     private var vao = 0
     private var sourceTex = 0
     private var stageTex = 0
@@ -378,6 +379,7 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         }
         uploadUbo(developUbo, developBlock(params))
         uploadUbo(lightUbo, lightBlock(params, image.grid, reconstruct))
+        uploadUbo(lookUbo, ColourShaders.lookBlock(params))
         // The scene texture and the guide depend only on what reaches scene-linear light (white balance, matrix,
         // exposure, reconstruction): a drag of a tone slider re-runs only the develop pass.
         val scene = SceneKey(
@@ -513,14 +515,19 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         bindBlock(developProgram, "Light", LIGHT_BINDING, "uCoef", unit = 1)
         GLES30.glUniform1i(GLES30.glGetUniformLocation(developProgram, "uMoments"), 2)
         bindBlock(outputProgram, "Output", OUTPUT_BINDING, "uStage")
-        val ids = IntArray(3)
-        GLES30.glGenBuffers(3, ids, 0)
+        val ids = IntArray(4)
+        val lookIndex = GLES30.glGetUniformBlockIndex(developProgram, "Look")
+        check(lookIndex != GLES30.GL_INVALID_INDEX) { "uniform block Look missing" }
+        GLES30.glUniformBlockBinding(developProgram, lookIndex, ColourShaders.BINDING)
+        GLES30.glGenBuffers(4, ids, 0)
         developUbo = ids[0]
         outputUbo = ids[1]
         lightUbo = ids[2]
+        lookUbo = ids[3]
         GLES30.glBindBufferBase(GLES30.GL_UNIFORM_BUFFER, DEVELOP_BINDING, developUbo)
         GLES30.glBindBufferBase(GLES30.GL_UNIFORM_BUFFER, OUTPUT_BINDING, outputUbo)
         GLES30.glBindBufferBase(GLES30.GL_UNIFORM_BUFFER, LIGHT_BINDING, lightUbo)
+        GLES30.glBindBufferBase(GLES30.GL_UNIFORM_BUFFER, ColourShaders.BINDING, lookUbo)
         light.init()
         val vaos = IntArray(1)
         GLES30.glGenVertexArrays(1, vaos, 0)
@@ -667,7 +674,7 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         if (!::info.isInitialized) return
         deleteImageTextures()
         light.release()
-        GLES30.glDeleteBuffers(3, intArrayOf(developUbo, outputUbo, lightUbo), 0)
+        GLES30.glDeleteBuffers(4, intArrayOf(developUbo, outputUbo, lightUbo, lookUbo), 0)
         GLES30.glDeleteVertexArrays(1, intArrayOf(vao), 0)
         GLES30.glDeleteProgram(sceneProgram)
         GLES30.glDeleteProgram(developProgram)
@@ -873,13 +880,12 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
             return renderer
         }
 
-        /** std140 block of the develop stage: wb (vec4), cameraToWorking (mat4), exposure (vec4), baseTone (vec4). */
+        /** std140 block of the develop stage: wb (vec4), cameraToWorking (mat4), exposure (vec4). */
         internal fun developBlock(p: DevelopParams): ByteBuffer {
             val b = ByteBuffer.allocateDirect(DEVELOP_BLOCK_FLOATS * Float.SIZE_BYTES).order(ByteOrder.nativeOrder())
             b.putFloat(p.wbMultipliers[0]).putFloat(p.wbMultipliers[1]).putFloat(p.wbMultipliers[2]).putFloat(0f)
             putMat4(b, p.cameraToWorking)
             b.putFloat(p.exposureGain).putFloat(0f).putFloat(0f).putFloat(0f)
-            b.putFloat(p.toneKnee).putFloat(0f).putFloat(0f).putFloat(0f)
             b.flip()
             return b
         }
@@ -942,7 +948,7 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
             b.putFloat(0f).putFloat(0f).putFloat(0f).putFloat(1f)
         }
 
-        private const val DEVELOP_BLOCK_FLOATS = 28
+        private const val DEVELOP_BLOCK_FLOATS = 24
         private const val LIGHT_BLOCK_FLOATS = 16
         private const val OUTPUT_BLOCK_FLOATS = 32
     }

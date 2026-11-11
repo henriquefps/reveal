@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Reveal glyph, white and tintable: tint it at the use site (about screen, empty states). -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="96dp"
+    android:height="96dp"
+    android:viewportWidth="128"
+    android:viewportHeight="128">
+    <path
+        android:pathData="M14 64A50 50 0 1 0 114 64A50 50 0 1 0 14 64Z"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="10" />
+    <path
+        android:pathData="M64 28A36 36 0 0 0 64 100Z"
+        android:fillColor="#FFFFFF" />
+    <path
+        android:pathData="M64 28A36 36 0 0 1 64 100Z"
+        android:fillColor="#FFFFFF"
+        android:fillAlpha="0.45" />
+</vector>

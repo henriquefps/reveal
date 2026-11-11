@@ -53,11 +53,6 @@ android {
         }
     }
 
-    lint {
-        // TODO(icon worker): remove this line together with the launcher icon being added to the manifest.
-        disable += "MissingApplicationIcon"
-    }
-
     testOptions {
         unitTests.isIncludeAndroidResources = true
     }

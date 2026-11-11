@@ -1,0 +1,203 @@
+{
+  "$schema": "https://designer.hfps.dev/schema/designer-project.schema.json",
+  "format": "designer",
+  "schemaVersion": 1,
+  "id": "dmwbe8ueq5fmhc3y",
+  "name": "Reveal icon",
+  "createdAt": 1794357700082,
+  "updatedAt": 1794357700082,
+  "artboard": {
+    "width": 128,
+    "height": 128,
+    "background": {
+      "kind": "none"
+    }
+  },
+  "children": [
+    {
+      "id": "nmwbe8ueq4voy7nr",
+      "name": "Group",
+      "visible": true,
+      "locked": false,
+      "opacity": 1,
+      "transform": {
+        "x": 19.316364,
+        "y": 19.316364,
+        "rotation": 0,
+        "scaleX": 0.698182,
+        "scaleY": 0.698182
+      },
+      "type": "group",
+      "children": [
+        {
+          "id": "nmwbe8uep1t7a56v",
+          "name": "Ellipse",
+          "visible": true,
+          "locked": false,
+          "opacity": 1,
+          "transform": {
+            "x": 64,
+            "y": 64,
+            "rotation": 0,
+            "scaleX": 1,
+            "scaleY": 1
+          },
+          "type": "ellipse",
+          "rx": 50,
+          "ry": 50,
+          "fill": {
+            "kind": "none"
+          },
+          "stroke": {
+            "paint": {
+              "kind": "solid",
+              "color": "#000000"
+            },
+            "width": 10,
+            "cap": "butt",
+            "join": "miter",
+            "dash": []
+          }
+        },
+        {
+          "id": "nmwbe8ueq297xfye",
+          "name": "Path",
+          "visible": true,
+          "locked": false,
+          "opacity": 1,
+          "transform": {
+            "x": 0,
+            "y": 0,
+            "rotation": 0,
+            "scaleX": 1,
+            "scaleY": 1
+          },
+          "type": "path",
+          "subpaths": [
+            {
+              "closed": true,
+              "points": [
+                {
+                  "x": 64,
+                  "y": 28,
+                  "type": "corner",
+                  "out": {
+                    "x": 44.117749006091444,
+                    "y": 28
+                  }
+                },
+                {
+                  "x": 28,
+                  "y": 63.99999999999999,
+                  "type": "symmetric",
+                  "in": {
+                    "x": 28.000000000000007,
+                    "y": 44.11774900609143
+                  },
+                  "out": {
+                    "x": 28,
+                    "y": 83.88225099390856
+                  }
+                },
+                {
+                  "x": 64,
+                  "y": 100,
+                  "type": "corner",
+                  "in": {
+                    "x": 44.11774900609143,
+                    "y": 100
+                  }
+                }
+              ]
+            }
+          ],
+          "fill": {
+            "kind": "solid",
+            "color": "#000000"
+          },
+          "stroke": {
+            "paint": {
+              "kind": "none"
+            },
+            "width": 1,
+            "cap": "butt",
+            "join": "miter",
+            "dash": []
+          },
+          "fillRule": "nonzero"
+        },
+        {
+          "id": "nmwbe8ueq3z2frvw",
+          "name": "Path",
+          "visible": true,
+          "locked": false,
+          "opacity": 0.45,
+          "transform": {
+            "x": 0,
+            "y": 0,
+            "rotation": 0,
+            "scaleX": 1,
+            "scaleY": 1
+          },
+          "type": "path",
+          "subpaths": [
+            {
+              "closed": true,
+              "points": [
+                {
+                  "x": 64,
+                  "y": 28,
+                  "type": "corner",
+                  "out": {
+                    "x": 83.88225099390857,
+                    "y": 28
+                  }
+                },
+                {
+                  "x": 100,
+                  "y": 64,
+                  "type": "symmetric",
+                  "in": {
+                    "x": 100,
+                    "y": 44.11774900609144
+                  },
+                  "out": {
+                    "x": 100,
+                    "y": 83.88225099390857
+                  }
+                },
+                {
+                  "x": 64,
+                  "y": 100,
+                  "type": "corner",
+                  "in": {
+                    "x": 83.88225099390857,
+                    "y": 100
+                  }
+                }
+              ]
+            }
+          ],
+          "fill": {
+            "kind": "solid",
+            "color": "#000000"
+          },
+          "stroke": {
+            "paint": {
+              "kind": "none"
+            },
+            "width": 1,
+            "cap": "butt",
+            "join": "miter",
+            "dash": []
+          },
+          "fillRule": "nonzero"
+        }
+      ]
+    }
+  ],
+  "icon": {
+    "preset": "app-icon",
+    "shape": "auto"
+  }
+}

@@ -1,6 +1,7 @@
 # ADR 0002: Pipeline order, working space and GPU/CPU numerics
 
-Status: accepted (M0, W5). Date: 2026-11-10. Amended by ADR 0007 (M1 Light: slots 1, 5, 5b, 8; version 3).
+Status: accepted (M0, W5). Date: 2026-11-10. Amended by ADR 0007 (M1 Light: slots 1, 5, 5b, 8; version 3) and by
+M1/G (slot 13 geometry, version 5; section "Geometry (slot 13)").
 
 ## Fixed operator order
 
@@ -43,7 +44,9 @@ Implemented in M0 are marked **(M0)**; the rest are the reserved slots from `doc
 10. **Local adjustments / masks (later)**: after global colour so masks adjust the globally graded image.
 11. **Detail (later)**: noise reduction then sharpening; NR before sharpening, both before effects.
 12. **Effects (later)**: texture/clarity/dehaze, vignette, grain: grain last so it is not sharpened or denoised.
-13. **Geometry (later)**: crop/rotate/transform as a single resampling.
+13. **Geometry (M1/G)**: crop, straighten, quarter turns and flips as a single resampling, after every pixel operator
+    and before the output transform (see "Geometry (slot 13)"); perspective/Upright and lens geometry (slot 3) will
+    fold into the same mapping.
 14. **Output transform + dithering (M0)**: working space to sRGB or Display P3, OETF, 8-bit quantisation with
     dither. Always last: every operator works on linear light and the display encoding is a property of the output,
     not of the edit.
@@ -132,7 +135,8 @@ inputs, but version 1 has not shipped, so it stays 1 (no cache from an earlier p
 so its CRC is unchanged; RAW output changes. **Version 3** (M1, ADR 0007): highlight reconstruction replaces that
 clip, and the Light operators exist; a second golden CRC pins them. **Version 4** (M1, ADR 0008): the profiles
 replace the M0 Standard curve (RAW renders about 1.3 EV brighter, matching the camera), vibrance/saturation and the
-relative white balance of display-referred input exist; a third golden CRC pins them.
+relative white balance of display-referred input exist; a third golden CRC pins them. **Version 5** (M1/G): the
+geometry operator (slot 13); a recipe without geometry renders as before, a fourth golden CRC pins the operator.
 
 ## Determinism
 
@@ -143,6 +147,43 @@ export caches are keyed by the version, not compared across devices.
 Dither noise is a function of the output pixel position and a seed (lowbias32 integer hash, identical on CPU and
 GPU), one value per pixel shared by the three channels (no chroma noise): `q = floor(255 v + n)`. The on-screen
 pass dithers by screen position; an export dithers by image position with the same seed.
+
+## Geometry (slot 13)
+
+One resampling for crop + straighten + quarter turns + flips, the same maths everywhere:
+
+- **`GeometryMapping`** (`geometry/`, pure Kotlin, JVM-tested): output pixel <-> image pixel for a `Geometry` on an
+  image of W x H. `o = D * R(angle) * (p - c) + outputSize / 2`, where `c` is the crop centre (the recipe's normalised
+  crop rounded to whole pixels of the image being rendered, at least one pixel), `R` turns clockwise as seen about it,
+  and `D = F * Q^rotate` orients the result (quarter turns, then flips of the final picture). The output is the crop's
+  size, swapped for odd quarter turns. Straightening is in the image's own orientation, so a level horizon stays level
+  when the picture is turned or flipped; the crop mode converts the dial and the horizon line to "as seen" (a mirrored
+  picture turns the other way in recipe terms). The CPU operator, the GPU output pass, the export's tiles
+  (`sourceRegion` gives the image region a tile needs, filter margin included) and, later, masks and heals use it.
+- **Filter**: without straightening every output pixel centre lands on an image pixel centre, so the operator copies
+  pixels (crops, turns and flips never blur). With straightening: **Catmull-Rom** (Keys a = -0.5) in linear light, 4x4
+  explicit fetches clamped to the edge, chosen over Lanczos-3 (36 taps) for cost on the 120 Hz phone with no visible
+  difference at these angles; its small overshoot stays in float and is clamped by the output transform. Points outside
+  the image (empty corners when the constraint is off) are black.
+- **GPU**: folded into the output pass (no extra full-resolution pass, no extra texture): the view maps a screen pixel
+  to an output point, the mapping (2 x vec4 in the `Output` block) to the working texture. Sampling, decided on the
+  CPU (`OutputSampling`): 1:1 unstraightened = `texelFetch` (exact), straightened at 1:1 and magnified = Catmull-Rom at
+  LOD 0 with the output point snapped to its pixel centre at 1:1 and from 200 % (so pixel peeping shows the export's
+  pixels), minified = `textureLod` at the explicit LOD (on screen only). Readback/export render the output size.
+- **Editor**: the zoom frames the operator's output; the histogram measures it; "hold to compare" keeps the geometry so
+  the photo does not jump. The crop mode shows the **editing plane** (`GeometryMapping.editing`: the whole image
+  straightened about the crop centre and oriented, outside the image = surround) with the crop frame as an axis-aligned
+  box in it; the frame's content equals the operator's output (up to the edge snapping). `CropEditing` holds the
+  gesture maths (handles with and without a ratio, pan, pinch, straighten with auto-constrain, horizon line, aspect
+  presets, quarter turns, flips, swap) and keeps frames valid by searching along the gesture for the last valid frame.
+- **Constrain to image** (`geometry.constrain`, default on): the straightened crop must lie inside the image;
+  straightening shrinks the frame about its centre (from the frame at the start of the gesture, so turning back regrows
+  it).
+
+Parity (emulator, host GPU, `GpuParityTest.geometryMatchesCpuReferenceIn8Bit`, dither off, 4 images x 7 geometry
+recipes incl. 7.3 deg and -31.7 deg straightening, quarter turns, flips, empty corners): **max 1 level, mean 0.069**;
+unstraightened crops/turns/flips within 1 level everywhere (the stage's own fp16 rounding). The full 8-bit parity set
+with the geometry recipes added stays within the existing per-image tolerances.
 
 ## Proxies and tiles (the seam)
 

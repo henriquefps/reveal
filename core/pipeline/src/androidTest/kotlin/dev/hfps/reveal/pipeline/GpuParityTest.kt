@@ -206,6 +206,37 @@ class GpuParityTest {
     }
 
     @Test
+    fun geometryMatchesCpuReferenceIn8Bit() = runBlocking {
+        // Slot 13 alone: same size, exact copies without straightening, Catmull-Rom within the 8-bit tolerance.
+        var worst = 0
+        var sum = 0L
+        var count = 0L
+        for (name in listOf("checker", "scene", "srgbChart", "stepEdge")) {
+            val image = images.getValue(name)
+            renderer.setInput(image)
+            for (recipe in GEOMETRY) {
+                val settings = OutputSettings(dither = false)
+                val cpu = CpuDevelop.render(image, recipe, settings)
+                val gpu = renderer.renderOutput(recipe, settings)
+                assertThat(gpu.size).isEqualTo(cpu.size)
+                var max = 0
+                for (i in cpu.indices) {
+                    val diff = abs((gpu[i].toInt() and 0xff) - (cpu[i].toInt() and 0xff))
+                    max = maxOf(max, diff)
+                    sum += diff
+                    count++
+                }
+                Log.i(TAG, "geometry $name ${recipe.geometry}: max diff $max levels")
+                worst = maxOf(worst, max)
+                if (recipe.geometry.angle == 0f) assertThat(max).isAtMost(1)
+            }
+        }
+        Log.i(TAG, "geometry: max diff $worst levels, mean diff ${sum.toDouble() / count}")
+        assertThat(worst).isAtMost(OUTPUT_MAX_LEVELS)
+        assertThat(sum.toDouble() / count).isAtMost(OUTPUT_MEAN_LEVELS)
+    }
+
+    @Test
     fun displayReferredImageRoundTripsOnTheGpu(): Unit = runBlocking {
         val (input, source) = SyntheticImages.srgb8Chart()
         renderer.setInput(input)

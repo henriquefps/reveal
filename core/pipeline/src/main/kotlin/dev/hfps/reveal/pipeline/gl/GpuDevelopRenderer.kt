@@ -356,7 +356,11 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         } else {
             GeometryMapping.of(geometry, image.width, image.height)
         }
-        if (!req.geometryEditing) shownMapping = mapping
+        if (!req.geometryEditing && mapping != shownMapping) {
+            // The histogram is of the cropped picture: a new crop/turn measures it again.
+            shownMapping = mapping
+            histogramDirty = true
+        }
         val panes = CompareLayout.panes(
             compare,
             frame,

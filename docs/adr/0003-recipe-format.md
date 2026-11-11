@@ -65,6 +65,7 @@ the value that means no change.
 | `geometry.rotate` | `rotate` | quarter turns clockwise | 0..3 | 0 | |
 | `geometry.flipH` `flipV` | | boolean | | false | |
 | `geometry.aspect` | `Aspect(preset, w, h, locked)` | `free` `original` `1_1` `4_5` `5_4` `3_2` `2_3` `16_9` `9_16` `custom`; `w:h` used by `custom` | w,h > 0 | `free`, 1:1, unlocked | |
+| `geometry.constrain` | `constrain` | boolean: straightening and the crop handles keep the crop inside the image (an editing option stored with the edit, like `aspect`; no pixel change by itself) | | `true` | |
 
 Decisions:
 
@@ -82,7 +83,9 @@ Decisions:
   `angle`, `rotate` and the flips not). The editor shows the full image while cropping and the crop follows the
   transform. `aspect` (and its lock) is stored in the recipe so undo and copy restore the frame constraint.
   **Masks and heals stay in image coordinates** (the oriented, un-cropped, un-rotated space), so they follow every
-  geometry change without being rewritten.
+  geometry change without being rewritten. The operator's mapping (crop centre, clockwise-as-seen straightening about it,
+  quarter turns then flips of the final picture) is in ADR 0002, "Geometry (slot 13)". `constrain` (M1/G, additive,
+  default `true`) is not in the history diff.
 - **`RecipeRanges`** (`recipe/RecipeRanges.kt`) holds one `ControlRange` per scalar control (id, min, max, default,
   step, fine step, bipolar, neutral, value kind) and `ValueFormat` (`+0.70`, `−12` with U+2212, `5600 K`, `100 %`,
   `1.5°`; locale-independent). The temperature descriptor's default (5500 K) is only where the slider starts when

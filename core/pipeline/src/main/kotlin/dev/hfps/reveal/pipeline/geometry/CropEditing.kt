@@ -239,7 +239,8 @@ object CropEditing {
      */
     fun straighten(start: Geometry, angle: Float, width: Int, height: Int): Geometry {
         val range = RecipeRanges.angle
-        val g = start.copy(angle = range.snap(angle, range.fineStep))
+        // One decimal exactly (0.1 steps counted from -45 in float would store 9.100002).
+        val g = start.copy(angle = range.clamp(Math.round(angle * TENTHS) / TENTHS))
         if (!g.constrain) return g
         val box = shrinkToFit(g, frame(start, width, height), width, height)
         return withFrame(g, box, width, height)
@@ -391,4 +392,5 @@ object CropEditing {
     )
 
     private const val QUARTERS = 4
+    private const val TENTHS = 10f
 }

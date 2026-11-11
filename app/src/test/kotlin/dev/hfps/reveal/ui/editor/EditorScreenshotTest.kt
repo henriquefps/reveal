@@ -39,7 +39,9 @@ import dev.hfps.reveal.feature.editor.edit.AsShot
 import dev.hfps.reveal.feature.editor.layout.PanelSnap
 import dev.hfps.reveal.feature.editor.panels.toSliderSpec
 import dev.hfps.reveal.feature.editor.tools.ToolId
+import dev.hfps.reveal.pipeline.PipelineInput
 import dev.hfps.reveal.pipeline.cpu.CpuDevelop
+import dev.hfps.reveal.pipeline.cpu.ProfileLooks
 import dev.hfps.reveal.pipeline.gl.ClippingWarnings
 import dev.hfps.reveal.pipeline.gl.CompareMode
 import dev.hfps.reveal.pipeline.gl.Histogram
@@ -227,7 +229,21 @@ private object Photos {
         colour = Colour(WhiteBalance(temperatureK = 5600f, tint = 8f, mode = WbMode.CUSTOM), vibrance = 20f),
     )
 
-    private val input = SyntheticImages.scene(WIDTH, HEIGHT)
+    // The synthetic scene's values are display-like (grey near 0.18); a camera exposes a RAW about 1.3 EV lower
+    // (grey near 0.06), which is what Standard's baseline gain expects (docs/adr/0008). Exposed like a camera so the
+    // screenshots show a normal photo instead of a blown-out one.
+    private val input = SyntheticImages.scene(WIDTH, HEIGHT).let { scene ->
+        val k = (1.0 / ProfileLooks.STANDARD_FILMIC.gain).toFloat()
+        PipelineInput(
+            scene.kind,
+            scene.width,
+            scene.height,
+            FloatArray(scene.linearRgb.size) { scene.linearRgb[it] * k },
+            scene.cameraToXyz,
+            scene.asShotMultipliers,
+            scene.saturation,
+        )
+    }
     private val editedRgba = CpuDevelop.render(input, recipe)
 
     val edited: ImageBitmap = bitmap(editedRgba)

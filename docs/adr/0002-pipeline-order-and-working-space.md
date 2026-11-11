@@ -227,9 +227,30 @@ Time to the first developed frame: ADR 0004, "Measurements of the real open flow
 
 ## Measurement of the M1 editor (M1/E, emulator, to be re-measured on the phone)
 
-`EditorMeasurementsTest` on the public ZV-E10 ARW after the Light operators (PR #9), emulator API 36 arm64 with host
-GPU, another worker's emulator running alongside. The editor's live histogram (async PBO readback, 10 Hz cap) does
-not change the drag cost: with the histogram on, render + swap p50 40-51 ms (p95 109-148 ms), 52-64 frames in 4 s,
-5-7 histograms per drag at 1.3-23 ms GL-thread time each; with `-e histogram false`, p50 44-62 ms (p95 148-179 ms),
-45-57 frames. The frame cost is the Light group's passes on the emulator's translated GPU (M0 stage 1 alone was about
-2 ms); the phone numbers decide whether they need a proxy-resolution budget.
+`EditorMeasurementsTest` on the public ZV-E10 ARW (2400x1600 proxy, 1080x2400 screen), 4 s real-time drag, with
+`-e light true` (contrast +25, highlights -50, shadows +40, whites +15, blacks -10, so the local tone path runs) and
+`-e profile true` (`GpuDevelopRenderer.profilePasses`: `glFinish` after every section; mean ms per frame).
+
+**The emulator's GPU matters.** `scripts/emulator.sh` defaults to `-gpu swiftshader_indirect` (a CPU rasteriser):
+there every pass is 15-50 ms (develop 45, mipmaps 24, scene 20, guided filter 16, output 15) and a drag shows about
+50 ms per frame. With `EMULATOR_GPU=host` (Apple M4 Pro through the translator), the setup of the M0 numbers and of
+`PipelineBenchmark`, the same drag runs at the display rate. Measure on the host GPU; `GpuParityTest` also passes
+there while one SwiftShader run went just over tolerance on `rawNoise`.
+
+| Host GPU, warm runs | exposure drag | highlights drag (scene + guide cached) |
+| --- | --- | --- |
+| params (CPU) | 0.13 | 0.14-0.23 |
+| scene pass | 0.80 | not run |
+| guided filter | 1.42-1.45 | not run |
+| develop pass | 1.35-1.40 | 1.52-1.54 |
+| mipmaps | 0.62-0.64 | 0.56-0.57 |
+| output pass | 0.84-0.91 | 0.82-1.04 |
+| GPU work per frame | about 5.1 ms | about 3.1 ms (was about 4.8 before the cache) |
+| frames in 4 s, interval p50 / p95 | 179-191, 16.6 / 20-23 ms | 191-221, 16.6-17.1 / 21-40 ms |
+| histograms (async PBO, 10 Hz cap) | 10-11, GL thread 1.1-1.8 ms | 15-17, GL thread 1.1-1.7 ms (one 7.4) |
+
+"Swap" (13 ms with `glFinish`) is the wait for the 60 Hz vsync, not work. The max interval (about 0.8 s on the
+exposure drag) is idle time: the swipe reaches the +5 EV clamp and nothing changes until it turns back. UI thread
+(gfxinfo over the drag, emulator, indicative): p50 18-25 ms, 7-12 slow-UI-thread frames per 5 s window; slider rows
+now memoise their callbacks so a drag recomposes only the dragged row's value. The phone (Adreno 750, 120 Hz)
+decides the remaining budget.

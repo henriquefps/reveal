@@ -25,6 +25,7 @@ object FileNames {
      * [name] if it [fits], else the longest `head…tail.ext` that fits (`DSC02…008.ARW`): the extension is always
      * kept, the stem loses characters from its middle. Falls back to `…ext` (and finally `…`) when nothing else fits.
      */
+    @Suppress("ReturnCount")
     fun ellipsize(name: String, fits: (String) -> Boolean): String {
         if (fits(name)) return name
         val dot = name.lastIndexOf('.')

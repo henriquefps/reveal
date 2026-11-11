@@ -64,7 +64,7 @@ class EditorMeasurementsTest {
         }
     }
 
-    @Suppress("LongMethod")
+    @Suppress("LongMethod", "NestedBlockDepth")
     private fun measure(file: File, label: String, private: Boolean) {
         val name = if (private) "photo.ARW" else file.name
         val uri = TestPhotos.insert(name, "image/x-sony-arw", file)

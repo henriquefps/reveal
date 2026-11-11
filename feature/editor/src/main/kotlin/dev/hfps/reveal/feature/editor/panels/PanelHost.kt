@@ -108,20 +108,29 @@ fun ControlSlider(
     val range = RecipeRanges[id]
     val spec = remember(range) { range.toSliderSpec() }
     val edit = host.state.edit
-    FocusRow(host.focus, id) {
+    val value = RecipeControls.get(edit.recipe, id, edit.asShot)
+    val ready = host.state.ready
+    // Stable callbacks (keyed by what they capture) so a drag of one slider does not recompose the others.
+    val actions = host.actions
+    val focus = host.focus
+    val format = remember(range) { range::format }
+    val onChange = remember(actions, id) { { v: Float -> actions.onControl(id, v) } }
+    val onReset = remember(actions, id) { { actions.onResetControl(id) } }
+    val onDrag = remember(focus, id) { { dragging: Boolean -> focus.dragging = if (dragging) id else null } }
+    FocusRow(focus, id) {
         RevealSlider(
             label = stringResource(label),
-            value = RecipeControls.get(edit.recipe, id, edit.asShot),
+            value = value,
             spec = spec,
-            format = range::format,
-            onValueChange = { host.actions.onControl(id, it) },
-            onReset = { host.actions.onResetControl(id) },
+            format = format,
+            onValueChange = onChange,
+            onReset = onReset,
             modifier = modifier,
-            enabled = enabled && host.state.ready,
+            enabled = enabled && ready,
             trackBrush = trackBrush,
             testTag = EditorTags.control(id),
-            onDragStateChange = { host.focus.dragging = if (it) id else null },
-            onValueChangeFinished = host.actions.onCommit,
+            onDragStateChange = onDrag,
+            onValueChangeFinished = actions.onCommit,
         )
     }
 }

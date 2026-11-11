@@ -84,6 +84,7 @@ object LibraryTags {
     const val GRID = "library-grid"
     const val SOURCES = "library-sources"
     const val ADD_FOLDER = "library-add-folder"
+    const val EXPORT = "library-export"
     const val MENU = "library-menu"
     const val SELECTION_BAR = "library-selection"
     const val EMPTY = "library-empty"

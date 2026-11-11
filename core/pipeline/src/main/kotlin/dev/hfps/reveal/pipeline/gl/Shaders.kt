@@ -45,6 +45,9 @@ precision highp sampler2D;
     val SCENE_FRAG: String = HEADER + DEVELOP_BLOCK + LightShaders.COMMON + """
 uniform sampler2D uSource;
 uniform sampler2D uChroma;
+// Tiled export (TiledRenderer): image position of this target's pixel (0, 0); 0 for whole-image renders. The tile
+// textures are read at the local position, the low-res grids at the image position.
+uniform ivec2 uOrigin;
 out vec4 outColor;
 """ + LightShaders.RECONSTRUCT + """
 void main() {
@@ -52,7 +55,7 @@ void main() {
     vec3 c = texelFetch(uSource, p, 0).rgb;
     c = c * wbMultiplier.rgb;
     if (grid.w != 0.0) {
-        c = reconstructHighlights(c, p);
+        c = reconstructHighlights(c, p + uOrigin);
     }
     c = mat3(cameraToWorking) * c;
     c = c * exposure.x;
@@ -69,6 +72,7 @@ void main() {
 uniform sampler2D uScene;
 uniform sampler2D uCoef;
 uniform sampler2D uMoments;
+uniform ivec2 uOrigin;   // see SCENE_FRAG
 out vec4 outColor;
 
 """ + ColourShaders.BLOCK + ColourShaders.FUNCTIONS + LightShaders.TONE + """
@@ -76,7 +80,7 @@ void main() {
     ivec2 p = ivec2(gl_FragCoord.xy);
     vec3 c = texelFetch(uScene, p, 0).rgb;
     if (tone.z != 0.0) {
-        c = localTone(c, p);
+        c = localTone(c, p + uOrigin);
     }
     c = profileLook(c);
     if (tone.w != 0.0) {
@@ -84,6 +88,32 @@ void main() {
     }
     c = vibranceSaturation(c);
     outColor = vec4(c, 1.0);
+}
+"""
+
+    /**
+     * Output maths shared by the on-screen output pass and the export output pass (`ExportShaders`): the dither hash
+     * (`Dither` on the CPU) and the sRGB OETF (`OutputTransformOp`).
+     */
+    const val OUTPUT_FUNCTIONS: String = """
+uint hashLowBias32(uint v) {
+    v ^= v >> 16;
+    v *= 0x7feb352du;
+    v ^= v >> 15;
+    v *= 0x846ca68bu;
+    v ^= v >> 16;
+    return v;
+}
+
+float ditherNoise(ivec2 p, uint seed) {
+    uint h = hashLowBias32(uint(p.x) + hashLowBias32(uint(p.y) + seed * 0x9E3779B9u));
+    return float(h >> 8) * (1.0 / 16777216.0);
+}
+
+vec3 srgbOetf(vec3 v) {
+    vec3 low = 12.92 * v;
+    vec3 high = 1.055 * pow(max(v, vec3(0.0031308)), vec3(1.0 / 2.4)) - 0.055;
+    return mix(high, low, lessThanEqual(v, vec3(0.0031308)));
 }
 """
 
@@ -114,26 +144,7 @@ layout(std140) uniform Output {
 uniform sampler2D uStage;
 out vec4 outColor;
 
-uint hashLowBias32(uint v) {
-    v ^= v >> 16;
-    v *= 0x7feb352du;
-    v ^= v >> 15;
-    v *= 0x846ca68bu;
-    v ^= v >> 16;
-    return v;
-}
-
-float ditherNoise(ivec2 p, uint seed) {
-    uint h = hashLowBias32(uint(p.x) + hashLowBias32(uint(p.y) + seed * 0x9E3779B9u));
-    return float(h >> 8) * (1.0 / 16777216.0);
-}
-
-vec3 srgbOetf(vec3 v) {
-    vec3 low = 12.92 * v;
-    vec3 high = 1.055 * pow(max(v, vec3(0.0031308)), vec3(1.0 / 2.4)) - 0.055;
-    return mix(high, low, lessThanEqual(v, vec3(0.0031308)));
-}
-
+""" + OUTPUT_FUNCTIONS + """
 // GeometryOp.weights: Catmull-Rom (a = -0.5) for the fraction t.
 vec4 catmullRomWeights(float t) {
     return vec4(

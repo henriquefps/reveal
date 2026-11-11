@@ -159,4 +159,5 @@
         <item quantity="one">Edits reset on %1$d photo</item>
         <item quantity="other">Edits reset on %1$d photos</item>
     </plurals>
+    <string name="library_menu_settings">Settings</string>
 </resources>

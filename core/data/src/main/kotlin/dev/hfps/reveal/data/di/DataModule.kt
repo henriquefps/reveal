@@ -12,6 +12,7 @@ import dev.hfps.reveal.data.db.MetaDao
 import dev.hfps.reveal.data.db.RevealDatabase
 import dev.hfps.reveal.data.edit.EditRepository
 import dev.hfps.reveal.data.edit.HistoryWriter
+import dev.hfps.reveal.data.export.ExportPreferences
 import dev.hfps.reveal.data.handoff.HandoffRepository
 import dev.hfps.reveal.data.handoff.HandoffTree
 import dev.hfps.reveal.data.index.LibraryIndexer
@@ -95,6 +96,10 @@ object DataModule {
         sidecars: SidecarSync,
         @DataScope scope: CoroutineScope,
     ): LibraryRepository = LibraryRepository(context.contentResolver, database, volumes, trees, sidecars, scope)
+
+    @Provides
+    @Singleton
+    fun provideExportPreferences(@ApplicationContext context: Context): ExportPreferences = ExportPreferences(context)
 
     @Provides
     @Singleton

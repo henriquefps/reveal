@@ -81,4 +81,5 @@ dependencies {
     androidTestImplementation(libs.androidx.test.espresso.core)
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
     androidTestImplementation(libs.truth)
+    androidTestImplementation(libs.androidx.work.runtime.ktx)
 }

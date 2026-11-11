@@ -194,7 +194,8 @@ is an input texture plus an offset/overlap, stage 1 renders it into a tile-sized
 tile's view transform. Local operators will be extra passes between stage 1 and the output pass reading the
 working-space texture; stage 1 is already isolated for that. Since M1 (ADR 0007) stage 1 is two full-res stages
 (scene, develop) with the Light group's low-res passes between them; they need no tile overlap, only cell-aligned
-tiles and a grid pre-pass.
+tiles and a grid pre-pass. Export implements this seam (ADR 0009, `TiledRenderer`): a `uOrigin` uniform, image-wide
+grid pre-passes, Lanczos overlap per output tile.
 
 ### Output pass sampling (never from derivatives)
 

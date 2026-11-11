@@ -182,6 +182,7 @@ uniform sampler2D uSource;
 uniform vec4 uMul;      // rgb = white-balance multipliers
 uniform vec4 uClip;     // rgb = balanced clip levels
 uniform ivec4 uGrid;    // x = cell, y = image width, z = image height
+uniform ivec2 uOrigin;  // image position of the source texture's texel (0, 0): a tile in a tiled export, else 0
 out vec4 outColor;
 
 void main() {
@@ -190,7 +191,7 @@ void main() {
     int x1 = min((g.x + 1) * cell, uGrid.y);
     vec4 acc = vec4(0.0);
     for (int x = g.x * cell; x < x1; x++) {
-        vec3 b = texelFetch(uSource, ivec2(x, g.y), 0).rgb * uMul.rgb;
+        vec3 b = texelFetch(uSource, ivec2(x, g.y) - uOrigin, 0).rgb * uMul.rgb;
         float tr = clipAmount(b.r, uClip.r);
         float tg = clipAmount(b.g, uClip.g);
         float tb = clipAmount(b.b, uClip.b);
@@ -275,6 +276,7 @@ void main() {
     val GUIDE_ROWS_FRAG: String = HEADER + """
 uniform sampler2D uScene;
 uniform ivec4 uGrid;    // x = cell, y = image width, z = image height
+uniform ivec2 uOrigin;  // as in RECON_ROWS_FRAG
 out vec4 outColor;
 
 float luma(vec3 c) {
@@ -288,7 +290,7 @@ void main() {
     float s = 0.0;
     float s2 = 0.0;
     for (int x = g.x * cell; x < x1; x++) {
-        float l = logLuminance(texelFetch(uScene, ivec2(x, g.y), 0).rgb);
+        float l = logLuminance(texelFetch(uScene, ivec2(x, g.y) - uOrigin, 0).rgb);
         s += l;
         s2 += l * l;
     }

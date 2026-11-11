@@ -144,6 +144,13 @@ class LibraryViewModel @Inject constructor(
 
     // ------------------------------------------------------------------ copy / paste edits
 
+    /** Versions of the selected photos, in grid order, for the export sheet. */
+    suspend fun selectedVersions(): List<Long> {
+        val selected = _state.value.selected
+        val ordered = _state.value.photoIds.filter { it in selected }
+        return edits.versionsOf(ordered)
+    }
+
     /** Copies the whole edit of the one selected photo (the paste chooser picks the groups). */
     fun copyEdits() {
         val photoId = _state.value.selected.singleOrNull() ?: return

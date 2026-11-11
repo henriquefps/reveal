@@ -10,6 +10,8 @@ import dev.hfps.reveal.feature.editor.editorScreen
 import dev.hfps.reveal.feature.editor.navigateToEditor
 import dev.hfps.reveal.feature.library.LibraryRoute
 import dev.hfps.reveal.feature.library.libraryScreens
+import dev.hfps.reveal.feature.settings.SettingsRoute
+import dev.hfps.reveal.feature.settings.settingsScreen
 import dev.hfps.reveal.ui.about.AboutScreen
 import dev.hfps.reveal.ui.gallery.DesignSystemGallery
 
@@ -29,6 +31,7 @@ fun RevealNavHost(
             onOpenFile = { uri -> navController.navigateToEditor(uri.toString()) },
             onGallery = { navController.navigate(GalleryRoute) },
             onAbout = { navController.navigate(AboutRoute) },
+            onSettings = { navController.navigate(SettingsRoute) },
         )
         composable<GalleryRoute> {
             DesignSystemGallery(
@@ -38,6 +41,7 @@ fun RevealNavHost(
             )
         }
         composable<AboutRoute> { AboutScreen(onBack = { navController.popBackStack() }) }
+        settingsScreen(onBack = { navController.popBackStack() })
         editorScreen(onBack = onEditorBack)
     }
 }

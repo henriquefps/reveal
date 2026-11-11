@@ -35,8 +35,10 @@ import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.onPlaced
@@ -75,6 +77,8 @@ import dev.hfps.reveal.feature.editor.tools.EditorTools
 import dev.hfps.reveal.feature.editor.tools.ModeHost
 import dev.hfps.reveal.feature.editor.tools.ToolBehaviour
 import dev.hfps.reveal.feature.editor.tools.ToolId
+import dev.hfps.reveal.feature.export.ui.ExportRequest
+import dev.hfps.reveal.feature.export.ui.ExportSheetHost
 import dev.hfps.reveal.pipeline.geometry.GeometryMapping
 import dev.hfps.reveal.pipeline.gl.CompareMode
 import kotlinx.coroutines.launch
@@ -85,6 +89,7 @@ fun EditorScreen(onBack: () -> Unit, modifier: Modifier = Modifier, viewModel: E
     val state by viewModel.state.collectAsStateWithLifecycle()
     val context = LocalContext.current
     BackHandler(onBack = onBack)
+    var exportRequest by remember { mutableStateOf<ExportRequest?>(null) }
     val actions = remember(viewModel, onBack, context) {
         EditorActions(
             onBack = onBack,
@@ -120,10 +125,12 @@ fun EditorScreen(onBack: () -> Unit, modifier: Modifier = Modifier, viewModel: E
             onCropMode = viewModel::setCropMode,
             onCropDone = viewModel::cropDone,
             onCropCancel = viewModel::cropCancel,
+            onExport = { exportRequest = viewModel.exportRequest() },
         )
     }
     EditorTheme {
         EditorContent(state = state, actions = actions, modifier = modifier)
+        ExportSheetHost(request = exportRequest, onDismiss = { exportRequest = null })
     }
 }
 

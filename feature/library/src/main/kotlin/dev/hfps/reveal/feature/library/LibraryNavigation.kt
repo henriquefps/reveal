@@ -11,7 +11,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.ImageBitmap
@@ -26,9 +28,12 @@ import androidx.navigation.NavGraphBuilder
 import androidx.navigation.compose.composable
 import dev.hfps.reveal.data.db.PhotoRow
 import dev.hfps.reveal.data.thumb.ThumbnailRepository
+import dev.hfps.reveal.feature.export.ui.ExportRequest
+import dev.hfps.reveal.feature.export.ui.ExportSheetHost
 import dev.hfps.reveal.feature.library.LibraryViewModel.Companion.encode
 import dev.hfps.reveal.feature.library.viewer.ViewerScreen
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
 
 /**
@@ -61,6 +66,7 @@ fun NavGraphBuilder.libraryScreens(
     onOpenFile: (Uri) -> Unit,
     onGallery: () -> Unit,
     onAbout: () -> Unit,
+    onSettings: () -> Unit = {},
 ) {
     composable<LibraryRoute> {
         LibraryScreen(
@@ -76,6 +82,7 @@ fun NavGraphBuilder.libraryScreens(
             onOpenFile = onOpenFile,
             onGallery = onGallery,
             onAbout = onAbout,
+            onSettings = onSettings,
         )
     }
     composable<ViewerRoute> {
@@ -92,6 +99,7 @@ fun LibraryScreen(
     onGallery: () -> Unit,
     onAbout: () -> Unit,
     modifier: Modifier = Modifier,
+    onSettings: () -> Unit = {},
     viewModel: LibraryViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -104,6 +112,8 @@ fun LibraryScreen(
     val snackbar = remember { SnackbarHostState() }
     LibraryMessages(viewModel.events, snackbar)
     val thumbnails = remember(viewModel) { RepositoryThumbnails(viewModel.thumbnails) }
+    var exportRequest by remember { mutableStateOf<ExportRequest?>(null) }
+    val scope = rememberCoroutineScope()
     val actions = remember(viewModel) {
         LibraryActions(
             onSelect = viewModel::select,
@@ -124,10 +134,18 @@ fun LibraryScreen(
             onPasteConfirm = viewModel::confirmPaste,
             onPasteDismiss = viewModel::dismissPaste,
             onResetEdits = viewModel::resetEdits,
+            onExport = {
+                scope.launch {
+                    val versions = viewModel.selectedVersions()
+                    if (versions.isNotEmpty()) exportRequest = ExportRequest.Versions(versions)
+                }
+            },
+            onSettings = onSettings,
             onGallery = onGallery,
             onAbout = onAbout,
         )
     }
+    ExportSheetHost(request = exportRequest, onDismiss = { exportRequest = null })
     BackHandler(enabled = state.selecting) { viewModel.setSelected(emptySet()) }
     BackHandler(enabled = !state.selecting && state.searchOpen) { viewModel.setSearchOpen(false) }
     BoxWithConstraints(modifier) {

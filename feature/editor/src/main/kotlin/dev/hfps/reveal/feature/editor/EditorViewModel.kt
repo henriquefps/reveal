@@ -24,6 +24,7 @@ import dev.hfps.reveal.feature.editor.open.OpenError
 import dev.hfps.reveal.feature.editor.open.OpenEvent
 import dev.hfps.reveal.feature.editor.open.OpenException
 import dev.hfps.reveal.feature.editor.open.PhotoOpener
+import dev.hfps.reveal.feature.export.ui.ExportRequest
 import dev.hfps.reveal.pipeline.PipelineInput
 import dev.hfps.reveal.pipeline.cpu.WhiteBalanceModel
 import dev.hfps.reveal.pipeline.cpu.WhiteBalancePicker
@@ -326,6 +327,13 @@ class EditorViewModel @Inject constructor(
     fun setLook(look: BaseLook) = editAndCommit { RecipeControls.withLook(it, look) }
 
     fun setWbMode(mode: WbMode) = editAndCommit { RecipeControls.withWbMode(it, mode, _state.value.edit.autoWb) }
+
+    /** What the export sheet exports: this photo with the recipe on screen; null until the photo is open. */
+    fun exportRequest(): ExportRequest? {
+        val current = _state.value
+        if (!current.ready) return null
+        return ExportRequest.Current(route.versionId, route.uri, current.fileName, current.edit.recipe)
+    }
 
     // ------------------------------------------------------------------ view options
 

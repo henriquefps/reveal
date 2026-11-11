@@ -107,23 +107,26 @@ fun EditorTopBar(
         )
         CompareButton(state, actions)
         MoreMenu(state, actions, onHistory)
-        // TODO(export worker): enable Export (opens the export sheet).
         when {
             compact -> RevealIconButton(
                 icon = PhosphorRegular.Export,
                 contentDescription = stringResource(R.string.editor_export),
                 onClick = actions.onExport,
-                enabled = false,
+                enabled = state.ready,
                 modifier = Modifier.testTag(EditorTags.EXPORT),
             )
 
             // Phone portrait: an icon-sized primary pill leaves the file name the room.
-            narrow -> ExportPill(onClick = actions.onExport, enabled = false)
+            narrow -> ExportPill(
+                onClick = actions.onExport,
+                enabled = state.ready,
+                modifier = Modifier.testTag(EditorTags.EXPORT),
+            )
 
             else -> PrimaryButton(
                 text = stringResource(R.string.editor_export),
                 onClick = actions.onExport,
-                enabled = false,
+                enabled = state.ready,
                 modifier = Modifier
                     .padding(start = 4.dp, end = 4.dp)
                     .testTag(EditorTags.EXPORT),

@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <application>
+        <!-- Debug builds only: the M0 pipeline canvas with its debug sliders. Not part of release builds. -->
+        <activity
+            android:name=".debug.PipelineDebugActivity"
+            android:exported="true"
+            android:label="@string/debug_pipeline_label"
+            android:theme="@style/Theme.Reveal" />
+    </application>
+
+</manifest>

@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Rótulos do histórico; %1$s é o valor com sinal, por exemplo "+0.70" ou "5600 K" (RecipeDiff). -->
+    <string name="history_exposure">Exposição %1$s</string>
+    <string name="history_temperature">Temperatura %1$s</string>
+    <string name="history_tint">Matiz %1$s</string>
+    <string name="history_base_look">Perfil %1$s</string>
+    <!-- Os mesmos rótulos quando o campo volta ao ajuste original da câmera. -->
+    <string name="history_temperature_as_shot">Temperatura original</string>
+    <string name="history_tint_as_shot">Matiz original</string>
+</resources>

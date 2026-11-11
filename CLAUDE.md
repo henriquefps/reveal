@@ -78,11 +78,29 @@ own thread), `synthetic/` (generated test images). `PipelineInput` is the pipeli
 6. If any pixel output changes: bump `PIPELINE_VERSION` and the golden CRC in `CpuDevelopTest`.
 
 Stages (ADR 0007): `SCENE_FRAG` (WB, highlight reconstruction, matrix, exposure) -> scene texture -> Light low-res passes
-(`gl/LightPasses.kt`, on the `LowResGrid`, RGBA32F, skipped when neutral) -> `DEVELOP_FRAG` (highlights/shadows, base
-look, contrast/whites/blacks) -> working texture -> output. A neighbourhood operator gathers at most one grid cell at full
+(`gl/LightPasses.kt`, on the `LowResGrid`, RGBA32F, skipped when neutral) -> `DEVELOP_FRAG` (highlights/shadows,
+profile, contrast/whites/blacks, vibrance/saturation) -> working texture -> output. A neighbourhood operator gathers at most one grid cell at full
 res and does the rest on the grid (no tile overlap); upsample with explicit fp32 weights, never hardware bilinear.
 
-Parity and benchmark (emulator or phone, GLES 3.0+ with `EXT_color_buffer_float`):
+Colour (ADR 0008): profiles in `cpu/ProfileLooks.kt` (one 16-knot `ToneCurve` per look, `Filmic` for designed looks),
+Camera JPEG match constants in `cpu/CameraMatchZvE10.kt`, vibrance/saturation and `HueTreatment` in
+`cpu/ColourOperators.kt` (OkLab, `cpu/OkLab.kt`), GLSL in `gl/ColourShaders.kt` (own `Look` block, binding 3). White
+balance API for the editor: `WhiteBalanceModel.preset/presetCct/neutralFromSample/asShot`, `AutoWhiteBalance.analyse`
+(keep the small `WbAnalysis`, not the proxy) then `.whiteBalance`. Profiles apply to scene-referred input only.
+
+Camera JPEG match calibration (owner's RAW+JPEG pairs, opt-in, copies deleted by the script, aggregates only). The shoot
+folders are the owner's private ZV-E10 RAW+JPEG folders; ask the orchestrator for the paths:
+
+```sh
+scripts/calibration/calibrate.sh <work dir outside the repo> <private shoot folder 1> <private shoot folder 2>
+#   prints CALIB aggregates + CALIB-CONST for CameraMatchZvE10.kt
+scripts/calibration/rawdump.sh core/image/build/samples/sony-zv-e10.arw build/calibration/zv.rdump   # public sample
+REVEAL_RENDER_DUMP=$PWD/build/calibration/zv.rdump REVEAL_RENDER_OUT=$PWD/build/calibration/zv \
+  ./gradlew :core:pipeline:testDebugUnitTest --tests '*SampleRenderSheetTest*' --rerun   # profile + WB contact sheets
+```
+
+Parity and benchmark (emulator or phone, GLES 3.0+ with `EXT_color_buffer_float`; start the emulator with
+`EMULATOR_GPU=host` for meaningful frame times, the default SwiftShader is ~50x slower):
 
 ```sh
 ANDROID_SERIAL=emulator-<port> ./gradlew :core:pipeline:connectedDebugAndroidTest

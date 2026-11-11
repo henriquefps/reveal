@@ -9,9 +9,9 @@ import dev.hfps.reveal.pipeline.recipe.Recipe
  */
 object CpuDevelop {
     /**
-     * Runs raw WB, highlight reconstruction, camera matrix, exposure, highlights/shadows, the base tone curve and
-     * contrast/whites/blacks, returning linear Rec.2020 RGB (`width*height*3`, display-referred below 1.0) before the
-     * output transform. [input] is not modified.
+     * Runs raw WB, highlight reconstruction, camera matrix, exposure, highlights/shadows, the profile (base look),
+     * contrast/whites/blacks and vibrance/saturation, returning linear Rec.2020 RGB (`width*height*3`,
+     * display-referred below 1.0) before the output transform. [input] is not modified.
      */
     fun renderLinear(input: PipelineInput, recipe: Recipe): FloatArray {
         val params = DevelopParams.from(input, recipe)
@@ -29,8 +29,9 @@ object CpuDevelop {
             val moments = LocalToneOp.moments(rgb, grid)
             LocalToneOp.apply(rgb, grid, moments, LocalToneOp.guide(moments, grid), params.tone)
         }
-        BaseToneOp.apply(rgb, params.toneKnee)
+        ProfileOp.apply(rgb, params.profile)
         if (params.tone.globalActive) GlobalToneOp.apply(rgb, params.tone)
+        VibranceSaturationOp.apply(rgb, params.colour)
         return rgb
     }
 

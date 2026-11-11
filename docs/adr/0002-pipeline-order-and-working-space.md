@@ -27,18 +27,19 @@ Implemented in M0 are marked **(M0)**; the rest are the reserved slots from `doc
    right after step 1 in camera space (exposure, a scalar gain, commutes with it).
    **5b. Highlights / Shadows (M1, ADR 0007)**: edge-aware local tone on scene-linear light, before the base look,
    so negative highlights can bring the RAW's headroom back before the shoulder compresses it.
-6. **Profile / base look (M0, the "Standard" tone curve)**: turns scene-linear into display-referred values. Every
+6. **Profile / base look (M1, ADR 0008: Standard and six looks)**: turns scene-linear into display-referred values. Every
    user adjustment below acts on this base, so presets and profiles define the look and sliders refine it.
    **Only for scene-referred input.** `PipelineInput.kind` is `SCENE_REFERRED` (demosaiced RAW) or `DISPLAY_REFERRED`
    (JPEG/HEIF/PNG, already tone-mapped by a camera or editor). For display-referred input the base look is the
-   identity (`DevelopParams.toneKnee = IDENTITY_KNEE`), so the default recipe shows the original pixels (product
+   identity (`ProfileParams.IDENTITY`), so the default recipe shows the original pixels (product
    principle: nothing is applied without the user seeing it). Tested: an sRGB 8-bit chart (every grey level plus colour
    patches) round-trips within 1 level with dither on, on the CPU and on the GPU. Exposure and white balance still
    apply to display-referred input; its out-of-range values clip only at the output.
 7. **White balance fine / tint (M0 handles temperature and tint at step 1-2, see below)**.
 8. **Tone (M1, ADR 0007)**: contrast, whites/blacks (curves later): display-referred, after the base look.
    Highlights/shadows moved to 5b (scene-referred).
-9. **Colour (later)**: vibrance, saturation, HSL, grading, B&W: in a space where saturation is meaningful.
+9. **Colour (M1, ADR 0008: vibrance and saturation in OkLab)**: then HSL, grading, B&W later, in a space where
+   saturation is meaningful.
 10. **Local adjustments / masks (later)**: after global colour so masks adjust the globally graded image.
 11. **Detail (later)**: noise reduction then sharpening; NR before sharpening, both before effects.
 12. **Effects (later)**: texture/clarity/dehaze, vignette, grain: grain last so it is not sharpened or denoised.
@@ -83,7 +84,9 @@ Chosen over ProPhoto RGB (D50):
 
 ## Base tone curve ("Standard")
 
-Per channel, identity up to a knee `k = 0.8`, then `k + (1-k) g(u)`, `u = (x-k)/(1-k)`,
+**Superseded by ADR 0008** (M1): Standard is now a profile gain plus a filmic curve fitted to the camera's tone, and
+the curve is a 16-knot spline shared by every look. The M0 curve, for the record: per channel, identity up to a knee
+`k = 0.8`, then `k + (1-k) g(u)`, `u = (x-k)/(1-k)`,
 `g(u) = u / (1+u^8)^(1/8)`: C1 at the knee (slope 1, second derivative 0), strictly monotonic, bounded by 1.0 but
 never reaching it (no hard clip inside the curve), `f(1.0) = 0.983`. `(1+u^8)^(1/8)` is three square roots, exact
 and cheap on both sides. Per-channel application desaturates bright colours slightly (filmic); a
@@ -127,7 +130,9 @@ Version 1 is this pipeline. Making the base look identity for display-referred i
 inputs, but version 1 has not shipped, so it stays 1 (no cache from an earlier pipeline exists).
 **Version 2** (M0/W6): the highlight clip of slot 1 for input with a known saturation. The golden scene has none,
 so its CRC is unchanged; RAW output changes. **Version 3** (M1, ADR 0007): highlight reconstruction replaces that
-clip, and the Light operators exist; a second golden CRC pins them.
+clip, and the Light operators exist; a second golden CRC pins them. **Version 4** (M1, ADR 0008): the profiles
+replace the M0 Standard curve (RAW renders about 1.3 EV brighter, matching the camera), vibrance/saturation and the
+relative white balance of display-referred input exist; a third golden CRC pins them.
 
 ## Determinism
 

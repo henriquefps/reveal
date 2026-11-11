@@ -16,7 +16,7 @@ unchanged.
 | 5, run right after 1 | **highlight reconstruction** | balanced camera RGB |
 | 2, 4 | camera matrix, exposure | scene-linear Rec.2020 |
 | **5b** (new) | **Highlights / Shadows** (local, edge-aware) | scene-linear log luminance |
-| 6 | base look (Standard curve; profiles later) | scene -> display-referred |
+| 6 | base look (profiles, ADR 0008) | scene -> display-referred |
 | 8 | **Contrast, Whites, Blacks** (global) | display-referred lightness |
 
 - **Reconstruction runs in camera space, right after the white balance.** Clipping happens per *camera* channel, so
@@ -205,6 +205,21 @@ the 90-99 % ramp multiplies a source rounding by 11. (2) Tone gains computed fro
 whose luminance is near zero) multiply relative errors far beyond the curve's slope. M0 recipes keep the old
 tolerance. On the real sample RAWs (ZV-E10 and D5600, 1600 px proxies, all Light sliders) GPU and CPU differ by at
 most **1 level** (mean 0.03).
+
+### Parity on SwiftShader (M1, added with ADR 0008)
+
+`scripts/emulator.sh` starts emulators with SwiftShader (software GLES via ANGLE/Vulkan) by default, whose `pow`/`exp2`
+are less exact than the host GPU's. There, on main before ADR 0008, the random recipe "EV +2.99, contrast -22,
+whites +74, blacks +8, WB 5320 K / tint 74" on the random-noise image failed the linear stage at **1.06x** the Light
+tolerance (one pixel: CPU 1.8808, GPU 1.8389, red channel of a saturated noise pixel lifted far above white by the
+whites gain). The same recipe passes on the host GPU (worst 0.87x, on another recipe). Not a logic mismatch: the
+whites/blacks gain is `y2 / max(y, YMIN)` of a luminance near zero, so its sensitivity to the input is huge exactly
+where the stress image puts saturated pixels with almost no luminance, and the less exact `pow` of SwiftShader is
+enough to cross the line. ADR 0008's profile clamps negative curve inputs to 0, so luminance entering the global tone
+is never negative; with it the linear stage passes on SwiftShader (worst 0.59x over every image and recipe, that
+recipe now pinned in `LIGHT_EXTREMES`). Its 8-bit output on the noise image reaches **6 levels** on SwiftShader (a few
+pixels, 143 of 8.5 M values off by more than 1, mean 0.02), so tone recipes on the random-noise image are allowed 6
+levels (`OUTPUT_MAX_LEVELS_NOISE_TONE`); every other image and the real sample RAWs keep their limits.
 
 ## PIPELINE_VERSION
 

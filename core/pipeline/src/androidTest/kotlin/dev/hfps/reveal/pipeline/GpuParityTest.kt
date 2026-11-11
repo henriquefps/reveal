@@ -7,8 +7,10 @@ import dev.hfps.reveal.pipeline.cpu.CpuDevelop
 import dev.hfps.reveal.pipeline.cpu.OutputSettings
 import dev.hfps.reveal.pipeline.cpu.OutputSpace
 import dev.hfps.reveal.pipeline.gl.GpuDevelopRenderer
+import dev.hfps.reveal.pipeline.recipe.BaseLook
 import dev.hfps.reveal.pipeline.recipe.Colour
 import dev.hfps.reveal.pipeline.recipe.Light
+import dev.hfps.reveal.pipeline.recipe.Profile
 import dev.hfps.reveal.pipeline.recipe.Recipe
 import dev.hfps.reveal.pipeline.recipe.WhiteBalance
 import dev.hfps.reveal.pipeline.synthetic.SyntheticImages
@@ -60,7 +62,7 @@ class GpuParityTest {
     private fun recipes(count: Int): List<Recipe> {
         val random = Random(1234)
         fun slider() = if (random.nextBoolean()) random.nextFloat() * 200f - 100f else 0f
-        return listOf(Recipe()) + LIGHT_EXTREMES + List(count) {
+        return listOf(Recipe()) + LIGHT_EXTREMES + COLOUR_EXTREMES + List(count) {
             Recipe(
                 light = Light(
                     random.nextFloat() * 6f - 3f,
@@ -74,8 +76,13 @@ class GpuParityTest {
                     WhiteBalance(
                         temperatureK = if (random.nextBoolean()) 2500f + random.nextFloat() * 9500f else null,
                         tint = if (random.nextBoolean()) random.nextFloat() * 160f - 80f else null,
+                        relTemperature = slider(),
+                        relTint = slider(),
                     ),
+                    vibrance = slider(),
+                    saturation = slider(),
                 ),
+                profile = Profile(BaseLook.entries[random.nextInt(BaseLook.entries.size)], random.nextFloat() * 200f),
             )
         }
     }
@@ -95,19 +102,27 @@ class GpuParityTest {
                 val cpu = CpuDevelop.renderLinear(image, recipe)
                 val gpu = renderer.renderLinear(recipe)
                 val light = recipe.light.hasTone() || name in RECONSTRUCTING
+                val colour = recipe.hasColour()
                 for (p in 0 until image.width * image.height) {
                     val scale = maxOf(abs(cpu[p * 3]), abs(cpu[p * 3 + 1]), abs(cpu[p * 3 + 2]))
                     for (c in 0 until 3) {
                         val error = abs(gpu[p * 3 + c] - cpu[p * 3 + c])
-                        val allowed = if (light) LIGHT_ABS + LIGHT_REL * scale else LINEAR_ABS + LINEAR_REL * scale
+                        val allowed = when {
+                            light && colour -> LIGHT_ABS + COLOUR_LIGHT_REL * scale
+                            light -> LIGHT_ABS + LIGHT_REL * scale
+                            colour -> COLOUR_ABS + COLOUR_REL * scale
+                            else -> LINEAR_ABS + LINEAR_REL * scale
+                        }
                         val ratio = error / allowed
                         maxAbs = maxOf(maxAbs, error)
                         sumAbs += error
                         count++
                         if (ratio > imageWorst) {
                             imageWorst = ratio
-                            where = "recipe #$r ${recipe.light}, pixel ($p % ${image.width}, ${p / image.width}) " +
-                                "channel $c: cpu ${cpu[p * 3 + c]} gpu ${gpu[p * 3 + c]}"
+                            where =
+                                "recipe #$r ${recipe.light} ${recipe.profile.base}, " +
+                                "pixel ($p % ${image.width}, ${p / image.width}) channel $c: " +
+                                "cpu ${cpu[p * 3 + c]} gpu ${gpu[p * 3 + c]}"
                         }
                     }
                 }
@@ -135,13 +150,15 @@ class GpuParityTest {
             for ((name, image) in images) {
                 var imageMax = 0
                 var where = ""
-                val allowed = when (name) {
+                val imageAllowed = when (name) {
                     "rawNoise" -> OUTPUT_MAX_LEVELS_NOISE
                     in RECONSTRUCTING -> OUTPUT_MAX_LEVELS_RECONSTRUCTION
                     else -> OUTPUT_MAX_LEVELS
                 }
                 renderer.setInput(image)
                 for ((r, recipe) in recipes(RANDOM_RECIPES).withIndex()) {
+                    val allowed = outputAllowed(name, recipe, imageAllowed)
+                    var recipeMax = 0
                     val settings = OutputSettings(space = space)
                     val cpu = CpuDevelop.render(image, recipe, settings)
                     val gpu = renderer.renderOutput(recipe, settings)
@@ -155,14 +172,16 @@ class GpuParityTest {
                         sum += diff
                         count++
                         if (diff > 1) overOne++
+                        recipeMax = maxOf(recipeMax, diff)
                         if (diff > imageMax) {
                             imageMax = diff
-                            where = "recipe #$r ${recipe.light}, pixel ${i / 4 % image.width}, ${i / 4 / image.width}"
+                            where = "recipe #$r ${recipe.light} ${recipe.profile} ${recipe.colour}, " +
+                                "pixel ${i / 4 % image.width}, ${i / 4 / image.width}"
                         }
                     }
+                    if (recipeMax > allowed) failures += "$space $name recipe #$r"
                 }
                 Log.i(TAG, "output $space $name: max diff $imageMax levels at $where")
-                if (imageMax > allowed) failures += "$space $name"
             }
             Log.i(
                 TAG,
@@ -172,6 +191,13 @@ class GpuParityTest {
             assertThat(sum.toDouble() / count).isAtMost(OUTPUT_MEAN_LEVELS)
         }
         assertThat(failures).isEmpty()
+    }
+
+    /** The 8-bit limit for [recipe] on image [name]: the image's own, raised for colour and noise+tone cases. */
+    private fun outputAllowed(name: String, recipe: Recipe, imageAllowed: Int): Int = when {
+        recipe.hasColour() -> maxOf(imageAllowed, OUTPUT_MAX_LEVELS_COLOUR)
+        name == "rawNoise" && recipe.light.hasTone() -> OUTPUT_MAX_LEVELS_NOISE_TONE
+        else -> imageAllowed
     }
 
     @Test
@@ -247,13 +273,34 @@ class GpuParityTest {
             Light(whites = 100f, blacks = -100f),
             Light(whites = -100f, blacks = 100f),
             Light(-1.5f, contrast = 50f, highlights = -100f, shadows = 100f, whites = 40f, blacks = -30f),
-        ).map { Recipe(light = it) }
+        ).map { Recipe(light = it) } +
+            // Regression: main's random recipe #13 before ADR 0008 (failed at 1.06x on rawNoise; see ADR 0007).
+            Recipe(
+                light = Light(2.9933739f, contrast = -21.92221f, whites = 74.15491f, blacks = 8.119026f),
+                colour = Colour(WhiteBalance(5320.001f, 74.344864f)),
+            )
+
+        // Colour group (docs/adr/0008): every look at 100 % and 200 %, vibrance/saturation extremes, relative WB.
+        val COLOUR_EXTREMES: List<Recipe> = BaseLook.entries.flatMap { look ->
+            listOf(100f, 200f).map { Recipe(profile = Profile(look, it)) }
+        } + listOf(
+            Colour(saturation = 100f),
+            Colour(saturation = -100f),
+            Colour(vibrance = 100f),
+            Colour(vibrance = -100f),
+            Colour(vibrance = 100f, saturation = 100f),
+            Colour(WhiteBalance(relTemperature = 100f, relTint = -100f), saturation = 40f),
+        ).map { Recipe(colour = it) } +
+            Recipe(profile = Profile(BaseLook.CAMERA_MATCH), colour = Colour(vibrance = 60f, saturation = -30f))
         const val RANDOM_RECIPES = 12
 
         // Linear stage: |gpu - cpu| <= LINEAR_ABS + LINEAR_REL * (largest |channel| of that pixel); docs/adr/0002.
         const val LINEAR_ABS = 1e-6f
         const val LINEAR_REL = 3e-3f
-        const val LINEAR_MEAN = 3e-4
+
+        // Mean absolute error over every image and recipe. 3e-4 in M0; 4e-4 since the Standard look of ADR 0008
+        // renders scene-referred input about 1.3 EV brighter (absolute errors grow with the values; measured 3.3e-4).
+        const val LINEAR_MEAN = 4e-4
 
         // 8-bit output: dithering turns sub-level float differences into at most one level of change.
         // The random-noise image is a stress test: saturated pixels with tiny channels in the darks, where one
@@ -269,7 +316,26 @@ class GpuParityTest {
         const val LIGHT_ABS = 2e-3f
         const val LIGHT_REL = 2e-2f
         const val OUTPUT_MAX_LEVELS_RECONSTRUCTION = 3
+
+        // Tone sliders on the saturated random-noise stress image (docs/adr/0007, "Parity on SwiftShader"): the
+        // whites/blacks gain is computed from a near-zero luminance, so a driver with a less exact pow (SwiftShader)
+        // reaches 6 levels on a few pixels; the host GPU stays within 4.
+        const val OUTPUT_MAX_LEVELS_NOISE_TONE = 6
         val RECONSTRUCTING = setOf("rawClipped", "highlights")
+
+        // Colour group (docs/adr/0008): recipes with a look other than Standard, vibrance/saturation or relative
+        // white balance. The scene texture between the two develop stages is fp16 (ADR 0007); a look's matrix
+        // (Camera JPEG match: coefficients up to about ±6 at 200 %) and the OkLab cube roots amplify that one
+        // rounding. Measured on the emulator: worst 2.1x the base linear tolerance (saturated noise), 1.7x Light's
+        // where reconstruction runs too; 8-bit output at most 6 levels, 381 of 8.3 M values off by more than 1, mean
+        // unchanged (0.05).
+        const val COLOUR_ABS = 1e-5f
+        const val COLOUR_REL = 8e-3f
+        const val COLOUR_LIGHT_REL = 4e-2f
+        const val OUTPUT_MAX_LEVELS_COLOUR = 6
+
+        fun Recipe.hasColour() = profile.base != BaseLook.STANDARD || colour.vibrance != 0f ||
+            colour.saturation != 0f || colour.whiteBalance.relTemperature != 0f || colour.whiteBalance.relTint != 0f
 
         fun Light.hasTone() = contrast != 0f || highlights != 0f || shadows != 0f || whites != 0f || blacks != 0f
         const val OUTPUT_MEAN_LEVELS = 0.1

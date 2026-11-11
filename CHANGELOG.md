@@ -6,6 +6,8 @@ All notable changes to Reveal are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-11
+
 ### Added
 - Library (start screen): add folders from the phone, an SD card or a USB drive (nothing is copied); they are
   indexed in the background and kept up to date; unplugged drives keep their thumbnails and show a warning.

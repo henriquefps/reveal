@@ -35,6 +35,7 @@ import dev.hfps.reveal.designsystem.theme.RevealTheme
 
 @OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3Api::class)
 @Composable
+@Suppress("MultipleEmitters", "LongMethod", "ktlint:compose:multiple-emitters-check")
 internal fun ControlsPage() {
     var chip by remember { mutableIntStateOf(0) }
     var sheetOpen by rememberSaveable { mutableStateOf(false) }
@@ -63,7 +64,8 @@ internal fun ControlsPage() {
         }
     }
     Section(R.string.gallery_section_chips) {
-        val labels = listOf(R.string.chip_original, R.string.chip_square, R.string.chip_portrait, R.string.chip_landscape)
+        val labels =
+            listOf(R.string.chip_original, R.string.chip_square, R.string.chip_portrait, R.string.chip_landscape)
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             labels.forEachIndexed { index, label ->
                 RevealChip(stringResource(label), selected = index == chip, onClick = { chip = index })

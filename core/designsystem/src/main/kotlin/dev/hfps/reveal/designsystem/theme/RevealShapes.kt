@@ -17,6 +17,7 @@ data class RevealShapes(
     val sheet: Shape = RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp),
 )
 
+@Suppress("CompositionLocalAllowlist")
 internal val LocalRevealShapes = staticCompositionLocalOf { RevealShapes() }
 
 internal val MaterialShapes = Shapes(

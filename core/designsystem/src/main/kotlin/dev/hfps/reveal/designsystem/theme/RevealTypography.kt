@@ -1,3 +1,5 @@
+@file:Suppress("MagicNumber")
+
 package dev.hfps.reveal.designsystem.theme
 
 import androidx.compose.material3.Typography
@@ -55,6 +57,7 @@ data class RevealTypography(
     val monoSmall: TextStyle,
 )
 
+@Suppress("CompositionLocalAllowlist")
 internal val LocalRevealTypography = staticCompositionLocalOf<RevealTypography> {
     error("RevealTheme (or EditorTheme) is missing: no RevealTypography provided")
 }

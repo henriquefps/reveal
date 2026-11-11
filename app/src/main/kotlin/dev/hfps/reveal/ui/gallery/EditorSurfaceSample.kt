@@ -1,3 +1,5 @@
+@file:Suppress("MagicNumber")
+
 package dev.hfps.reveal.ui.gallery
 
 import androidx.annotation.StringRes

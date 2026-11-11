@@ -9,11 +9,7 @@ import dev.hfps.reveal.designsystem.theme.ThemeMode
 import dev.hfps.reveal.ui.gallery.DesignSystemGallery
 
 @Composable
-fun RevealNavHost(
-    themeMode: ThemeMode,
-    onThemeModeChange: (ThemeMode) -> Unit,
-    modifier: Modifier = Modifier,
-) {
+fun RevealNavHost(themeMode: ThemeMode, onThemeModeChange: (ThemeMode) -> Unit, modifier: Modifier = Modifier) {
     val navController = rememberNavController()
     NavHost(navController = navController, startDestination = StartRoute, modifier = modifier) {
         // The design-system gallery is the start destination until the library (M1) replaces it.

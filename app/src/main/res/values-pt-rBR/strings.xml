@@ -52,7 +52,6 @@
     <string name="action_redo">Refazer</string>
     <string name="action_before_after">Antes e depois</string>
     <string name="action_adjustments">Ajustes</string>
-    <string name="action_export">Exportar</string>
     <string name="chip_original">Original</string>
     <string name="chip_square">1:1</string>
     <string name="chip_portrait">4:5</string>
@@ -67,7 +66,6 @@
     <string name="sheet_body">Um formulário ou seletor: alça de arrastar, raio de 16 dp, a superfície do cartão.</string>
     <string name="sheet_close">Concluído</string>
 
-    <string name="editor_file_name">DSC01234.ARW</string>
     <string name="editor_photo_area">Área da foto: cinza neutro, croma zero</string>
     <string name="editor_panel_light">Luz</string>
     <string name="editor_exposure">Exposição</string>

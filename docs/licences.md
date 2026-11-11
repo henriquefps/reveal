@@ -11,6 +11,8 @@ generated from this list.
 | Kotlin standard library, kotlinx.coroutines, kotlinx.serialization | `gradle/libs.versions.toml` | Apache-2.0 |
 | AndroidX (core, activity, lifecycle, navigation, Room, Compose, Material 3) | `gradle/libs.versions.toml` | Apache-2.0 |
 | Dagger / Hilt | `gradle/libs.versions.toml` | Apache-2.0 |
+| Inter 4.1 variable font (`core/designsystem/src/main/res/font/inter_variable.ttf`; licence text in `core/designsystem/fonts/Inter-OFL-LICENSE.txt`) | rsms/inter release v4.1 | SIL OFL 1.1 |
+| Phosphor Icons 2.1.1 (path data generated into `core/designsystem/.../icons/Phosphor*.kt`) | `scripts/icons/generate_icons.py` (`VERSION`) | MIT |
 
 ## Build, test and analysis tooling (not shipped)
 

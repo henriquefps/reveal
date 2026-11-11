@@ -27,8 +27,8 @@ import dev.hfps.reveal.designsystem.theme.RevealTheme
  */
 @Composable
 fun RevealScaffold(
-    modifier: Modifier = Modifier,
     topBar: @Composable () -> Unit,
+    modifier: Modifier = Modifier,
     content: @Composable BoxScope.() -> Unit,
 ) {
     Column(

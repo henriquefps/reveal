@@ -52,7 +52,6 @@
     <string name="action_redo">Redo</string>
     <string name="action_before_after">Before and after</string>
     <string name="action_adjustments">Adjustments</string>
-    <string name="action_export">Export</string>
     <string name="chip_original">Original</string>
     <string name="chip_square">1:1</string>
     <string name="chip_portrait">4:5</string>
@@ -67,7 +66,6 @@
     <string name="sheet_body">A form or chooser: drag handle, 16 dp radius, the card surface.</string>
     <string name="sheet_close">Done</string>
 
-    <string name="editor_file_name">DSC01234.ARW</string>
     <string name="editor_photo_area">Photo area: neutral grey, zero chroma</string>
     <string name="editor_panel_light">Light</string>
     <string name="editor_exposure">Exposure</string>

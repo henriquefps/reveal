@@ -32,6 +32,7 @@ private val FillIcons: List<ImageVector> = with(PhosphorFill) {
 }
 
 @Composable
+@Suppress("MultipleEmitters", "ktlint:compose:multiple-emitters-check")
 internal fun IconsPage() {
     Section(R.string.gallery_section_icons_regular) { IconGrid(RegularIcons, RevealTheme.colors.foreground) }
     Section(R.string.gallery_section_icons_fill) { IconGrid(FillIcons, RevealTheme.colors.primary) }
@@ -44,6 +45,8 @@ private fun IconGrid(icons: List<ImageVector>, tint: Color) {
         horizontalArrangement = Arrangement.spacedBy(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-        icons.forEach { Icon(imageVector = it, contentDescription = null, modifier = Modifier.size(28.dp), tint = tint) }
+        icons.forEach {
+            Icon(imageVector = it, contentDescription = null, modifier = Modifier.size(28.dp), tint = tint)
+        }
     }
 }

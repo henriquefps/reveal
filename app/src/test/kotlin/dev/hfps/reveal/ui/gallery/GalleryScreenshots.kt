@@ -76,9 +76,17 @@ abstract class GalleryScreenshotBase(private val size: String) {
                 }
             }
         }
-        val theme = if (page == GalleryPage.Editor) "editor" else if (dark) "dark" else "light"
+        val theme = if (page == GalleryPage.Editor) {
+            "editor"
+        } else if (dark) {
+            "dark"
+        } else {
+            "light"
+        }
         val scale = if (fontScale == 1f) "" else "_font${(fontScale * 100).toInt()}"
-        composeRule.onRoot().captureRoboImage("src/test/screenshots/gallery/${size}_${page.name.lowercase()}_$theme$scale.png")
+        composeRule.onRoot().captureRoboImage(
+            "src/test/screenshots/gallery/${size}_${page.name.lowercase()}_$theme$scale.png",
+        )
     }
 }
 

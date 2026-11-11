@@ -1,3 +1,5 @@
+@file:Suppress("MatchingDeclarationName")
+
 package dev.hfps.reveal.ui.gallery
 
 import androidx.annotation.StringRes

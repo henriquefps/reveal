@@ -106,9 +106,9 @@ private fun RevealButton(
     onClick: () -> Unit,
     colors: ButtonColors,
     border: BorderStroke?,
-    modifier: Modifier,
     icon: ImageVector?,
     enabled: Boolean,
+    modifier: Modifier = Modifier,
 ) {
     Button(
         onClick = onClick,

@@ -45,37 +45,39 @@ internal fun FoundationsPage(themeMode: ThemeMode, onThemeModeChange: (ThemeMode
         R.string.swatch_border to c.border,
         R.string.swatch_ring to c.ring,
     )
-    Section(R.string.gallery_section_theme) {
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            ThemeLabels.forEach { (mode, label) ->
-                RevealChip(
-                    label = stringResource(label),
-                    selected = mode == themeMode,
-                    onClick = { onThemeModeChange(mode) },
-                )
+    Column(verticalArrangement = Arrangement.spacedBy(24.dp)) {
+        Section(R.string.gallery_section_theme) {
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                ThemeLabels.forEach { (mode, label) ->
+                    RevealChip(
+                        label = stringResource(label),
+                        selected = mode == themeMode,
+                        onClick = { onThemeModeChange(mode) },
+                    )
+                }
             }
         }
-    }
-    Section(R.string.gallery_section_colour) {
-        FlowRow(
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            swatches.forEach { (label, color) -> Swatch(stringResource(label), color) }
+        Section(R.string.gallery_section_colour) {
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                swatches.forEach { (label, color) -> Swatch(stringResource(label), color) }
+            }
         }
-    }
-    Section(R.string.gallery_section_type) {
-        val t = RevealTheme.typography
-        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Eyebrow(stringResource(R.string.type_eyebrow))
-            TypeLine(R.string.type_ui, t.ui)
-            TypeLine(R.string.type_body, t.body)
-            TypeLine(R.string.type_body_large, t.bodyLarge)
-            TypeLine(R.string.type_title, t.title)
-            TypeLine(R.string.type_number, t.number)
-            TypeLine(R.string.type_number_large, t.numberLarge)
-            TypeLine(R.string.type_mono, t.mono)
-            TypeLine(R.string.type_mono_small, t.monoSmall)
+        Section(R.string.gallery_section_type) {
+            val t = RevealTheme.typography
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Eyebrow(stringResource(R.string.type_eyebrow))
+                TypeLine(R.string.type_ui, t.ui)
+                TypeLine(R.string.type_body, t.body)
+                TypeLine(R.string.type_body_large, t.bodyLarge)
+                TypeLine(R.string.type_title, t.title)
+                TypeLine(R.string.type_number, t.number)
+                TypeLine(R.string.type_number_large, t.numberLarge)
+                TypeLine(R.string.type_mono, t.mono)
+                TypeLine(R.string.type_mono_small, t.monoSmall)
+            }
         }
     }
 }

@@ -40,6 +40,7 @@ data class RevealColors(
     val isDark: Boolean,
 )
 
+@Suppress("CompositionLocalAllowlist")
 internal val LocalRevealColors = staticCompositionLocalOf<RevealColors> {
     error("RevealTheme (or EditorTheme) is missing: no RevealColors provided")
 }

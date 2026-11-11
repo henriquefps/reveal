@@ -8,14 +8,14 @@ import androidx.compose.animation.core.tween
  * transition is a `tween` (interruptible: a new target retargets from the current value).
  */
 object RevealMotion {
-    const val Fast = 150
-    const val Standard = 200
-    const val Slow = 250
+    const val FAST = 150
+    const val STANDARD = 200
+    const val SLOW = 250
 
     /** Strong ease-out (the skill's custom curve). */
     val EaseOut = CubicBezierEasing(0.23f, 1f, 0.32f, 1f)
 
-    fun <T> fast() = tween<T>(durationMillis = Fast, easing = EaseOut)
+    fun <T> fast() = tween<T>(durationMillis = FAST, easing = EaseOut)
 
-    fun <T> standard() = tween<T>(durationMillis = Standard, easing = EaseOut)
+    fun <T> standard() = tween<T>(durationMillis = STANDARD, easing = EaseOut)
 }

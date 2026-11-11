@@ -177,13 +177,15 @@ class CpuDevelopTest {
 
         val crc = CRC32().apply { update(CpuDevelop.render(input, recipe)) }.value
 
+        // Version 2 added highlight clipping for input with a known saturation; this scene has none, so its CRC is
+        // the same as version 1's.
         // If this fails the pipeline output changed: that is only legitimate together with a PIPELINE_VERSION bump
         // (docs/adr/0002, "PIPELINE_VERSION rules"); update both here.
-        assertThat(PIPELINE_VERSION).isEqualTo(1)
-        assertThat(crc).isEqualTo(GOLDEN_CRC_V1)
+        assertThat(PIPELINE_VERSION).isEqualTo(2)
+        assertThat(crc).isEqualTo(GOLDEN_CRC_V2)
     }
 
     private companion object {
-        const val GOLDEN_CRC_V1: Long = 1568956133L
+        const val GOLDEN_CRC_V2: Long = 1568956133L
     }
 }

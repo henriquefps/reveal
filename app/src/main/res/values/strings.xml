@@ -80,4 +80,41 @@
     <string name="tool_crop">Crop</string>
     <string name="tool_masks">Masks</string>
     <string name="tool_heal">Heal</string>
+    <!-- Start screen (temporary until the library, M1) -->
+    <string name="start_eyebrow">Preview build</string>
+    <string name="start_title">Develop a photo</string>
+    <string name="start_body">Open a RAW file (ARW, DNG, CR3, NEF…) or a JPEG or HEIF. Reveal reads it in place and never changes the original.</string>
+    <string name="start_open">Open photo</string>
+    <string name="start_menu">More</string>
+    <string name="start_menu_gallery">Design system</string>
+    <string name="start_menu_about">About</string>
+
+    <!-- About -->
+    <string name="about_title">About</string>
+    <string name="about_back">Back</string>
+    <string name="about_version">Version %1$s</string>
+    <string name="about_licence">Free and open source</string>
+    <string name="about_licence_body">GNU AGPL-3.0-or-later. Source code: github.com/henriquefps/reveal</string>
+    <string name="about_third_party">Third-party licences</string>
+    <!-- Component names and licence identifiers are proper names: not translated. Mirrors docs/licences.md. -->
+    <string-array name="about_licences" translatable="false">
+        <item>LibRaw 0.22.3|LGPL-2.1 (chosen from LGPL-2.1 / CDDL-1.0)</item>
+        <item>dcraw (inside LibRaw)|dcraw licence (free use and redistribution)</item>
+        <item>DCB and FBDD demosaic, Jacek Gozdz (inside LibRaw)|BSD-3-Clause</item>
+        <item>X3F tools, Roland Karlsson (inside LibRaw)|BSD-style</item>
+        <item>Hoard image core (dev.hfps.image)|AGPL-3.0-or-later</item>
+        <item>Inter 4.1, Rasmus Andersson|SIL Open Font License 1.1</item>
+        <item>Phosphor Icons 2.1.1|MIT</item>
+        <item>Kotlin standard library|Apache-2.0</item>
+        <item>kotlinx.coroutines|Apache-2.0</item>
+        <item>kotlinx.serialization|Apache-2.0</item>
+        <item>Jetpack Compose (runtime, UI, foundation, animation, Material 3)|Apache-2.0</item>
+        <item>AndroidX (core, activity, lifecycle, navigation, savedstate, fragment, startup, window, …)|Apache-2.0</item>
+        <item>AndroidX Room and SQLite|Apache-2.0</item>
+        <item>AndroidX Hilt, Dagger and Hilt|Apache-2.0</item>
+        <item>javax.inject, jakarta.inject|Apache-2.0</item>
+        <item>Guava ListenableFuture|Apache-2.0</item>
+        <item>JSR-305 annotations|BSD-3-Clause</item>
+        <item>JetBrains annotations, JSpecify|Apache-2.0</item>
+    </string-array>
 </resources>

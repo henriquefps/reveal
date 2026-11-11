@@ -94,19 +94,28 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
     private var stageFbo = 0
     private var readTex = 0
     private var readFbo = 0
-    private var input: PipelineInput? = null
+    private var input: UploadedImage? = null
     private var stageParams: DevelopParams? = null
     private var frames = 0L
     private var lastStats = FrameStats(0, 0, 0f, 0f)
 
     // ------------------------------------------------------------------ public API (any thread)
 
-    /** Uploads [input] (linear proxy) as a float16 texture; replaces the previous image. */
+    /**
+     * Uploads [input] (linear proxy) as a float16 texture; replaces the previous image. The renderer keeps only the
+     * texture and the colour metadata, never the pixel array, so the caller's copy is the last one on the heap.
+     */
     fun setInput(input: PipelineInput) {
         handler.post {
             uploadInput(input)
             requestFrame()
         }
+    }
+
+    /** [setInput] that returns once the texture is uploaded (the caller can then drop [input] and time the upload). */
+    suspend fun upload(input: PipelineInput) = onGl {
+        uploadInput(input)
+        requestFrame()
     }
 
     /** Sets the recipe to render. Coalesced. */
@@ -175,7 +184,7 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         val image = checkNotNull(input) { "no input" }
         recipes.map { recipe ->
             val start = System.nanoTime()
-            runStage1(DevelopParams.from(image, recipe))
+            runStage1(DevelopParams.from(image.colour, recipe))
             drawOutputOffscreen(OutputSettings(dither = true))
             GLES20.glFinish()
             (System.nanoTime() - start) / NANOS_PER_MS
@@ -211,7 +220,7 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         if (image == null || !egl.hasWindow) return
         val start = System.nanoTime()
         val req = request.get()
-        val params = DevelopParams.from(image, if (req.showOriginal) Recipe.DEFAULT else req.recipe)
+        val params = DevelopParams.from(image.colour, if (req.showOriginal) Recipe.DEFAULT else req.recipe)
         if (params != stageParams) {
             runStage1(params)
             GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, stageTex)
@@ -249,7 +258,7 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
     }
 
     private fun drawOutput(
-        image: PipelineInput,
+        image: UploadedImage,
         view: ViewTransform,
         width: Int,
         height: Int,
@@ -257,7 +266,7 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         surround: FloatArray,
     ) {
         GLES30.glUseProgram(outputProgram)
-        uploadUbo(outputUbo, outputBlock(image, view, width, height, settings, surround))
+        uploadUbo(outputUbo, outputBlock(image.width, image.height, view, width, height, settings, surround))
         GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, stageTex)
         val magnified = view.scale >= NEAREST_ABOVE_SCALE
@@ -280,7 +289,7 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
 
     private fun readLinear(recipe: Recipe): FloatArray {
         val image = checkNotNull(input) { "no input" }
-        runStage1(DevelopParams.from(image, recipe))
+        runStage1(DevelopParams.from(image.colour, recipe))
         val pixels = FloatBuffer.allocate(image.width * image.height * RGBA)
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, stageFbo)
         GLES30.glReadPixels(0, 0, image.width, image.height, GLES30.GL_RGBA, GLES30.GL_FLOAT, pixels)
@@ -296,7 +305,7 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
 
     private fun readOutput(recipe: Recipe, settings: OutputSettings): ByteArray {
         val image = checkNotNull(input) { "no input" }
-        runStage1(DevelopParams.from(image, recipe))
+        runStage1(DevelopParams.from(image.colour, recipe))
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, stageTex)
         GLES30.glGenerateMipmap(GLES30.GL_TEXTURE_2D)
         drawOutputOffscreen(settings)
@@ -371,7 +380,7 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
 
     private fun uploadInput(image: PipelineInput) {
         deleteImageTextures()
-        input = image
+        input = UploadedImage(image.width, image.height, image.colourOnly())
         stageParams = null
         val levels = 32 - Integer.numberOfLeadingZeros(maxOf(image.width, image.height))
         sourceTex = newTexture(1, image.width, image.height, GLES30.GL_NEAREST, GLES30.GL_NEAREST)
@@ -387,14 +396,25 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
             image.width * band * RGBA * Float.SIZE_BYTES,
         ).order(ByteOrder.nativeOrder())
         val floats = staging.asFloatBuffer()
+        // RGB -> RGBA in a heap array, then one bulk put: element-wise puts into a direct buffer cost ~4x more.
+        val band4 = FloatArray(image.width * band * RGBA)
+        val rgb = image.linearRgb
         var y = 0
         while (y < image.height) {
             val rows = minOf(band, image.height - y)
-            floats.clear()
-            for (p in 0 until image.width * rows) {
-                val s = (y * image.width + p) * PipelineInput.CHANNELS
-                floats.put(image.linearRgb[s]).put(image.linearRgb[s + 1]).put(image.linearRgb[s + 2]).put(1f)
+            val pixels = image.width * rows
+            var s = y * image.width * PipelineInput.CHANNELS
+            var d = 0
+            repeat(pixels) {
+                band4[d] = rgb[s]
+                band4[d + 1] = rgb[s + 1]
+                band4[d + 2] = rgb[s + 2]
+                band4[d + 3] = 1f
+                s += PipelineInput.CHANNELS
+                d += RGBA
             }
+            floats.clear()
+            floats.put(band4, 0, pixels * RGBA)
             floats.flip()
             GLES30.glTexSubImage2D(
                 GLES30.GL_TEXTURE_2D, 0, 0, y, image.width, rows, GLES30.GL_RGBA, GLES30.GL_FLOAT, floats,
@@ -503,7 +523,9 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         /** std140 block of the develop stage: wb (vec4), cameraToWorking (mat4), exposure (vec4), baseTone (vec4). */
         internal fun developBlock(p: DevelopParams): ByteBuffer {
             val b = ByteBuffer.allocateDirect(DEVELOP_BLOCK_FLOATS * Float.SIZE_BYTES).order(ByteOrder.nativeOrder())
-            b.putFloat(p.wbMultipliers[0]).putFloat(p.wbMultipliers[1]).putFloat(p.wbMultipliers[2]).putFloat(0f)
+            b.putFloat(
+                p.wbMultipliers[0],
+            ).putFloat(p.wbMultipliers[1]).putFloat(p.wbMultipliers[2]).putFloat(p.highlightClip)
             putMat4(b, p.cameraToWorking)
             b.putFloat(p.exposureGain).putFloat(0f).putFloat(0f).putFloat(0f)
             b.putFloat(p.toneKnee).putFloat(0f).putFloat(0f).putFloat(0f)
@@ -513,7 +535,8 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
 
         /** std140 block of the output pass: mat4, image (vec4), viewport (vec4), surround (vec4), dither (uvec4). */
         internal fun outputBlock(
-            image: PipelineInput,
+            imageWidth: Int,
+            imageHeight: Int,
             view: ViewTransform,
             width: Int,
             height: Int,
@@ -522,7 +545,7 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         ): ByteBuffer {
             val b = ByteBuffer.allocateDirect(OUTPUT_BLOCK_FLOATS * Float.SIZE_BYTES).order(ByteOrder.nativeOrder())
             putMat4(b, OutputTransformOp.workingToOutput(settings.space).toFloatArray())
-            b.putFloat(image.width.toFloat()).putFloat(image.height.toFloat()).putFloat(view.scale).putFloat(0f)
+            b.putFloat(imageWidth.toFloat()).putFloat(imageHeight.toFloat()).putFloat(view.scale).putFloat(0f)
             b.putFloat(view.centerX).putFloat(view.centerY).putFloat(width.toFloat()).putFloat(height.toFloat())
             b.putFloat(surround[0]).putFloat(surround[1]).putFloat(surround[2]).putFloat(1f)
             b.putInt(settings.ditherSeed).putInt(if (settings.dither) 1 else 0).putInt(0).putInt(0)
@@ -542,3 +565,10 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         private const val OUTPUT_BLOCK_FLOATS = 32
     }
 }
+
+/** What the GL thread keeps of an uploaded input: its size and a 1x1 stand-in carrying the colour metadata. */
+private class UploadedImage(val width: Int, val height: Int, val colour: PipelineInput)
+
+/** The same input without its pixels (one black pixel): enough for [DevelopParams.from]. */
+private fun PipelineInput.colourOnly(): PipelineInput =
+    PipelineInput(kind, 1, 1, FloatArray(PipelineInput.CHANNELS), cameraToXyz, asShotMultipliers?.copyOf(), saturation)

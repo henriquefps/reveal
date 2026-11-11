@@ -38,7 +38,7 @@ enum class GalleryPage(@param:StringRes val label: Int) {
 
 /**
  * Proves the design system: tokens, type scale, Phosphor icons, controls and the editor surface, inside the hfps
- * shell. Debug start destination until the library (M1) replaces it.
+ * shell. Reachable from the start screen's menu.
  */
 @Composable
 fun DesignSystemGallery(
@@ -46,12 +46,13 @@ fun DesignSystemGallery(
     onThemeModeChange: (ThemeMode) -> Unit,
     modifier: Modifier = Modifier,
     initialPage: GalleryPage = GalleryPage.Foundations,
+    onBack: () -> Unit = {},
 ) {
     var page by rememberSaveable { mutableStateOf(initialPage) }
     if (page == GalleryPage.Editor) {
-        EditorTheme { GalleryShell(page, { page = it }, themeMode, onThemeModeChange, modifier) }
+        EditorTheme { GalleryShell(page, { page = it }, themeMode, onThemeModeChange, onBack, modifier) }
     } else {
-        GalleryShell(page, { page = it }, themeMode, onThemeModeChange, modifier)
+        GalleryShell(page, { page = it }, themeMode, onThemeModeChange, onBack, modifier)
     }
 }
 
@@ -61,6 +62,7 @@ private fun GalleryShell(
     onPageChange: (GalleryPage) -> Unit,
     themeMode: ThemeMode,
     onThemeModeChange: (ThemeMode) -> Unit,
+    onBack: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     RevealScaffold(
@@ -68,7 +70,7 @@ private fun GalleryShell(
         topBar = {
             RevealTopBar(
                 title = stringResource(R.string.gallery_title),
-                onBack = {},
+                onBack = onBack,
                 backContentDescription = stringResource(R.string.gallery_back),
                 actions = {
                     RevealIconButton(

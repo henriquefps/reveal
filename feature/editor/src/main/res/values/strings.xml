@@ -8,4 +8,30 @@
     <string name="debug_kelvin">%1$d K</string>
     <string name="debug_frame_stats">Last frame %1$.1f ms · frames: %2$d · updates: %3$d</string>
     <string name="debug_gpu_unsupported">This device cannot run the GPU pipeline: %1$s</string>
+    <!-- Editor (M0 shape: canvas + debug develop panel) -->
+    <string name="editor_back">Back</string>
+    <string name="editor_zoom_toggle">Fit or 100 %</string>
+    <string name="editor_panel_develop">Develop</string>
+    <string name="editor_reset">Reset</string>
+    <string name="editor_exposure">Exposure</string>
+    <string name="editor_temperature">Temperature</string>
+    <string name="editor_tint">Tint</string>
+    <string name="editor_value_ev">%1$+.2f EV</string>
+    <string name="editor_value_kelvin">%1$d K</string>
+    <string name="editor_value_tint">%1$+d</string>
+    <string name="editor_loading">Developing…</string>
+    <string name="editor_loading_progress">Developing, %1$d %%</string>
+    <string name="editor_error_back">Back</string>
+    <string name="editor_error_permission_title">Can’t read this photo anymore</string>
+    <string name="editor_error_permission_body">Reveal lost access to the file, or it was moved or deleted. Open it again from the picker or the app that shared it.</string>
+    <string name="editor_error_format_title">Format not supported</string>
+    <string name="editor_error_format_body">Reveal opens RAW files (ARW, DNG, CR2, CR3, NEF, RAF, ORF, RW2…) and JPEG, HEIF, PNG and WebP images.</string>
+    <string name="editor_error_camera_title">Camera not supported yet</string>
+    <string name="editor_error_camera_body">This RAW opened, but there is no colour profile for its camera, so its colours can’t be developed correctly.</string>
+    <string name="editor_error_corrupt_title">Couldn’t read this photo</string>
+    <string name="editor_error_corrupt_body">The file looks damaged or incomplete. If it is still copying, wait for it to finish and try again.</string>
+    <string name="editor_error_gpu_title">This device’s GPU isn’t supported</string>
+    <string name="editor_error_gpu_body">Reveal develops photos on the GPU and needs OpenGL ES 3 with floating-point render targets.</string>
+    <string name="editor_error_memory_title">Not enough memory</string>
+    <string name="editor_error_memory_body">This photo needs more memory than is free right now. Close other apps and try again.</string>
 </resources>

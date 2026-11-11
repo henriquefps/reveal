@@ -41,12 +41,26 @@ fun ZoomableGlCanvas(
     modifier: Modifier = Modifier,
     zoom: ZoomState = rememberZoomState(renderer),
 ) {
+    LaunchedEffect(renderer, input) { renderer.setInput(input) }
+    ZoomableGlCanvas(renderer, input.width, input.height, recipe, modifier, zoom)
+}
+
+/**
+ * [ZoomableGlCanvas] for an image the caller already uploaded (`GpuDevelopRenderer.upload`) and released: only its
+ * size ([imageWidth] x [imageHeight] proxy pixels) is needed here.
+ */
+@Composable
+fun ZoomableGlCanvas(
+    renderer: GpuDevelopRenderer,
+    imageWidth: Int,
+    imageHeight: Int,
+    recipe: Recipe,
+    modifier: Modifier = Modifier,
+    zoom: ZoomState = rememberZoomState(renderer),
+) {
     val scope = rememberCoroutineScope()
     val currentRenderer = rememberUpdatedState(renderer)
-    LaunchedEffect(renderer, input) {
-        renderer.setInput(input)
-        zoom.setImageSize(input.width, input.height)
-    }
+    LaunchedEffect(zoom, imageWidth, imageHeight) { zoom.setImageSize(imageWidth, imageHeight) }
     LaunchedEffect(renderer) { renderer.setSurround(EditorNeutrals.Surround.toArgb() and RGB_MASK) }
     LaunchedEffect(renderer, recipe) { renderer.setRecipe(recipe) }
     DisposableEffect(renderer) { onDispose { renderer.setShowOriginal(false) } }

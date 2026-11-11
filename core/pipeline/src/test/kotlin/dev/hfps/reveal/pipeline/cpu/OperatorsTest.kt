@@ -15,6 +15,19 @@ class OperatorsTest {
     }
 
     @Test
+    fun `white balance clips every channel at the lowest balanced saturation point`() {
+        val mul = floatArrayOf(2f, 1f, 1.5f)
+        // Fully clipped (all at the white level) and green-only clipped pixels both become neutral at the clip.
+        val rgb = floatArrayOf(1f, 1f, 1f, 0.8f, 1f, 0.9f, 0.2f, 0.4f, 0.3f)
+
+        RawWhiteBalanceOp.apply(rgb, mul, RawWhiteBalanceOp.clipLevel(mul))
+
+        assertThat(RawWhiteBalanceOp.clipLevel(mul)).isEqualTo(1f)
+        assertThat(rgb).usingTolerance(1e-7)
+            .containsExactly(floatArrayOf(1f, 1f, 1f, 1f, 1f, 1f, 0.4f, 0.4f, 0.45f)).inOrder()
+    }
+
+    @Test
     fun `camera matrix is row major`() {
         val rgb = floatArrayOf(1f, 2f, 3f)
 

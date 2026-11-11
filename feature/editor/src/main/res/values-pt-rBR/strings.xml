@@ -8,4 +8,30 @@
     <string name="debug_kelvin">%1$d K</string>
     <string name="debug_frame_stats">Último quadro %1$.1f ms · quadros: %2$d · atualizações: %3$d</string>
     <string name="debug_gpu_unsupported">Este aparelho não consegue executar o pipeline de GPU: %1$s</string>
+    <!-- Editor (formato do M0: canvas + painel de revelação de depuração) -->
+    <string name="editor_back">Voltar</string>
+    <string name="editor_zoom_toggle">Ajustar ou 100 %</string>
+    <string name="editor_panel_develop">Revelar</string>
+    <string name="editor_reset">Redefinir</string>
+    <string name="editor_exposure">Exposição</string>
+    <string name="editor_temperature">Temperatura</string>
+    <string name="editor_tint">Matiz</string>
+    <string name="editor_value_ev">%1$+.2f EV</string>
+    <string name="editor_value_kelvin">%1$d K</string>
+    <string name="editor_value_tint">%1$+d</string>
+    <string name="editor_loading">Revelando…</string>
+    <string name="editor_loading_progress">Revelando, %1$d %%</string>
+    <string name="editor_error_back">Voltar</string>
+    <string name="editor_error_permission_title">Não é mais possível ler esta foto</string>
+    <string name="editor_error_permission_body">O Reveal perdeu o acesso ao arquivo, ou ele foi movido ou apagado. Abra de novo pelo seletor ou pelo app que o compartilhou.</string>
+    <string name="editor_error_format_title">Formato não suportado</string>
+    <string name="editor_error_format_body">O Reveal abre arquivos RAW (ARW, DNG, CR2, CR3, NEF, RAF, ORF, RW2…) e imagens JPEG, HEIF, PNG e WebP.</string>
+    <string name="editor_error_camera_title">Câmera ainda não suportada</string>
+    <string name="editor_error_camera_body">Este RAW abriu, mas não há perfil de cor para a câmera, então as cores não podem ser reveladas corretamente.</string>
+    <string name="editor_error_corrupt_title">Não foi possível ler esta foto</string>
+    <string name="editor_error_corrupt_body">O arquivo parece danificado ou incompleto. Se ainda estiver sendo copiado, espere terminar e tente de novo.</string>
+    <string name="editor_error_gpu_title">A GPU deste aparelho não é suportada</string>
+    <string name="editor_error_gpu_body">O Reveal revela as fotos na GPU e precisa de OpenGL ES 3 com alvos de renderização em ponto flutuante.</string>
+    <string name="editor_error_memory_title">Memória insuficiente</string>
+    <string name="editor_error_memory_body">Esta foto precisa de mais memória do que há livre agora. Feche outros apps e tente de novo.</string>
 </resources>

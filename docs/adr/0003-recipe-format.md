@@ -111,3 +111,33 @@ sign and U+2212 as the minus (same as the sliders' value labels). Changes below 
   field if the gesture changed several), stores the new recipe JSON in Room and moves `committed` forward. Undo/redo
   swap `committed` and push it to the renderer.
 - A drag that ends where it started is empty diff and no step.
+
+## History engine (M1, history workstream)
+
+`EditHistory` (`recipe/EditHistory.kt`, pure Kotlin, immutable) is the undo/redo model of one version: `entries`
+(each a `HistoryEntry` = the full recipe after the step + its `StepLabel`), `cursor` (-1 = `base`, the default
+recipe) and `current`. Semantics, all JVM-tested (`EditHistoryTest`):
+
+- `commit(recipe, action?, groups)` appends a step after the cursor, labelled with `RecipeDiff.between(current,
+  recipe)`; **a commit after an undo drops the steps above the cursor** (a new branch, no tree). An empty diff is no
+  step, even for a named action ("Reset all" on an unedited photo adds nothing); the editor then snaps its working
+  recipe back to `current`.
+- `undo` / `redo` move the cursor by one; `goTo(position)` jumps to any step (the history list) and keeps the later
+  steps for redo. Unlimited.
+- **What is one step:** slider release, numeric entry, double-tap reset of a slider, a chip (look, WB mode), the
+  eyedropper, a panel reset, Reset all, Reset to as opened, a paste, "Previous", and (for the workers that add them) a
+  mode's Done, Auto and a preset. Never a drag frame.
+- **Named steps:** `StepLabel(changes, action, groups)` with `HistoryAction` `RESET_ALL`, `RESET_GROUP` (+ the group),
+  `AS_OPENED`, `PASTE` (+ the pasted groups), `PREVIOUS`, and `AUTO` / `PRESET` reserved for their workstreams. The
+  list shows the action's name ("Paste edits", "Reset Light") with the changes underneath; an unnamed step shows its
+  only change ("Exposure +0.70") or the first one "and N more" (`HistoryLabels.format`, plural resource).
+- **Resets:** reset panel = `RecipeGroup.reset` of the panel's group; Reset all = `Recipe.DEFAULT`; **Reset to as
+  opened** = the default recipe plus the user's default settings (default profile, open with Auto) once Settings
+  stores them; until then it equals Reset all (`EditorViewModel.asOpened`, the seam for the settings worker).
+
+Copy/paste (`RecipePaste`): copy takes the **whole** recipe; the **paste chooser** picks the groups (all, or per
+`RecipeGroup`; each row lists what the copied edit holds for that group). `paste(source, target, groups)` replaces
+each chosen group of the target as a whole (a field the source left at default resets it on the target) and leaves
+the other groups untouched. The default choice is every group but geometry (a crop rarely fits another frame), and
+the last choice is remembered. **"Previous"** applies the last edited other photo's recipe with the default groups
+(no chooser: one tap). White balance carries both pairs, so a paste between RAW and JPEG is harmless (see above).

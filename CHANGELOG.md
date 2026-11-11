@@ -15,6 +15,11 @@ All notable changes to Reveal are documented here. The format follows
 - Ratings, labels and pick/reject are read from XMP sidecars (Hoard, Lightroom, darktable) and written back to them
   when the folder allows it.
 - Full-screen viewer: swipe between photos, pinch or double-tap to 100 %, photo info, rate and flag, Edit.
+- Edit history: unlimited undo and redo that survive closing the app, and a history list (More ⋯ → History) with
+  named steps such as "Exposure +0.70" or "Paste edits"; tap a step to go back to it.
+- Copy and paste edits, in the editor and on a selection in the library, with a chooser of what to paste (light,
+  colour, profile, geometry, …); "Previous" applies the last edited photo's settings; reset all, reset a panel,
+  reset to as opened, and "Reset edits" for a library selection. Every one of them can be undone.
 
 ## [0.1.1] - 2026-11-10
 

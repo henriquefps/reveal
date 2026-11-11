@@ -28,7 +28,8 @@ import kotlin.math.sqrt
  * @property lumEdge `1 / (2 sigma^2)` of the luminance edge stop of each level's smoothing.
  * @property chromaRange `1 / (2 sigma^2)` of the chroma (a, b) range weight of each level.
  * @property chromaMix how much of each level's chroma smoothing is kept (0 = colour NR off at that level).
- * @property chromaLuma `1 / (2 sigma^2)` of the luminance guard of the chroma smoothing (colour does not cross L edges).
+ * @property chromaLuma `1 / (2 sigma^2)` of the luminance guard of the chroma smoothing (colour does not cross L
+ *   edges).
  * @property blur the sharpening Gaussian's half kernel (index 0 = centre, normalised over `-R..R`).
  * @property sharpenGain multiplier of the shaped high-pass.
  * @property coring2 squared texture-coring threshold (0 = every amplitude is sharpened).
@@ -91,6 +92,9 @@ data class DetailParams(
         /** Luminance shrinkage threshold at amount 100 (OkLab L; high-ISO noise is about 0.01-0.03). */
         const val LUM_TAU_MAX: Float = 0.06f
 
+        /** Exponent of the amount -> threshold curve (calibrated on CC0 ISO 2000 and 12800 files, docs/adr/0012). */
+        private const val LUM_CURVE = 1.5
+
         /** Per-level share of the luminance threshold (finer levels carry more of white-ish noise). */
         val LUM_LEVEL: FloatArray = floatArrayOf(1f, 0.62f, 0.38f, 0.22f, 0.13f)
 
@@ -104,7 +108,7 @@ data class DetailParams(
         const val CORING_MAX: Float = 0.006f
 
         /** Masking gradient (OkLab L per full-resolution pixel) where the mask is fully on at masking 100. */
-        const val MASK_MAX: Float = 0.03f
+        const val MASK_MAX: Float = 0.06f
 
         /** Smallest rendered sharpening sigma; smaller radii keep this and lower the amount in proportion. */
         const val MIN_SIGMA: Float = 0.5f
@@ -124,7 +128,10 @@ data class DetailParams(
         fun from(detail: Detail, pixelScale: Float): DetailParams {
             val r = RecipeRanges
             val ps = max(1f, pixelScale)
-            val lum = r.nrLuminance.clamp(detail.nrLuminance) / PERCENT
+            // The threshold grows as amount^1.5: the low half of the slider stays gentle for the moderate noise of
+            // mid ISOs (a texture of the same amplitude as the noise survives), the top keeps ISO 12800's strength.
+            val lumLinear = r.nrLuminance.clamp(detail.nrLuminance) / PERCENT
+            val lum = StrictMath.pow(lumLinear.toDouble(), LUM_CURVE).toFloat()
             val lumDetail = r.nrLuminanceDetail.clamp(detail.nrLuminanceDetail) / PERCENT
             val lumContrast = r.nrLuminanceContrast.clamp(detail.nrLuminanceContrast) / PERCENT
             val col = r.nrColour.clamp(detail.nrColour) / PERCENT
@@ -205,7 +212,8 @@ data class DetailParams(
  *    over [DetailParams.LEVELS] levels, each a 5x5 kernel `h = [1, 4, 6, 4, 1] / 16` with holes of the level's step:
  *    - luminance: the level's smoothing is edge-stopped (`exp(-dL^2 / 2 sigma_e^2)`), its detail `d = L_i - L_i+1` is
  *      shrunk by the squared Wiener-like factor `d * (d^2 / (d^2 + tau^2))^2` (a smooth garrote: details
- *      well above tau pass almost whole, those below it vanish, no hard knee as in soft thresholding) and accumulated; the result is the coarsest level plus the shrunk details. Every stored value is
+ *      well above tau pass almost whole, those below it vanish, no hard knee as in soft thresholding) and
+ *      accumulated; the result is the coarsest level plus the shrunk details. Every stored value is
  *      rounded to float16 ([Half], as the GPU stores it) and `d` is taken against the stored `L_i+1`, so with no
  *      shrinkage the levels telescope back to the input exactly;
  *    - colour: the level's smoothing of `a, b` weighted by chroma distance and a luminance guard, mixed in by the
@@ -230,6 +238,7 @@ object DetailOp {
         render(rgb, width, height, p, showMask = true)
     }
 
+    @Suppress("NestedBlockDepth")
     private fun render(rgb: FloatArray, width: Int, height: Int, p: DetailParams, showMask: Boolean) {
         val n = width * height
         var lab = FloatArray(n * LAB)

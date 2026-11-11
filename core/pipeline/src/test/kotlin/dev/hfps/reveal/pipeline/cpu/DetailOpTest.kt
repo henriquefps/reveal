@@ -40,7 +40,9 @@ class DetailOpTest {
             for (x in 4 until w - 4) {
                 if (abs(x - w / 2) < 8 || y == h / 3) continue
                 val i = (y * w + x) * 3
-                val d = if (c == 0) (a[i] - b[i]).toDouble() else {
+                val d = if (c == 0) {
+                    (a[i] - b[i]).toDouble()
+                } else {
                     val da = a[i + 1] - b[i + 1]
                     val db = a[i + 2] - b[i + 2]
                     sqrt((da * da + db * db).toDouble())
@@ -166,8 +168,14 @@ class DetailOpTest {
         assertThat(proxy.sharpenGain).isWithin(1e-6f).of(full.sharpenGain * 0.8f)
         assertThat(proxy.gradientScale).isWithin(1e-6f).of(0.4f)
         val widest = DetailParams.from(
-            Detail(nrLuminance = 1f, nrColour = 1f, nrColourSmoothness = 100f, sharpenAmount = 1f, sharpenRadius = 3f,
-                sharpenMasking = 1f),
+            Detail(
+                nrLuminance = 1f,
+                nrColour = 1f,
+                nrColourSmoothness = 100f,
+                sharpenAmount = 1f,
+                sharpenRadius = 3f,
+                sharpenMasking = 1f,
+            ),
             1f,
         )
         assertThat(widest.reach).isEqualTo(DetailParams.MAX_REACH)
@@ -199,26 +207,41 @@ class DetailOpTest {
         assertThat(withDetail).isLessThan(without + 0.01)
     }
 
+    @Suppress("NestedBlockDepth")
     private fun halve(image: PipelineInput): PipelineInput {
         val w = image.width / 2
         val h = image.height / 2
         val out = FloatArray(w * h * 3)
-        for (y in 0 until h) for (x in 0 until w) for (c in 0 until 3) {
-            var s = 0f
-            for (dy in 0..1) for (dx in 0..1) s += image.linearRgb[((2 * y + dy) * image.width + 2 * x + dx) * 3 + c]
-            out[(y * w + x) * 3 + c] = s / 4f
+        for (y in 0 until h) {
+            for (x in 0 until w) {
+                for (c in 0 until 3) {
+                    var s = 0f
+                    for (dy in 0..1) {
+                        for (dx in 0..1) {
+                            s +=
+                                image.linearRgb[((2 * y + dy) * image.width + 2 * x + dx) * 3 + c]
+                        }
+                    }
+                    out[(y * w + x) * 3 + c] = s / 4f
+                }
+            }
         }
         return PipelineInput(image.kind, w, h, out, image.cameraToXyz, image.asShotMultipliers, image.saturation)
     }
 
+    @Suppress("NestedBlockDepth")
     private fun halveLab(lab: FloatArray): FloatArray {
         val w = W / 2
         val h = H / 2
         val out = FloatArray(w * h * 3)
-        for (y in 0 until h) for (x in 0 until w) for (c in 0 until 3) {
-            var s = 0f
-            for (dy in 0..1) for (dx in 0..1) s += lab[((2 * y + dy) * W + 2 * x + dx) * 3 + c]
-            out[(y * w + x) * 3 + c] = s / 4f
+        for (y in 0 until h) {
+            for (x in 0 until w) {
+                for (c in 0 until 3) {
+                    var s = 0f
+                    for (dy in 0..1) for (dx in 0..1) s += lab[((2 * y + dy) * W + 2 * x + dx) * 3 + c]
+                    out[(y * w + x) * 3 + c] = s / 4f
+                }
+            }
         }
         return out
     }

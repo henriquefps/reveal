@@ -291,7 +291,7 @@ class CpuDevelopTest {
     }
 
     private companion object {
-        const val GOLDEN_CRC_DETAIL_V6: Long = 279721035L
+        const val GOLDEN_CRC_DETAIL_V6: Long = 2313595005L
         const val GOLDEN_CRC_V4: Long = 3273411752L
         const val GOLDEN_CRC_LIGHT_V4: Long = 2469709740L
         const val GOLDEN_CRC_COLOUR_V4: Long = 3805206770L

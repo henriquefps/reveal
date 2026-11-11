@@ -43,10 +43,10 @@ class ZoomTilesTest {
     private val proxy = halve(full)
 
     @Before
-    fun setUp() = runBlocking {
+    fun setUp(): Unit = runBlocking {
         renderer = GpuDevelopRenderer.create()
         renderer.upload(proxy, K)
-        renderer.setFullResolution(PipelineInputTileSource(full), K)
+        check(renderer.setFullResolution(PipelineInputTileSource(full), K))
     }
 
     @After
@@ -62,7 +62,8 @@ class ZoomTilesTest {
     @Test
     fun hundredPercentShowsTilesThatMatchTheCpuAndTheExport() = runBlocking {
         renderer.setRecipe(edit)
-        // 100 %: the editor's scale is k screen pixels per proxy pixel. Proxy output point (256, 256) is full (512, 512).
+        // 100 %: the editor's scale is k screen pixels per proxy pixel; proxy output point (256, 256) is full
+        // (512, 512).
         val view = ViewTransform(K, 256f, 256f)
         val stats = withTimeout(TIMEOUT_MS) { renderer.awaitZoom(view, PANE_W, PANE_H) }
         Log.i(TAG, "100 %: $stats")
@@ -146,6 +147,38 @@ class ZoomTilesTest {
         assertThat(worst).isAtMost(1)
     }
 
+    /** A crop changes no pixel of a tile: the tiles stay and are drawn through the new geometry at once. */
+    @Test
+    fun aCropKeepsTheTilesAndMovesThem() = runBlocking {
+        renderer.setRecipe(edit)
+        val before = withTimeout(TIMEOUT_MS) { renderer.awaitZoom(ViewTransform(K, 256f, 256f), PANE_W, PANE_H) }
+        val cropped = edit.copy(geometry = Geometry(crop = CropRect(0.25f, 0.25f, 1f, 1f), rotate = 1))
+        renderer.setRecipe(cropped)
+        val proxyOut = CpuDevelop.mapping(proxy, cropped)
+        val view = ViewTransform(K, proxyOut.outputWidth / 2f, proxyOut.outputHeight / 2f)
+        val after = withTimeout(TIMEOUT_MS) { renderer.awaitZoom(view, PANE_W, PANE_H) }
+        val shot = renderer.renderView(view, PANE_W, PANE_H, OutputSettings(dither = false))
+        val fullOut = CpuDevelop.mapping(full, cropped)
+        val export = exportFull(cropped)
+        val x0 = fullOut.outputWidth / 2 - PANE_W / 2
+        val y0 = fullOut.outputHeight / 2 - PANE_H / 2
+        var differ = 0
+        for (y in 0 until PANE_H) {
+            for (x in 0 until PANE_W) {
+                for (c in 0 until 3) {
+                    if (shot[(y * PANE_W + x) * 4 + c] != export[((y + y0) * fullOut.outputWidth + x + x0) * 4 + c]) {
+                        differ++
+                    }
+                }
+            }
+        }
+        Log.i(
+            TAG,
+            "crop after the tiles: ${after.tiles - before.tiles} new tiles, $differ values differ from the export",
+        )
+        assertThat(differ).isEqualTo(0)
+    }
+
     @Test
     fun tilesBelowHundredPercentAgreeWithTheProxyAndWaitForTheEditToSettle() = runBlocking {
         renderer.setRecipe(edit)
@@ -158,7 +191,13 @@ class ZoomTilesTest {
         renderer.setRecipe(next)
         val proxyOnly = renderer.renderView(view, PANE_W, PANE_H, OutputSettings(dither = false))
         var mean = 0.0
-        for (i in tiles.indices) if (i % 4 != 3) mean += abs((tiles[i].toInt() and 0xff) - (proxyOnly[i].toInt() and 0xff))
+        for (i in tiles.indices) {
+            if (i % 4 !=
+                3
+            ) {
+                mean += abs((tiles[i].toInt() and 0xff) - (proxyOnly[i].toInt() and 0xff))
+            }
+        }
         mean /= PANE_W * PANE_H * 3
         Log.i(TAG, "70 % tiles vs proxy: mean $mean levels")
         // Same tone and colour, more detail: the mean difference stays small.
@@ -206,6 +245,7 @@ class ZoomTilesTest {
         const val PROXY_MEAN_LEVELS = 3.0
 
         /** The proxy: 2x2 means of the full-resolution image. */
+        @Suppress("NestedBlockDepth")
         fun halve(image: PipelineInput): PipelineInput {
             val w = image.width / 2
             val h = image.height / 2
@@ -214,7 +254,12 @@ class ZoomTilesTest {
                 for (x in 0 until w) {
                     for (c in 0 until 3) {
                         var s = 0f
-                        for (dy in 0..1) for (dx in 0..1) s += image.linearRgb[((2 * y + dy) * image.width + 2 * x + dx) * 3 + c]
+                        for (dy in 0..1) {
+                            for (dx in 0..1) {
+                                s +=
+                                    image.linearRgb[((2 * y + dy) * image.width + 2 * x + dx) * 3 + c]
+                            }
+                        }
                         out[(y * w + x) * 3 + c] = s / 4f
                     }
                 }

@@ -2,6 +2,7 @@ package dev.hfps.reveal.feature.editor.open
 
 import android.content.ContentResolver
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.net.Uri
 import android.provider.OpenableColumns
 import dev.hfps.image.ImageInput
@@ -15,6 +16,7 @@ import dev.hfps.image.source.CancelToken
 import dev.hfps.image.source.CancelledException
 import dev.hfps.reveal.pipeline.PipelineInput
 import dev.hfps.reveal.pipeline.gl.GlesRequirementException
+import dev.hfps.reveal.pipeline.input.BitmapTileSource
 import dev.hfps.reveal.pipeline.input.NativeRawTileSource
 import dev.hfps.reveal.pipeline.input.PipelineInputMapper
 import dev.hfps.reveal.pipeline.input.RegionTileSource
@@ -123,11 +125,12 @@ class PhotoOpener(private val resolver: ContentResolver) {
 
     /**
      * The full-resolution source of [uri] for the editor's zoom (docs/adr/0012): a RAW decoded once into native
-     * memory with the export's LibRaw path ([NativeRawTileSource], about 6 bytes per pixel while the editor is open), a
-     * standard image read in regions ([RegionTileSource], the document stays open until the source is closed). Upright,
-     * the same size the proxy was mapped from. Blocking, cancellable; the caller owns (closes) the result.
+     * memory with the export's LibRaw path ([NativeRawTileSource], 6 bytes per pixel while the editor is open), a
+     * standard image decoded once like the export ([BitmapTileSource], 4 bytes per pixel) or, above
+     * [FULL_DECODE_MAX_PIXELS], read in regions ([RegionTileSource], the document stays open until the source is
+     * closed). Upright, the same size the proxy was mapped from. Blocking, cancellable; the caller owns (closes) it.
      */
-    @Suppress("ThrowsCount")
+    @Suppress("ThrowsCount", "ReturnCount")
     fun openFullResolution(uri: Uri, cancel: CancelToken): TileSource {
         val image = openInput(uri, displayName(uri))
         try {
@@ -144,7 +147,24 @@ class PhotoOpener(private val resolver: ContentResolver) {
             }
             if (type.kind == ImageKind.OTHER) throw OpenException(OpenError.UNSUPPORTED_FORMAT)
             val orientation = runCatching { image.inspection.metadata.orientation }.getOrNull() ?: 1
-            return RegionTileSource(image.descriptor, orientation) { image.close() }
+            val fd = image.descriptor.fileDescriptor
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeFileDescriptor(fd, null, bounds)
+            if (bounds.outWidth.toLong() * bounds.outHeight > FULL_DECODE_MAX_PIXELS) {
+                // Very large: regions on demand (as the library viewer), the document stays open.
+                return RegionTileSource(image.descriptor, orientation) { image.close() }
+            }
+            // A JPEG region decode re-reads everything above the region (about 250 ms per tile at 12 MP on the
+            // emulator); one full decode (4 bytes per pixel, the export's own source) makes every tile cheap.
+            val options = BitmapFactory.Options().apply {
+                inPreferredConfig = Bitmap.Config.ARGB_8888
+                inPremultiplied = false
+                bounds.outColorSpace?.let { inPreferredColorSpace = it }
+            }
+            cancel.throwIfCancelled()
+            val bitmap = BitmapFactory.decodeFileDescriptor(fd, null, options) ?: throw OpenException(OpenError.CORRUPT)
+            image.close()
+            return BitmapTileSource(bitmap, orientation)
         } catch (@Suppress("TooGenericExceptionCaught") e: Throwable) {
             image.close()
             throw e
@@ -190,6 +210,9 @@ class PhotoOpener(private val resolver: ContentResolver) {
     }
 
     companion object {
+        /** Standard images above this many pixels are read in regions instead of decoded whole (160 MB at ARGB). */
+        const val FULL_DECODE_MAX_PIXELS: Long = 40_000_000L
+
         /** The user-facing reason for a failure while decoding or rendering. */
         fun classify(error: Throwable): OpenError = when (error) {
             is OpenException -> error.error

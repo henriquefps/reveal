@@ -1,6 +1,6 @@
 # ADR 0009: Export
 
-Status: accepted (M1, Export). Date: 2026-11-11. Builds on ADR 0002 (tiles seam, output transforms, dither,
+Status: accepted (M1, Export). Date: 2026-11-11. Amended by ADR 0012 (the Detail apron of every tile). Builds on ADR 0002 (tiles seam, output transforms, dither,
 sampling), 0004 (full decode, memory), 0006 (versions and recipes), 0007 (Light operators' grid), 0008 (profiles).
 
 Export renders the photo with the same shaders as the preview at full resolution, in tiles, encodes it to JPEG or
@@ -56,7 +56,9 @@ unquantised (RGBA32F) for 10/16-bit encoders (PNG/TIFF 16-bit in M5; tested agai
 further reads inside, that tap's weight being 0); its **input region** is what the geometry operator reads for that
 box (`GeometryMapping.sourceRegion`, Catmull-Rom margin included; null in an empty corner, then the tile is black).
 Tiles are sized so the input region fits the tile (the box edge divided by sqrt 2 when straightened). The geometry and
-Lanczos passes reuse the two RGBA32F targets, no extra texture. JVM-tested.
+Lanczos passes reuse the two RGBA32F targets, no extra texture. JVM-tested. Since M2 the Detail operator (slot 11)
+reads a neighbourhood: every input region grows by its reach (at most 72 px) and the geometry pass always runs to cut
+that apron off (ADR 0012, "Detail in export tiles").
 
 **Tile size and memory.** Default 2048: three RGBA16F `tile²` textures (source, scene, working, 32 MB each), two
 RGBA32F resampling targets and the output target, about 150 MB of GPU memory, plus the image-wide rows target

@@ -60,7 +60,13 @@ class ZoomGridTest {
         val proxy = GeometryMapping.of(geometry, 2400, 1600)
         val view = ZoomView(2.5f, proxy.outputWidth, proxy.outputHeight, full)
         // The centre of the output is the centre of the crop: full pixel (4500, 3000).
-        val (x, y) = view.imagePoint(ViewTransform(2.5f, proxy.outputWidth / 2f, proxy.outputHeight / 2f), 100, 100, 50f, 50f)
+        val (x, y) = view.imagePoint(
+            ViewTransform(2.5f, proxy.outputWidth / 2f, proxy.outputHeight / 2f),
+            100,
+            100,
+            50f,
+            50f,
+        )
         assertThat(x).isWithin(0.01f).of(4500f)
         assertThat(y).isWithin(0.01f).of(3000f)
     }

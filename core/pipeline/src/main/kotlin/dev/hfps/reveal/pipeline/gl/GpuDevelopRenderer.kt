@@ -179,16 +179,17 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
     val zoomStats: ZoomStats get() = zoom.stats
 
     /**
-     * Suspends until every full-resolution tile [view] needs in a [width] x [height] pane is developed for the current
-     * recipe and faded in. Without a window (tests), the pane also drives the tile scheduling.
+     * Suspends until the view is zoomed in far enough for tiles (some are wanted) and every one of them is developed
+     * for the current recipe and faded in. Without a window (tests) the pane [view] in a [width] x [height] surface
+     * drives the scheduling; with one, the window's panes do (and the arguments are not used).
      */
     suspend fun awaitZoom(view: ViewTransform, width: Int, height: Int): ZoomStats {
         val done = CompletableDeferred<ZoomStats>()
         handler.post {
             zoom.testPane = TilePane(view, width, height, null)
             zoom.whenIdle {
-                done.complete(zoom.stats)
-                true
+                val stats = zoom.stats
+                (stats.wanted > 0).also { if (it) done.complete(stats) }
             }
         }
         return done.await()
@@ -212,7 +213,12 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, readFbo)
         GLES30.glViewport(0, 0, width, height)
         drawOutput(
-            image, view, width, height, settings, surround,
+            image,
+            view,
+            width,
+            height,
+            settings,
+            surround,
             mapping = mapping,
             tiles = zoom.uniforms(view, mapping),
         )
@@ -225,6 +231,56 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
             pixels.get(flipped, row * width * RGBA, width * RGBA)
         }
         flipped
+    }
+
+    /**
+     * The edit as the window shows it now (its first pane: the whole frame when not comparing), drawn offscreen at the
+     * window's size with the ready zoom tiles, plus what maps its pixels to the image. Tests only; needs a window.
+     */
+    suspend fun renderShown(settings: OutputSettings): ShownView = onGl {
+        val image = checkNotNull(input) { "no input" }
+        check(egl.hasWindow) { "no window" }
+        val req = request.get()
+        val (width, height) = egl.windowSize()
+        val frame = req.frame ?: ViewFrame.whole(width, height)
+        val mapping = GeometryMapping.of(req.recipe.geometry, image.width, image.height)
+        val pane = CompareLayout.panes(
+            CompareMode.Off,
+            frame,
+            width,
+            height,
+            mapping.outputWidth,
+            mapping.outputHeight,
+            req.view,
+        ).first()
+        val params = image.params(req.recipe)
+        if (params != stageParams || stageMask) {
+            runStage1(params)
+            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, stageTex)
+            GLES30.glGenerateMipmap(GLES30.GL_TEXTURE_2D)
+        }
+        ensureReadTarget(width, height)
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, readFbo)
+        GLES30.glViewport(0, 0, width, height)
+        drawOutput(
+            image,
+            pane.view,
+            width,
+            height,
+            settings,
+            surround,
+            mapping = mapping,
+            tiles = if (tilesShown(req)) zoom.uniforms(pane.view, mapping) else null,
+        )
+        val pixels = ByteBuffer.allocateDirect(width * height * RGBA)
+        GLES30.glReadPixels(0, 0, width, height, GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, pixels)
+        GlSupport.checkError("shown readback")
+        val flipped = ByteArray(width * height * RGBA)
+        for (row in 0 until height) {
+            pixels.position((height - 1 - row) * width * RGBA)
+            pixels.get(flipped, row * width * RGBA, width * RGBA)
+        }
+        ShownView(flipped, width, height, frame, pane.view, image.pixelScale, mapping.outputWidth, mapping.outputHeight)
     }
 
     /** Sets the recipe to render. Coalesced. */
@@ -423,6 +479,7 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         if (framePosted.compareAndSet(false, true)) handler.post(::renderFrame)
     }
 
+    @Suppress("CyclomaticComplexMethod", "LongMethod")
     private fun renderFrame() {
         framePosted.set(false)
         val image = input ?: return
@@ -470,13 +527,8 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         }
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
         GLES30.glViewport(0, 0, width, height)
-        val tilesOn = zoom.active && !req.showOriginal && !req.geometryEditing && !req.detailMask
-        val tilePanes = if (tilesOn) {
-            // Only what is visible: the pane's clip, else the photo's frame (not the surface under the panels).
-            panes.filter { !it.original }.map { TilePane(it.view, width, height, it.clip ?: frame) }
-        } else {
-            emptyList()
-        }
+        val tilesOn = tilesShown(req)
+        val tilePanes = if (tilesOn) tilePanes(panes, width, height, frame) else emptyList()
         val fading = zoom.beforeFrame(req.recipe, mapping, tilePanes, System.nanoTime())
         drawPanes(image, panes, width, height, req, mapping, tilesOn)
         profiler.mark("output pass")
@@ -497,6 +549,14 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
     }
 
     // ------------------------------------------------------------------ GL work (GL thread only)
+
+    /** Zoom tiles show unless the photo shows the original, the crop mode's plane or the sharpening mask. */
+    private fun tilesShown(req: Request): Boolean =
+        zoom.active && !req.showOriginal && !req.geometryEditing && !req.detailMask
+
+    /** The edit's panes as the zoom sees them: only what is visible (the clip, else the photo's frame). */
+    private fun tilePanes(panes: List<ComparePane>, width: Int, height: Int, frame: ViewFrame): List<TilePane> =
+        panes.filter { !it.original }.map { TilePane(it.view, width, height, it.clip ?: frame) }
 
     /** Without a window (tests, benchmarks): the zoom's scheduling for its test pane, nothing is drawn. */
     private fun zoomOffscreen(image: UploadedImage) {
@@ -1254,6 +1314,23 @@ private class UploadedImage(
     /** The operator parameters of [recipe] for this image at its pixel scale. */
     fun params(recipe: Recipe): DevelopParams = DevelopParams.from(colour, recipe, pixelScale)
 }
+
+/**
+ * What [GpuDevelopRenderer.renderShown] read back: RGBA8 pixels of the [width] x [height] window (top row first), the
+ * photo's [frame], the pane's [view] (window terms, as the output pass uses it), the proxy's [pixelScale] and its
+ * geometry output size; `ZoomView(pixelScale, proxyOutputWidth, proxyOutputHeight, fullMapping).imagePoint(view, ...)`
+ * maps a window pixel to the full-resolution image.
+ */
+class ShownView(
+    val rgba: ByteArray,
+    val width: Int,
+    val height: Int,
+    val frame: ViewFrame,
+    val view: ViewTransform,
+    val pixelScale: Float,
+    val proxyOutputWidth: Int,
+    val proxyOutputHeight: Int,
+)
 
 /** The same input without its pixels (one black pixel): enough for [DevelopParams.from]. */
 private fun PipelineInput.colourOnly(): PipelineInput =

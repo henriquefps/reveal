@@ -61,15 +61,15 @@ class ZoomView(val k: Float, val proxyOutputWidth: Int, val proxyOutputHeight: I
     fun fullScale(scale: Float): Float = scale / k
 
     /** Full-resolution output point of proxy output point ([x], [y]). */
-    fun fullOutput(x: Float, y: Float): Pair<Float, Float> =
-        (x - proxyOutputWidth / 2f) * k + full.outputWidth / 2f to (y - proxyOutputHeight / 2f) * k + full.outputHeight / 2f
+    fun fullOutput(x: Float, y: Float): Pair<Float, Float> = (x - proxyOutputWidth / 2f) * k + full.outputWidth / 2f to
+        (y - proxyOutputHeight / 2f) * k + full.outputHeight / 2f
 
     /**
      * The tiles of [grid] a pane shows: [view] in a [windowWidth] x [windowHeight] surface (the output pass's maths:
      * output point `(sp - window / 2) / scale + centre`), clipped to [clip] (window pixels; null = whole window),
      * plus [margin] tiles around (prefetch), nearest to the pane's centre first. Empty below [ZoomGrid.MIN_SCALE].
      */
-    @Suppress("LongParameterList")
+    @Suppress("LongParameterList", "ReturnCount")
     fun visibleTiles(
         view: ViewTransform,
         windowWidth: Int,
@@ -90,7 +90,8 @@ class ZoomView(val k: Float, val proxyOutputWidth: Int, val proxyOutputHeight: I
         val maxX = corners.maxOf { it.first }
         val minY = corners.minOf { it.second }
         val maxY = corners.maxOf { it.second }
-        if (maxX < 0f || maxY < 0f || minX >= grid.imageWidth || minY >= grid.imageHeight) return emptyList()
+        val outside = maxX < 0f || maxY < 0f || minX >= grid.imageWidth
+        if (outside || minY >= grid.imageHeight) return emptyList()
         val tx0 = max(0, floor(minX / grid.tile).toInt() - margin)
         val ty0 = max(0, floor(minY / grid.tile).toInt() - margin)
         val tx1 = min(grid.columns - 1, floor(maxX / grid.tile).toInt() + margin)

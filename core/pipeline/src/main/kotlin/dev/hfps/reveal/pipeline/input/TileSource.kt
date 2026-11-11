@@ -205,9 +205,29 @@ class RegionTileSource(
         null,
     )
 
+    private var block: Bitmap? = null
+    private var blockLeft = 0
+    private var blockTop = 0
+
+    /**
+     * Readers ask for a tile in bands of a few dozen rows: the first band decodes the stored block holding the next
+     * [BLOCK_ROWS] upright rows of those columns (one region decode per tile), later bands are cut from it.
+     */
     @Synchronized
     override fun read(x: Int, y: Int, w: Int, h: Int, out: FloatArray) {
         val stored = storedBounds(x, y, w, h, storedWidth, storedHeight, orientation)
+        val cached = block?.takeIf {
+            stored.left >= blockLeft && stored.top >= blockTop &&
+                stored.left + stored.width <= blockLeft + it.width && stored.top + stored.height <= blockTop + it.height
+        } ?: decodeBlock(x, y, w, h)
+        linearise(cached, blockLeft, blockTop, x, y, w, h, out, storedWidth, storedHeight, orientation, lut)
+    }
+
+    private fun decodeBlock(x: Int, y: Int, w: Int, h: Int): Bitmap {
+        block?.recycle()
+        block = null
+        val rows = minOf(height - y, maxOf(h, BLOCK_ROWS))
+        val stored = storedBounds(x, y, w, rows, storedWidth, storedHeight, orientation)
         val left = maxOf(0, stored.left - MARGIN)
         val top = maxOf(0, stored.top - MARGIN)
         val right = minOf(storedWidth, stored.left + stored.width + MARGIN)
@@ -218,15 +238,16 @@ class RegionTileSource(
         }
         val part = decoder.decodeRegion(Rect(left, top, right, bottom), options)
             ?: throw java.io.IOException("Region decode failed")
-        try {
-            linearise(part, left, top, x, y, w, h, out, storedWidth, storedHeight, orientation, lut)
-        } finally {
-            part.recycle()
-        }
+        block = part
+        blockLeft = left
+        blockTop = top
+        return part
     }
 
     @Synchronized
     override fun close() {
+        block?.recycle()
+        block = null
         decoder.recycle()
         onClose()
     }
@@ -234,6 +255,9 @@ class RegionTileSource(
     private companion object {
         /** Stored pixels decoded around a region (JPEG MCUs are at most 16 px; chroma upsampling reads 1). */
         const val MARGIN = 16
+
+        /** Upright rows decoded at once (a zoom tile with its apron is 672). */
+        const val BLOCK_ROWS = 1024
     }
 }
 

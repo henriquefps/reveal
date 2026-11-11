@@ -173,7 +173,10 @@ class TiledRendererTest {
         val straight = Geometry(crop = CropRect(0.2f, 0.2f, 0.8f, 0.8f), angle = 7.3f)
         val turned = edit.copy(geometry = straight)
         assertThat(
-            render(detailPlan(256, straight), with = turned).contentEquals(render(detailPlan(1024, straight), with = turned)),
+            render(
+                detailPlan(256, straight),
+                with = turned,
+            ).contentEquals(render(detailPlan(1024, straight), with = turned)),
         ).isTrue()
         val preview = GpuDevelopRenderer.create()
         try {

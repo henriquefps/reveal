@@ -17,7 +17,8 @@ import org.junit.Test
 
 /**
  * Opt-in 100 % crops of the Detail operator (docs/adr/0012) on public CC0 high-ISO RAWs: a full-size dump
- * (`scripts/calibration/rawdump.sh <file.ARW> <out.rdump> full`), a crop, rendered by the CPU reference before and after
+ * (`scripts/calibration/rawdump.sh <file.ARW> <out.rdump> full`), a crop, rendered by the CPU reference before and
+ * after
  * noise reduction and sharpening. Writes `<out>-<name>.jpg` (small JPEGs for docs/screenshots/detail) and an overview.
  *
  * `REVEAL_DETAIL_DUMP=<rdump> REVEAL_DETAIL_OUT=<prefix> [REVEAL_DETAIL_CROP=x,y,w,h] [REVEAL_DETAIL_EV=0.0]
@@ -33,21 +34,27 @@ class DetailRenderSheetTest {
         val ev = System.getenv("REVEAL_DETAIL_EV")?.takeIf { it.isNotBlank() }?.toFloat() ?: 0f
         val light = Light(exposureEv = ev)
         write(raw.pipelineInput(maxOf(1, raw.width / OVERVIEW)), Recipe(light = light), "$out-overview.jpg")
-        val crop = System.getenv("REVEAL_DETAIL_CROP")?.takeIf { it.isNotBlank() }?.split(',')?.map { it.trim().toInt() }
-            ?: listOf(raw.width / 2 - CROP / 2, raw.height / 2 - CROP / 2, CROP, CROP)
+        val crop =
+            System.getenv("REVEAL_DETAIL_CROP")?.takeIf { it.isNotBlank() }?.split(',')?.map { it.trim().toInt() }
+                ?: listOf(raw.width / 2 - CROP / 2, raw.height / 2 - CROP / 2, CROP, CROP)
         val input = raw.crop(crop[0], crop[1], crop[2], crop[3])
         val recipes = listOf(
             "before" to Detail(),
-            "nr-luminance-40" to Detail(nrLuminance = 40f),
-            "nr-luminance-70" to Detail(nrLuminance = 70f),
-            "nr-colour-50" to Detail(nrColour = 50f),
-            "nr-40-colour-50" to Detail(nrLuminance = 40f, nrColour = 50f),
-            "nr-70-colour-50-detail-80" to Detail(nrLuminance = 70f, nrLuminanceDetail = 80f, nrColour = 50f),
-            "nr-70-contrast-60" to Detail(nrLuminance = 70f, nrLuminanceContrast = 60f, nrColour = 50f),
-            "sharpen-60" to Detail(sharpenAmount = 60f),
-            "after" to Detail(sharpenAmount = 50f, sharpenMasking = 30f, nrLuminance = 45f, nrColour = 50f),
-            "mask-60" to Detail(sharpenAmount = 50f, sharpenMasking = 60f),
-        )
+            // High ISO (6400-12800): strong luminance NR, colour NR, sharpening limited to edges.
+            "noise-reduction-high" to Detail(nrLuminance = 60f, nrColour = 50f),
+            "after-high" to Detail(sharpenAmount = 40f, sharpenMasking = 40f, nrLuminance = 60f, nrColour = 50f),
+            // Mid ISO (800-3200): gentle luminance NR keeps texture.
+            "noise-reduction-low" to Detail(nrLuminance = 20f, nrColour = 30f),
+            "after-low" to Detail(sharpenAmount = 50f, sharpenMasking = 20f, nrLuminance = 20f, nrColour = 30f),
+            "sharpening" to Detail(sharpenAmount = 60f, sharpenMasking = 30f),
+            "mask" to Detail(sharpenAmount = 50f, sharpenMasking = 30f),
+        ) + (
+            System.getenv("REVEAL_DETAIL_SWEEP")?.takeIf { it.isNotBlank() }?.let { _ ->
+                listOf(10f, 20f, 35f, 50f, 70f, 100f).map {
+                    "sweep-%03d".format(it.toInt()) to Detail(nrLuminance = it)
+                }
+            } ?: emptyList()
+            )
         for ((name, detail) in recipes) {
             val recipe = Recipe(light = light, detail = detail)
             val start = System.nanoTime()

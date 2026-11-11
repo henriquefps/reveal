@@ -13,6 +13,13 @@ All notable changes to Reveal are documented here. The format follows
 - Hidden XMP sidecars (`.<name>.xmp`) are read; the normal name wins when both exist, and Reveal keeps writing the
   normal name.
 - Stable ids (UUIDs) on photos and versions, ready for sync (database version 5).
+- Full-resolution zoom: zooming in past 50 % now shows the photo's real pixels instead of a magnified preview. The
+  original is decoded in the background after the photo opens; the visible part is developed in tiles with the same
+  maths as the export (the 100 % view is the exported pixels) and fades in within a fraction of a second. While a
+  slider moves the fast preview shows, and the sharp tiles come back when you let go.
+- Detail panel: sharpening (amount, radius, detail, masking, with a mask overlay while you drag Masking) and noise
+  reduction for luminance (amount, detail, contrast) and colour (amount, detail, smoothness). Judged at 100 %; the
+  zoomed-out view shows a matching approximation, and exports apply it at full resolution.
 
 ## [0.2.0] - 2026-11-11
 

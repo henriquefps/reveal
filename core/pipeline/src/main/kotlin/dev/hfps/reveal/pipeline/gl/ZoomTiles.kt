@@ -9,6 +9,7 @@ import android.util.Log
 import dev.hfps.reveal.pipeline.cpu.DevelopParams
 import dev.hfps.reveal.pipeline.geometry.GeometryMapping
 import dev.hfps.reveal.pipeline.input.TileSource
+import dev.hfps.reveal.pipeline.recipe.Geometry
 import dev.hfps.reveal.pipeline.recipe.Recipe
 import dev.hfps.reveal.pipeline.zoom.ZoomGrid
 import dev.hfps.reveal.pipeline.zoom.ZoomView
@@ -43,6 +44,7 @@ data class ZoomStats(
 internal data class TilePane(val view: ViewTransform, val windowWidth: Int, val windowHeight: Int, val clip: ViewFrame?)
 
 /** The uniforms of the output pass's tile path for one pane (`Shaders.OUTPUT_FRAG`). */
+@Suppress("LongParameterList")
 internal class TileUniforms(
     val k: Float,
     val fullOutputWidth: Int,
@@ -67,7 +69,8 @@ internal class TileUniforms(
  *
  * The full-resolution [TileSource] (decoded once in the background after open) is developed in tiles of
  * [ZoomGrid.TILE] px by a [TiledRenderer] whose context shares this one's textures (its own thread: a tile never
- * blocks a frame), with the export's code: the full-resolution Light grids built once per scene ([TiledRenderer.prepareZoom]),
+ * blocks a frame), with the export's code: the full-resolution Light grids built once per scene
+ * ([TiledRenderer.prepareZoom]),
  * the same scene/develop/Detail shaders at scale 1. Each tile goes into a slot of an RGBA16F **atlas** (two levels:
  * the 2x2 means serve views between 50 % and 100 %), found through a small **index** texture (one RGBA8 texel per
  * tile: slot, fade-in alpha, ready). The output pass reads the proxy as before and, where the index has a tile of the
@@ -190,10 +193,13 @@ internal class ZoomTiles(
      * Before drawing a frame: follows the edit ([recipe]; a change hides every tile until the edit settles), works out
      * the wanted tiles of [panes] and refreshes the index. Returns true while tiles are fading in (keep drawing).
      */
+    @Suppress("CyclomaticComplexMethod", "ReturnCount", "LoopWithTooManyJumpStatements")
     fun beforeFrame(recipe: Recipe, mapping: GeometryMapping, panes: List<TilePane>, now: Long): Boolean {
         val src = source ?: return false
         val g = grid ?: return false
         frameNo++
+        // Tiles are in image space: a crop or turn keeps them, but the mapping must follow the geometry at once.
+        geometry = recipe.geometry
         val params = DevelopParams.from(src.colour, recipe)
         if (params != genParams) {
             genParams = params
@@ -241,6 +247,7 @@ internal class ZoomTiles(
     }
 
     /** The tile uniforms of a pane of [view] (null when it shows no tiles: below 50 % or no source). */
+    @Suppress("ReturnCount")
     fun uniforms(view: ViewTransform, mapping: GeometryMapping): TileUniforms? {
         val src = source ?: return null
         val g = grid ?: return null
@@ -289,6 +296,7 @@ internal class ZoomTiles(
      */
     fun afterFrame(now: Long) = dispatch(now)
 
+    @Suppress("CyclomaticComplexMethod", "ReturnCount", "LongMethod")
     private fun dispatch(now: Long) {
         val src = source ?: return
         val w = worker
@@ -425,11 +433,12 @@ internal class ZoomTiles(
     private fun zoomView(mapping: GeometryMapping, src: TileSource): ZoomView =
         ZoomView(k, mapping.outputWidth, mapping.outputHeight, fullMapping(src))
 
-    private var fullGeometry: dev.hfps.reveal.pipeline.recipe.Geometry? = null
+    private var geometry: Geometry = Geometry()
+    private var fullGeometry: Geometry? = null
     private var fullMappingCache: GeometryMapping? = null
 
     private fun fullMapping(src: TileSource): GeometryMapping {
-        val geometry = genRecipe.geometry
+        val geometry = geometry
         val cached = fullMappingCache
         if (cached != null && geometry == fullGeometry) return cached
         return GeometryMapping.of(geometry, src.width, src.height).also {

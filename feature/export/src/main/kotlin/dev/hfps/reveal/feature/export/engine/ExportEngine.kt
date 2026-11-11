@@ -26,6 +26,7 @@ import dev.hfps.reveal.feature.export.model.ExportDestination
 import dev.hfps.reveal.feature.export.model.ExportFormat
 import dev.hfps.reveal.feature.export.model.ExportNaming
 import dev.hfps.reveal.feature.export.model.ExportOptions
+import dev.hfps.reveal.pipeline.cpu.DetailParams
 import dev.hfps.reveal.pipeline.cpu.OutputSettings
 import dev.hfps.reveal.pipeline.cpu.OutputSpace
 import dev.hfps.reveal.pipeline.export.ExportPlan
@@ -33,7 +34,6 @@ import dev.hfps.reveal.pipeline.gl.GlesRequirementException
 import dev.hfps.reveal.pipeline.gl.RenderCancelledException
 import dev.hfps.reveal.pipeline.gl.TiledRenderStats
 import dev.hfps.reveal.pipeline.gl.TiledRenderer
-import dev.hfps.reveal.pipeline.cpu.DetailParams
 import dev.hfps.reveal.pipeline.input.BitmapTileSource
 import dev.hfps.reveal.pipeline.input.NativeRawTileSource
 import dev.hfps.reveal.pipeline.input.TileSource

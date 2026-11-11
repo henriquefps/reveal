@@ -50,6 +50,7 @@ import dev.hfps.reveal.pipeline.gl.Histogram
 import dev.hfps.reveal.pipeline.recipe.Aspect
 import dev.hfps.reveal.pipeline.recipe.AspectPreset
 import dev.hfps.reveal.pipeline.recipe.Colour
+import dev.hfps.reveal.pipeline.recipe.Detail
 import dev.hfps.reveal.pipeline.recipe.EditHistory
 import dev.hfps.reveal.pipeline.recipe.Geometry
 import dev.hfps.reveal.pipeline.recipe.HistoryAction
@@ -123,6 +124,18 @@ class EditorPhoneScreenshotTest : EditorScreenshotBase("phone") {
 
     @Test fun colourFontScale200() = shoot("colour_font200") { Scaled(2f) { Editor(tool = ToolId.COLOUR) } }
 
+    /** Detail (docs/adr/0012): every amount at 0, so the shaping sliders are disabled. */
+    @Test fun detail() = shoot("detail") { Editor(tool = ToolId.DETAIL) }
+
+    /** Detail with sharpening and both noise reductions on, the whole panel. */
+    @Test fun detailEdited() = shoot("detail_edited") {
+        Editor(tool = ToolId.DETAIL, snap = PanelSnap.EXPANDED, detail = Photos.detail)
+    }
+
+    @Test fun detailFontScale200() = shoot("detail_font200") {
+        Scaled(2f) { Editor(tool = ToolId.DETAIL, detail = Photos.detail) }
+    }
+
     @Test fun historyPanel() = shoot("history") {
         Editor(tool = ToolId.HISTORY, snap = PanelSnap.EXPANDED, history = Photos.history)
     }
@@ -185,6 +198,8 @@ class EditorLandscapeScreenshotTest : EditorScreenshotBase("landscape") {
     @Test fun colour() = shoot("colour") { Editor(tool = ToolId.COLOUR) }
 
     @Test fun cropMode() = shoot("crop") { CropEditor() }
+
+    @Test fun detail() = shoot("detail") { Editor(tool = ToolId.DETAIL, detail = Photos.detail) }
 }
 
 @RunWith(AndroidJUnit4::class)
@@ -234,8 +249,9 @@ abstract class EditorScreenshotBase(private val size: String) {
         history: EditHistory = EditHistory(),
         geometry: Geometry = Geometry(),
         mode: ToolId? = null,
+        detail: Detail = Detail(),
     ) {
-        val recipe = Photos.recipe.copy(geometry = geometry)
+        val recipe = Photos.recipe.copy(geometry = geometry, detail = detail)
         EditorTheme {
             EditorContent(
                 state = EditorUiState(
@@ -284,6 +300,9 @@ private object Photos {
         light = Light(exposureEv = 0.7f, contrast = 18f, highlights = -64f, shadows = 35f),
         colour = Colour(WhiteBalance(temperatureK = 5600f, tint = 8f, mode = WbMode.CUSTOM), vibrance = 20f),
     )
+
+    /** A typical high-ISO Detail edit. */
+    val detail = Detail(sharpenAmount = 45f, sharpenMasking = 30f, nrLuminance = 35f, nrColour = 40f)
 
     // The synthetic scene's values are display-like (grey near 0.18); a camera exposes a RAW about 1.3 EV lower
     // (grey near 0.06), which is what Standard's baseline gain expects (docs/adr/0008). Exposed like a camera so the

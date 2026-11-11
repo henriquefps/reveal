@@ -60,8 +60,9 @@ class DevelopParams(
         private const val PERCENT = 100f
 
         /**
-         * Resolves [recipe] against [input]. [pixelScale] is how many full-resolution pixels one pixel of [input] covers
-         * (the proxy's downscale; 1 for full-resolution renders): only the Detail operator's lengths depend on it.
+         * Resolves [recipe] against [input]. [pixelScale] is how many full-resolution pixels one pixel of [input]
+         * covers (the proxy's downscale; 1 for full-resolution renders): only the Detail operator's lengths depend on
+         * it.
          */
         fun from(input: PipelineInput, recipe: Recipe, pixelScale: Float = 1f): DevelopParams {
             val wb = WhiteBalanceModel.solve(input, recipe.colour.whiteBalance)

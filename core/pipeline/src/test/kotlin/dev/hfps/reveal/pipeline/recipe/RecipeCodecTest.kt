@@ -40,9 +40,14 @@ class RecipeCodecTest {
         val text = codec.encode(Recipe())
 
         assertThat(text).isEqualTo(
-            """{"v":1,"profile":{"base":"standard"},"light":{"exposure":0.0},""" +
-                """"colour":{"whiteBalance":{"temperature":null,"tint":null}},""" +
-                """"effects":{},"detail":{},"optics":{},"geometry":{},"masks":[],"heals":[]}""",
+            """{"v":1,"profile":{"base":"standard","amount":100.0},""" +
+                """"light":{"exposure":0.0,"contrast":0.0,"highlights":0.0,"shadows":0.0,""" +
+                """"whites":0.0,"blacks":0.0},""" +
+                """"colour":{"whiteBalance":{"temperature":null,"tint":null,"mode":"as_shot",""" +
+                """"relTemperature":0.0,"relTint":0.0},"vibrance":0.0,"saturation":0.0},""" +
+                """"effects":{},"detail":{},"optics":{},""" +
+                """"geometry":{"crop":null,"angle":0.0,"rotate":0,"flipH":false,"flipV":false,""" +
+                """"aspect":{"preset":"free","w":1,"h":1,"locked":false}},"masks":[],"heals":[]}""",
         )
         assertThat(codec.decode(text)).isEqualTo(Recipe())
     }
@@ -123,5 +128,69 @@ class RecipeCodecTest {
     @Test
     fun `the production migrator table covers every version below the current one`() {
         for (from in 1 until RECIPE_VERSION) assertThat(RECIPE_MIGRATORS).containsKey(from)
+    }
+
+    @Test
+    fun `round trip keeps every M1 field`() {
+        val recipe = Recipe(
+            profile = Profile(BaseLook.CAMERA_MATCH, 140f),
+            light = Light(0.7f, contrast = 12f, highlights = -30f, shadows = 25f, whites = 5f, blacks = -8f),
+            colour = Colour(
+                WhiteBalance(5600f, -12f, WbMode.CUSTOM, relTemperature = 10f, relTint = -4f),
+                vibrance = 20f,
+                saturation = -15f,
+            ),
+            geometry = Geometry(
+                crop = CropRect(0.1f, 0.2f, 0.9f, 0.8f),
+                angle = -1.5f,
+                rotate = 3,
+                flipH = true,
+                flipV = true,
+                aspect = Aspect(AspectPreset.CUSTOM, 7, 5, locked = true),
+            ),
+        )
+
+        assertThat(codec.decode(codec.encode(recipe))).isEqualTo(recipe)
+        assertThat(recipe.isDefault()).isFalse()
+    }
+
+    @Test
+    fun `a stored M0 recipe still decodes with the new fields at their defaults`() {
+        val m0 = """{"v":1,"profile":{"base":"standard"},"light":{"exposure":0.7},""" +
+            """"colour":{"whiteBalance":{"temperature":5600.0,"tint":-12.5}},""" +
+            """"effects":{},"detail":{},"optics":{},"geometry":{},"masks":[],"heals":[]}"""
+
+        val recipe = codec.decode(m0)
+
+        assertThat(recipe).isEqualTo(
+            Recipe(light = Light(0.7f), colour = Colour(WhiteBalance(temperatureK = 5600f, tint = -12.5f))),
+        )
+        assertThat(recipe.geometry).isEqualTo(Geometry())
+        assertThat(recipe.profile.amountPercent).isEqualTo(100f)
+    }
+
+    @Test
+    fun `every look, white balance mode and aspect has a distinct stable key`() {
+        for (look in BaseLook.entries) {
+            val text = codec.encode(Recipe(profile = Profile(look)))
+            assertThat(codec.decode(text).profile.base).isEqualTo(look)
+        }
+        assertThat(codec.encode(Recipe(profile = Profile(BaseLook.CAMERA_MATCH)))).contains("\"camera_match\"")
+        for (mode in WbMode.entries) {
+            val text = codec.encode(Recipe(colour = Colour(WhiteBalance(mode = mode))))
+            assertThat(codec.decode(text).colour.whiteBalance.mode).isEqualTo(mode)
+        }
+        for (preset in AspectPreset.entries) {
+            val text = codec.encode(Recipe(geometry = Geometry(aspect = Aspect(preset))))
+            assertThat(codec.decode(text).geometry.aspect.preset).isEqualTo(preset)
+        }
+    }
+
+    @Test
+    fun `invalid geometry is rejected`() {
+        assertThrows(IllegalArgumentException::class.java) { CropRect(0.5f, 0f, 0.5f, 1f) }
+        assertThrows(IllegalArgumentException::class.java) { CropRect(-0.1f, 0f, 1f, 1f) }
+        assertThrows(IllegalArgumentException::class.java) { Geometry(rotate = 4) }
+        assertThrows(IllegalArgumentException::class.java) { Aspect(w = 0) }
     }
 }

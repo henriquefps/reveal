@@ -10,33 +10,37 @@ import dev.hfps.reveal.pipeline.recipe.Recipe
  * a constant; they can only disagree on arithmetic, which is what the parity test measures.
  *
  * @property wbMultipliers raw white-balance multipliers (R, G, B), G = 1.
- * @property highlightClip level each balanced channel is clamped to ([RawWhiteBalanceOp]): the input's saturation
- *   times `min(mul)`, or [RawWhiteBalanceOp.NO_CLIP] when the input has no saturation (standard images, synthetic).
+ * @property highlights clip levels for [HighlightReconstructionOp], or `null` when the input has no known saturation
+ *   (standard images, synthetic): no reconstruction.
  * @property cameraToWorking row-major 3x3, balanced camera RGB to linear Rec.2020.
  * @property exposureGain linear gain `2^EV`.
  * @property toneKnee knee of the base tone curve; [BaseToneOp.IDENTITY_KNEE] (curve is the identity) for
  *   display-referred input.
+ * @property tone the Light group's tone sliders ([LocalToneOp], [GlobalToneOp]).
  */
 class DevelopParams(
     val wbMultipliers: FloatArray,
     val cameraToWorking: FloatArray,
     val exposureGain: Float,
     val toneKnee: Float,
-    val highlightClip: Float = RawWhiteBalanceOp.NO_CLIP,
+    val highlights: HighlightParams? = null,
+    val tone: ToneParams = ToneParams(),
 ) {
     override fun equals(other: Any?): Boolean = other is DevelopParams &&
         wbMultipliers.contentEquals(other.wbMultipliers) &&
         cameraToWorking.contentEquals(other.cameraToWorking) &&
         exposureGain == other.exposureGain &&
         toneKnee == other.toneKnee &&
-        highlightClip == other.highlightClip
+        highlights == other.highlights &&
+        tone == other.tone
 
     override fun hashCode(): Int {
         var h = wbMultipliers.contentHashCode()
         h = h * HASH + cameraToWorking.contentHashCode()
         h = h * HASH + exposureGain.hashCode()
         h = h * HASH + toneKnee.hashCode()
-        return h * HASH + highlightClip.hashCode()
+        h = h * HASH + highlights.hashCode()
+        return h * HASH + tone.hashCode()
     }
 
     companion object {
@@ -52,8 +56,8 @@ class DevelopParams(
                 cameraToWorking = wb.balancedToWorking.toFloatArray(),
                 exposureGain = ExposureOp.gain(recipe.light.exposureEv),
                 toneKnee = if (scene) BaseToneOp.KNEE else BaseToneOp.IDENTITY_KNEE,
-                highlightClip = input.saturation?.let { RawWhiteBalanceOp.clipLevel(multipliers, it) }
-                    ?: RawWhiteBalanceOp.NO_CLIP,
+                highlights = input.saturation?.let { HighlightParams.from(multipliers, it) },
+                tone = ToneParams.from(recipe.light),
             )
         }
     }

@@ -4,6 +4,9 @@ package dev.hfps.reveal.pipeline.gl
  * GLSL ES shaders of the develop pipeline. Every function mirrors the CPU reference in `cpu/Operators.kt` line for
  * line (formulas are documented there); the parity test keeps them equal.
  *
+ * Stages: scene (WB, highlight reconstruction, matrix, exposure) -> [low-res Light passes] -> develop (local tone,
+ * base look, global tone) -> output. The Light group's GLSL lives in [LightShaders].
+ *
  * Version: `#version 300 es`. The plan asks for OpenGL ES 3.2 as the default target; the shaders only use ES 3.0
  * features (uniform blocks, `texelFetch`, `gl_VertexID`, 32-bit unsigned integer arithmetic, float render targets
  * through `EXT_color_buffer_float`, which is core in ES 3.2), so they run unchanged on a 3.2 phone and on emulator
@@ -18,24 +21,55 @@ void main() {
 }
 """
 
-    /**
-     * Stage 1, fused: raw white balance, camera matrix, exposure and the base tone curve. Reads the source texture
-     * texel by texel and writes the working-space texture 1:1 (RGBA16F).
-     */
-    const val DEVELOP_FRAG: String = """#version 300 es
-precision highp float;
-precision highp int;
-precision highp sampler2D;
-
+    /** The `Develop` uniform block (std140, binding 0), declared by both develop stages. */
+    private const val DEVELOP_BLOCK = """
 // One block, one sub-struct per operator (std140): each operator's parameters are uploaded from DevelopParams.
 layout(std140) uniform Develop {
-    vec4 wbMultiplier;       // RawWhiteBalanceOp: rgb = multipliers, w = highlight clip level
+    vec4 wbMultiplier;       // RawWhiteBalanceOp: rgb = multipliers
     mat4 cameraToWorking;    // CameraMatrixOp: upper-left 3x3, column-major
     vec4 exposure;           // ExposureOp: x = linear gain 2^EV
     vec4 baseTone;           // BaseToneOp: x = knee
 };
+"""
 
+    private const val HEADER = """#version 300 es
+precision highp float;
+precision highp int;
+precision highp sampler2D;
+"""
+
+    /**
+     * Stage 1, scene-linear (slots 1-5 of ADR 0002): raw white balance, highlight reconstruction, camera matrix and
+     * exposure. Reads the source texture texel by texel and writes the scene texture 1:1 (RGBA16F), which the
+     * local-tone guide passes read.
+     */
+    val SCENE_FRAG: String = HEADER + DEVELOP_BLOCK + LightShaders.COMMON + """
 uniform sampler2D uSource;
+uniform sampler2D uChroma;
+out vec4 outColor;
+""" + LightShaders.RECONSTRUCT + """
+void main() {
+    ivec2 p = ivec2(gl_FragCoord.xy);
+    vec3 c = texelFetch(uSource, p, 0).rgb;
+    c = c * wbMultiplier.rgb;
+    if (grid.w != 0.0) {
+        c = reconstructHighlights(c, p);
+    }
+    c = mat3(cameraToWorking) * c;
+    c = c * exposure.x;
+    outColor = vec4(c, 1.0);
+}
+"""
+
+    /**
+     * Stage 2, develop (slots 5b-8): highlights/shadows on scene-linear light, the base tone curve, then
+     * contrast/whites/blacks on display-referred light. Reads the scene texture 1:1 and writes the working-space
+     * texture (RGBA16F, mip-mapped) the output pass reads.
+     */
+    val DEVELOP_FRAG: String = HEADER + DEVELOP_BLOCK + LightShaders.COMMON + """
+uniform sampler2D uScene;
+uniform sampler2D uCoef;
+uniform sampler2D uMoments;
 out vec4 outColor;
 
 float toneCurve(float x) {
@@ -50,13 +84,18 @@ float toneCurve(float x) {
     float d = sqrt(sqrt(sqrt(1.0 + u8)));
     return k + (1.0 - k) * (u / d);
 }
-
+""" + LightShaders.TONE + """
 void main() {
-    vec3 c = texelFetch(uSource, ivec2(gl_FragCoord.xy), 0).rgb;
-    c = min(c * wbMultiplier.rgb, vec3(wbMultiplier.w));
-    c = mat3(cameraToWorking) * c;
-    c = c * exposure.x;
-    outColor = vec4(toneCurve(c.r), toneCurve(c.g), toneCurve(c.b), 1.0);
+    ivec2 p = ivec2(gl_FragCoord.xy);
+    vec3 c = texelFetch(uScene, p, 0).rgb;
+    if (tone.z != 0.0) {
+        c = localTone(c, p);
+    }
+    c = vec3(toneCurve(c.r), toneCurve(c.g), toneCurve(c.b));
+    if (tone.w != 0.0) {
+        c = globalTone(c);
+    }
+    outColor = vec4(c, 1.0);
 }
 """
 

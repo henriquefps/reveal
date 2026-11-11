@@ -1,0 +1,51 @@
+package dev.hfps.reveal.feature.editor
+
+import dev.hfps.reveal.feature.editor.tools.ToolId
+import dev.hfps.reveal.pipeline.recipe.BaseLook
+import dev.hfps.reveal.pipeline.recipe.ControlId
+import dev.hfps.reveal.pipeline.recipe.WbMode
+
+/** Test tags of the editor, for instrumented and screenshot tests (locale-independent). */
+object EditorTags {
+    const val CANVAS = "editor-canvas"
+    const val PREVIEW = "editor-preview"
+    const val LOADING = "editor-loading"
+    const val DEVELOPED = "editor-developed"
+    const val ERROR = "editor-error"
+    const val TOP_BAR = "editor-top-bar"
+    const val COMPARE = "editor-compare"
+    const val MORE = "editor-more"
+    const val UNDO = "editor-undo"
+    const val REDO = "editor-redo"
+    const val EXPORT = "editor-export"
+    const val PANEL = "editor-panel"
+    const val PANEL_HEADER = "editor-panel-header"
+    const val PANEL_RESET = "editor-panel-reset"
+    const val PANEL_BACK = "editor-panel-back"
+    const val PROFILE_ROW = "editor-profile-row"
+    const val TOOL_STRIP = "editor-tool-strip"
+    const val HISTOGRAM = "editor-histogram"
+    const val HISTOGRAM_SHADOWS = "editor-histogram-shadows"
+    const val HISTOGRAM_HIGHLIGHTS = "editor-histogram-highlights"
+    const val MENU_HISTOGRAM = "editor-menu-histogram"
+    const val MENU_SHADOWS = "editor-menu-shadows"
+    const val MENU_HIGHLIGHTS = "editor-menu-highlights"
+    const val COMPARE_MENU = "editor-compare-menu"
+    const val COMPARE_DIVIDER = "editor-compare-divider"
+    const val EYEDROPPER = "editor-eyedropper"
+    const val EYEDROPPER_HINT = "editor-eyedropper-hint"
+
+    /** The slider row of recipe control [id], e.g. `editor-control-exposure`. */
+    fun control(id: ControlId): String = "editor-control-${id.name.lowercase()}"
+
+    /** The exposure slider (the measurement test drags it). */
+    val EXPOSURE: String = control(ControlId.EXPOSURE)
+
+    fun tool(id: ToolId): String = "editor-tool-${id.name.lowercase()}"
+
+    fun look(look: BaseLook): String = "editor-look-${look.name.lowercase()}"
+
+    fun wbMode(mode: WbMode): String = "editor-wb-${mode.name.lowercase()}"
+
+    fun compareOption(index: Int): String = "editor-compare-option-$index"
+}

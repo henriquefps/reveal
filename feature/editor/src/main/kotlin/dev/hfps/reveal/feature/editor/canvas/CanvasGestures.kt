@@ -13,6 +13,8 @@ import androidx.compose.foundation.gestures.calculatePan
 import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.input.pointer.PointerEvent
@@ -36,15 +38,23 @@ private const val DOUBLE_TAP_ZOOM_MS = 260
 private const val MIN_FLING_SPEED = 80f
 
 /**
- * Pinch zoom, one-finger pan when zoomed, fling, double-tap fit <-> 100 % and hold-to-show-original for the photo
- * canvas. [onHold] is called with `true` when the hold starts and `false` when it ends.
+ * Pinch zoom, one-finger pan when zoomed, fling, double-tap fit <-> 100 %, hold-to-show-original and tap for the
+ * photo canvas. [onHold] is called with `true` when the hold starts and `false` when it ends; [onTap] on a single
+ * tap (after the double-tap timeout).
  */
 @Composable
-internal fun Modifier.canvasGestures(state: ZoomState, scope: CoroutineScope, onHold: (Boolean) -> Unit): Modifier {
+internal fun Modifier.canvasGestures(
+    state: ZoomState,
+    scope: CoroutineScope,
+    onTap: () -> Unit = {},
+    onHold: (Boolean) -> Unit,
+): Modifier {
     val density = androidx.compose.ui.platform.LocalDensity.current
     val slop = LocalViewConfiguration.current.touchSlop
+    val currentHold by rememberUpdatedState(onHold)
+    val currentTap by rememberUpdatedState(onTap)
     return this
-        .pointerInput(state) { detectDoubleTap(state, scope) { onHold(it) } }
+        .pointerInput(state) { detectDoubleTap(state, scope, { currentTap() }) { currentHold(it) } }
         .pointerInput(state, density) { detectZoomPanFling(state, scope, slop, density) }
 }
 
@@ -58,6 +68,7 @@ suspend fun ZoomState.animateDoubleTap(focusX: Float, focusY: Float) {
 private suspend fun PointerInputScope.detectDoubleTap(
     state: ZoomState,
     scope: CoroutineScope,
+    onTap: () -> Unit,
     onHold: (Boolean) -> Unit,
 ) {
     var zoomJob: Job? = null
@@ -74,6 +85,7 @@ private suspend fun PointerInputScope.detectDoubleTap(
                 onHold(false)
             }
         },
+        onTap = { onTap() },
         onDoubleTap = { tap ->
             zoomJob?.cancel()
             zoomJob = scope.launch { state.animateDoubleTap(tap.x, tap.y) }

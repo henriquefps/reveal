@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- RevealSlider: accessibility actions and the numeric input. -->
+    <string name="slider_increase">Increase</string>
+    <string name="slider_decrease">Decrease</string>
+    <string name="slider_increase_fine">Increase finely</string>
+    <string name="slider_decrease_fine">Decrease finely</string>
+    <string name="slider_reset">Reset</string>
+    <string name="slider_type_value">Type a value</string>
+    <string name="slider_range">%1$s to %2$s</string>
+    <string name="slider_input_invalid">Not a number</string>
+    <string name="slider_input_cancel">Cancel</string>
+    <string name="slider_input_done">Done</string>
+</resources>

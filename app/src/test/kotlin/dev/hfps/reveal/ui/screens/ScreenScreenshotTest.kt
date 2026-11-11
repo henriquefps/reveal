@@ -7,7 +7,6 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.github.takahirom.roborazzi.captureRoboImage
 import dev.hfps.reveal.designsystem.theme.EditorTheme
 import dev.hfps.reveal.designsystem.theme.RevealTheme
-import dev.hfps.reveal.feature.editor.DevelopControls
 import dev.hfps.reveal.feature.editor.EditorActions
 import dev.hfps.reveal.feature.editor.EditorContent
 import dev.hfps.reveal.feature.editor.EditorPhase
@@ -70,7 +69,6 @@ class ScreenScreenshotTest {
                 state = EditorUiState(
                     fileName = "a-very-long-file-name-from-a-camera-that-names-files-verbosely-0001.DNG",
                     phase = EditorPhase.Failed(OpenError.UNSUPPORTED_CAMERA),
-                    controls = DevelopControls(),
                 ),
                 actions = EditorActions(onBack = {}),
             )

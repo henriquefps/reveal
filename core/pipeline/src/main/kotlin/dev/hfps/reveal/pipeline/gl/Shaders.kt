@@ -101,7 +101,8 @@ void main() {
 
     /**
      * Last stage: view transform (zoom/pan, texelFetch at 1:1, else textureLod with a CPU-computed LOD), output
-     * transform, sRGB OETF and 8-bit dithering. Pixels outside the image get the neutral surround colour.
+     * transform, sRGB OETF, 8-bit dithering and the optional clipping-warning overlay. Pixels outside the image get
+     * the neutral surround colour.
      */
     const val OUTPUT_FRAG: String = """#version 300 es
 precision highp float;
@@ -113,7 +114,8 @@ layout(std140) uniform Output {
     vec4 image;              // xy = image size in pixels, z = screen pixels per image pixel, w = explicit LOD
     vec4 viewport;           // xy = image point at the view centre (image px), zw = view size in pixels
     vec4 surround;           // rgb = display-encoded colour outside the image
-    uvec4 dither;            // x = seed, y = 1 when dithering is on, z = sampling mode (0 texelFetch, 1 textureLod)
+    uvec4 dither;            // x = seed, y = 1 when dithering is on, z = sampling mode (0 texelFetch, 1 textureLod),
+                             // w = clipping-warning bits (1 shadows, 2 highlights; ClippingWarnings)
 };
 
 uniform sampler2D uStage;
@@ -156,6 +158,13 @@ void main() {
     vec3 e = srgbOetf(c);
     float n = dither.y != 0u ? ditherNoise(ivec2(floor(sp)), dither.x) : 0.5;
     vec3 q = min(floor(e * 255.0 + n), 255.0) / 255.0;
+    // Clipping warnings (ClippingWarnings.classify): on the encoded value before dithering.
+    float m = max(e.r, max(e.g, e.b));
+    if ((dither.w & 2u) != 0u && m >= 254.5 / 255.0) {
+        q = vec3(255.0, 26.0, 26.0) / 255.0;
+    } else if ((dither.w & 1u) != 0u && m < 0.5 / 255.0) {
+        q = vec3(0.0, 102.0, 255.0) / 255.0;
+    }
     outColor = vec4(inside ? q : surround.rgb, 1.0);
 }
 """

@@ -23,6 +23,7 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
+import kotlin.math.roundToInt
 import kotlinx.coroutines.CompletableDeferred
 
 /** Where the view looks: [scale] screen pixels per image pixel, centred on image point ([centerX], [centerY]). */
@@ -55,7 +56,7 @@ data class FrameStats(
  * Create with [create]; call [close] when done. Failures to meet the GPU requirements surface from [create] as
  * [GlesRequirementException].
  */
-@Suppress("TooManyFunctions")
+@Suppress("TooManyFunctions", "LargeClass")
 class GpuDevelopRenderer private constructor() : AutoCloseable {
     private val thread = HandlerThread("reveal-gl").apply { start() }
     private val handler = Handler(thread.looper)
@@ -66,6 +67,10 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         val showOriginal: Boolean,
         val view: ViewTransform,
         val space: OutputSpace,
+        val frame: ViewFrame? = null,
+        val compare: CompareMode = CompareMode.Off,
+        val clipping: ClippingWarnings = ClippingWarnings.NONE,
+        val loupe: Loupe? = null,
     )
 
     @Volatile
@@ -107,6 +112,17 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
     private var readFbo = 0
     private var input: UploadedImage? = null
     private var stageParams: DevelopParams? = null
+    private var sceneKey: SceneKey? = null
+    private var guideValid = false
+    private var originalTex = 0
+    private var originalFbo = 0
+    private var originalValid = false
+    private var sourceFbo = 0
+    private val histogram = HistogramReadback()
+    private val profiler = PassProfiler()
+    private var histogramDirty = false
+    private var histogramPosted = false
+    private var histogramPollPosted = false
     private var frames = 0L
     private var lastStats = FrameStats(0, 0, 0f, 0f)
 
@@ -149,6 +165,80 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         update { it.copy(space = space) }
     }
 
+    /**
+     * Sets the visible part of the window where the photo is framed (window pixels); `null` = the whole window. The
+     * [ViewTransform] of [setView] is in frame terms (see [ViewFrame]). Coalesced.
+     */
+    fun setFrame(frame: ViewFrame?) {
+        update { it.copy(frame = frame) }
+    }
+
+    /** Sets the before/after comparison drawn on screen. Coalesced. */
+    fun setCompare(mode: CompareMode) {
+        update { it.copy(compare = mode) }
+    }
+
+    /** Shows or hides (`null`) the magnifier of the eyedropper. Coalesced. */
+    fun setLoupe(loupe: Loupe?) {
+        update { it.copy(loupe = loupe) }
+    }
+
+    /** Turns the on-screen clipping overlays on or off (see [ClippingWarnings]). Coalesced. */
+    fun setClippingWarnings(warnings: ClippingWarnings) {
+        update { it.copy(clipping = warnings) }
+    }
+
+    /** Called on the GL thread with each new histogram of the displayed photo while [histogramEnabled]. */
+    @Volatile
+    var onHistogram: ((Histogram) -> Unit)? = null
+
+    /** Computes a histogram of the displayed photo after it changes, rate-limited (see [HistogramReadback]). */
+    @Volatile
+    var histogramEnabled: Boolean = false
+        set(value) {
+            field = value
+            if (value) {
+                handler.post {
+                    histogramDirty = true
+                    requestFrame()
+                }
+            }
+        }
+
+    /**
+     * Per-pass profiling of on-screen frames (each section ends with `glFinish`; measurements only). Read the means
+     * with [passProfile]; setting it resets them.
+     */
+    var profilePasses: Boolean
+        get() = profiler.enabled
+        set(value) {
+            handler.post {
+                profiler.reset()
+                profiler.enabled = value
+            }
+        }
+
+    /** Mean milliseconds per section of the profiled frames (see [profilePasses]). */
+    suspend fun passProfile(): Map<String, Float> = onGl { profiler.snapshot() }
+
+    /** GL-thread milliseconds of the last histogram (request draw + map + binning), for measurements. */
+    val histogramMs: Float get() = histogram.lastMs
+
+    /** GL-thread milliseconds of the last histogram request alone (draw + readback issue). */
+    val histogramRequestMs: Float get() = histogram.lastRequestMs
+
+    /** Milliseconds from the last histogram request to its result (GPU latency included). */
+    val histogramLatencyMs: Float get() = histogram.lastLatencyMs
+
+    /** Histogram readbacks so far. */
+    val histogramCount: Long get() = histogram.count
+
+    /**
+     * Mean of the **source** pixels (the uploaded input before any develop step: un-balanced camera RGB for a RAW)
+     * in the square of half-size [radius] around image pixel ([x], [y]), clipped to the image; for the eyedropper.
+     */
+    suspend fun sampleSource(x: Int, y: Int, radius: Int): FloatArray = onGl { readSourceMean(x, y, radius) }
+
     /** Sets the neutral colour around the photo from an opaque `0xRRGGBB` value (display-encoded). */
     fun setSurround(rgb: Int) {
         surround = floatArrayOf((rgb shr 16 and 0xff) / 255f, (rgb shr 8 and 0xff) / 255f, (rgb and 0xff) / 255f)
@@ -185,6 +275,10 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
     /** Renders [recipe] offscreen through the output transform; RGBA8, top row first (`width*height*4`). */
     suspend fun renderOutput(recipe: Recipe, settings: OutputSettings = OutputSettings()): ByteArray =
         onGl { readOutput(recipe, settings) }
+
+    /** [renderOutput] with the clipping overlays drawn as on screen (tests of the output-pass flag). */
+    suspend fun renderOutput(recipe: Recipe, settings: OutputSettings, clipping: ClippingWarnings): ByteArray =
+        onGl { readOutput(recipe, settings, clipping) }
 
     /**
      * Times full offscreen renders (stage 1 + output pass into an RGBA8 target of the image size) for each recipe,
@@ -231,20 +325,31 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         framePosted.set(false)
         val image = input
         if (image == null || !egl.hasWindow) return
+        profiler.begin()
         val start = System.nanoTime()
         val req = request.get()
+        val (width, height) = egl.windowSize()
+        val frame = req.frame ?: ViewFrame.whole(width, height)
+        val compare = if (req.showOriginal) CompareMode.Off else req.compare
+        val panes = CompareLayout.panes(compare, frame, width, height, image.width, image.height, req.view) +
+            listOfNotNull(req.loupe?.let { CompareLayout.loupePane(it, width, height) })
+        if (panes.any { it.original }) ensureOriginal(image)
         val params = DevelopParams.from(image.colour, if (req.showOriginal) Recipe.DEFAULT else req.recipe)
+        profiler.mark("params (CPU)")
         if (params != stageParams) {
             runStage1(params)
             GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, stageTex)
             GLES30.glGenerateMipmap(GLES30.GL_TEXTURE_2D)
+            profiler.mark("mipmaps")
+            histogramDirty = true
         }
-        val (width, height) = egl.windowSize()
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
         GLES30.glViewport(0, 0, width, height)
-        drawOutput(image, req.view, width, height, OutputSettings(req.space), surround)
+        drawPanes(image, panes, width, height, req)
+        profiler.mark("output pass")
         val submitted = System.nanoTime()
         egl.swap()
+        profiler.mark("swap")
         var gpuWall = lastStats.gpuWallMs
         if (measureGpuTime) {
             GLES20.glFinish()
@@ -253,6 +358,7 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         frames++
         lastStats = FrameStats(frames, updates.get(), gpuWall, (submitted - start) / NANOS_PER_MS)
         onFrame?.invoke(lastStats)
+        maybeMeasureHistogram()
     }
 
     // ------------------------------------------------------------------ GL work (GL thread only)
@@ -267,17 +373,35 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
             if (key != reconKey) {
                 light.reconstruct(sourceTex, params.wbMultipliers, hp)
                 reconKey = key
+                profiler.mark("highlight reconstruction")
             }
         }
         uploadUbo(developUbo, developBlock(params))
         uploadUbo(lightUbo, lightBlock(params, image.grid, reconstruct))
-        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, sceneFbo)
-        GLES30.glViewport(0, 0, image.width, image.height)
-        GLES30.glUseProgram(sceneProgram)
-        bindTextures(sourceTex, if (reconstruct) light.chromaTexture else sourceTex)
-        GLES30.glDrawArrays(GLES30.GL_TRIANGLES, 0, 3)
-        GlSupport.checkError("scene stage")
-        if (params.tone.localActive) light.guide(sceneTex)
+        // The scene texture and the guide depend only on what reaches scene-linear light (white balance, matrix,
+        // exposure, reconstruction): a drag of a tone slider re-runs only the develop pass.
+        val scene = SceneKey(
+            params.wbMultipliers.toList(),
+            params.cameraToWorking.toList(),
+            params.exposureGain,
+            if (reconstruct) hp else null,
+        )
+        if (scene != sceneKey) {
+            GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, sceneFbo)
+            GLES30.glViewport(0, 0, image.width, image.height)
+            GLES30.glUseProgram(sceneProgram)
+            bindTextures(sourceTex, if (reconstruct) light.chromaTexture else sourceTex)
+            GLES30.glDrawArrays(GLES30.GL_TRIANGLES, 0, 3)
+            GlSupport.checkError("scene stage")
+            profiler.mark("scene pass")
+            sceneKey = scene
+            guideValid = false
+        }
+        if (params.tone.localActive && !guideValid) {
+            light.guide(sceneTex)
+            guideValid = true
+            profiler.mark("guided filter")
+        }
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, stageFbo)
         GLES30.glViewport(0, 0, image.width, image.height)
         GLES30.glUseProgram(developProgram)
@@ -289,6 +413,7 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         )
         GLES30.glDrawArrays(GLES30.GL_TRIANGLES, 0, 3)
         GlSupport.checkError("develop stage")
+        profiler.mark("develop pass")
         stageParams = params
     }
 
@@ -301,6 +426,7 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, unit0)
     }
 
+    @Suppress("LongParameterList")
     private fun drawOutput(
         image: UploadedImage,
         view: ViewTransform,
@@ -308,11 +434,16 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         height: Int,
         settings: OutputSettings,
         surround: FloatArray,
+        texture: Int = stageTex,
+        clipping: ClippingWarnings = ClippingWarnings.NONE,
     ) {
         GLES30.glUseProgram(outputProgram)
-        uploadUbo(outputUbo, outputBlock(image.width, image.height, view, width, height, settings, surround))
+        uploadUbo(
+            outputUbo,
+            outputBlock(image.width, image.height, view, width, height, settings, surround, clipping.bits),
+        )
         GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, stageTex)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, texture)
         val magnified = OutputSampling.nearestMagnification(view.scale)
         GLES30.glTexParameteri(
             GLES30.GL_TEXTURE_2D,
@@ -323,12 +454,12 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         GlSupport.checkError("output pass")
     }
 
-    private fun drawOutputOffscreen(settings: OutputSettings) {
+    private fun drawOutputOffscreen(settings: OutputSettings, clipping: ClippingWarnings = ClippingWarnings.NONE) {
         val image = checkNotNull(input) { "no input" }
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, readFbo)
         GLES30.glViewport(0, 0, image.width, image.height)
         val identity = ViewTransform(1f, image.width / 2f, image.height / 2f)
-        drawOutput(image, identity, image.width, image.height, settings, surround)
+        drawOutput(image, identity, image.width, image.height, settings, surround, clipping = clipping)
     }
 
     private fun readLinear(recipe: Recipe): FloatArray {
@@ -347,12 +478,16 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         return out
     }
 
-    private fun readOutput(recipe: Recipe, settings: OutputSettings): ByteArray {
+    private fun readOutput(
+        recipe: Recipe,
+        settings: OutputSettings,
+        clipping: ClippingWarnings = ClippingWarnings.NONE,
+    ): ByteArray {
         val image = checkNotNull(input) { "no input" }
         runStage1(DevelopParams.from(image.colour, recipe))
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, stageTex)
         GLES30.glGenerateMipmap(GLES30.GL_TEXTURE_2D)
-        drawOutputOffscreen(settings)
+        drawOutputOffscreen(settings, clipping)
         val pixels = ByteBuffer.allocateDirect(image.width * image.height * RGBA)
         GLES30.glReadPixels(0, 0, image.width, image.height, GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, pixels)
         GlSupport.checkError("readback of the output")
@@ -437,6 +572,8 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         input = UploadedImage(image.width, image.height, image.colourOnly(), grid, reconstruct)
         stageParams = null
         reconKey = null
+        sceneKey = null
+        guideValid = false
         val levels = 32 - Integer.numberOfLeadingZeros(maxOf(image.width, image.height))
         sourceTex = newTexture(1, image.width, image.height, GLES30.GL_NEAREST, GLES30.GL_NEAREST)
         stageTex = newTexture(levels, image.width, image.height, GLES30.GL_LINEAR_MIPMAP_LINEAR, GLES30.GL_LINEAR)
@@ -514,6 +651,7 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
     }
 
     private fun deleteImageTextures() {
+        releaseCompareAndReadbacks()
         GLES30.glDeleteTextures(4, intArrayOf(sourceTex, stageTex, readTex, sceneTex), 0)
         GLES30.glDeleteFramebuffers(3, intArrayOf(stageFbo, readFbo, sceneFbo), 0)
         sceneTex = 0
@@ -539,6 +677,160 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
     private fun uploadUbo(buffer: Int, data: ByteBuffer) {
         GLES30.glBindBuffer(GLES30.GL_UNIFORM_BUFFER, buffer)
         GLES30.glBufferData(GLES30.GL_UNIFORM_BUFFER, data.remaining(), data, GLES30.GL_DYNAMIC_DRAW)
+    }
+
+    // ------------------------------------------------------------------ compare, histogram, sampling (GL thread)
+
+    /** Draws the output pass once per compare pane, scissored to the pane where it has a clip. */
+    private fun drawPanes(image: UploadedImage, panes: List<ComparePane>, width: Int, height: Int, req: Request) {
+        val settings = OutputSettings(req.space)
+        if (panes.first().clip != null) {
+            // Side by side: the gap between the panes is the surround.
+            GLES30.glClearColor(surround[0], surround[1], surround[2], 1f)
+            GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
+        }
+        for (pane in panes) {
+            val clip = pane.clip
+            if (clip == null) {
+                GLES30.glDisable(GLES30.GL_SCISSOR_TEST)
+            } else {
+                val x = clip.left.roundToInt()
+                val top = clip.top.roundToInt()
+                val w = (clip.left + clip.width).roundToInt() - x
+                val h = (clip.top + clip.height).roundToInt() - top
+                GLES30.glEnable(GLES30.GL_SCISSOR_TEST)
+                GLES30.glScissor(x, height - (top + h), w.coerceAtLeast(0), h.coerceAtLeast(0))
+            }
+            drawOutput(
+                image = image,
+                view = pane.view,
+                width = width,
+                height = height,
+                settings = settings,
+                surround = surround,
+                texture = if (pane.original) originalTex else stageTex,
+                clipping = if (pane.original) ClippingWarnings.NONE else req.clipping,
+            )
+        }
+        GLES30.glDisable(GLES30.GL_SCISSOR_TEST)
+        if (panes.none { it.original }) releaseOriginal()
+    }
+
+    /**
+     * Keeps a developed copy of the original (default recipe) for split and side-by-side views: stage 1 runs with
+     * the defaults, the stage texture is blitted into its own mip-mapped texture, and the stage is marked stale so
+     * the edit is developed again. Freed as soon as no pane shows the original.
+     */
+    private fun ensureOriginal(image: UploadedImage) {
+        if (originalValid) return
+        if (originalTex == 0) {
+            val levels = 32 - Integer.numberOfLeadingZeros(maxOf(image.width, image.height))
+            originalTex = newTexture(
+                levels,
+                image.width,
+                image.height,
+                GLES30.GL_LINEAR_MIPMAP_LINEAR,
+                GLES30.GL_LINEAR,
+            )
+            originalFbo = newFramebuffer(originalTex)
+        }
+        runStage1(DevelopParams.from(image.colour, Recipe.DEFAULT))
+        GLES30.glBindFramebuffer(GLES30.GL_READ_FRAMEBUFFER, stageFbo)
+        GLES30.glBindFramebuffer(GLES30.GL_DRAW_FRAMEBUFFER, originalFbo)
+        GLES30.glBlitFramebuffer(
+            0, 0, image.width, image.height, 0, 0, image.width, image.height,
+            GLES30.GL_COLOR_BUFFER_BIT, GLES30.GL_NEAREST,
+        )
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, originalTex)
+        GLES30.glGenerateMipmap(GLES30.GL_TEXTURE_2D)
+        GlSupport.checkError("original for compare")
+        stageParams = null
+        originalValid = true
+    }
+
+    private fun releaseOriginal() {
+        if (originalTex == 0) return
+        GLES30.glDeleteTextures(1, intArrayOf(originalTex), 0)
+        GLES30.glDeleteFramebuffers(1, intArrayOf(originalFbo), 0)
+        originalTex = 0
+        originalFbo = 0
+        originalValid = false
+    }
+
+    /**
+     * After a presented frame: starts a histogram readback of the displayed stage now, or once the rate limit allows
+     * (trailing update); a readback in flight is polled until the GPU finished it.
+     */
+    @Suppress("ReturnCount")
+    private fun maybeMeasureHistogram() {
+        if (!histogramEnabled || onHistogram == null) return
+        if (histogram.pending) {
+            scheduleHistogramPoll()
+            return
+        }
+        if (!histogramDirty) return
+        val image = input ?: return
+        val wait = histogram.waitMs()
+        if (wait == 0L) {
+            profiler.begin()
+            histogram.request(image.width, image.height) { scale, w, h ->
+                val view = ViewTransform(scale, image.width / 2f, image.height / 2f)
+                drawOutput(image, view, w, h, OutputSettings(dither = false), surround)
+            }
+            profiler.mark("histogram request")
+            histogramDirty = false
+            scheduleHistogramPoll()
+        } else if (!histogramPosted) {
+            histogramPosted = true
+            handler.postDelayed({
+                histogramPosted = false
+                requestFrame()
+            }, wait)
+        }
+    }
+
+    private fun scheduleHistogramPoll() {
+        if (histogramPollPosted) return
+        histogramPollPosted = true
+        handler.postDelayed({
+            histogramPollPosted = false
+            val result = histogram.poll()
+            when {
+                result != null -> {
+                    onHistogram?.invoke(result)
+                    // The photo changed meanwhile: the next frame (re-rendered if needed) measures it.
+                    if (histogramDirty) requestFrame()
+                }
+
+                histogram.pending -> scheduleHistogramPoll()
+            }
+        }, HistogramReadback.POLL_MS)
+    }
+
+    private fun readSourceMean(x: Int, y: Int, radius: Int): FloatArray {
+        val image = checkNotNull(input) { "no input" }
+        if (sourceFbo == 0) sourceFbo = newFramebuffer(sourceTex)
+        val x0 = (x - radius).coerceIn(0, image.width - 1)
+        val x1 = (x + radius).coerceIn(0, image.width - 1)
+        val y0 = (y - radius).coerceIn(0, image.height - 1)
+        val y1 = (y + radius).coerceIn(0, image.height - 1)
+        val w = x1 - x0 + 1
+        val h = y1 - y0 + 1
+        val pixels = FloatBuffer.allocate(w * h * RGBA)
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, sourceFbo)
+        // Texture row 0 is the image's top row (uploadInput), and framebuffer y addresses texture rows directly.
+        GLES30.glReadPixels(x0, y0, w, h, GLES30.GL_RGBA, GLES30.GL_FLOAT, pixels)
+        GlSupport.checkError("source sample")
+        val sum = DoubleArray(PipelineInput.CHANNELS)
+        for (i in 0 until w * h) for (c in 0 until PipelineInput.CHANNELS) sum[c] += pixels.get(i * RGBA + c).toDouble()
+        return FloatArray(PipelineInput.CHANNELS) { (sum[it] / (w * h)).toFloat() }
+    }
+
+    private fun releaseCompareAndReadbacks() {
+        releaseOriginal()
+        if (sourceFbo != 0) GLES30.glDeleteFramebuffers(1, intArrayOf(sourceFbo), 0)
+        sourceFbo = 0
+        histogram.release()
     }
 
     // ------------------------------------------------------------------ threading helpers
@@ -614,7 +906,11 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
             return b
         }
 
-        /** std140 block of the output pass: mat4, image (vec4), viewport (vec4), surround (vec4), dither (uvec4). */
+        /**
+         * std140 block of the output pass: mat4, image (vec4), viewport (vec4), surround (vec4), dither (uvec4: seed,
+         * on, sampling mode, clipping-warning bits of [ClippingWarnings]).
+         */
+        @Suppress("LongParameterList")
         internal fun outputBlock(
             imageWidth: Int,
             imageHeight: Int,
@@ -623,6 +919,7 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
             height: Int,
             settings: OutputSettings,
             surround: FloatArray,
+            clippingBits: Int = 0,
         ): ByteBuffer {
             val b = ByteBuffer.allocateDirect(OUTPUT_BLOCK_FLOATS * Float.SIZE_BYTES).order(ByteOrder.nativeOrder())
             putMat4(b, OutputTransformOp.workingToOutput(settings.space).toFloatArray())
@@ -632,7 +929,7 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
             b.putFloat(view.centerX).putFloat(view.centerY).putFloat(width.toFloat()).putFloat(height.toFloat())
             b.putFloat(surround[0]).putFloat(surround[1]).putFloat(surround[2]).putFloat(1f)
             b.putInt(settings.ditherSeed).putInt(if (settings.dither) 1 else 0)
-                .putInt(OutputSampling.mode(view.scale)).putInt(0)
+                .putInt(OutputSampling.mode(view.scale)).putInt(clippingBits)
             b.flip()
             return b
         }
@@ -667,3 +964,11 @@ private class UploadedImage(
 /** The same input without its pixels (one black pixel): enough for [DevelopParams.from]. */
 private fun PipelineInput.colourOnly(): PipelineInput =
     PipelineInput(kind, 1, 1, FloatArray(PipelineInput.CHANNELS), cameraToXyz, asShotMultipliers?.copyOf(), saturation)
+
+/** What the scene pass (and so the guide) depends on: when it is unchanged, both are reused. */
+private data class SceneKey(
+    val wb: List<Float>,
+    val matrix: List<Float>,
+    val exposureGain: Float,
+    val highlights: Any?,
+)

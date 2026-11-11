@@ -26,7 +26,8 @@ val TopBarHeight: Dp = 56.dp
 
 /**
  * The hfps header: 56dp, transparent so it sits on `background`, no bottom border. Back control (when
- * [onBack] is set) + [title] + [actions]. Insets are applied by `RevealScaffold`.
+ * [onBack] is set) + [title] + [actions]. [titleIsFileName] shortens the title in the middle, keeping the
+ * extension. Insets are applied by `RevealScaffold`.
  */
 @Composable
 fun RevealTopBar(
@@ -35,6 +36,7 @@ fun RevealTopBar(
     onBack: (() -> Unit)? = null,
     backContentDescription: String = "",
     titleStyle: TextStyle = RevealTheme.typography.title,
+    titleIsFileName: Boolean = false,
     actions: @Composable RowScope.() -> Unit = {},
 ) {
     Row(
@@ -53,17 +55,27 @@ fun RevealTopBar(
         } else {
             Spacer(Modifier.width(12.dp))
         }
-        Text(
-            text = title,
-            modifier = Modifier
-                .weight(1f)
-                .padding(horizontal = 4.dp)
-                .semantics { heading() },
-            style = titleStyle,
-            color = RevealTheme.colors.foreground,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
+        val titleModifier = Modifier
+            .weight(1f)
+            .padding(horizontal = 4.dp)
+            .semantics { heading() }
+        if (titleIsFileName) {
+            FileNameText(
+                name = title,
+                style = titleStyle,
+                color = RevealTheme.colors.foreground,
+                modifier = titleModifier,
+            )
+        } else {
+            Text(
+                text = title,
+                modifier = titleModifier,
+                style = titleStyle,
+                color = RevealTheme.colors.foreground,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
         Row(
             horizontalArrangement = Arrangement.spacedBy(0.dp),
             verticalAlignment = Alignment.CenterVertically,

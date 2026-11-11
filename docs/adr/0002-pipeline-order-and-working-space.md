@@ -164,6 +164,32 @@ Only on-screen pixels at minification can change, so this has no cache key impac
 readback at 1:1 on a conforming GPU (the emulator, where LOD was already exactly 0) is bit-identical to before, and
 the fix makes other GPUs match it. `GpuParityTest.hardEdgedPatchesMatchCpuWithinOneLevelAtOneToOne` guards it.
 
+### Editor additions to the output pass (M1/E)
+
+All in their own files under `gl/` and additive (no operator, no `PIPELINE_VERSION` change, readback and export
+untouched unless a flag is passed):
+
+- **Frame** (`ViewFrame`, `GpuDevelopRenderer.setFrame`): the editor's `SurfaceView` fills the screen behind the
+  chrome; the frame is the visible rectangle between the panels. The zoom (`ViewTransform`) is in frame terms and
+  `CompareLayout` shifts the centre (`c - (frameCentre - windowCentre) / scale`), so a panel snap re-fits the photo
+  without resizing the surface.
+- **Compare panes** (`CompareMode`, `setCompare`): split = the edit full-frame, then the original scissored to the
+  "before" side; side by side = two scissored panes, each keeping the zoom relative to its own fit. The original is a
+  second mip-mapped RGBA16F texture filled by running stage 1 with the defaults and blitting the stage texture
+  (stage 1 stays a black box for the operator workers); it is freed as soon as no pane shows it.
+- **Loupe** (`Loupe`, `setLoupe`): one more scissored pane at a higher scale, for the eyedropper.
+- **Clipping warnings** (`ClippingWarnings`, `setClippingWarnings`, `dither.w` bits of the output block): on the
+  encoded value before dithering, highlight = any channel quantises to 255 (`max(e) >= 254.5/255`, red
+  `255,26,26`), shadow = every channel quantises to 0 (`max(e) < 0.5/255`, blue `0,102,255`). JVM test of the
+  classification, GPU test (`ReadbackApisTest`) against the CPU render.
+- **Histogram** (`HistogramReadback`, `histogramEnabled`/`onHistogram`): after a presented frame whose stage
+  changed, the output pass is drawn into a 256 px RGBA8 target (explicit LOD) and read back synchronously, binned on
+  the GL thread (RGB + Rec.709 luma, clipped shares). Rate-limited to one per 100 ms while the photo keeps changing,
+  plus a trailing one, so it stays live while dragging.
+- **Source sample** (`sampleSource(x, y, radius)`): mean of the uploaded (un-balanced) pixels around a point, read
+  through a framebuffer on the source texture; `WhiteBalancePicker` turns it into temperature/tint
+  (`W = M * cam`, then `cctAndTint`). The grey-world "Auto" estimate runs on the CPU proxy before upload.
+
 ## Output transforms
 
 `OutputSpace.SRGB` and `OutputSpace.DISPLAY_P3` (sRGB curve on P3 primaries): one 3x3 from the working space,
@@ -198,3 +224,33 @@ emulator (host scheduling, the start of an `input swipe`): render + swap p95 sta
 contended runs.
 Time to the first developed frame: ADR 0004, "Measurements of the real open flow".
 
+
+## Measurement of the M1 editor (M1/E, emulator, to be re-measured on the phone)
+
+`EditorMeasurementsTest` on the public ZV-E10 ARW (2400x1600 proxy, 1080x2400 screen), 4 s real-time drag, with
+`-e light true` (contrast +25, highlights -50, shadows +40, whites +15, blacks -10, so the local tone path runs) and
+`-e profile true` (`GpuDevelopRenderer.profilePasses`: `glFinish` after every section; mean ms per frame).
+
+**The emulator's GPU matters.** `scripts/emulator.sh` defaults to `-gpu swiftshader_indirect` (a CPU rasteriser):
+there every pass is 15-50 ms (develop 45, mipmaps 24, scene 20, guided filter 16, output 15) and a drag shows about
+50 ms per frame. With `EMULATOR_GPU=host` (Apple M4 Pro through the translator), the setup of the M0 numbers and of
+`PipelineBenchmark`, the same drag runs at the display rate. Measure on the host GPU; `GpuParityTest` also passes
+there while one SwiftShader run went just over tolerance on `rawNoise`.
+
+| Host GPU, warm runs | exposure drag | highlights drag (scene + guide cached) |
+| --- | --- | --- |
+| params (CPU) | 0.13 | 0.14-0.23 |
+| scene pass | 0.80 | not run |
+| guided filter | 1.42-1.45 | not run |
+| develop pass | 1.35-1.40 | 1.52-1.54 |
+| mipmaps | 0.62-0.64 | 0.56-0.57 |
+| output pass | 0.84-0.91 | 0.82-1.04 |
+| GPU work per frame | about 5.1 ms | about 3.1 ms (was about 4.8 before the cache) |
+| frames in 4 s, interval p50 / p95 | 179-191, 16.6 / 20-23 ms | 191-221, 16.6-17.1 / 21-40 ms |
+| histograms (async PBO, 10 Hz cap) | 10-11, GL thread 1.1-1.8 ms | 15-17, GL thread 1.1-1.7 ms (one 7.4) |
+
+"Swap" (13 ms with `glFinish`) is the wait for the 60 Hz vsync, not work. The max interval (about 0.8 s on the
+exposure drag) is idle time: the swipe reaches the +5 EV clamp and nothing changes until it turns back. UI thread
+(gfxinfo over the drag, emulator, indicative): p50 18-25 ms, 7-12 slow-UI-thread frames per 5 s window; slider rows
+now memoise their callbacks so a drag recomposes only the dragged row's value. The phone (Adreno 750, 120 Hz)
+decides the remaining budget.

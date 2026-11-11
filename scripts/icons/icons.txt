@@ -55,3 +55,11 @@ arrows-clockwise
 arrow-square-in
 selection-all
 image
+squares-four
+triangle
+selection
+bandaids
+eyedropper
+square-split-horizontal
+square-split-vertical
+columns

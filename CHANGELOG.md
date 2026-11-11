@@ -36,6 +36,7 @@ All notable changes to Reveal are documented here. The format follows
   name (cameras repeat `DSC00001.JPG` after a counter reset; two memory cards). Photos are now recognised by their
   content: the same photo keeps its edits even when it comes through another app or under another name, and a
   different file never inherits another one's edits.
+- Cancelling an export while it was rendering could crash the app.
 - The photo info sheet sometimes needed two presses of back (or two back gestures) to close on phones with a shorter
   screen or a larger font; one back now closes every sheet.
 

@@ -558,6 +558,12 @@ class TiledRenderer private constructor(requestedTile: Int) : AutoCloseable {
         thread.quitSafely()
     }
 
+    /**
+     * Runs [block] on the GL thread and waits for it **uninterruptibly**: the caller owns what the block reads (the
+     * [TileSource], the sink) and frees it as soon as this returns, so returning early on an interrupt (a cancelled
+     * export's worker) would let the GL thread read a recycled bitmap or freed LibRaw buffer. Cancellation stops the
+     * block at the next tile through its `cancel` check instead; the interrupt is restored afterwards.
+     */
     private fun <T> onGl(block: () -> T): T {
         val result = AtomicReference<Result<T>>()
         val latch = CountDownLatch(1)
@@ -565,7 +571,16 @@ class TiledRenderer private constructor(requestedTile: Int) : AutoCloseable {
             result.set(runCatching(block))
             latch.countDown()
         }
-        latch.await()
+        var interrupted = false
+        while (true) {
+            try {
+                latch.await()
+                break
+            } catch (_: InterruptedException) {
+                interrupted = true
+            }
+        }
+        if (interrupted) Thread.currentThread().interrupt()
         return result.get().getOrThrow()
     }
 

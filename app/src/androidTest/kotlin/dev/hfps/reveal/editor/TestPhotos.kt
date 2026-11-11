@@ -10,6 +10,8 @@ import android.provider.MediaStore
 import androidx.test.core.app.ActivityScenario
 import androidx.test.platform.app.InstrumentationRegistry
 import dev.hfps.reveal.MainActivity
+import dev.hfps.reveal.pipeline.recipe.Transform
+import dev.hfps.reveal.pipeline.synthetic.PerspectiveScenes
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.InputStream
@@ -79,6 +81,22 @@ object TestPhotos {
             .setClass(context, MainActivity::class.java)
             .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
         return ActivityScenario.launch(intent)
+    }
+
+    /**
+     * A synthetic facade ([PerspectiveScenes.facade]) photographed with converging verticals: Upright with
+     * [correction] makes it upright again. A JPEG at quality 95.
+     */
+    @Suppress("MagicNumber")
+    fun facadeJpeg(width: Int = 1200, height: Int = 800, correction: Transform = Transform()): ByteArray {
+        val gray = PerspectiveScenes.facade(width, height, correction)
+        val pixels = IntArray(width * height) { i ->
+            // The scene is linear-ish luminance 0..1: encode with a plain gamma for a JPEG.
+            val v = (Math.pow(gray[i].toDouble(), 1 / 2.2) * 255).toInt().coerceIn(0, 255)
+            Color.rgb(v, v, v)
+        }
+        val bitmap = Bitmap.createBitmap(pixels, width, height, Bitmap.Config.ARGB_8888)
+        return ByteArrayOutputStream().also { bitmap.compress(Bitmap.CompressFormat.JPEG, 95, it) }.toByteArray()
     }
 
     /**

@@ -176,6 +176,7 @@ class EditorViewModel @Inject constructor(
                     commit()
                 }
                 EditorMetrics.recipes = { _state.value.edit.let { it.recipe to it.committed } }
+                EditorMetrics.history = { _state.value.edit.history }
                 photoInput = colourOnly(input)
                 _state.update {
                     it.copy(
@@ -777,6 +778,7 @@ class EditorViewModel @Inject constructor(
         EditorMetrics.renderer = null
         EditorMetrics.setControl = null
         EditorMetrics.recipes = null
+        EditorMetrics.history = null
         // Closes the renderer once it exists (a creation cancelled half-way closes itself).
         gpu.invokeOnCompletion { failure -> if (failure == null) gpu.getCompleted().close() }
     }

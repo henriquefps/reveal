@@ -71,6 +71,9 @@ object EditorMetrics {
 
     /** For tests only: the working and committed recipes of the open photo. */
     @Volatile var recipes: (() -> Pair<Recipe, Recipe>)? = null
+
+    /** For tests only: the edit's history (steps, cursor, labels). */
+    @Volatile var history: (() -> dev.hfps.reveal.pipeline.recipe.EditHistory)? = null
         internal set
 
     /** Last error, if the open failed. */

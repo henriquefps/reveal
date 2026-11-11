@@ -11,6 +11,7 @@ import dev.hfps.reveal.pipeline.cpu.OutputSpace
 import dev.hfps.reveal.pipeline.cpu.OutputTransformOp
 import dev.hfps.reveal.pipeline.export.ExportPlan
 import dev.hfps.reveal.pipeline.export.ExportSize
+import dev.hfps.reveal.pipeline.geometry.CropEditing
 import dev.hfps.reveal.pipeline.gl.GpuDevelopRenderer
 import dev.hfps.reveal.pipeline.gl.RenderCancelledException
 import dev.hfps.reveal.pipeline.gl.TileSink
@@ -27,8 +28,10 @@ import dev.hfps.reveal.pipeline.recipe.Effects
 import dev.hfps.reveal.pipeline.recipe.Geometry
 import dev.hfps.reveal.pipeline.recipe.GradeWheel
 import dev.hfps.reveal.pipeline.recipe.Light
+import dev.hfps.reveal.pipeline.recipe.Optics
 import dev.hfps.reveal.pipeline.recipe.Profile
 import dev.hfps.reveal.pipeline.recipe.Recipe
+import dev.hfps.reveal.pipeline.recipe.Transform
 import dev.hfps.reveal.pipeline.recipe.Treatment
 import dev.hfps.reveal.pipeline.synthetic.SyntheticImages
 import java.nio.ByteBuffer
@@ -187,6 +190,63 @@ class TiledRendererTest {
                 assertThat(vsPreview.first).isAtMost(1)
                 assertThat(vsCpu.first).isAtMost(3)
             }
+        } finally {
+            preview.close()
+        }
+    }
+
+    /**
+     * Optics and Transform (docs/adr/0015): a warped geometry (lens distortion + CA + the Transform + straightening),
+     * vignetting and defringe through the tiles: they stitch bit-identically (the regions come from the warp's
+     * `sourceRegion`, defringe's radius is in the apron), the export equals the preview renderer and the CPU reference.
+     */
+    @Test
+    fun opticsAndTransformExportLikeThePreview() = runBlocking {
+        val lensImage = image.withLens(GpuParityTest.PARITY_LENS)
+        val edit = recipe.copy(
+            optics = Optics(lensCorrections = true, removeCa = true, purpleAmount = 10f),
+            geometry = Geometry(
+                angle = 2.5f,
+                transform = Transform(vertical = 28f, horizontal = -10f, rotate = 1.5f, scale = 105f),
+            ),
+        )
+        val constrained = edit.copy(
+            geometry = CropEditing.transform(
+                Geometry(angle = 2.5f),
+                edit.geometry.transform,
+                image.width,
+                image.height,
+            ),
+        )
+        val reach = DevelopParams.reach(constrained)
+        fun warpedPlan(tile: Int) = ExportPlan.of(
+            image.width,
+            image.height,
+            constrained.geometry,
+            ExportSize.Original,
+            tile,
+            reach,
+            GpuParityTest.PARITY_LENS,
+            constrained.optics,
+        )
+        fun renderLens(plan: ExportPlan): ByteArray {
+            val sink = ArraySink(plan.output.width, plan.output.height)
+            tiled.render(PipelineInputTileSource(lensImage), constrained, plan, OutputSettings(), sink)
+            return sink.pixels
+        }
+        val small = warpedPlan(256)
+        assertThat(small.mapping.warp).isNotNull()
+        assertThat(small.outputTiles().size).isGreaterThan(9)
+        val whole = renderLens(warpedPlan(1024))
+        assertThat(renderLens(small).contentEquals(whole)).isTrue()
+        val preview = GpuDevelopRenderer.create()
+        try {
+            preview.upload(lensImage)
+            val vsPreview = maxDiff(preview.renderOutput(constrained), whole)
+            val vsCpu = maxDiff(CpuDevelop.render(lensImage, constrained), whole)
+            Log.i(TAG, "optics + transform: vs preview $vsPreview, vs CPU $vsCpu (max levels, values differing)")
+            assertThat(vsPreview.first).isAtMost(1)
+            assertThat(vsCpu.first).isAtMost(4)
         } finally {
             preview.close()
         }

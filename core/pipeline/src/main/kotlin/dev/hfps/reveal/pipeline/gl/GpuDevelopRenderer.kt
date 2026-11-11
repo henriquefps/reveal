@@ -466,7 +466,8 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
             }
             drawOutputOffscreen(
                 OutputSettings(dither = true),
-                mapping = GeometryMapping.identity(image.width, image.height),
+                // The recipe's geometry (a Transform drag resamples through the warp every frame, docs/adr/0015).
+                mapping = image.mapping(recipe),
                 post = PostParams.from(recipe.effects),
             )
             GLES20.glFinish()

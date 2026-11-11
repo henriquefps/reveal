@@ -13,11 +13,14 @@ import dev.hfps.reveal.pipeline.recipe.CurvePoint
 import dev.hfps.reveal.pipeline.recipe.Curves
 import dev.hfps.reveal.pipeline.recipe.Detail
 import dev.hfps.reveal.pipeline.recipe.Effects
+import dev.hfps.reveal.pipeline.recipe.Geometry
 import dev.hfps.reveal.pipeline.recipe.GradeWheel
 import dev.hfps.reveal.pipeline.recipe.Light
+import dev.hfps.reveal.pipeline.recipe.Optics
 import dev.hfps.reveal.pipeline.recipe.ParametricCurve
 import dev.hfps.reveal.pipeline.recipe.Profile
 import dev.hfps.reveal.pipeline.recipe.Recipe
+import dev.hfps.reveal.pipeline.recipe.Transform
 import dev.hfps.reveal.pipeline.recipe.WhiteBalance
 import dev.hfps.reveal.pipeline.synthetic.SyntheticImages
 import kotlinx.coroutines.runBlocking
@@ -212,6 +215,25 @@ class PipelineBenchmark {
                 at(base, it)
             }
         }
+    }
+
+    /**
+     * Dragging the Transform's vertical slider (docs/adr/0015) on a photo with lens corrections and CA removal: the
+     * stage is cached, every frame is the output pass through the warp (three Catmull-Rom samples per pixel).
+     */
+    @Test
+    fun transformDragFrameTime(): Unit = runBlocking {
+        val image = SyntheticImages.scene(WIDTH, HEIGHT).withLens(GpuParityTest.PARITY_LENS)
+        drag("transform vertical (lens + CA on)", image) {
+            Recipe(
+                optics = Optics(lensCorrections = true, removeCa = true),
+                geometry = Geometry(transform = Transform(vertical = -40f + 80f * it, scale = 110f)),
+            )
+        }
+        drag("lens distortion amount", image) {
+            Recipe(optics = Optics(lensCorrections = true, distortionPercent = 200f * it))
+        }
+        drag("defringe purple amount", image) { Recipe(optics = Optics(purpleAmount = 20f * it)) }
     }
 
     private fun noisy() = SyntheticImages.noisyCard(WIDTH, HEIGHT, seed = 5)

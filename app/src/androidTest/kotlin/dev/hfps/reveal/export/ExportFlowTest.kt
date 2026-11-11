@@ -37,12 +37,16 @@ import dev.hfps.reveal.feature.export.work.ItemStatus
 import dev.hfps.reveal.pipeline.cpu.OutputSettings
 import dev.hfps.reveal.pipeline.cpu.OutputSpace
 import dev.hfps.reveal.pipeline.export.ExportSize
+import dev.hfps.reveal.pipeline.geometry.CropEditing
 import dev.hfps.reveal.pipeline.gl.GpuDevelopRenderer
 import dev.hfps.reveal.pipeline.gl.TiledRenderer
 import dev.hfps.reveal.pipeline.input.PipelineInputMapper
+import dev.hfps.reveal.pipeline.recipe.Geometry
 import dev.hfps.reveal.pipeline.recipe.Light
+import dev.hfps.reveal.pipeline.recipe.Optics
 import dev.hfps.reveal.pipeline.recipe.Recipe
 import dev.hfps.reveal.pipeline.recipe.RecipeCodec
+import dev.hfps.reveal.pipeline.recipe.Transform
 import java.io.File
 import java.nio.ByteBuffer
 import java.util.concurrent.atomic.AtomicLong
@@ -173,6 +177,45 @@ class ExportFlowTest {
         assertThat(checkNotNull(snapshot).field(Tags.MAKE)?.text).isEqualTo("SONY")
         assertThat(String(bytes, 0, minOf(bytes.size, HEADER_BYTES), Charsets.ISO_8859_1)).contains("ICC_PROFILE")
         assertThat(String(bytes, 0, minOf(bytes.size, HEADER_BYTES), Charsets.ISO_8859_1)).contains("xmp:Rating=\"3\"")
+    }
+
+    /**
+     * A transformed photo (docs/adr/0015): Upright-like perspective, rotation, the constrained crop and defringe, on a
+     * synthetic facade JPEG (no samples needed); the export at full size equals the preview renderer's render of the
+     * same recipe (the editor's proxy is the whole 1200 x 800 image).
+     */
+    @Test
+    fun transformedPhotoExportMatchesThePreview() = runBlocking {
+        val bytes = TestPhotos.facadeJpeg(FACADE_W, FACADE_H, Transform(vertical = 30f))
+        val uri = TestPhotos.insert(TestPhotos.uniqueName("reveal-facade.jpg"), "image/jpeg", bytes)
+            .also { inserted += it }
+        val start = Geometry(angle = 1.5f)
+        val transformed = Recipe(
+            optics = Optics(purpleAmount = 8f),
+            geometry = CropEditing.transform(start, Transform(vertical = 30f, rotate = 1f), FACADE_W, FACADE_H),
+        )
+        val result = export(uri, ExportOptions(quality = 100), name = "facade.jpg", recipe = transformed)
+        val input = ImageInput.fromUri(context.contentResolver, uri, "facade.jpg").use {
+            val proxy = ProxyBuilder.decodeProxy(it, PROXY)
+            PipelineInputMapper.map(proxy.image, proxy.info)
+        }
+        val preview = GpuDevelopRenderer.create()
+        val expected = try {
+            preview.upload(input)
+            preview.renderOutput(transformed, OutputSettings(OutputSpace.SRGB))
+        } finally {
+            preview.close()
+        }
+        val decoded =
+            checkNotNull(context.contentResolver.openInputStream(result.uri).use { BitmapFactory.decodeStream(it) })
+        assertThat(expected.size).isEqualTo(decoded.width * decoded.height * 4)
+        val actual = ByteArray(decoded.width * decoded.height * 4).also {
+            decoded.copyPixelsToBuffer(ByteBuffer.wrap(it))
+        }
+        val stats = DiffStats.of(expected, actual)
+        Log.i(TAG, "transformed facade ${decoded.width}x${decoded.height}: preview vs export $stats")
+        assertThat(stats.mean).isAtMost(PREVIEW_MEAN_LEVELS)
+        assertThat(stats.p99).isAtMost(PREVIEW_P99_LEVELS)
     }
 
     /** Opt-in (`-e large <file in files/samples>`): a ~60 MP RAW at full size, peak memory and time. */
@@ -398,6 +441,8 @@ class ExportFlowTest {
         const val TAG = "REVEAL_EXPORT"
         const val ARW = "sony-zv-e10.arw"
         const val PROXY = 2400
+        const val FACADE_W = 1200
+        const val FACADE_H = 800
         const val HEADER_BYTES = 64 * 1024
         const val TIMEOUT_MS = 120_000L
         const val POLL_MS = 100L

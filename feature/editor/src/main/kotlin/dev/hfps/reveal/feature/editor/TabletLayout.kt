@@ -258,9 +258,12 @@ private fun PanelResizeHandle(width: Dp, range: ClosedRange<Dp>, onResize: (Dp) 
     val density = LocalDensity.current
     val currentWidth by rememberUpdatedState(width)
     var dragging by remember { mutableStateOf(false) }
+    // The width the drag has reached: the last delta may land after the last recomposition, so release stores this.
+    var reached by remember { mutableStateOf(width) }
     val state = rememberDraggableState { delta ->
-        val next = (currentWidth - with(density) { delta.toDp() }).coerceIn(range.start, range.endInclusive)
-        onResize(next)
+        val from = if (dragging) reached else currentWidth
+        reached = (from - with(density) { delta.toDp() }).coerceIn(range.start, range.endInclusive)
+        onResize(reached)
     }
     val label = stringResource(R.string.editor_panel_resize)
     val wider = stringResource(R.string.editor_panel_wider)
@@ -279,10 +282,13 @@ private fun PanelResizeHandle(width: Dp, range: ClosedRange<Dp>, onResize: (Dp) 
             .draggable(
                 state = state,
                 orientation = Orientation.Horizontal,
-                onDragStarted = { dragging = true },
+                onDragStarted = {
+                    reached = currentWidth
+                    dragging = true
+                },
                 onDragStopped = {
                     dragging = false
-                    onResizeEnd(currentWidth)
+                    onResizeEnd(reached)
                 },
             )
             .testTag(EditorTags.PANEL_RESIZE)

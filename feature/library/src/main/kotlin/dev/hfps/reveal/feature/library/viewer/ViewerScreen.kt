@@ -89,6 +89,8 @@ fun ViewerScreen(
     EditorTheme {
         BoxWithConstraints(modifier.fillMaxSize().background(RevealTheme.colors.background)) {
             val wide = maxWidth >= TwoPaneMinWidth
+            // The info side panel closes on back before the viewer does (the phone's sheet has its own window).
+            BackHandler(enabled = wide && info != null) { info = null }
             Row(Modifier.fillMaxSize()) {
                 Box(Modifier.weight(1f).fillMaxHeight()) {
                     if (!state.loaded) return@Box

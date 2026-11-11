@@ -524,11 +524,6 @@ class GpuParityTest {
     internal companion object {
         const val TAG = "REVEAL_PARITY"
 
-        /** The Light sliders at their ends, alone and together (always in the parity set). */
-
-        // Geometry (slot 13): pixel-exact crops, quarter turns and flips, Catmull-Rom straightening (constrained and
-        // with black empty corners), a tiny angle; with an exposure so the stage is not the identity.
-
         /** The public ZV-E10 sample's embedded lens data (E PZ 16-50mm at 29 mm), with stronger CA for the test. */
         val PARITY_LENS = checkNotNull(
             SonyLensProfile.of(
@@ -574,6 +569,10 @@ class GpuParityTest {
             ),
         )
 
+        /** The Light sliders at their ends, alone and together (always in the parity set). */
+
+        // Geometry (slot 13): pixel-exact crops, quarter turns and flips, Catmull-Rom straightening (constrained and
+        // with black empty corners), a tiny angle; with an exposure so the stage is not the identity.
         val GEOMETRY: List<Recipe> = listOf(
             Geometry(crop = CropRect(0.1f, 0.2f, 0.8f, 0.9f)),
             Geometry(crop = CropRect(0.05f, 0f, 0.6f, 0.75f), rotate = 1, flipH = true),

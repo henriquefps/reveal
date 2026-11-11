@@ -45,7 +45,11 @@ class OpticsRenderSheetTest {
         val out = System.getenv("REVEAL_OPTICS_OUT")?.takeIf { it.isNotBlank() }?.let(::File)
         assumeTrue("REVEAL_OPTICS_OUT not set", out != null)
         checkNotNull(out).mkdirs()
-        for ((name, sample, dumpName, at) in SAMPLES) {
+        for (s in SAMPLES) {
+            val name = s.name
+            val sample = s.file
+            val dumpName = s.dump
+            val at = s.at
             val arw = File(root, "core/image/build/samples/$sample")
             val dump = File(root, "build/calibration/$dumpName")
             if (!arw.isFile || !dump.isFile) {

@@ -63,8 +63,8 @@ class LensWarp private constructor(val table: FloatArray, val scale: Double, val
     companion object {
         const val STRIDE: Int = 4
         private const val CA_UNIT = 1e-4
-        private const val BISECTIONS = 60
-        private const val BORDER_SAMPLES = 128
+        private const val BISECTIONS = 32
+        private const val BORDER_SAMPLES = 64
 
         private data class Key(
             val profile: LensProfile?,

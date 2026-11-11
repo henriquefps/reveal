@@ -13,6 +13,8 @@ Start with `docs/plan/README.md` (the brief), then `docs/plan/` and `docs/adr/`.
 - Credentials only through `skv` (group `reveal`). Never commit keystores or secrets.
 - Private photos: copies only, never committed, never in screenshots, aggregates only.
 - Workers use emulators; only the orchestrator installs on the owner's phone (`RXCX109VTTM`).
+  On the phone always install with `adb install --user 0` (it has a Dual App profile, user 95: a plain
+  `adb install` adds a second icon there), and uninstall `dev.hfps.reveal.debug` after a test run.
 - Code, identifiers, comments and ADRs in English.
 - Design system (`:core:designsystem`, ADR 0005): wrap screens in `RevealTheme` (the editor in `EditorTheme`), build
   them with `RevealScaffold`/`RevealTopBar`/`Eyebrow`/`RevealButtons`/`RevealIconButton`/`RevealChip`/`RevealListRow`.

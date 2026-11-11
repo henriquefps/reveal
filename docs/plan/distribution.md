@@ -14,6 +14,13 @@ Status: direction decided by the owner (2026-11-11). Nothing to build before 1.0
   refund window, a listing with real before/after screenshots and a short video, promo codes for reviewers, and the
   free build from source (GitHub releases / F-Droid).
 
+## Hoard as the free companion
+
+Hoard (the owner's file manager with photo culling) stays **free** and is the way in: cull in Hoard, develop in
+Reveal (hand-off contract, ADR 0011). Both under the same Play developer account, each listing mentions the other.
+In Hoard, "Develop in Reveal" stays visible when Reveal is not installed and opens Reveal's store page (no ads, no
+nagging). Reveal works fully without Hoard.
+
 ## Later, only if the app becomes exceptional
 
 - A hosted sync service run by the owner, by subscription, for people who do not want to run a server.

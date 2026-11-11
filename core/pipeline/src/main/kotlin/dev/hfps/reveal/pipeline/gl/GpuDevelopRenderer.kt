@@ -23,6 +23,7 @@ import dev.hfps.reveal.pipeline.geometry.GeometryMapping
 import dev.hfps.reveal.pipeline.geometry.Warp
 import dev.hfps.reveal.pipeline.input.TileSource
 import dev.hfps.reveal.pipeline.input.colourOnly
+import dev.hfps.reveal.pipeline.recipe.Geometry
 import dev.hfps.reveal.pipeline.recipe.Recipe
 import dev.hfps.reveal.pipeline.zoom.ZoomGrid
 import java.nio.ByteBuffer
@@ -695,29 +696,7 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
             detail.invalidate()
             effectsGridValid = false
         }
-        if (localOn) {
-            val lab = checkNotNull(if (fringeOn) fringeTarget else labTarget).texture
-            val e = if (showMask) EffectsParams.NONE else params.effects
-            if (e.gridActive && !effectsGridValid) {
-                effects.allocate(image.width, image.height)
-                effects.build(lab)
-                effectsGridValid = true
-                profiler.mark("effects grid")
-            }
-            detail.run(
-                params.detail,
-                e,
-                grid = if (e.gridActive) effects else null,
-                lab = lab,
-                t = checkNotNull(detailTargets),
-                output = GlTarget(stageTex, stageFbo),
-                region = region,
-                showMask = showMask,
-                cache = true,
-                half = if (half && stageHalfFbo != 0) GlTarget(stageTex, stageHalfFbo) else null,
-            )
-            lastLocalPasses = detail.lastPasses
-        }
+        if (localOn) runLocal(params, showMask, half, region, fringeOn)
         stageParams = params
         stageMask = showMask
         stageHalf = localOn && half && !showMask && stageHalfFbo != 0
@@ -767,6 +746,38 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         req: Request,
     ): Boolean = !tilesOn && req.loupe == null && !req.detailMask && !req.geometryEditing && mapping.axisAligned &&
         panes.all { it.original || it.view.scale <= HALF_VIEW_SCALE }
+
+    /** Slots 11 and 12 into the working texture (level 1 only with [half]); see [runStage1]. */
+    private fun runLocal(
+        params: DevelopParams,
+        showMask: Boolean,
+        half: Boolean,
+        region: DetailPasses.Region,
+        fringeOn: Boolean,
+    ) {
+        val image = checkNotNull(input) { "no input" }
+        val lab = checkNotNull(if (fringeOn) fringeTarget else labTarget).texture
+        val e = if (showMask) EffectsParams.NONE else params.effects
+        if (e.gridActive && !effectsGridValid) {
+            effects.allocate(image.width, image.height)
+            effects.build(lab)
+            effectsGridValid = true
+            profiler.mark("effects grid")
+        }
+        detail.run(
+            params.detail,
+            e,
+            grid = if (e.gridActive) effects else null,
+            lab = lab,
+            t = checkNotNull(detailTargets),
+            output = GlTarget(stageTex, stageFbo),
+            region = region,
+            showMask = showMask,
+            cache = true,
+            half = if (half && stageHalfFbo != 0) GlTarget(stageTex, stageHalfFbo) else null,
+        )
+        lastLocalPasses = detail.lastPasses
+    }
 
     /** Passes slots 11 and 12 ran in the last stage-1 render (0 when they were cached or off); for the benchmark. */
     @Volatile
@@ -1611,12 +1622,14 @@ private class UploadedImage(
 
     /**
      * The operator parameters of [recipe] for this image at its pixel scale. Everything but Detail and Effects is
-     * kept from the previous call while the rest of the recipe is unchanged: a Detail or Effects drag recomputes only
+     * kept from the previous call while the rest of the recipe (geometry aside, which no parameter depends on) is
+     * unchanged: a Detail or Effects drag recomputes only
      * its own group (the curve table, the mixer and grading parameters cost a millisecond or more per frame). GL
      * thread only.
      */
     fun params(recipe: Recipe): DevelopParams {
-        val key = recipe.withoutLocal()
+        // The geometry is the output pass' alone: a Transform or crop drag keeps the parameters too.
+        val key = recipe.withoutLocal().copy(geometry = Geometry())
         val kept = base?.takeIf { baseKey == key } ?: DevelopParams.from(colour, key, pixelScale).also {
             baseKey = key
             base = it

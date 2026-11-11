@@ -168,6 +168,25 @@ Emulator API 36.1 x86_64, host GPU (RTX 4080 through the translator); to be re-m
   the CPU each frame: 32 bisections over 64 border radii) 2.15 / 3.75; defringe amount 1.81 / 2.40; exposure for
   reference 1.24 / 1.66. All far below a 120 Hz frame (8.3 ms).
 
+**On the phone** (Galaxy S24 Ultra, Adreno 750; M2/P, ADR 0012 "M2/P", same benchmark with a 2 s continuous warm-up;
+"pipelined" = sustained ms per frame with two frames in flight as a display pipelines them, "GPU" = timer query per
+frame, "latency" = `glFinish` after every frame):
+
+| Drag (2400 x 1600 proxy) | M2/D latency p50 | M2/P latency p50 / p95 | M2/P pipelined | M2/P GPU p50 / p95 |
+| --- | --- | --- | --- | --- |
+| Transform vertical, lens + CA, 1:1 into 2400 x 1600 | 27.8 | 13.9 / 14.8 | 8.71 | 6.30 / 8.58 |
+| Transform vertical, lens + CA, fitted to 1080 x 720 (the editor) | - | 3.1 / 4.1 | 1.04 | 0.66 / 1.18 |
+| lens distortion amount, fitted | - | 5.0 / 11.8 | 2.34 | 1.06 / 1.08 |
+| defringe purple amount, fitted | - | 9.8 / 12.4 | 2.98 | 2.41 / 4.58 |
+
+Per pass (GPU timer queries, 1:1): the warped output pass is the whole frame (three Catmull-Rom samples of 16 texel
+fetches per pixel at 3.84 MP); the CPU side was 4.3 ms per frame of `DevelopParams` rebuilt because the geometry
+changed (now kept: no parameter depends on the geometry, `DevelopParamsTest`), now 1.0 ms. A shared 5 x 5 fetch for
+the three CA channels (25 fetches instead of 48, the same values) was measured and rejected: 8.6 ms GPU p50 against
+5.5 for three separate samples on the Adreno (the weight selection cost more than the fetches saved). The editor
+never draws 3.84 MP through the warp: its output pass covers the photo's rectangle on screen (at most the photo area,
+about 0.8-1.6 MP) and zoom from 50 % shows tiles, so a Transform drag in the editor costs about a millisecond.
+
 ## Alternatives not taken
 
 - Separate passes for lens distortion and the Transform: a second resampling softens the image and costs a full

@@ -143,7 +143,8 @@ output and the grid are cached); the vignette and the grain do not even re-run t
 and Effects slider on, two runs): p50 0.82-0.95 ms, the same as an exposure drag (0.89-0.91 ms). **Phone** (Adreno 750,
 same benchmark): vignette 8.0 ms, grain 6.6 ms (p50), texture 13.1, clarity 10.0, dehaze 13.4 ms with every Detail and
 Effects tool on (exposure in the same run: 9.3 ms): the final pass with everything on costs 6-8 ms there. ADR 0012
-"M2/C" has the full table, the per-pass profile and the next levers.
+"M2/C" has the full table, the per-pass profile and the next levers. M2/P (ADR 0012, "M2/P") brought every Effects drag to the display rate with
+every tool on: texture, clarity, dehaze 3.0-3.2 ms per frame pipelined (GPU p95 <= 5 ms), vignette and grain 1.2 ms.
 
 ## Recipe and UI
 

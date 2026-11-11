@@ -4,10 +4,12 @@ import com.google.common.truth.Truth.assertThat
 import dev.hfps.reveal.pipeline.recipe.BaseLook
 import dev.hfps.reveal.pipeline.recipe.Detail
 import dev.hfps.reveal.pipeline.recipe.Effects
+import dev.hfps.reveal.pipeline.recipe.Geometry
 import dev.hfps.reveal.pipeline.recipe.Light
 import dev.hfps.reveal.pipeline.recipe.Optics
 import dev.hfps.reveal.pipeline.recipe.Profile
 import dev.hfps.reveal.pipeline.recipe.Recipe
+import dev.hfps.reveal.pipeline.recipe.Transform
 import dev.hfps.reveal.pipeline.synthetic.SyntheticImages
 import org.junit.Test
 
@@ -26,6 +28,9 @@ class DevelopParamsTest {
             detail = Detail(nrLuminance = 40f, nrColour = 50f, sharpenAmount = 60f),
             effects = Effects(texture = 20f, clarity = 30f, vignetteAmount = -20f, grainAmount = 10f),
         )
+        // The renderer keeps them across a geometry drag too: nothing here depends on the geometry.
+        val turned = recipe.copy(geometry = Geometry(angle = 3f, transform = Transform(vertical = 20f)))
+        assertThat(DevelopParams.from(input, turned, 2.5f)).isEqualTo(DevelopParams.from(input, recipe, 2.5f))
         for (scale in listOf(1f, 2.5f)) {
             val base = DevelopParams.from(input, recipe.withoutLocal(), scale)
             assertThat(base.withLocal(input, recipe, scale)).isEqualTo(DevelopParams.from(input, recipe, scale))

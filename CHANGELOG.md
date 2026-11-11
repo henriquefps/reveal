@@ -51,6 +51,11 @@ All notable changes to Reveal are documented here. The format follows
 
 ### Changed
 - On tablets, sheets (export, paste, numeric input) open as centred dialogs.
+- Every Detail and Effects slider now keeps up with the 120 Hz display while you drag it, even with every tool on
+  (noise reduction, sharpening, texture, clarity, dehaze, vignette, grain, tone curve, colour mixer and grading):
+  the photo on screen is drawn from fewer, cheaper passes, and only the photo's area of the screen is redrawn.
+- Luminance noise reduction keeps edges and fine lines better at high amounts; photos edited with it look marginally
+  different (pipeline version 10).
 - Pipeline version 9: lens corrections, defringe and the Transform (photos without them look exactly as before).
 - Detail sliders respond faster while dragging: sharpening on its own now keeps up with the 120 Hz display, and
   luminance noise reduction drags cost about a quarter less. Colour noise reduction removes slightly more colour noise.

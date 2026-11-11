@@ -71,7 +71,7 @@ class EditorMeasurementsTest {
         }
     }
 
-    @Suppress("LongMethod", "NestedBlockDepth")
+    @Suppress("LongMethod", "NestedBlockDepth", "CyclomaticComplexMethod")
     private fun measure(file: File, label: String, private: Boolean) {
         val name = if (private) "photo.ARW" else file.name
         val uri = TestPhotos.insert(name, "image/x-sony-arw", file)
@@ -115,8 +115,9 @@ class EditorMeasurementsTest {
                 renderer.profilePasses = profile
                 val histogramsBefore = renderer.histogramCount
                 // `-e vsync true`: the value changes on every display frame (a perfectly smooth finger, set on the UI
-                // thread's Choreographer like a slider's drag), so the intervals measure the renderer, not the cadence of
-                // the injected touch events; otherwise a finger on the slider (`input swipe`).
+                // thread's Choreographer like a slider's drag), so the intervals measure the renderer, not the cadence
+                // of the injected touch events; otherwise a finger on the slider (`input swipe`). On a phone with an
+                // adaptive refresh rate the display may slow down without a touch: compare like with like.
                 val vsync = args.getString("vsync") == "true"
                 val slider = if (vsync) null else visibleSlider(scenario, EditorTags.control(dragged))
                 // Frames from the start of the drag (opening and scrolling the panel draw frames too).

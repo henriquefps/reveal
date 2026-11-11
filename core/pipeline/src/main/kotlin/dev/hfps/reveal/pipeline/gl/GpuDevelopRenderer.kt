@@ -9,14 +9,17 @@ import android.os.HandlerThread
 import android.view.Surface
 import dev.hfps.reveal.pipeline.PipelineInput
 import dev.hfps.reveal.pipeline.cpu.DevelopParams
+import dev.hfps.reveal.pipeline.cpu.EffectsParams
 import dev.hfps.reveal.pipeline.cpu.GlobalToneOp
 import dev.hfps.reveal.pipeline.cpu.HighlightReconstructionOp
 import dev.hfps.reveal.pipeline.cpu.LowResGrid
 import dev.hfps.reveal.pipeline.cpu.OutputSettings
 import dev.hfps.reveal.pipeline.cpu.OutputSpace
 import dev.hfps.reveal.pipeline.cpu.OutputTransformOp
+import dev.hfps.reveal.pipeline.cpu.PostParams
 import dev.hfps.reveal.pipeline.geometry.GeometryMapping
 import dev.hfps.reveal.pipeline.input.TileSource
+import dev.hfps.reveal.pipeline.input.colourOnly
 import dev.hfps.reveal.pipeline.recipe.Recipe
 import dev.hfps.reveal.pipeline.zoom.ZoomGrid
 import java.nio.ByteBuffer
@@ -103,12 +106,11 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
     private var developProgram = 0
     private var lightUbo = 0
     private val light = LightPasses()
-    private val detail = DetailPasses()
+    private val detail = DetailPasses().also { it.profile = { section -> profiler.mark(section) } }
+    private val effects = EffectsPasses()
     private var labTarget: GlTarget? = null
-    private var levelA: GlTarget? = null
-    private var levelB: GlTarget? = null
-    private var blurA: GlTarget? = null
-    private var blurB: GlTarget? = null
+    private var detailTargets: DetailPasses.Targets? = null
+    private var effectsGridValid = false
     private var developed: Pair<DevelopParams, Boolean>? = null
     private var stageMask = false
     private val zoom = ZoomTiles(handler, ::requestFrame) { egl.eglContext }
@@ -204,7 +206,7 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         val image = checkNotNull(input) { "no input" }
         val req = request.get()
         val params = image.params(req.recipe)
-        if (params != stageParams || stageMask) {
+        if (params.withoutPost() != stageParams || stageMask) {
             runStage1(params)
             GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, stageTex)
             GLES30.glGenerateMipmap(GLES30.GL_TEXTURE_2D)
@@ -222,6 +224,7 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
             surround,
             mapping = mapping,
             tiles = zoom.uniforms(view, mapping),
+            post = shownPost(req),
         )
         val pixels = ByteBuffer.allocateDirect(width * height * RGBA)
         GLES30.glReadPixels(0, 0, width, height, GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, pixels)
@@ -255,7 +258,7 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
             req.view,
         ).first()
         val params = image.params(req.recipe)
-        if (params != stageParams || stageMask) {
+        if (params.withoutPost() != stageParams || stageMask) {
             runStage1(params)
             GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, stageTex)
             GLES30.glGenerateMipmap(GLES30.GL_TEXTURE_2D)
@@ -272,6 +275,7 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
             surround,
             mapping = mapping,
             tiles = if (tilesShown(req)) zoom.uniforms(pane.view, mapping) else null,
+            post = shownPost(req),
         )
         val pixels = ByteBuffer.allocateDirect(width * height * RGBA)
         GLES30.glReadPixels(0, 0, width, height, GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, pixels)
@@ -445,14 +449,22 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         val image = checkNotNull(input) { "no input" }
         recipes.map { recipe ->
             val start = System.nanoTime()
-            runStage1(image.params(recipe))
-            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, stageTex)
-            GLES30.glGenerateMipmap(GLES30.GL_TEXTURE_2D)
+            profiler.begin()
+            val params = image.params(recipe)
+            // As on screen: the stage runs only when what it depends on changed (not for vignette or grain).
+            if (params.withoutPost() != stageParams || stageMask) {
+                runStage1(params)
+                GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, stageTex)
+                GLES30.glGenerateMipmap(GLES30.GL_TEXTURE_2D)
+                profiler.mark("mipmaps")
+            }
             drawOutputOffscreen(
                 OutputSettings(dither = true),
                 mapping = GeometryMapping.identity(image.width, image.height),
+                post = PostParams.from(recipe.effects),
             )
             GLES20.glFinish()
+            profiler.mark("output pass")
             (System.nanoTime() - start) / NANOS_PER_MS
         }
     }
@@ -519,7 +531,7 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         val params = image.params(if (req.showOriginal) Recipe.DEFAULT else req.recipe)
         val mask = req.detailMask && !req.showOriginal
         profiler.mark("params (CPU)")
-        if (params != stageParams || mask != stageMask) {
+        if (params.withoutPost() != stageParams || mask != stageMask) {
             runStage1(params, mask)
             GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, stageTex)
             GLES30.glGenerateMipmap(GLES30.GL_TEXTURE_2D)
@@ -551,6 +563,18 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
 
     // ------------------------------------------------------------------ GL work (GL thread only)
 
+    /**
+     * The post-crop vignette and grain of what the window shows: none for the original, the crop mode's plane (the
+     * frame is being edited) or the sharpening mask.
+     */
+    private fun shownPost(req: Request): PostParams = if (req.showOriginal || req.geometryEditing ||
+        req.detailMask
+    ) {
+        PostParams.NONE
+    } else {
+        PostParams.from(req.recipe.effects)
+    }
+
     /** Zoom tiles show unless the photo shows the original, the crop mode's plane or the sharpening mask. */
     private fun tilesShown(req: Request): Boolean =
         zoom.active && !req.showOriginal && !req.geometryEditing && !req.detailMask
@@ -570,35 +594,53 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
     }
 
     /**
-     * Scene stage, the Light passes that are needed, the develop stage, then Detail (slot 11) when it runs, into the
-     * working texture. [showMask] draws the sharpening mask instead (the Masking overlay). The develop output is kept
-     * (in OkLab) while only Detail changes, so a Detail drag re-runs only its own passes.
+     * Scene stage, the Light passes that are needed, the develop stage, then Detail (slot 11) and the local Effects
+     * (slot 12) when they run, into the working texture. [showMask] draws the sharpening mask instead (the Masking
+     * overlay). The develop output is kept (in OkLab) while only Detail and Effects change, and so is the Effects grid
+     * built from it; [DetailPasses] caches its own intermediates, so a Detail or Effects drag re-runs only the passes
+     * that depend on the dragged slider.
      */
-    private fun runStage1(params: DevelopParams, showMask: Boolean = false) {
+    private fun runStage1(all: DevelopParams, showMask: Boolean = false) {
         val image = checkNotNull(input) { "no input" }
-        val detailOn = params.detail.active || showMask
-        val develop = params.withoutDetail() to detailOn
+        val params = all.withoutPost()
+        val localOn = params.localActive || showMask
+        val develop = params.withoutDetail() to localOn
         if (develop != developed) {
-            runDevelop(params, detailOn)
+            runDevelop(params, localOn)
             developed = develop
+            detail.invalidate()
+            effectsGridValid = false
         }
-        if (detailOn) {
+        if (localOn) {
+            val lab = checkNotNull(labTarget).texture
+            val e = if (showMask) EffectsParams.NONE else params.effects
+            if (e.gridActive && !effectsGridValid) {
+                effects.allocate(image.width, image.height)
+                effects.build(lab)
+                effectsGridValid = true
+                profiler.mark("effects grid")
+            }
             detail.run(
                 params.detail,
-                lab = checkNotNull(labTarget).texture,
-                levelA = checkNotNull(levelA),
-                levelB = checkNotNull(levelB),
-                blurA = checkNotNull(blurA),
-                blurB = checkNotNull(blurB),
+                e,
+                grid = if (e.gridActive) effects else null,
+                lab = lab,
+                t = checkNotNull(detailTargets),
                 output = GlTarget(stageTex, stageFbo),
                 region = DetailPasses.Region(0, 0, image.width, image.height, image.width, image.height),
                 showMask = showMask,
+                cache = true,
             )
-            profiler.mark("detail passes")
+            lastLocalPasses = detail.lastPasses
         }
         stageParams = params
         stageMask = showMask
     }
+
+    /** Passes slots 11 and 12 ran in the last stage-1 render (0 when they were cached or off); for the benchmark. */
+    @Volatile
+    var lastLocalPasses: Int = 0
+        private set
 
     /** Scene stage, Light passes and the develop stage: into the stage texture, or OkLab for the Detail passes. */
     private fun runDevelop(params: DevelopParams, labOut: Boolean) {
@@ -657,32 +699,45 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         profiler.mark("develop pass")
     }
 
-    /** The Detail operator's textures at the proxy size, allocated the first time it runs on this image. */
+    /** The textures of slots 11 and 12 at the proxy size, allocated the first time they run on this image. */
     private fun ensureDetailTargets(image: UploadedImage) {
         if (labTarget != null) return
-        fun target(format: Int): GlTarget {
-            val tex = newTexture(1, image.width, image.height, GLES30.GL_NEAREST, GLES30.GL_NEAREST, format)
+        fun target(format: Int, w: Int = image.width, h: Int = image.height): GlTarget {
+            val tex = newTexture(1, w, h, GLES30.GL_NEAREST, GLES30.GL_NEAREST, format)
             return GlTarget(tex, newFramebuffer(tex))
         }
+        val hw = (image.width + 1) / 2
+        val hh = (image.height + 1) / 2
         labTarget = target(GLES30.GL_RGBA16F)
-        levelA = target(GLES30.GL_RGBA16F)
-        levelB = target(GLES30.GL_RGBA16F)
-        blurA = target(GLES30.GL_R32F)
-        blurB = target(GLES30.GL_R32F)
+        detailTargets = DetailPasses.Targets(
+            lumA = target(GLES30.GL_RG16F),
+            lumB = target(GLES30.GL_RG16F),
+            lumH = target(GLES30.GL_R16F),
+            halfD = target(GLES30.GL_RGBA16F, hw, hh),
+            halfA = target(GLES30.GL_RGBA16F, hw, hh),
+            halfB = target(GLES30.GL_RGBA16F, hw, hh),
+            blurA = target(GLES30.GL_RG32F),
+            blurB = target(GLES30.GL_RG32F),
+        )
+        detail.invalidate()
     }
 
     private fun deleteDetailTargets() {
-        val targets = listOfNotNull(labTarget, levelA, levelB, blurA, blurB)
+        val t = detailTargets
+        val targets = listOfNotNull(labTarget) +
+            (
+                t?.let { listOf(it.lumA, it.lumB, it.lumH, it.halfD, it.halfA, it.halfB, it.blurA, it.blurB) }
+                    ?: emptyList()
+                )
         if (targets.isNotEmpty()) {
             GLES30.glDeleteTextures(targets.size, targets.map { it.texture }.toIntArray(), 0)
             GLES30.glDeleteFramebuffers(targets.size, targets.map { it.fbo }.toIntArray(), 0)
         }
         labTarget = null
-        levelA = null
-        levelB = null
-        blurA = null
-        blurB = null
+        detailTargets = null
         developed = null
+        effectsGridValid = false
+        detail.invalidate()
     }
 
     private fun bindTextures(unit0: Int, unit1: Int, unit2: Int = unit1) {
@@ -706,12 +761,14 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         clipping: ClippingWarnings = ClippingWarnings.NONE,
         mapping: GeometryMapping = GeometryMapping.identity(image.width, image.height),
         tiles: TileUniforms? = null,
+        post: PostParams = PostParams.NONE,
     ) {
         GLES30.glUseProgram(outputProgram)
         uploadUbo(
             outputUbo,
             outputBlock(
                 image.width, image.height, view, width, height, settings, surround, clipping.bits, mapping, tiles,
+                post,
             ),
         )
         if (tiles != null) zoom.bind(tiles.nearest)
@@ -732,6 +789,7 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         settings: OutputSettings,
         clipping: ClippingWarnings = ClippingWarnings.NONE,
         mapping: GeometryMapping,
+        post: PostParams = PostParams.NONE,
     ) {
         val image = checkNotNull(input) { "no input" }
         val w = mapping.outputWidth
@@ -740,7 +798,7 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, readFbo)
         GLES30.glViewport(0, 0, w, h)
         val identity = ViewTransform(1f, w / 2f, h / 2f)
-        drawOutput(image, identity, w, h, settings, surround, clipping = clipping, mapping = mapping)
+        drawOutput(image, identity, w, h, settings, surround, clipping = clipping, mapping = mapping, post = post)
     }
 
     /** (Re)allocates the RGBA8 readback target when the output size changes (crop, quarter turns). */
@@ -782,7 +840,7 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, stageTex)
         GLES30.glGenerateMipmap(GLES30.GL_TEXTURE_2D)
         val mapping = GeometryMapping.of(recipe.geometry, image.width, image.height)
-        drawOutputOffscreen(settings, clipping, mapping)
+        drawOutputOffscreen(settings, clipping, mapping, PostParams.from(recipe.effects))
         val w = mapping.outputWidth
         val h = mapping.outputHeight
         val pixels = ByteBuffer.allocateDirect(w * h * RGBA)
@@ -828,6 +886,7 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         tools = ColourToolShaders.Gl(developProgram)
         light.init()
         detail.init()
+        effects.init()
         val vaos = IntArray(1)
         GLES30.glGenVertexArrays(1, vaos, 0)
         vao = vaos[0]
@@ -978,6 +1037,7 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         deleteImageTextures()
         light.release()
         detail.release()
+        effects.release()
         GLES30.glDeleteBuffers(4, intArrayOf(developUbo, outputUbo, lightUbo, lookUbo), 0)
         if (::tools.isInitialized) tools.release()
         GLES30.glDeleteVertexArrays(1, intArrayOf(vao), 0)
@@ -1033,6 +1093,7 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
                 clipping = if (pane.original || req.geometryEditing) ClippingWarnings.NONE else req.clipping,
                 mapping = mapping,
                 tiles = if (tilesOn && !pane.original) zoom.uniforms(pane.view, mapping) else null,
+                post = if (pane.original) PostParams.NONE else shownPost(req),
             )
         }
         GLES30.glDisable(GLES30.GL_SCISSOR_TEST)
@@ -1100,7 +1161,16 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
             val mapping = shownMapping
             histogram.request(mapping.outputWidth, mapping.outputHeight) { scale, w, h ->
                 val view = ViewTransform(scale, mapping.outputWidth / 2f, mapping.outputHeight / 2f)
-                drawOutput(image, view, w, h, OutputSettings(dither = false), surround, mapping = mapping)
+                drawOutput(
+                    image,
+                    view,
+                    w,
+                    h,
+                    OutputSettings(dither = false),
+                    surround,
+                    mapping = mapping,
+                    post = shownPost(request.get()),
+                )
             }
             profiler.mark("histogram request")
             histogramDirty = false
@@ -1248,6 +1318,7 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
             clippingBits: Int = 0,
             mapping: GeometryMapping = GeometryMapping.identity(imageWidth, imageHeight),
             tiles: TileUniforms? = null,
+            post: PostParams = PostParams.NONE,
         ): ByteBuffer {
             val b = ByteBuffer.allocateDirect(OUTPUT_BLOCK_FLOATS * Float.SIZE_BYTES).order(ByteOrder.nativeOrder())
             putMat4(b, OutputTransformOp.workingToOutput(settings.space).toFloatArray())
@@ -1265,6 +1336,7 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
             b.putInt(if (OutputSampling.snapToOutputPixels(view.scale, aligned)) 1 else 0)
                 .putInt(if (mapping.emptyIsSurround) 1 else 0).putInt(0).putInt(0)
             putTiles(b, tiles)
+            putPost(b, post, mapping, tiles)
             b.flip()
             return b
         }
@@ -1286,6 +1358,21 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
             b.putInt(t.mode).putInt(if (t.snap) 1 else 0).putInt(t.indexWidth).putInt(t.indexHeight)
         }
 
+        /**
+         * The post-crop finish (docs/adr/0014): post0 = (vignette, midpoint, feather, highlights), post1 = (round,
+         * exponent, norm, flags), post2 = (grain, roughness), post3 = lattice cells per output pixel of the proxy's
+         * output and of the full-resolution tiles' output.
+         */
+        private fun putPost(b: ByteBuffer, p: PostParams, mapping: GeometryMapping, tiles: TileUniforms?) {
+            val flags = (if (p.vignetteActive) 1 else 0) or (if (p.grainActive) 2 else 0)
+            b.putFloat(p.vignette).putFloat(p.midpoint).putFloat(p.feather).putFloat(p.highlights)
+            b.putFloat(p.round).putFloat(p.exponent).putFloat(p.norm).putFloat(flags.toFloat())
+            b.putFloat(p.grain).putFloat(p.roughness).putFloat(0f).putFloat(0f)
+            val full = tiles?.let { p.grainScale(maxOf(it.fullOutputWidth, it.fullOutputHeight)) } ?: 0f
+            b.putFloat(p.grainScale(maxOf(mapping.outputWidth, mapping.outputHeight))).putFloat(full)
+                .putFloat(0f).putFloat(0f)
+        }
+
         private fun putMat4(b: ByteBuffer, rowMajor3: FloatArray) {
             for (col in 0 until 3) {
                 for (row in 0 until 3) b.putFloat(rowMajor3[row * 3 + col])
@@ -1297,7 +1384,8 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         private const val DEVELOP_BLOCK_FLOATS = 24
         private const val LIGHT_BLOCK_FLOATS = 16
         private const val TILE_BLOCK_FLOATS = 24
-        private const val OUTPUT_BLOCK_FLOATS = 44 + TILE_BLOCK_FLOATS
+        private const val POST_BLOCK_FLOATS = 16
+        private const val OUTPUT_BLOCK_FLOATS = 44 + TILE_BLOCK_FLOATS + POST_BLOCK_FLOATS
         private const val FADE_TICK_MS = 16L
     }
 }
@@ -1335,10 +1423,6 @@ class ShownView(
     val proxyOutputWidth: Int,
     val proxyOutputHeight: Int,
 )
-
-/** The same input without its pixels (one black pixel): enough for [DevelopParams.from]. */
-private fun PipelineInput.colourOnly(): PipelineInput =
-    PipelineInput(kind, 1, 1, FloatArray(PipelineInput.CHANNELS), cameraToXyz, asShotMultipliers?.copyOf(), saturation)
 
 /** What the scene pass (and so the guide) depends on: when it is unchanged, both are reused. */
 private data class SceneKey(

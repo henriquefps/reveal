@@ -2,8 +2,8 @@
 
 Status: accepted (M0, W5). Date: 2026-11-10. Amended by ADR 0007 (M1 Light: slots 1, 5, 5b, 8; version 3), by
 M1/G (slot 13 geometry, version 5; section "Geometry (slot 13)"), by ADR 0012 (M2: slot 11 Detail, version 6, the
-editor's full-resolution tiles) and by ADR 0013 (M2/B: tone curve in slot 8, colour mixer, black & white and colour
-grading in slot 9; version 7).
+editor's full-resolution tiles), by ADR 0013 (M2/B: tone curve in slot 8, colour mixer, black & white and colour
+grading in slot 9; version 7) and by ADR 0014 (M2/C: slot 12 Effects and the post-crop finish, version 8).
 
 ## Fixed operator order
 
@@ -46,7 +46,9 @@ Implemented in M0 are marked **(M0)**; the rest are the reserved slots from `doc
 10. **Local adjustments / masks (later)**: after global colour so masks adjust the globally graded image.
 11. **Detail (M2, ADR 0012)**: noise reduction then sharpening; NR before sharpening, both before effects. In OkLab,
     a neighbourhood operator at full resolution (the proxy scales its lengths); export tiles carry its apron.
-12. **Effects (later)**: texture/clarity/dehaze, vignette, grain: grain last so it is not sharpened or denoised.
+12. **Effects (M2/C, ADR 0014)**: texture, clarity, dehaze in Detail's final pass (texture with an apron, clarity and
+    dehaze on the low-resolution grid). The **vignette and grain are post-crop**: after slot 13, in the output passes,
+    on the geometry operator's output (grain last so it is not sharpened, denoised or resampled away).
 13. **Geometry (M1/G)**: crop, straighten, quarter turns and flips as a single resampling, after every pixel operator
     and before the output transform (see "Geometry (slot 13)"); perspective/Upright and lens geometry (slot 3) will
     fold into the same mapping.
@@ -143,6 +145,9 @@ geometry operator (slot 13); a recipe without geometry renders as before, a four
 **Version 6** (M2, ADR 0012): the Detail operator (slot 11), identity at its defaults; a fifth golden CRC pins it.
 **Version 7** (M2/B, ADR 0013): the tone curve, colour mixer, black & white and colour grading; identity at their
 defaults (a recipe without them renders as before), a sixth golden CRC pins them.
+**Version 8** (M2/C, ADR 0014 and ADR 0012 "M2/C"): the Effects (identity at their defaults) and the faster Detail
+(separable luminance levels, colour on a half-resolution copy, the noise model): Detail's output changes; the Detail
+CRC is re-pinned and a seventh one pins the Effects.
 
 ## Determinism
 

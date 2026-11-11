@@ -5,6 +5,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.google.common.truth.Truth.assertThat
 import dev.hfps.reveal.pipeline.cpu.CpuDevelop
 import dev.hfps.reveal.pipeline.cpu.CurveLut
+import dev.hfps.reveal.pipeline.cpu.EffectsParams
 import dev.hfps.reveal.pipeline.cpu.OutputSettings
 import dev.hfps.reveal.pipeline.cpu.OutputSpace
 import dev.hfps.reveal.pipeline.gl.GpuDevelopRenderer
@@ -17,6 +18,7 @@ import dev.hfps.reveal.pipeline.recipe.CropRect
 import dev.hfps.reveal.pipeline.recipe.CurvePoint
 import dev.hfps.reveal.pipeline.recipe.Curves
 import dev.hfps.reveal.pipeline.recipe.Detail
+import dev.hfps.reveal.pipeline.recipe.Effects
 import dev.hfps.reveal.pipeline.recipe.Geometry
 import dev.hfps.reveal.pipeline.recipe.GradeWheel
 import dev.hfps.reveal.pipeline.recipe.Light
@@ -71,12 +73,14 @@ class GpuParityTest {
         "stepEdge" to SyntheticImages.stepEdge(256, 48, dark = 0.02f, bright = 2f, texture = 0.25f),
         // Colour tools (docs/adr/0013): every hue at several lightnesses plus a neutral band.
         "hueSweep" to SyntheticImages.hueSweep(180, 24),
+        // Effects (docs/adr/0014): a hazy landscape (dehaze), display-referred.
+        "hazy" to SyntheticImages.hazy(160, 96),
     )
 
     private fun recipes(count: Int): List<Recipe> {
         val random = Random(1234)
         fun slider() = if (random.nextBoolean()) random.nextFloat() * 200f - 100f else 0f
-        return listOf(Recipe()) + LIGHT_EXTREMES + COLOUR_EXTREMES + GEOMETRY + DETAIL + TOOL_EXTREMES +
+        return listOf(Recipe()) + LIGHT_EXTREMES + COLOUR_EXTREMES + GEOMETRY + DETAIL + EFFECTS + TOOL_EXTREMES +
             toolRecipes(count) +
             List(count) {
                 Recipe(
@@ -171,12 +175,14 @@ class GpuParityTest {
         }
     }
 
-    @Suppress("CyclomaticComplexMethod")
+    @Suppress("CyclomaticComplexMethod", "LongMethod")
     @Test
     fun linearStageMatchesCpuReference() = runBlocking {
         var maxAbs = 0f
         var sumAbs = 0.0
         var count = 0L
+        var dehazeSum = 0.0
+        var dehazeCount = 0L
         var worstRatio = 0f
         val failures = mutableListOf<String>()
         for ((name, image) in images) {
@@ -184,6 +190,8 @@ class GpuParityTest {
             var imageWorst = 0f
             var where = ""
             for ((r, recipe) in recipes(RANDOM_RECIPES).withIndex()) {
+                // The hazy landscape is there for Dehaze: only the Detail and Effects recipes run on it.
+                if (name == "hazy" && !recipe.hasDetail()) continue
                 val cpu = CpuDevelop.renderLinear(image, recipe)
                 val gpu = renderer.renderLinear(recipe)
                 val light = recipe.light.hasTone() || name in RECONSTRUCTING
@@ -196,7 +204,7 @@ class GpuParityTest {
                     for (c in 0 until 3) {
                         val error = abs(gpu[p * 3 + c] - cpu[p * 3 + c])
                         val allowed = slope * when {
-                            detail -> DETAIL_ABS + DETAIL_REL * scale
+                            detail -> (DETAIL_ABS + DETAIL_REL * scale) * recipe.dehazeGain()
                             light && colour -> LIGHT_ABS + COLOUR_LIGHT_REL * scale
                             light -> LIGHT_ABS + LIGHT_REL * scale
                             colour -> COLOUR_ABS + COLOUR_REL * scale
@@ -204,12 +212,18 @@ class GpuParityTest {
                         }
                         val ratio = error / allowed
                         maxAbs = maxOf(maxAbs, error)
-                        sumAbs += error
-                        count++
+                        // Detail and Effects (float16 cascades; positive dehaze x4) have their own mean bound.
+                        if (!detail) {
+                            sumAbs += error
+                            count++
+                        } else {
+                            dehazeSum += error
+                            dehazeCount++
+                        }
                         if (ratio > imageWorst) {
                             imageWorst = ratio
                             where =
-                                "recipe #$r ${recipe.light} ${recipe.profile.base}, " +
+                                "recipe #$r ${recipe.light} ${recipe.profile.base} ${recipe.effects}, " +
                                 "pixel ($p % ${image.width}, ${p / image.width}) channel $c: " +
                                 "cpu ${cpu[p * 3 + c]} gpu ${gpu[p * 3 + c]}"
                         }
@@ -222,12 +236,15 @@ class GpuParityTest {
         }
         Log.i(
             TAG,
-            "linear: max abs error $maxAbs, mean abs error ${sumAbs / count}, worst error / tolerance $worstRatio",
+            "linear: max abs error $maxAbs, mean abs error ${sumAbs / count} (Detail and Effects recipes " +
+                "${dehazeSum / dehazeCount}), worst error / tolerance $worstRatio",
         )
         assertThat(failures).isEmpty()
         assertThat(sumAbs / count).isAtMost(LINEAR_MEAN)
+        assertThat(dehazeSum / dehazeCount).isAtMost(DETAIL_MEAN)
     }
 
+    @Suppress("CyclomaticComplexMethod")
     @Test
     fun outputMatchesCpuReferenceIn8Bit() = runBlocking {
         val failures = mutableListOf<String>()
@@ -246,6 +263,8 @@ class GpuParityTest {
                 }
                 renderer.setInput(image)
                 for ((r, recipe) in recipes(RANDOM_RECIPES).withIndex()) {
+                    // The hazy landscape is there for Dehaze: only the Detail and Effects recipes run on it.
+                    if (name == "hazy" && !recipe.hasDetail()) continue
                     val allowed = outputAllowed(name, recipe, imageAllowed)
                     var recipeMax = 0
                     val settings = OutputSettings(space = space)
@@ -295,7 +314,7 @@ class GpuParityTest {
             else -> imageAllowed
         }
         // A steep tone curve multiplies the fp16 rounding before it (docs/adr/0013, "Parity").
-        return kotlin.math.ceil(base * recipe.curveSlope()).toInt()
+        return kotlin.math.ceil(base * recipe.curveSlope() * recipe.dehazeGain()).toInt()
     }
 
     @Test
@@ -342,7 +361,7 @@ class GpuParityTest {
             val image = images.getValue(name)
             for (scale in listOf(2.5f, 4f)) {
                 renderer.upload(image, scale)
-                for (recipe in DETAIL) {
+                for (recipe in DETAIL + EFFECTS) {
                     val settings = OutputSettings(dither = false)
                     val cpu = CpuDevelop.render(image, recipe, settings, scale)
                     val gpu = renderer.renderOutput(recipe, settings)
@@ -354,13 +373,30 @@ class GpuParityTest {
                         count++
                     }
                     worst = maxOf(worst, max)
-                    val allowed = if (name == "rawNoise") OUTPUT_MAX_LEVELS_NOISE_DETAIL else OUTPUT_MAX_LEVELS_DETAIL
+                    val allowed = (
+                        if (name == "rawNoise") OUTPUT_MAX_LEVELS_NOISE_DETAIL else OUTPUT_MAX_LEVELS_DETAIL
+                        ) * recipe.dehazeGain().toInt()
                     assertThat(max).isAtMost(allowed)
                 }
             }
         }
-        Log.i(TAG, "detail at proxy scales: max diff $worst levels, mean diff ${sum.toDouble() / count}")
+        Log.i(TAG, "detail and effects at proxy scales: max diff $worst levels, mean diff ${sum.toDouble() / count}")
         assertThat(sum.toDouble() / count).isAtMost(OUTPUT_MEAN_LEVELS)
+    }
+
+    @Test
+    fun effectsNeutralIsIdentity() = runBlocking {
+        val image = images.getValue("scene")
+        renderer.setInput(image)
+        val base = Recipe(light = Light(0.3f))
+        // The shaping sliders change nothing while every amount is 0 (slot 12 and the post-crop finish are skipped).
+        val shaped = base.copy(
+            effects = Effects(vignetteMidpoint = 10f, vignetteRoundness = -60f, vignetteFeather = 90f, grainSize = 80f),
+        )
+        assertThat(renderer.renderLinear(shaped)).isEqualTo(renderer.renderLinear(base))
+        assertThat(renderer.renderOutput(shaped)).isEqualTo(renderer.renderOutput(base))
+        val edit = base.copy(effects = Effects(clarity = 50f, dehaze = 30f, grainAmount = 40f, vignetteAmount = -30f))
+        assertThat(renderer.renderOutput(edit)).isEqualTo(renderer.renderOutput(edit))
     }
 
     @Test
@@ -434,7 +470,7 @@ class GpuParityTest {
         assertThat(renderer.renderLinear(zeros)).isEqualTo(renderer.renderLinear(exposureOnly))
     }
 
-    private companion object {
+    internal companion object {
         const val TAG = "REVEAL_PARITY"
 
         /** The Light sliders at their ends, alone and together (always in the parity set). */
@@ -468,6 +504,30 @@ class GpuParityTest {
                 nrColour = 50f,
             ),
         ).map { Recipe(light = Light(0.2f, contrast = 10f), detail = it) }
+
+        // Effects (docs/adr/0014): each local effect at both ends, with Detail, and the post-crop finish on a crop.
+        val EFFECTS: List<Recipe> = listOf(
+            Recipe(effects = Effects(texture = 100f)),
+            Recipe(effects = Effects(texture = -100f), detail = Detail(nrLuminance = 30f)),
+            Recipe(effects = Effects(clarity = 100f)),
+            Recipe(effects = Effects(clarity = -100f, texture = 40f)),
+            Recipe(effects = Effects(dehaze = 100f)),
+            Recipe(effects = Effects(dehaze = -100f, clarity = 30f)),
+            Recipe(
+                effects = Effects(texture = 50f, clarity = 40f, dehaze = 40f),
+                detail = Detail(sharpenAmount = 60f, sharpenMasking = 20f, nrColour = 40f),
+            ),
+            Recipe(
+                geometry = Geometry(crop = CropRect(0.1f, 0.05f, 0.9f, 0.95f)),
+                effects = Effects(vignetteAmount = -80f, vignetteRoundness = 40f, vignetteHighlights = 50f),
+            ),
+            Recipe(effects = Effects(vignetteAmount = 70f, vignetteRoundness = -90f, vignetteFeather = 15f)),
+            Recipe(effects = Effects(grainAmount = 100f, grainSize = 10f, grainRoughness = 100f)),
+            Recipe(
+                geometry = Geometry(crop = CropRect(0.2f, 0.2f, 0.8f, 0.8f), angle = 7.3f),
+                effects = Effects(grainAmount = 60f, grainSize = 70f, vignetteAmount = -50f, clarity = 30f),
+            ),
+        ).map { it.copy(light = Light(0.2f, contrast = 10f)) }
 
         val LIGHT_EXTREMES: List<Recipe> = listOf(
             Light(highlights = -100f),
@@ -507,6 +567,9 @@ class GpuParityTest {
         // Mean absolute error over every image and recipe. 3e-4 in M0; 4e-4 since the Standard look of ADR 0008
         // renders scene-referred input about 1.3 EV brighter (absolute errors grow with the values; measured 3.3e-4).
         const val LINEAR_MEAN = 4e-4
+
+        /** Mean abs error of the linear stage over the Detail and Effects recipes (docs/adr/0014). */
+        const val DETAIL_MEAN = 1e-3
 
         // 8-bit output: dithering turns sub-level float differences into at most one level of change.
         // The random-noise image is a stress test: saturated pixels with tiny channels in the darks, where one
@@ -671,7 +734,13 @@ class GpuParityTest {
             return steepest
         }
 
-        fun Recipe.hasDetail() = detail != Detail()
+        fun Recipe.hasDetail() = detail != Detail() || effects != Effects()
+
+        /**
+         * Positive dehaze divides by the transmission (at least `DEHAZE_T0`): it multiplies the fp16 storage
+         * differences of its input by up to `1 / t0` = 4, so its tolerance is Detail's times that (docs/adr/0014).
+         */
+        fun Recipe.dehazeGain(): Float = if (effects.dehaze > 0f) 1f / EffectsParams.DEHAZE_T0 else 1f
 
         // Detail (docs/adr/0012): both sides store the same float16 values (Half / q16), so what remains is fp32
         // arithmetic (exp, cube roots) amplified by sharpening (gain up to 1.8); the random-noise stress image gets

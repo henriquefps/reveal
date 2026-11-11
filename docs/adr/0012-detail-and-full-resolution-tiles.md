@@ -1,6 +1,7 @@
 # ADR 0012: Detail and full-resolution tiles
 
-Status: accepted (M2/Z). Date: 2026-11-11. Amends ADR 0002 (slot 11, `PIPELINE_VERSION` 6, "Proxies and tiles"),
+Status: accepted (M2/Z); amended by M2/C (section "M2/C: Detail at the display rate and the noise model", version 8).
+Date: 2026-11-11. Amends ADR 0002 (slot 11, `PIPELINE_VERSION` 6, "Proxies and tiles"),
 ADR 0009 (the Detail apron of export tiles). Builds on ADR 0007 (Light grids) and ADR 0008 (OkLab).
 
 Two things that only make sense together: the editor shows **full-resolution detail when zoomed in** (it only had the
@@ -229,12 +230,111 @@ candidates are colour NR at half resolution (chroma is low-frequency) and a chea
 **6**: the Detail operator exists (identity at its defaults, so no existing output changes); a fifth golden CRC pins
 it (`CpuDevelopTest`, two recipes at scale 1 and one at a proxy scale).
 
+## M2/C: Detail at the display rate and the noise model
+
+M2/Z left a Detail drag at 23 ms per frame on the Adreno 750 (43 fps), against about 9 ms for a Light drag. Target: at
+most 8.3 ms p50 and 12 ms p95 for every Detail slider at 2400 x 1600. Four changes, all mirrored in the CPU reference
+(`DetailOp`), so the operator is still exactly what the GPU renders (`PIPELINE_VERSION` 8, ADR 0014):
+
+1. **Separable luminance levels.** Each level's edge-avoiding smoothing runs along x then along y (5 + 5 taps, each axis
+   edge-stopped against its own centre) instead of 5 x 5 = 25 taps, on single-channel textures (R16F for the axis,
+   RG16F `(L_i, acc)` between levels) instead of RGBA16F. The shrinkage, the float16 storage and the telescoping are
+   unchanged (relative change without shrinkage 0.17 %). Fetches per level: 25 RGBA16F -> 10 R/RG16F, `exp` per tap:
+   2 -> 1.
+2. **Colour on a half-resolution copy.** Colour noise is low-frequency: `(L, a, b)` is binned 2 x 2 and the colour
+   levels run there (5 x 5, chroma range and luminance guard as before, half-resolution steps; the finest level is the
+   binning itself). The full-resolution colour is `up(S) + r * (1 - exp(-|r|^2 / 8 sigma^2))^2` with the residual
+   `r = ab - up(D)` (bilinear, explicit weights): colour finer than the copy is dropped where it is small (noise) and
+   kept where it is a real colour edge. A quarter of the pixels. Measured: colour NR 60 leaves **10 %** of the chroma
+   noise (M2/Z: 12 %), `L` unchanged.
+3. **Levels skipped on the proxy.** A level runs when its rendered step is at least one pixel (was 0.75): on a 24 MP
+   photo's 2400 px proxy (scale 2.5) luminance runs levels 2-4 (steps 2, 3, 6), colour levels 3-4 at half resolution;
+   the finer ones were averaged away by the proxy's binning. The 100 % tiles and the export are unchanged in this
+   respect (every level runs at scale 1).
+4. **Caching per slider.** `DetailPasses` keeps the luminance levels while their parameters are unchanged, the colour
+   levels likewise, and the blurs while the denoised luminance and the kernels are: a sharpening amount, detail or
+   masking drag (and every Effects drag) is one final pass; a colour drag is the binning, its levels and the final
+   pass; only a luminance drag re-runs the luminance levels and the blurs. Uniform locations are looked up once per
+   program (they were looked up every pass: costly through the emulator's GL translator and wasted CPU on the phone).
+
+Drag cost (`PipelineBenchmark.detailAndEffectsSliderDrags`, 2400 x 1600, pixel scale 2.5, every Detail and Effects
+slider on; emulator with the host GPU NVIDIA RTX 4080, two runs, p50 / p95 ms):
+
+| Drag | main (M2/Z) | M2/C |
+| --- | --- | --- |
+| exposure (reference) | 0.82 / 1.14 | 0.89-0.91 / 1.27-1.50 |
+| luminance NR (colour NR + sharpening on; `detailDragFrameTime`) | 2.38 / 2.81-2.99 | 1.17-1.20 / 1.48-1.58 |
+| luminance, luminance detail, luminance contrast (everything on) | - | 1.25-1.34 / 1.62-2.13 |
+| colour, colour detail, colour smoothness | - | 0.94-1.02 / 1.30-1.64 |
+| sharpening amount / radius / detail / masking | 1.77 / 2.27-2.41 (amount) | 0.84-0.96 / 1.11-1.29 |
+
+On this host every slider other than luminance costs what an exposure drag costs, and luminance about 1.4x; but the
+emulator's numbers are dominated by per-call overhead.
+
+**On the phone** (Galaxy S24 Ultra, Adreno 750, debug build; the worker ran it there because the emulator kept
+crashing, owner's rules: `--user 0`, CC0/synthetic only, apps removed after). Same benchmark, p50 / p95 ms; the phone
+warms up over a run (the exposure reference moved from 8.3 to 9.3 ms between two runs), so compare within a run:
+
+| Drag (everything on unless noted) | main (M2/Z) | M2/C, run 1 | M2/C, final |
+| --- | --- | --- | --- |
+| exposure (reference) | 9.0 | 8.3 / 11.0 | 9.3 / 11.6 |
+| luminance NR, colour NR + sharpening on (`detailDragFrameTime`) | 23.2 / 26.6 | 23.0 / 26.6 | **17.6** / 22.1 |
+| sharpening alone (`sharpenDragFrameTime`) | 12.8 | **7.0** / 9.1 | 9.7 / 12.6 (warm) |
+| luminance / luminance detail / luminance contrast | - | 22.5-25.9 | 12.7-22.9 / 15-33 |
+| colour / colour detail / colour smoothness | - | 16.5-17.2 | 13.7-15.9 / 17-19 |
+| sharpening amount / radius / detail / masking | - | 12.6-15.2 | 12.1-15.8 / 14-20 |
+| texture / clarity / dehaze (ADR 0014) | - | 14.7-15.8 | 10.0-13.4 / 15 |
+| vignette / grain (ADR 0014, output pass only) | - | 15.8 / 15.7 | **8.0 / 6.6** |
+
+Per pass (`-e profile true`, `glFinish` after every section, so each figure includes a sync; mean ms): luminance levels
+(3 levels x 2 axes) 10-12, the two blurs 5-7, colour levels at half resolution 5.5-6.3, the final pass with everything
+on 6-8, mipmaps 2.0-2.6, the output pass at 2400 x 1600 6-8. **On the Adreno a full-resolution pass at 2400 x 1600 costs
+about 1.5-2 ms almost whatever it computes**: the number of passes matters, the number of taps much less (so the
+separable levels, which halve the taps but double the passes, did not pay there, unlike on the emulator). Two changes
+were made after the first phone run: the final pass is compiled per feature set (compile-time flags instead of uniform
+branches: the general shader's register pressure slowed every pixel), and the vignette and grain no longer re-run a
+stage (they are output uniforms).
+
+**Target status:** at most 8.3 ms p50 / 12 ms p95 is met for sharpening alone (cool phone), the vignette and the grain;
+it is **not** met with every Detail and Effects tool on at once (10-23 ms; a luminance drag went from 23.2 to 17.6 ms).
+Next levers, in order of expected gain on the Adreno: run the luminance levels whose rendered step is 2 or more on a
+half-resolution copy (as colour does; 3-4 fewer full-resolution passes during a luminance drag), back to one pass per
+level (25 taps, half the passes), RG16F blur targets with the float16 rounding of ADR 0012, and the output pass at the
+frame's size rather than the proxy's in the benchmark (the editor already draws it at screen size).
+
+### Noise model
+
+The thresholds of luminance and colour NR (`lumTau`, the chroma sigma) are multiplied by the photo's expected noise
+relative to a reference capture (`cpu/NoiseModel.kt`, from `PipelineInput.noise`: EXIF ISO and camera model, set by
+`PipelineInputMapper` and the RAW tile source), so an amount removes the same share of the noise at ISO 200 and ISO
+12800: `factor = sqrt(ISO / 5000) * 5.9 um / pitch(camera)`, clamped to [0.1, 4]. Shot noise after the gain grows as
+`sqrt(ISO)` and falls with the pixel's area (relative noise `1 / pitch`); the reference (factor 1) is the CC0 Sony A7C
+(full frame 24 MP, 5.9 um) at ISO 5000, the middle of the two files the amount curve was calibrated on, so mid-to-high
+ISO photos keep M2/Z's look. Defaults: no ISO -> factor 1 (M2/Z); unknown camera -> 3.9 um (APS-C 24 MP);
+display-referred input (JPEG, HEIF: the camera already denoised it, the decoders report no ISO) -> 0.5. A table of
+common bodies gives the pitch (sensor width / columns).
+
+Check on the CC0 files (`NoiseCalibrationTest`, opt-in; full-size dumps, default render, OkLab `L` noise of the
+flattest mid-tone 16 x 16 blocks of a 1000 px centre crop; `rawdump` now records the ISO):
+
+| File | ISO | measured sigma | model factor | sigma / factor |
+| --- | --- | --- | --- | --- |
+| Canon EOS R6 | 100 | 0.0032 | 0.13 | 0.025 |
+| Nikon D5600 | 200 | 0.0061 | 0.30 | 0.020 |
+| Sony ZV-E10 | 400 | 0.0082 | 0.43 | 0.019 |
+| Sony A7C | 2000 | 0.0098 | 0.63 | 0.016 |
+| Sony A7C | 12800 | 0.0217 | 1.60 | 0.014 |
+
+Same camera, ISO 2000 -> 12800: measured 2.2x, model 2.5x. Across five cameras sigma / factor stays within about
++-30 % (the low-ISO files have a floor of real texture in their "flattest" blocks), against a 17x spread of the factor:
+the model normalises what it should. Without the model, amount 50 would mean a 7x different strength on these files.
+
 ## Limits and follow-ups
 
-- The noise reduction does not know the camera's noise: the same amount is stronger on a clean photo. A per-ISO
-  noise model (or an estimate from the image's finest wavelet level) could normalise the slider; the amount curve is
-  the M2 compromise.
+- The noise reduction did not know the camera's noise: fixed in M2/C (the noise model above). A per-image estimate
+  (the finest wavelet level) would also cover in-camera NR differences and unknown cameras.
 - Tiles are made from 50 % up; between the proxy's scale and 50 % a 61 MP photo's proxy is magnified up to 2x.
-- A Detail drag costs 23 ms per frame on the Adreno 750 (above): smooth but under 120 Hz; see the candidates above.
+- A Detail drag cost 23 ms per frame on the Adreno 750 (above); M2/C (section above) rebuilt the passes for the display
+  rate, to be re-measured on the phone.
 - `GpuParityTest.outputMatchesCpuReferenceIn8Bit` fails on the Linux host GPU (NVIDIA via the emulator's translator)
   for one Light-only regression recipe on the sRGB chart (5 levels, also on `main`); it passes on the phone.

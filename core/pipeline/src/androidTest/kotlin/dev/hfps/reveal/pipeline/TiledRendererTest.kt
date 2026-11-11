@@ -4,7 +4,7 @@ import android.util.Log
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.google.common.truth.Truth.assertThat
 import dev.hfps.reveal.pipeline.cpu.CpuDevelop
-import dev.hfps.reveal.pipeline.cpu.DetailParams
+import dev.hfps.reveal.pipeline.cpu.DevelopParams
 import dev.hfps.reveal.pipeline.cpu.LanczosResampleOp
 import dev.hfps.reveal.pipeline.cpu.OutputSettings
 import dev.hfps.reveal.pipeline.cpu.OutputSpace
@@ -23,6 +23,7 @@ import dev.hfps.reveal.pipeline.recipe.ColourMixer
 import dev.hfps.reveal.pipeline.recipe.CropRect
 import dev.hfps.reveal.pipeline.recipe.Curves
 import dev.hfps.reveal.pipeline.recipe.Detail
+import dev.hfps.reveal.pipeline.recipe.Effects
 import dev.hfps.reveal.pipeline.recipe.Geometry
 import dev.hfps.reveal.pipeline.recipe.GradeWheel
 import dev.hfps.reveal.pipeline.recipe.Light
@@ -200,7 +201,7 @@ class TiledRendererTest {
         val edit = recipe.copy(
             detail = Detail(sharpenAmount = 80f, sharpenMasking = 25f, nrLuminance = 50f, nrColour = 60f),
         )
-        val reach = DetailParams.from(edit.detail, 1f).reach
+        val reach = DevelopParams.reach(edit)
         assertThat(reach).isGreaterThan(0)
         fun detailPlan(tile: Int, geometry: Geometry = Geometry()) =
             ExportPlan.of(image.width, image.height, geometry, ExportSize.Original, tile, reach)
@@ -224,6 +225,55 @@ class TiledRendererTest {
             Log.i(TAG, "detail: vs preview $vsPreview, vs CPU $vsCpu (max levels, values differing)")
             assertThat(vsPreview.first).isAtMost(1)
             assertThat(vsCpu.first).isAtMost(4)
+        } finally {
+            preview.close()
+        }
+    }
+
+    /**
+     * Effects (docs/adr/0014): texture's apron and the clarity/dehaze grid pre-pass make tiles stitch bit-identically,
+     * also straightened and resized (vignette and grain at the export's own size); the export equals the preview
+     * renderer and stays within the Effects tolerance of the CPU reference.
+     */
+    @Test
+    fun effectsTilesStitchAndMatchThePreviewAndTheCpu() = runBlocking {
+        // With a tone curve: its table shares the develop stage's units with nothing of slots 11-12 (docs/adr/0014).
+        val edit = recipe.copy(
+            light = recipe.light.copy(curve = Curves(rgb = Curves.MEDIUM_CONTRAST)),
+            detail = Detail(nrColour = 40f),
+            effects = Effects(
+                texture = 60f,
+                clarity = 50f,
+                dehaze = 30f,
+                vignetteAmount = -50f,
+                grainAmount = 40f,
+                grainSize = 40f,
+            ),
+        )
+        val reach = DevelopParams.reach(edit)
+        fun effectsPlan(tile: Int, geometry: Geometry = Geometry(), size: ExportSize = ExportSize.Original) =
+            ExportPlan.of(image.width, image.height, geometry, size, tile, reach)
+        val whole = render(effectsPlan(1024), with = edit)
+        assertThat(render(effectsPlan(256), with = edit).contentEquals(whole)).isTrue()
+        val straight = Geometry(crop = CropRect(0.1f, 0.15f, 0.85f, 0.9f), angle = -4.2f)
+        val turned = edit.copy(geometry = straight)
+        assertThat(
+            render(effectsPlan(256, straight), with = turned)
+                .contentEquals(render(effectsPlan(1024, straight), with = turned)),
+        ).isTrue()
+        val small = ExportSize.LongEdge(640)
+        assertThat(
+            render(effectsPlan(256, size = small), with = edit)
+                .contentEquals(render(effectsPlan(1024, size = small), with = edit)),
+        ).isTrue()
+        val preview = GpuDevelopRenderer.create()
+        try {
+            preview.upload(image)
+            val vsPreview = maxDiff(preview.renderOutput(edit), whole)
+            val vsCpu = maxDiff(CpuDevelop.render(image, edit), whole)
+            Log.i(TAG, "effects: vs preview $vsPreview, vs CPU $vsCpu (max levels, values differing)")
+            assertThat(vsPreview.first).isAtMost(1)
+            assertThat(vsCpu.first).isAtMost(8)
         } finally {
             preview.close()
         }

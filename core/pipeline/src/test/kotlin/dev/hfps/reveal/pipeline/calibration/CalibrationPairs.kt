@@ -306,7 +306,7 @@ class RawDump(val width: Int, val height: Int, private val data: ShortArray, pri
                     cfa = CfaKind.BAYER,
                     cfaPattern = "RGGB",
                     isDng = false,
-                    iso = null,
+                    iso = header["iso"]?.firstOrNull()?.toIntOrNull()?.takeIf { it > 0 },
                 )
                 return RawDump(w, h, shorts, info)
             }

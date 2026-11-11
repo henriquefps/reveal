@@ -18,7 +18,7 @@ import dev.hfps.reveal.feature.editor.EditorTags
 import dev.hfps.reveal.pipeline.InputKind
 import dev.hfps.reveal.pipeline.PipelineInput
 import dev.hfps.reveal.pipeline.cpu.CpuDevelop
-import dev.hfps.reveal.pipeline.cpu.DetailParams
+import dev.hfps.reveal.pipeline.cpu.DevelopParams
 import dev.hfps.reveal.pipeline.cpu.OutputSettings
 import dev.hfps.reveal.pipeline.export.ExportPlan
 import dev.hfps.reveal.pipeline.export.PixelBox
@@ -104,7 +104,7 @@ class EditorZoomTest {
         assertThat(ix0 / ZoomGrid.TILE).isLessThan(ix1 / ZoomGrid.TILE)
         assertThat(iy0 / ZoomGrid.TILE).isLessThan(iy1 / ZoomGrid.TILE)
         // CPU reference of that region with the Detail apron (only global and Detail operators: exact on a crop).
-        val apron = DetailParams.from(recipe.detail, 1f).reach + 2
+        val apron = DevelopParams.reach(recipe) + 2
         val region = ExportPlan.grow(PixelBox(ix0, iy0, ix1 - ix0 + 1, iy1 - iy0 + 1), apron, WIDTH, HEIGHT)
         val options = BitmapFactory.Options().apply { inPreferredConfig = Bitmap.Config.ARGB_8888 }
         val source = BitmapTileSource(BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size, options))

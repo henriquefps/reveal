@@ -145,7 +145,7 @@ vec3 srgbOetf(vec3 v) {
      * 8-bit dithering and the optional clipping-warning overlay. Pixels outside the output get the neutral surround;
      * empty corners of an unconstrained straighten are black (the crop mode's editing plane shows the surround).
      */
-    const val OUTPUT_FRAG: String = """#version 300 es
+    val OUTPUT_FRAG: String = """#version 300 es
 precision highp float;
 precision highp int;
 precision highp sampler2D;
@@ -167,6 +167,11 @@ layout(std140) uniform Output {
     vec4 tileAtlas;          // x = tile core, y = slot border, z = slot size, w = explicit LOD (0..1)
     vec4 tileImage;          // xy = full-res image size, zw = atlas size
     uvec4 tileFlags;         // x = sampling mode (as dither.z), y = 1 snaps to full-res output pixel centres
+    // Post-crop vignette and grain (EffectsShaders.POST, docs/adr/0014); post1.w = 0 when off.
+    vec4 post0;              // vignette, midpoint, feather, highlights
+    vec4 post1;              // round, exponent, norm, flags (1 vignette, 2 grain)
+    vec4 post2;              // grain, roughness
+    vec4 post3;              // lattice cells per output pixel: x = proxy output, y = full-resolution output
 };
 
 uniform sampler2D uStage;
@@ -174,7 +179,7 @@ uniform sampler2D uAtlas;      // zoom tiles: RGBA16F slots, levels 0-1
 uniform sampler2D uTileIndex;  // zoom tiles: RGBA8 per tile, rg = slot, b = fade-in alpha, a = ready
 out vec4 outColor;
 
-""" + OUTPUT_FUNCTIONS + """
+""" + OUTPUT_FUNCTIONS + EffectsShaders.POST + """
 // GeometryOp.weights: Catmull-Rom (a = -0.5) for the fraction t.
 vec4 catmullRomWeights(float t) {
     return vec4(
@@ -259,9 +264,10 @@ void main() {
     if (!insideImage) {
         c = vec3(0.0);
     }
+    vec2 fo = op;
     if (tileView.y != 0.0) {
         // The full-resolution output point of the same screen pixel (ZoomView.fullOutput), then its image point.
-        vec2 fo = (op0 - vec2(tileGeomX.w, tileGeomY.w) * 0.5) * tileView.x + tileView.zw * 0.5;
+        fo = (op0 - vec2(tileGeomX.w, tileGeomY.w) * 0.5) * tileView.x + tileView.zw * 0.5;
         if (tileFlags.y != 0u) {
             fo = floor(fo) + 0.5;
         }
@@ -273,6 +279,12 @@ void main() {
                 c = mix(c, sampleTile(fp, t, idx), idx.b);
             }
         }
+    }
+    if (post1.w != 0.0) {
+        // Post-crop, in the output's own terms: the full-resolution output where tiles are on, else the proxy's.
+        c = tileView.y != 0.0
+            ? postCrop(c, fo, tileView.zw, post3.y, post0, post1, post2)
+            : postCrop(c, op, vec2(geomX.w, geomY.w), post3.x, post0, post1, post2);
     }
     c = clamp(mat3(workingToOutput) * c, 0.0, 1.0);
     vec3 e = srgbOetf(c);

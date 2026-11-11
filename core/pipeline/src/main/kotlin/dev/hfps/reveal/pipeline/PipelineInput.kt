@@ -35,6 +35,8 @@ enum class InputKind {
  * @property saturation value of [linearRgb] at which the sensor saturated (a decoded RAW: the lowest per-channel
  *   saturation point, at most 1.0); the raw white balance then clips highlights to neutral instead of magenta
  *   (`RawWhiteBalanceOp`). `null` = no known saturation (synthetic or merged data with real headroom): no clip.
+ * @property noise what the file says about its noise (ISO, camera) for the Detail operator's noise model
+ *   (`cpu/NoiseModel`); `null` = unknown (synthetic images, tests): the model's documented defaults apply.
  */
 class PipelineInput(
     val kind: InputKind,
@@ -44,6 +46,7 @@ class PipelineInput(
     val cameraToXyz: Mat3,
     val asShotMultipliers: FloatArray?,
     val saturation: Float? = null,
+    val noise: NoiseInfo? = null,
 ) {
     init {
         require(width > 0 && height > 0) { "image must not be empty" }
@@ -71,3 +74,9 @@ class PipelineInput(
             PipelineInput(InputKind.DISPLAY_REFERRED, width, height, linearRgb, ColorSpaces.DISPLAY_P3.toXyz, null)
     }
 }
+
+/**
+ * The capture facts the noise model needs (docs/adr/0012, "Noise model"): the [iso] speed from EXIF and the camera's
+ * [make] and [model] as written in the file; any of them may be unknown.
+ */
+data class NoiseInfo(val iso: Int? = null, val make: String? = null, val model: String? = null)

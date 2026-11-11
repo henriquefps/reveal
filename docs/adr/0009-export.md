@@ -1,6 +1,6 @@
 # ADR 0009: Export
 
-Status: accepted (M1, Export). Date: 2026-11-11. Amended by ADR 0012 (the Detail apron of every tile). Builds on ADR 0002 (tiles seam, output transforms, dither,
+Status: accepted (M1, Export). Date: 2026-11-11. Amended by ADR 0012 (the Detail apron of every tile) and ADR 0014 (the Effects pre-pass, texture's apron, the post-crop vignette and grain in the output pass). Builds on ADR 0002 (tiles seam, output transforms, dither,
 sampling), 0004 (full decode, memory), 0006 (versions and recipes), 0007 (Light operators' grid), 0008 (profiles).
 
 Export renders the photo with the same shaders as the preview at full resolution, in tiles, encodes it to JPEG or

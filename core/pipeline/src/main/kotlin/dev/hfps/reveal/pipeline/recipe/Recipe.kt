@@ -9,7 +9,7 @@ const val RECIPE_VERSION: Int = 1
 /**
  * The edit model of one photo version: an immutable tree where every default means "no change". Originals are never
  * modified; a photo's look is its recipe. Groups follow the develop pipeline order (docs/adr/0002). Groups without
- * operators yet (effects, detail, optics) are empty placeholders that reserve the JSON name and say what
+ * operators yet (optics) are empty placeholders that reserve the JSON name and say what
  * will live there, so adding fields later is an additive, non-breaking change.
  */
 @Serializable
@@ -18,7 +18,7 @@ data class Recipe(
     @SerialName("profile") val profile: Profile = Profile(),
     @SerialName("light") val light: Light = Light(),
     @SerialName("colour") val colour: Colour = Colour(),
-    @SerialName("effects") val effects: Effects = Effects,
+    @SerialName("effects") val effects: Effects = Effects(),
     @SerialName("detail") val detail: Detail = Detail(),
     @SerialName("optics") val optics: Optics = Optics,
     @SerialName("geometry") val geometry: Geometry = Geometry(),
@@ -188,9 +188,48 @@ data class WhiteBalance(
     }
 }
 
-/** Effects (texture/clarity/dehaze, vignette, grain). Reserved. */
+/**
+ * Effects (slot 12 and the post-crop finish, docs/adr/0014): texture, clarity and dehaze (edge-aware, on the working
+ * image after Detail), then the post-crop vignette and grain (on the geometry operator's output, so they follow the
+ * crop). Every amount defaults to 0 (no change); the shaping sliders do nothing until their amount is on. Ranges and
+ * steps live in [RecipeRanges].
+ *
+ * The JSON group was an empty object (`{}`) before these fields existed; it reads as the defaults (additive).
+ */
 @Serializable
-data object Effects
+data class Effects(
+    /** Texture, -100..+100: medium-scale detail (skin, foliage); negative smooths it, strong edges are left alone. */
+    @SerialName("texture") val texture: Float = 0f,
+    /** Clarity, -100..+100: local contrast of the midtones at a large scale, edge-aware (no halos). */
+    @SerialName("clarity") val clarity: Float = 0f,
+    /** Dehaze, -100..+100: removes (positive) or adds (negative) atmospheric haze (dark channel prior). */
+    @SerialName("dehaze") val dehaze: Float = 0f,
+    /** Post-crop vignette amount, -100..+100: negative darkens the corners, positive lightens them. */
+    @SerialName("vignetteAmount") val vignetteAmount: Float = 0f,
+    /** Vignette midpoint, 0..100: lower reaches further towards the centre. */
+    @SerialName("vignetteMidpoint") val vignetteMidpoint: Float = 50f,
+    /** Vignette roundness, -100..+100: 0 follows the frame's aspect, +100 is a circle, -100 a rounded rectangle. */
+    @SerialName("vignetteRoundness") val vignetteRoundness: Float = 0f,
+    /** Vignette feather, 0..100: width of the transition. */
+    @SerialName("vignetteFeather") val vignetteFeather: Float = 50f,
+    /** Vignette highlights, 0..100: keeps bright areas bright under a darkening vignette. */
+    @SerialName("vignetteHighlights") val vignetteHighlights: Float = 0f,
+    /** Grain amount, 0..100 (0 = off). */
+    @SerialName("grainAmount") val grainAmount: Float = 0f,
+    /** Grain size, 0..100: a fraction of the picture, so the same in the preview, at 100 % and in an export. */
+    @SerialName("grainSize") val grainSize: Float = 25f,
+    /** Grain roughness, 0..100: 0 is smooth and regular, 100 is clumpy and irregular. */
+    @SerialName("grainRoughness") val grainRoughness: Float = 50f,
+) {
+    init {
+        require(
+            listOf(
+                texture, clarity, dehaze, vignetteAmount, vignetteMidpoint, vignetteRoundness, vignetteFeather,
+                vignetteHighlights, grainAmount, grainSize, grainRoughness,
+            ).all { it.isFinite() },
+        ) { "effects values must be finite" }
+    }
+}
 
 /**
  * Detail (slot 11, docs/adr/0012): luminance and colour noise reduction, then sharpening. Every amount defaults to 0

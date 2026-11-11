@@ -34,6 +34,17 @@
     <string name="history_nr_colour">Colour noise reduction %1$s</string>
     <string name="history_nr_colour_detail">Colour detail %1$s</string>
     <string name="history_nr_colour_smoothness">Colour smoothness %1$s</string>
+    <string name="history_texture">Texture %1$s</string>
+    <string name="history_clarity">Clarity %1$s</string>
+    <string name="history_dehaze">Dehaze %1$s</string>
+    <string name="history_vignette_amount">Vignette %1$s</string>
+    <string name="history_vignette_midpoint">Vignette midpoint %1$s</string>
+    <string name="history_vignette_roundness">Vignette roundness %1$s</string>
+    <string name="history_vignette_feather">Vignette feather %1$s</string>
+    <string name="history_vignette_highlights">Vignette highlights %1$s</string>
+    <string name="history_grain_amount">Grain %1$s</string>
+    <string name="history_grain_size">Grain size %1$s</string>
+    <string name="history_grain_roughness">Grain roughness %1$s</string>
     <string name="history_flip_h">Flip horizontal</string>
     <string name="history_flip_v">Flip vertical</string>
     <string name="history_aspect">Aspect: %1$s</string>

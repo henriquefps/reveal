@@ -222,6 +222,17 @@ object HistoryLabels {
         HistoryField.NR_COLOUR to R.string.history_nr_colour,
         HistoryField.NR_COLOUR_DETAIL to R.string.history_nr_colour_detail,
         HistoryField.NR_COLOUR_SMOOTHNESS to R.string.history_nr_colour_smoothness,
+        HistoryField.TEXTURE to R.string.history_texture,
+        HistoryField.CLARITY to R.string.history_clarity,
+        HistoryField.DEHAZE to R.string.history_dehaze,
+        HistoryField.VIGNETTE_AMOUNT to R.string.history_vignette_amount,
+        HistoryField.VIGNETTE_MIDPOINT to R.string.history_vignette_midpoint,
+        HistoryField.VIGNETTE_ROUNDNESS to R.string.history_vignette_roundness,
+        HistoryField.VIGNETTE_FEATHER to R.string.history_vignette_feather,
+        HistoryField.VIGNETTE_HIGHLIGHTS to R.string.history_vignette_highlights,
+        HistoryField.GRAIN_AMOUNT to R.string.history_grain_amount,
+        HistoryField.GRAIN_SIZE to R.string.history_grain_size,
+        HistoryField.GRAIN_ROUGHNESS to R.string.history_grain_roughness,
     )
 
     private val VALUE_NAMES: Map<String, Int> = mapOf(

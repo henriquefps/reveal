@@ -54,6 +54,7 @@ class RecipeGroupsTest {
             aspect = Aspect(locked = true),
         ),
         detail = Detail(10f, 1.5f, 30f, 40f, 50f, 60f, 70f, 80f, 90f, 95f),
+        effects = Effects(11f, 12f, 13f, 14f, 15f, 16f, 17f, 18f, 19f, 20f, 21f),
         masks = listOf(Mask("m")),
         heals = listOf(Heal("h")),
     )
@@ -63,7 +64,7 @@ class RecipeGroupsTest {
         // The group is a constructor property, so "exactly one" holds by construction; check coverage.
         val used = HistoryField.entries.map { it.group }.toSet()
         val reserved =
-            setOf(RecipeGroup.EFFECTS, RecipeGroup.OPTICS, RecipeGroup.MASKS, RecipeGroup.HEALS)
+            setOf(RecipeGroup.OPTICS, RecipeGroup.MASKS, RecipeGroup.HEALS)
         assertThat(used + reserved).containsExactlyElementsIn(RecipeGroup.entries)
     }
 

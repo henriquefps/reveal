@@ -63,6 +63,9 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         val space: OutputSpace,
     )
 
+    @Volatile
+    private var surround: FloatArray = DEFAULT_SURROUND
+
     private val request = AtomicReference(Request(Recipe.DEFAULT, false, ViewTransform(), OutputSpace.SRGB))
     private val framePosted = AtomicBoolean(false)
     private val updates = AtomicLong()
@@ -124,6 +127,12 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
     /** Sets the display output space of the on-screen pass. */
     fun setOutputSpace(space: OutputSpace) {
         update { it.copy(space = space) }
+    }
+
+    /** Sets the neutral colour around the photo from an opaque `0xRRGGBB` value (display-encoded). */
+    fun setSurround(rgb: Int) {
+        surround = floatArrayOf((rgb shr 16 and 0xff) / 255f, (rgb shr 8 and 0xff) / 255f, (rgb and 0xff) / 255f)
+        requestFrame()
     }
 
     /** Attaches the window [surface]; frames are presented into it. */
@@ -211,7 +220,7 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         val (width, height) = egl.windowSize()
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
         GLES30.glViewport(0, 0, width, height)
-        drawOutput(image, req.view, width, height, OutputSettings(req.space), SURROUND_RGB)
+        drawOutput(image, req.view, width, height, OutputSettings(req.space), surround)
         val submitted = System.nanoTime()
         egl.swap()
         var gpuWall = lastStats.gpuWallMs
@@ -266,7 +275,7 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, readFbo)
         GLES30.glViewport(0, 0, image.width, image.height)
         val identity = ViewTransform(1f, image.width / 2f, image.height / 2f)
-        drawOutput(image, identity, image.width, image.height, settings, SURROUND_RGB)
+        drawOutput(image, identity, image.width, image.height, settings, surround)
     }
 
     private fun readLinear(recipe: Recipe): FloatArray {
@@ -473,9 +482,8 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         private const val NANOS_PER_MS = 1_000_000f
         private const val NEAREST_ABOVE_SCALE = 2f
 
-        /** The neutral surround outside the image, display-encoded `#1c1c1e`. */
-        // TODO(theme worker): take this from EditorTheme once the theme is merged.
-        private val SURROUND_RGB = floatArrayOf(0x1c / 255f, 0x1c / 255f, 0x1e / 255f)
+        /** Default surround outside the image, display-encoded `#1C1C1C` (the editor's `EditorNeutrals.Surround`). */
+        private val DEFAULT_SURROUND = floatArrayOf(0x1c / 255f, 0x1c / 255f, 0x1c / 255f)
 
         /**
          * Creates a renderer, building its GL thread, context and programs, and fails with

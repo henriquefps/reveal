@@ -138,7 +138,7 @@ HDR (Rec.2020 PQ) is a later output transform in the same slot.
 ## Measurement (emulator, to be re-measured on the phone)
 
 2400x1600 proxy, stage 1 + output pass into an RGBA8 target, `glFinish` after each frame, 120 exposure values
-(`PipelineBenchmark`): mean 2.5 ms, p50 1.9 ms, p95 6.6 ms, max 9.7 ms per frame on the emulator's host GPU;
-upload plus first frame 0.9 s. On-screen, the debug canvas coalesced 80 updates into 61 frames during a
+(`PipelineBenchmark`): first (cold) run mean 2.5 ms, p50 1.9 ms, p95 6.6 ms, max 9.7 ms per frame on the emulator's host GPU, warm
+re-run mean 0.84 ms, p95 1.13 ms, max 1.26 ms; upload plus first frame 0.4-0.9 s. On-screen, the debug canvas coalesced 80 updates into 61 frames during a
 slider drag. `GL_TIME_ELAPSED` is not exposed by `android.opengl` (no binding for `EXT_disjoint_timer_query`), so GPU
 time is wall time up to `glFinish`.

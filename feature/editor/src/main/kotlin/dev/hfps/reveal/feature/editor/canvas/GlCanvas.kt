@@ -12,18 +12,12 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.viewinterop.AndroidView
+import dev.hfps.reveal.designsystem.theme.EditorNeutrals
 import dev.hfps.reveal.pipeline.PipelineInput
 import dev.hfps.reveal.pipeline.gl.GpuDevelopRenderer
 import dev.hfps.reveal.pipeline.recipe.Recipe
-
-/**
- * The neutral surround of the editor: zero-chroma grey around the photo (docs/plan/ux.md, "The editor is a darkroom").
- * Same value the GL renderer clears to outside the image.
- */
-// TODO(theme worker): replace with the EditorTheme surround token once the theme is merged.
-internal val CanvasSurround: Color = Color(0xFF1C1C1E)
 
 /**
  * The editor's photo canvas: a [SurfaceView] fed by the GPU develop pipeline, with fit-to-screen, pinch zoom up to
@@ -53,11 +47,12 @@ fun ZoomableGlCanvas(
         renderer.setInput(input)
         zoom.setImageSize(input.width, input.height)
     }
+    LaunchedEffect(renderer) { renderer.setSurround(EditorNeutrals.Surround.toArgb() and RGB_MASK) }
     LaunchedEffect(renderer, recipe) { renderer.setRecipe(recipe) }
     DisposableEffect(renderer) { onDispose { renderer.setShowOriginal(false) } }
     Box(
         modifier = modifier
-            .background(CanvasSurround)
+            .background(EditorNeutrals.Surround)
             .canvasGestures(zoom, scope) { renderer.setShowOriginal(it) },
     ) {
         AndroidView(
@@ -92,3 +87,5 @@ fun rememberZoomState(renderer: GpuDevelopRenderer, hundredPercentScale: Float =
     remember(renderer, hundredPercentScale) {
         ZoomState(hundredPercentScale = hundredPercentScale, onChange = renderer::setView)
     }
+
+private const val RGB_MASK = 0xFFFFFF

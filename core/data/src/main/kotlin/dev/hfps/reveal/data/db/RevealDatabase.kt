@@ -27,7 +27,7 @@ import androidx.room.RoomDatabase
     ],
     version = RevealDatabase.VERSION,
     exportSchema = true,
-    autoMigrations = [AutoMigration(from = 1, to = 2)],
+    autoMigrations = [AutoMigration(from = 1, to = 2), AutoMigration(from = 2, to = 3)],
 )
 abstract class RevealDatabase : RoomDatabase() {
     abstract fun metaDao(): MetaDao
@@ -42,6 +42,6 @@ abstract class RevealDatabase : RoomDatabase() {
 
     companion object {
         const val NAME = "reveal.db"
-        const val VERSION = 2
+        const val VERSION = 3
     }
 }

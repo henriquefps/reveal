@@ -19,9 +19,8 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
-            <!-- Open one photo from another app (M0). The full hand-off contract (explicit DEVELOP action,
-                 ClipData, RAW+JPEG pairs) is M1. image/* already matches the image/x-* RAW types; they are listed
-                 so apps that resolve by exact type find Reveal too. -->
+            <!-- Open a photo from another app. image/* already matches the image/x-* RAW types; they are listed so
+                 apps that resolve by exact type find Reveal too. The hand-off contract is ADR 0011. -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <action android:name="android.intent.action.EDIT" />
@@ -46,6 +45,54 @@
                 <action android:name="android.intent.action.SEND" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <data android:mimeType="image/*" />
+                <data android:mimeType="image/x-sony-arw" />
+                <data android:mimeType="image/x-sony-sr2" />
+                <data android:mimeType="image/x-sony-srf" />
+                <data android:mimeType="image/x-adobe-dng" />
+                <data android:mimeType="image/x-canon-cr2" />
+                <data android:mimeType="image/x-canon-cr3" />
+                <data android:mimeType="image/x-nikon-nef" />
+                <data android:mimeType="image/x-nikon-nrw" />
+                <data android:mimeType="image/x-fuji-raf" />
+                <data android:mimeType="image/x-olympus-orf" />
+                <data android:mimeType="image/x-panasonic-rw2" />
+                <data android:mimeType="image/x-pentax-pef" />
+                <data android:mimeType="image/x-samsung-srw" />
+            </intent-filter>
+            <!-- Explicit hand-off from Hoard and other apps (ADR 0011): ClipData of content URIs. A typed filter
+                 (image/*, RAW types, application/octet-stream for providers that do not know RAW) and a type-less one
+                 for senders that leave the type unset. -->
+            <intent-filter>
+                <action android:name="dev.hfps.reveal.action.DEVELOP" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="image/*" />
+                <data android:mimeType="image/dng" />
+                <data android:mimeType="image/x-raw" />
+                <data android:mimeType="application/octet-stream" />
+                <data android:mimeType="image/x-sony-arw" />
+                <data android:mimeType="image/x-sony-sr2" />
+                <data android:mimeType="image/x-sony-srf" />
+                <data android:mimeType="image/x-adobe-dng" />
+                <data android:mimeType="image/x-canon-cr2" />
+                <data android:mimeType="image/x-canon-cr3" />
+                <data android:mimeType="image/x-nikon-nef" />
+                <data android:mimeType="image/x-nikon-nrw" />
+                <data android:mimeType="image/x-fuji-raf" />
+                <data android:mimeType="image/x-olympus-orf" />
+                <data android:mimeType="image/x-panasonic-rw2" />
+                <data android:mimeType="image/x-pentax-pef" />
+                <data android:mimeType="image/x-samsung-srw" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="dev.hfps.reveal.action.DEVELOP" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.SEND_MULTIPLE" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="image/*" />
+                <data android:mimeType="image/dng" />
+                <data android:mimeType="image/x-raw" />
                 <data android:mimeType="image/x-sony-arw" />
                 <data android:mimeType="image/x-sony-sr2" />
                 <data android:mimeType="image/x-sony-srf" />

@@ -100,6 +100,9 @@ class LibraryIndexer(private val db: RevealDatabase, private val clock: () -> Lo
         )
     }
 
+    /** Reads the headers of the photos of [sourceId] still `PENDING` (the hand-off source has no walk, ADR 0011). */
+    suspend fun readMetadata(sourceId: Long, tree: DocumentTree): Int = readHeaders(sourceId, tree) {}
+
     // ------------------------------------------------------------------ 1. walk
 
     /** A listed folder: its image files and its `.xmp` sidecars by lower-case name. */

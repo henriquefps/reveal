@@ -88,4 +88,5 @@
     <string name="about_licence">Livre e de código aberto</string>
     <string name="about_licence_body">GNU AGPL-3.0 ou posterior. Código-fonte: github.com/henriquefps/reveal</string>
     <string name="about_third_party">Licenças de terceiros</string>
+    <string name="handoff_unreadable">O Reveal não conseguiu abrir essas fotos. Confira se o outro app compartilhou imagens que o Reveal consegue ler.</string>
 </resources>

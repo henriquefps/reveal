@@ -9,6 +9,7 @@ import dev.hfps.reveal.data.model.FileRole
 import dev.hfps.reveal.data.model.MetadataState
 import dev.hfps.reveal.data.model.PhotoFormat
 import dev.hfps.reveal.data.model.PickFlag
+import dev.hfps.reveal.data.model.SourceKind
 import dev.hfps.reveal.data.model.SourceState
 
 /**
@@ -29,6 +30,8 @@ data class SourceEntity(
     val writable: Boolean,
     @ColumnInfo(name = "added_at") val addedAt: Long,
     @ColumnInfo(name = "indexed_at") val indexedAt: Long? = null,
+    /** [SourceKind.HANDOFF] is the single "Opened from other apps" source (ADR 0011); every other row is a folder. */
+    @ColumnInfo(defaultValue = "FOLDER") val kind: SourceKind = SourceKind.FOLDER,
 )
 
 /**
@@ -89,6 +92,9 @@ data class PhotoEntity(
     @ColumnInfo(name = "xmp_modified") val xmpModified: Long? = null,
     @ColumnInfo(name = "added_at") val addedAt: Long,
     @ColumnInfo(name = "last_opened_at") val lastOpenedAt: Long? = null,
+    /** Hand-off source only (ADR 0011): when another app last sent this photo, and the sender's `EXTRA_TITLE`. */
+    @ColumnInfo(name = "handoff_at") val handoffAt: Long? = null,
+    @ColumnInfo(name = "handoff_title") val handoffTitle: String? = null,
     /**
      * "Remove from library": the photo stays indexed (so a rescan does not bring it back) but no grid shows it.
      * The files are never touched.

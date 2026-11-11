@@ -117,6 +117,15 @@ The full suite excludes both measurement classes:
 Frame measurements must not use a Compose test rule (it holds frames while it synchronizes): launch with
 `ActivityScenario` and inject touches with `input swipe`.
 
+## Hand-off from other apps (`:core:data/handoff`, ADR 0011)
+
+`HandoffIntents.parse` (action `dev.hfps.reveal.action.DEVELOP`, `VIEW`, `EDIT`, `SEND`, `SEND_MULTIPLE`; URIs from data +
+ClipData + `EXTRA_STREAM`) -> `HandoffRepository.receive` (pairs by stem and parent, files the photos under the single
+`sources.kind = HANDOFF` source, `HandoffTree` keys documents by URI) -> `HandoffOutcome` (`MainActivity.show`). DB v3.
+Library scope `FromApps` = "Opened from other apps" (newest hand-off first, header per batch). Sidecars are only written
+when the sender included a writable `.xmp` item. Instrumented: `dev.hfps.reveal.handoff.HandoffFlowTest` (same command
+shape as the library tests).
+
 ## Editor open flow (`:feature:editor`, M0)
 
 `EditorRoute(uri)` → `EditorViewModel`: `PhotoOpener` (preview via `FirstImageLoader`, proxy via `ProxyBuilder`,

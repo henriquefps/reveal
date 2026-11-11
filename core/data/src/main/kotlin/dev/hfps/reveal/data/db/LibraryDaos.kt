@@ -32,6 +32,9 @@ data class PhotoRow(
     @ColumnInfo(name = "has_edit") val hasEdit: Boolean,
     @ColumnInfo(name = "version_id") val versionId: Long,
     @ColumnInfo(name = "edit_time") val editTime: Long?,
+    /** Hand-off photos only: when another app sent it and the sender's title (ADR 0011). */
+    @ColumnInfo(name = "handoff_at") val handoffAt: Long? = null,
+    @ColumnInfo(name = "handoff_title") val handoffTitle: String? = null,
 )
 
 /** What the incremental walk compares a listed file with. */
@@ -66,12 +69,16 @@ interface SourceDao {
     @Query("SELECT * FROM sources WHERE tree_uri = :treeUri")
     suspend fun byTree(treeUri: String): SourceEntity?
 
-    @Query("SELECT * FROM sources ORDER BY display_name COLLATE NOCASE")
+    /** The added folders (not the hand-off source). */
+    @Query("SELECT * FROM sources WHERE kind = 'FOLDER' ORDER BY display_name COLLATE NOCASE")
     suspend fun all(): List<SourceEntity>
+
+    @Query("SELECT * FROM sources WHERE kind = 'HANDOFF' LIMIT 1")
+    suspend fun handoff(): SourceEntity?
 
     @Query(
         "SELECT s.*, (SELECT COUNT(*) FROM photos p WHERE p.source_id = s.id AND p.hidden = 0) AS photo_count " +
-            "FROM sources s ORDER BY s.display_name COLLATE NOCASE, s.id",
+            "FROM sources s WHERE s.kind = 'FOLDER' ORDER BY s.display_name COLLATE NOCASE, s.id",
     )
     fun observeWithCounts(): Flow<List<SourceWithCount>>
 
@@ -194,6 +201,47 @@ interface PhotoDao {
 
     @Query("UPDATE photos SET hidden = :hidden WHERE id IN (:ids)")
     suspend fun setHidden(ids: List<Long>, hidden: Boolean)
+
+    // ---- hand-offs (ADR 0011)
+
+    @Query("SELECT * FROM photos WHERE source_id = :sourceId AND folder = :folder AND stem_key = :stemKey")
+    suspend fun byStem(sourceId: Long, folder: String, stemKey: String): PhotoEntity?
+
+    @Query("SELECT * FROM photo_files WHERE source_id = :sourceId AND relative_path IN (:paths)")
+    suspend fun filesByPath(sourceId: Long, paths: List<String>): List<PhotoFileEntity>
+
+    @Query("DELETE FROM photo_files WHERE photo_id = :photoId")
+    suspend fun deleteFilesOf(photoId: Long)
+
+    @Query(
+        "UPDATE photos SET name = :name, format = :format, has_raw = :hasRaw, folder_document_id = :folder, " +
+            "handoff_at = :at, handoff_title = :title, hidden = 0, metadata_state = 'PENDING', " +
+            "xmp_document_id = :xmpDocumentId, xmp_modified = :xmpModified WHERE id = :id",
+    )
+    suspend fun updateHandoff(
+        id: Long,
+        name: String,
+        format: PhotoFormat,
+        hasRaw: Boolean,
+        folder: String,
+        at: Long,
+        title: String?,
+        xmpDocumentId: String?,
+        xmpModified: Long?,
+    )
+
+    /** Hand-off photos beyond the newest [keep] that have no edit, oldest first: candidates to forget. */
+    @Query(
+        "SELECT p.id FROM photos p WHERE p.source_id = :sourceId AND p.has_edit = 0 " +
+            "ORDER BY p.handoff_at DESC, p.id DESC LIMIT -1 OFFSET :keep",
+    )
+    suspend fun staleHandoffs(sourceId: Long, keep: Int): List<Long>
+
+    @Query("DELETE FROM photos WHERE id IN (:ids)")
+    suspend fun deletePhotos(ids: List<Long>)
+
+    @Query("SELECT document_id FROM photo_files WHERE photo_id IN (:photoIds)")
+    suspend fun documentIdsOf(photoIds: List<Long>): List<String>
 
     @Query("UPDATE photos SET last_opened_at = :time WHERE id = :id")
     suspend fun setOpened(id: Long, time: Long)

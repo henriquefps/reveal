@@ -137,7 +137,9 @@ class LibraryViewModel @Inject constructor(
             volumes.changes().drop(1).debounce(VOLUME_DEBOUNCE_MS).collect { library.refresh() }
         }
         viewModelScope.launch { library.refresh() }
-        viewModelScope.launch { edits.clipboard().collect { clip -> _state.update { it.copy(clipboard = clip?.recipe) } } }
+        viewModelScope.launch {
+            edits.clipboard().collect { clip -> _state.update { it.copy(clipboard = clip?.recipe) } }
+        }
     }
 
     // ------------------------------------------------------------------ copy / paste edits
@@ -160,7 +162,12 @@ class LibraryViewModel @Inject constructor(
         viewModelScope.launch {
             writer.flush()
             val all = RecipeGroup.entries.toSet()
-            val changed = edits.paste(edits.versionsOf(ids), EditClipboard(Recipe.DEFAULT), all, HistoryAction.RESET_ALL)
+            val changed = edits.paste(
+                edits.versionsOf(ids),
+                EditClipboard(Recipe.DEFAULT),
+                all,
+                HistoryAction.RESET_ALL,
+            )
             messages.send(LibraryMessage.Reset(changed))
         }
     }

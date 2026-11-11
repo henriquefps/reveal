@@ -14,10 +14,22 @@ object HistoryLabels {
      * change ("Exposure +0.70"), else the first change and how many more.
      */
     fun format(context: Context, label: StepLabel): String {
-        label.action?.let { return action(context, it, label.groups) }
-        val first = label.changes.firstOrNull()?.let { format(context, it) } ?: return ""
+        val action = label.action
         val more = label.changes.size - 1
-        return if (more == 0) first else context.resources.getQuantityString(R.plurals.history_and_more, more, first, more)
+        return when {
+            action != null -> action(context, action, label.groups)
+
+            more < 0 -> ""
+
+            more == 0 -> format(context, label.changes[0])
+
+            else -> context.resources.getQuantityString(
+                R.plurals.history_and_more,
+                more,
+                format(context, label.changes[0]),
+                more,
+            )
+        }
     }
 
     /** The changes of [label] one per line (the detail under a named step). */

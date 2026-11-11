@@ -1,3 +1,5 @@
+@file:Suppress("MatchingDeclarationName")
+
 package dev.hfps.reveal.designsystem.components
 
 import androidx.compose.foundation.layout.Arrangement

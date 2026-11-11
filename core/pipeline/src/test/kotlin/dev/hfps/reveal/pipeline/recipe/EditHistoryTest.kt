@@ -93,11 +93,17 @@ class EditHistoryTest {
     @Test
     fun `named steps keep their action, groups and changes`() {
         val edited = Recipe(light = Light(exposureEv = 1f, contrast = 20f))
-        val reset = EditHistory().commitOrFail(edited).commit(Recipe.DEFAULT, HistoryAction.RESET_GROUP, listOf(RecipeGroup.LIGHT))
+        val reset = EditHistory().commitOrFail(
+            edited,
+        ).commit(Recipe.DEFAULT, HistoryAction.RESET_GROUP, listOf(RecipeGroup.LIGHT))
         val label = checkNotNull(reset).entries.last().label
         assertThat(label.action).isEqualTo(HistoryAction.RESET_GROUP)
         assertThat(label.groups).containsExactly(RecipeGroup.LIGHT)
-        assertThat(label.changes.map { it.field }).containsExactly(HistoryField.EXPOSURE, HistoryField.CONTRAST).inOrder()
+        assertThat(
+            label.changes.map {
+                it.field
+            },
+        ).containsExactly(HistoryField.EXPOSURE, HistoryField.CONTRAST).inOrder()
     }
 
     @Test

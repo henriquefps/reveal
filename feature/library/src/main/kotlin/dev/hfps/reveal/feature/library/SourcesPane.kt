@@ -228,19 +228,12 @@ private fun SourceMenu(name: String, onRescan: () -> Unit, onRemove: () -> Unit)
 }
 
 @Composable
-internal fun MenuItem(
-    icon: ImageVector?,
-    text: String,
-    enabled: Boolean = true,
-    modifier: Modifier = Modifier,
-    onClick: () -> Unit,
-) {
+internal fun MenuItem(icon: ImageVector?, text: String, enabled: Boolean = true, onClick: () -> Unit) {
     DropdownMenuItem(
         text = { Text(text, style = RevealTheme.typography.ui) },
         leadingIcon = icon?.let { { Icon(it, contentDescription = null) } },
         enabled = enabled,
         onClick = onClick,
-        modifier = modifier,
     )
 }
 

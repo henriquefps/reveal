@@ -305,7 +305,12 @@ private fun CompareButton(state: EditorUiState, actions: EditorActions, modifier
  */
 @Suppress("LongMethod")
 @Composable
-private fun MoreMenu(state: EditorUiState, actions: EditorActions, onHistory: () -> Unit, modifier: Modifier = Modifier) {
+private fun MoreMenu(
+    state: EditorUiState,
+    actions: EditorActions,
+    onHistory: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
     var open by remember { mutableStateOf(false) }
     val view = state.view
     val edit = state.edit
@@ -328,18 +333,47 @@ private fun MoreMenu(state: EditorUiState, actions: EditorActions, onHistory: ()
             containerColor = RevealTheme.colors.card,
             shape = RevealTheme.shapes.control,
         ) {
-            ActionItem(R.string.editor_menu_history, PhosphorRegular.ClockCounterClockwise, EditorTags.MENU_HISTORY,
-                onClick = run(onHistory))
-            ActionItem(R.string.editor_menu_copy, PhosphorRegular.Copy, EditorTags.MENU_COPY,
-                enabled = ready, onClick = run(actions.onCopy))
-            ActionItem(R.string.editor_menu_paste, PhosphorRegular.ClipboardText, EditorTags.MENU_PASTE,
-                enabled = ready && edit.canPaste, onClick = run(actions.onPaste))
-            ActionItem(R.string.editor_menu_previous, PhosphorRegular.ArrowBendUpLeft, EditorTags.MENU_PREVIOUS,
-                enabled = ready && edit.hasPrevious, onClick = run(actions.onPrevious))
-            ActionItem(R.string.editor_menu_reset_all, PhosphorRegular.ArrowCounterClockwise, EditorTags.MENU_RESET_ALL,
-                enabled = ready && !edit.committed.isDefault(), onClick = run(actions.onResetAll))
-            ActionItem(R.string.editor_menu_reset_as_opened, PhosphorRegular.ArrowCounterClockwise,
-                EditorTags.MENU_RESET_AS_OPENED, enabled = ready, onClick = run(actions.onResetAsOpened))
+            ActionItem(
+                R.string.editor_menu_history,
+                PhosphorRegular.ClockCounterClockwise,
+                EditorTags.MENU_HISTORY,
+                onClick = run(onHistory),
+            )
+            ActionItem(
+                R.string.editor_menu_copy,
+                PhosphorRegular.Copy,
+                EditorTags.MENU_COPY,
+                enabled = ready,
+                onClick = run(actions.onCopy),
+            )
+            ActionItem(
+                R.string.editor_menu_paste,
+                PhosphorRegular.ClipboardText,
+                EditorTags.MENU_PASTE,
+                enabled = ready && edit.canPaste,
+                onClick = run(actions.onPaste),
+            )
+            ActionItem(
+                R.string.editor_menu_previous,
+                PhosphorRegular.ArrowBendUpLeft,
+                EditorTags.MENU_PREVIOUS,
+                enabled = ready && edit.hasPrevious,
+                onClick = run(actions.onPrevious),
+            )
+            ActionItem(
+                R.string.editor_menu_reset_all,
+                PhosphorRegular.ArrowCounterClockwise,
+                EditorTags.MENU_RESET_ALL,
+                enabled = ready && !edit.committed.isDefault(),
+                onClick = run(actions.onResetAll),
+            )
+            ActionItem(
+                R.string.editor_menu_reset_as_opened,
+                PhosphorRegular.ArrowCounterClockwise,
+                EditorTags.MENU_RESET_AS_OPENED,
+                enabled = ready,
+                onClick = run(actions.onResetAsOpened),
+            )
             HorizontalDivider(color = RevealTheme.colors.hairline)
             CheckItem(R.string.editor_menu_histogram, view.histogram, EditorTags.MENU_HISTOGRAM) {
                 actions.onHistogram(!view.histogram)
@@ -362,7 +396,9 @@ private fun ActionItem(text: Int, icon: ImageVector, tag: String, enabled: Boole
         text = { Text(stringResource(text), style = RevealTheme.typography.ui, color = tint) },
         onClick = onClick,
         enabled = enabled,
-        leadingIcon = { Icon(imageVector = icon, contentDescription = null, tint = tint, modifier = Modifier.size(20.dp)) },
+        leadingIcon = {
+            Icon(imageVector = icon, contentDescription = null, tint = tint, modifier = Modifier.size(20.dp))
+        },
         modifier = Modifier.testTag(tag),
     )
 }

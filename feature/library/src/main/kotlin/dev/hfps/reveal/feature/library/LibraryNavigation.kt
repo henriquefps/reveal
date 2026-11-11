@@ -84,6 +84,7 @@ fun NavGraphBuilder.libraryScreens(
 }
 
 /** The library screen with its ViewModel, pickers, messages and back handling. */
+@Suppress("LongMethod")
 @Composable
 fun LibraryScreen(
     onOpen: (PhotoRow, LibraryUiState) -> Unit,

@@ -33,6 +33,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
@@ -325,6 +326,13 @@ private fun RatingMenu(actions: LibraryActions) {
     }
 }
 
+/** A [MenuItem] with a test tag (instrumented tests find it in any language). */
+@Composable
+private fun TaggedMenuItem(icon: ImageVector, text: String, tag: String, enabled: Boolean = true, onClick: () -> Unit) {
+    Box(Modifier.testTag(tag)) { MenuItem(icon, text, enabled, onClick) }
+}
+
+@Suppress("LongMethod")
 @Composable
 private fun SelectionOverflow(state: LibraryUiState, actions: LibraryActions) {
     var open by remember { mutableStateOf(false) }
@@ -349,28 +357,28 @@ private fun SelectionOverflow(state: LibraryUiState, actions: LibraryActions) {
                 open = false
                 actions.onRemovePhotos()
             }
-            MenuItem(
+            TaggedMenuItem(
                 PhosphorRegular.Copy,
                 stringResource(R.string.library_action_copy_edits),
+                LibraryTags.COPY_EDITS,
                 enabled = state.selected.size == 1,
-                modifier = Modifier.testTag(LibraryTags.COPY_EDITS),
             ) {
                 open = false
                 actions.onCopyEdits()
             }
-            MenuItem(
+            TaggedMenuItem(
                 PhosphorRegular.ClipboardText,
                 stringResource(R.string.library_action_paste_edits_choose),
+                LibraryTags.PASTE_EDITS,
                 enabled = state.clipboard != null,
-                modifier = Modifier.testTag(LibraryTags.PASTE_EDITS),
             ) {
                 open = false
                 actions.onPasteEdits()
             }
-            MenuItem(
+            TaggedMenuItem(
                 PhosphorRegular.ArrowCounterClockwise,
                 stringResource(R.string.library_action_reset_edits),
-                modifier = Modifier.testTag(LibraryTags.RESET_EDITS),
+                LibraryTags.RESET_EDITS,
             ) {
                 open = false
                 actions.onResetEdits()

@@ -82,8 +82,9 @@ class EditRepository(private val db: RevealDatabase, private val clock: () -> Lo
         val rows = edits.history(versionId)
         val entries = ArrayList<HistoryEntry>(rows.size)
         for (row in rows) {
-            if (row.position != entries.size) break
-            val recipe = runCatching { RecipeCodec.Default.decode(row.recipeJson) }.getOrNull() ?: break
+            val recipe = row.takeIf { it.position == entries.size }
+                ?.let { runCatching { RecipeCodec.Default.decode(it.recipeJson) }.getOrNull() }
+                ?: break
             entries += HistoryEntry(recipe, decodeLabel(row.labelsJson))
         }
         val cursor = (edits.cursor(versionId) ?: entries.lastIndex).coerceIn(-1, entries.lastIndex)
@@ -110,7 +111,14 @@ class EditRepository(private val db: RevealDatabase, private val clock: () -> Lo
         db.withTransaction {
             for (op in ops) {
                 when (op) {
-                    is HistoryOp.Commit -> if (op.label.changes.isNotEmpty()) commitStep(op.versionId, op.recipe, op.label)
+                    is HistoryOp.Commit -> if (op.label.changes.isNotEmpty()) {
+                        commitStep(
+                            op.versionId,
+                            op.recipe,
+                            op.label,
+                        )
+                    }
+
                     is HistoryOp.Move -> moveStep(op.versionId) { op.position }
                 }
             }
@@ -247,7 +255,10 @@ class EditRepository(private val db: RevealDatabase, private val clock: () -> Lo
 
     private fun encodeLabel(label: StepLabel): String {
         val action = label.action?.let { Label(action = it.name, groups = label.groups.map(RecipeGroup::name)) }
-        return json.encodeToString(labelList, listOfNotNull(action) + label.changes.map { Label(it.field.name, it.value) })
+        return json.encodeToString(
+            labelList,
+            listOfNotNull(action) + label.changes.map { Label(it.field.name, it.value) },
+        )
     }
 
     /** Fields and actions this app does not know (a newer app wrote them) are skipped, never a crash. */
@@ -260,7 +271,9 @@ class EditRepository(private val db: RevealDatabase, private val clock: () -> Lo
         StepLabel(
             changes = changes,
             action = actionItem?.action?.let { name -> HistoryAction.entries.firstOrNull { it.name == name } },
-            groups = actionItem?.groups.orEmpty().mapNotNull { name -> RecipeGroup.entries.firstOrNull { it.name == name } },
+            groups = actionItem?.groups.orEmpty().mapNotNull { name ->
+                RecipeGroup.entries.firstOrNull { it.name == name }
+            },
         )
     }.getOrDefault(StepLabel(emptyList()))
 

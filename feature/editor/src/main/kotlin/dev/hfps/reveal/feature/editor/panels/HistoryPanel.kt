@@ -84,7 +84,7 @@ fun HistoryPanel(host: PanelHost, modifier: Modifier = Modifier) {
     }
 }
 
-@Suppress("LongParameterList")
+@Suppress("LongParameterList", "LongMethod")
 @Composable
 private fun HistoryRow(
     title: String,

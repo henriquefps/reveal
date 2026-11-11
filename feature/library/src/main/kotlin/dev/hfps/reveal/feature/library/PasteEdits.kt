@@ -43,7 +43,8 @@ fun PasteEditsContent(
         val changes = RecipeDiff.between(Recipe.DEFAULT, copied)
         RecipeGroup.entries.map { group ->
             val held = changes.filter { it.field.group == group }.map { HistoryLabels.format(context, it) }
-            ChecklistItem(group, HistoryLabels.groupName(context, group), held.joinToString(" · ").ifEmpty { noChange })
+            val detail = held.joinToString(" · ").ifEmpty { noChange }
+            ChecklistItem(group, HistoryLabels.groupName(context, group), detail)
         }
     }
     RevealChecklist(

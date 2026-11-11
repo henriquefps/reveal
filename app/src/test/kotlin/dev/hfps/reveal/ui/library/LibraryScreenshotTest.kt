@@ -5,14 +5,22 @@ import android.graphics.Canvas
 import android.graphics.LinearGradient
 import android.graphics.Paint
 import android.graphics.Shader
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.github.takahirom.roborazzi.captureRoboImage
 import dev.hfps.image.format.ExifTime
@@ -31,9 +39,15 @@ import dev.hfps.reveal.feature.library.LibraryActions
 import dev.hfps.reveal.feature.library.LibraryContent
 import dev.hfps.reveal.feature.library.LibrarySelection
 import dev.hfps.reveal.feature.library.LibraryUiState
+import dev.hfps.reveal.feature.library.PasteEditsContent
 import dev.hfps.reveal.feature.library.SpecialSource
 import dev.hfps.reveal.feature.library.ThumbnailSource
 import dev.hfps.reveal.feature.library.buildGridEntries
+import dev.hfps.reveal.pipeline.recipe.Colour
+import dev.hfps.reveal.pipeline.recipe.Geometry
+import dev.hfps.reveal.pipeline.recipe.Light
+import dev.hfps.reveal.pipeline.recipe.Recipe
+import dev.hfps.reveal.pipeline.recipe.RecipePaste
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -203,6 +217,29 @@ class PhoneLibraryScreenshotTest : LibraryScreenshotBase("phone") {
         dark = false,
         state = LibrarySamples.grid(selection = LibrarySelection.Folder(3)),
     )
+
+    @Test fun pasteChooser() {
+        composeRule.setContent {
+            RevealTheme(darkTheme = false) {
+                Box(Modifier.fillMaxSize().background(RevealTheme.colors.background), Alignment.BottomCenter) {
+                    Surface(color = RevealTheme.colors.card, shape = RevealTheme.shapes.sheet) {
+                        PasteEditsContent(
+                            copied = Recipe(
+                                light = Light(exposureEv = 0.7f, shadows = 35f),
+                                colour = Colour(vibrance = 20f),
+                                geometry = Geometry(angle = 1.5f),
+                            ),
+                            groups = RecipePaste.DEFAULT_GROUPS,
+                            targets = 4,
+                            actions = LibraryActions(),
+                            modifier = Modifier.padding(top = 24.dp),
+                        )
+                    }
+                }
+            }
+        }
+        composeRule.onRoot().captureRoboImage("src/test/screenshots/library/phone_paste_chooser_light.png")
+    }
 
     @Test fun indexing() = shoot(
         "indexing_light",

@@ -141,7 +141,13 @@ class EditRepositoryTest {
             ),
         )
         db.editDao().insertHistory(
-            HistoryEntity(versionId = versionId, position = 1, recipeJson = """{"v":999}""", labelsJson = "[]", createdAt = 0),
+            HistoryEntity(
+                versionId = versionId,
+                position = 1,
+                recipeJson = """{"v":999}""",
+                labelsJson = "[]",
+                createdAt = 0,
+            ),
         )
         db.editDao().setCursor(HistoryCursorEntity(versionId, 1))
         val loaded = edits.load(versionId)

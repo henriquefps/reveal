@@ -22,6 +22,7 @@ import dev.hfps.reveal.data.model.PickFlag
 import dev.hfps.reveal.data.storage.DocumentEntry
 import dev.hfps.reveal.data.storage.DocumentTree
 import dev.hfps.reveal.data.storage.fingerprint
+import dev.hfps.reveal.data.xmp.SidecarNames
 import dev.hfps.reveal.data.xmp.XmpFields
 import dev.hfps.reveal.data.xmp.XmpReader
 import java.util.TimeZone
@@ -161,12 +162,11 @@ class LibraryIndexer(private val db: RevealDatabase, private val clock: () -> Lo
                 if (path.isEmpty()) throw e else continue
             }
             for (entry in children) {
-                val name = entry.name
-                when {
-                    name.startsWith('.') -> Unit
-                    entry.isDirectory -> pending.add(join(path, name) to entry.documentId)
-                    name.endsWith(XMP_SUFFIX, ignoreCase = true) -> sidecars[name.lowercase()] = entry
-                    ImageFormats.classify(name).isDisplayable -> images += entry
+                when (kindOf(entry)) {
+                    EntryKind.FOLDER -> pending.add(join(path, entry.name) to entry.documentId)
+                    EntryKind.SIDECAR -> sidecars[entry.name.lowercase()] = entry
+                    EntryKind.IMAGE -> images += entry
+                    EntryKind.IGNORED -> Unit
                 }
             }
             seen += images.size
@@ -174,6 +174,20 @@ class LibraryIndexer(private val db: RevealDatabase, private val clock: () -> Lo
             onProgress(IndexProgress(IndexPhase.LISTING, seen, 0))
         }
         return out
+    }
+
+    private enum class EntryKind { FOLDER, SIDECAR, IMAGE, IGNORED }
+
+    /** Hidden files and folders are skipped, except hidden sidecars (`.<stem>.xmp`, ADR 0006 "XMP"). */
+    private fun kindOf(entry: DocumentEntry): EntryKind {
+        val name = entry.name
+        val hidden = name.startsWith('.')
+        return when {
+            entry.isDirectory -> if (hidden) EntryKind.IGNORED else EntryKind.FOLDER
+            SidecarNames.isSidecar(name) -> EntryKind.SIDECAR
+            !hidden && ImageFormats.classify(name).isDisplayable -> EntryKind.IMAGE
+            else -> EntryKind.IGNORED
+        }
     }
 
     // ------------------------------------------------------------------ 2. save the difference
@@ -445,7 +459,6 @@ class LibraryIndexer(private val db: RevealDatabase, private val clock: () -> Lo
     }
 
     companion object {
-        private const val XMP_SUFFIX = ".xmp"
         private const val BATCH = 500
         private const val SQL_ARGS = 900
         private const val HEADER_BATCH = 64
@@ -463,14 +476,14 @@ class LibraryIndexer(private val db: RevealDatabase, private val clock: () -> Lo
         private fun msSince(start: Long) = (System.nanoTime() - start) / NANOS_PER_MS
 
         /**
-         * The sidecar of a shot: `<stem>.xmp` (Lightroom, Hoard), else `<file name>.xmp` (darktable) of its RAW, then
-         * of its rendering. Names compare case-insensitively.
+         * The sidecar of a shot ([SidecarNames]): `<stem>.xmp` (Lightroom, Hoard), else `<file name>.xmp` (darktable)
+         * of its RAW, then of its rendering, then the same names hidden (`.<stem>.xmp`). Names compare
+         * case-insensitively; a normal name wins over a hidden one.
          */
         internal fun sidecarFor(shot: Shot, sidecars: Map<String, DocumentEntry>): DocumentEntry? {
             if (sidecars.isEmpty()) return null
-            return sidecars["${shot.stem.lowercase()}$XMP_SUFFIX"]
-                ?: shot.raw?.let { sidecars["${it.name.lowercase()}$XMP_SUFFIX"] }
-                ?: shot.rendered?.let { sidecars["${it.name.lowercase()}$XMP_SUFFIX"] }
+            val names = listOfNotNull(shot.raw?.name, shot.rendered?.name)
+            return SidecarNames.candidates(shot.stem, names).firstNotNullOfOrNull { sidecars[it] }
         }
 
         /** The badge format of a shot. */

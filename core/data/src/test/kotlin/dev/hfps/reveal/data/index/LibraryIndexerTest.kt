@@ -132,6 +132,30 @@ class LibraryIndexerTest {
     }
 
     @Test
+    fun `hidden sidecars are read, a normal name wins over a hidden one, AppleDouble files are not sidecars`() =
+        runTest {
+            raw("DSC00011.ARW", "2026:08:07 10:00:00")
+            File(root, ".DSC00011.xmp").writeText(SyntheticShoot.sidecar(rating = 2))
+            raw("DSC00012.ARW", "2026:08:07 10:00:01")
+            File(root, ".DSC00012.ARW.xmp").writeText(SyntheticShoot.sidecar(rating = 1))
+            File(root, "DSC00012.ARW.xmp").writeText(SyntheticShoot.sidecar(rating = 5))
+            raw("DSC00013.ARW", "2026:08:07 10:00:02")
+            File(root, "._DSC00013.xmp").writeText("AppleDouble, not XMP")
+            File(root, ".DSC00013.xmp").writeText(SyntheticShoot.sidecar(rating = 3))
+
+            index()
+
+            val photos = rows().associateBy { it.name }
+            assertThat(photos.getValue("DSC00011.ARW").rating).isEqualTo(2)
+            assertThat(photos.getValue("DSC00012.ARW").rating).isEqualTo(5)
+            assertThat(
+                db.photoDao().get(photos.getValue("DSC00012.ARW").id)!!.xmpDocumentId,
+            ).isEqualTo("DSC00012.ARW.xmp")
+            assertThat(photos.getValue("DSC00013.ARW").rating).isEqualTo(3)
+            assertThat(db.photoDao().get(photos.getValue("DSC00013.ARW").id)!!.xmpDocumentId).isEqualTo(".DSC00013.xmp")
+        }
+
+    @Test
     fun `filters and search`() = runTest {
         raw("DSC00001.ARW", "2026:08:07 10:00:00")
         jpeg("DSC00001.JPG", "2026:08:07 10:00:00")

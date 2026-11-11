@@ -3,6 +3,7 @@ package dev.hfps.reveal.handoff
 import android.content.ClipData
 import android.content.Intent
 import android.net.Uri
+import android.os.Bundle
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.junit4.v2.createEmptyComposeRule
@@ -207,6 +208,52 @@ class HandoffFlowTest {
             assertThat(XmpReader.read(text).rating).isEqualTo(5)
             // A Hoard sidecar means "picked"; the write keeps it, now as an explicit digiKam pick label.
             assertThat(XmpReader.read(text).flag).isEqualTo(PickFlag.PICK)
+        }
+    }
+
+    /** The culling extra as Hoard writes it (ADR 0011 "Culling"): literal keys, so the wire format is tested. */
+    private fun culling(vararg items: Pair<Uri, Bundle>) = Bundle().apply {
+        items.forEach { (uri, values) -> putBundle(uri.toString(), values) }
+    }
+
+    @Test
+    fun cullingValuesFromTheSenderRateTheBatchAndAreNotWrittenBack() {
+        val pair = listOf(raw("${stem}_c.ARW"), jpeg("${stem}_c.JPG"))
+        val rejected = jpeg("${stem}_r.jpg")
+        val sidecarBytes = SyntheticShoot.sidecar(rating = 1, label = "Blue", creatorTool = "darktable").toByteArray()
+        val sidecar = TestPhotos.insert("${stem}_c.xmp", "application/octet-stream", sidecarBytes).also(inserted::add)
+        val intent = Intent(HandoffIntents.ACTION_DEVELOP).setType("image/*")
+            .putExtra("dev.hfps.reveal.extra.CULLING_VERSION", 1)
+            .putExtra(
+                "dev.hfps.reveal.extra.CULLING",
+                culling(
+                    pair[1] to Bundle().apply {
+                        putInt("rating", 4)
+                        putString("flag", "pick")
+                    },
+                    rejected to Bundle().apply {
+                        putString("flag", "reject")
+                        putString("label", "Red")
+                    },
+                ),
+            )
+        intent.clipData = clip(pair[0], pair[1], rejected, sidecar)
+        intent.addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+        launch(intent).use {
+            compose.waitUntil(TIMEOUT_MS) { photos().size == 2 }
+            val rows = photos().associateBy { it.name }
+            with(rows.getValue("${stem}_c.ARW")) {
+                assertThat(rating).isEqualTo(4)
+                assertThat(flag).isEqualTo(PickFlag.PICK)
+                // Not sent: the sidecar's label fills it.
+                assertThat(label).isEqualTo("Blue")
+            }
+            with(rows.getValue("${stem}_r.jpg")) {
+                assertThat(flag).isEqualTo(PickFlag.REJECT)
+                assertThat(label).isEqualTo("Red")
+            }
+            val now = context.contentResolver.openInputStream(sidecar)!!.use { it.readBytes() }
+            assertThat(now).isEqualTo(sidecarBytes)
         }
     }
 

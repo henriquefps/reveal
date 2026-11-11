@@ -79,6 +79,7 @@ object ExportTags {
     const val START = "export_start"
     const val CANCEL = "export_cancel"
     const val DONE = "export_done"
+    const val SHARE_RESULTS = "export_share_results"
     const val ESTIMATE = "export_estimate"
     const val PROGRESS = "export_progress"
     const val FORMAT_JPEG = "export_format_jpeg"
@@ -110,9 +111,11 @@ fun ExportSheetHost(
         // The share sheet returned: the receiving app has read the files.
         ShareCache.clear(context)
     }
+    // Sharing files already saved (Pictures/Reveal, a folder): nothing to clean up when the sheet returns.
+    val shareResultsLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {}
     LaunchedEffect(state.share) {
         if (state.share.isEmpty()) return@LaunchedEffect
-        shareLauncher.launch(Intent.createChooser(shareIntent(state.share, state.options.format), null))
+        shareLauncher.launch(Intent.createChooser(shareIntent(state.share, state.options.format.mimeType), null))
         viewModel.onShareLaunched()
     }
     val folderPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
@@ -132,6 +135,9 @@ fun ExportSheetHost(
             if (needsPermission) notifications.launch(Manifest.permission.POST_NOTIFICATIONS) else viewModel.start()
         },
         onCancel = viewModel::cancel,
+        onShareResults = { uris ->
+            shareResultsLauncher.launch(Intent.createChooser(shareIntent(uris, state.options.format.mimeType), null))
+        },
         onDone = {
             viewModel.dismissRun()
             onDismiss()
@@ -164,6 +170,8 @@ class ExportSheetActions(
     val onRememberedFolder: () -> ExportDestination.Folder? = { null },
     val onStart: () -> Unit = {},
     val onCancel: () -> Unit = {},
+    /** Share the files the finished run saved ([ExportRun.results]) through the system share sheet. */
+    val onShareResults: (List<Uri>) -> Unit = {},
     val onDone: () -> Unit = {},
 )
 
@@ -596,6 +604,13 @@ private fun RunSection(run: ExportRun, actions: ExportSheetActions) {
         for ((name, failure) in run.failures) {
             Note("$name — ${stringResource(failure.label())}", warning = true)
         }
+        if (run.results.isNotEmpty()) {
+            SecondaryButton(
+                text = stringResource(R.string.export_share_results),
+                onClick = { actions.onShareResults(run.results) },
+                modifier = Modifier.fillMaxWidth().testTag(ExportTags.SHARE_RESULTS),
+            )
+        }
         PrimaryButton(
             text = stringResource(R.string.export_done),
             onClick = actions.onDone,
@@ -615,13 +630,17 @@ fun ExportFailure.label(): Int = when (this) {
     ExportFailure.FAILED -> R.string.export_failure_other
 }
 
-private fun shareIntent(uris: List<Uri>, format: ExportFormat): Intent {
+/**
+ * `ACTION_SEND` (one file) or `ACTION_SEND_MULTIPLE` with the [uris] in `EXTRA_STREAM` and the `ClipData` (which
+ * carries the read grant to the receiving app), typed [mimeType].
+ */
+fun shareIntent(uris: List<Uri>, mimeType: String): Intent {
     val intent = if (uris.size == 1) {
         Intent(Intent.ACTION_SEND).putExtra(Intent.EXTRA_STREAM, uris.first())
     } else {
         Intent(Intent.ACTION_SEND_MULTIPLE).putParcelableArrayListExtra(Intent.EXTRA_STREAM, ArrayList(uris))
     }
-    intent.type = format.mimeType
+    intent.type = mimeType
     intent.clipData =
         ClipData.newRawUri(null, uris.first()).apply { uris.drop(1).forEach { addItem(ClipData.Item(it)) } }
     intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)

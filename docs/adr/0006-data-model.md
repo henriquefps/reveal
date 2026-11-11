@@ -1,7 +1,8 @@
 # ADR 0006: Library data model, indexing, XMP and thumbnails
 
 Status: accepted (M1, library). Date: 2026-11-11. Amended 2026-11-11: file identity is a content fingerprint
-("Identity", DB version 4).
+("Identity", DB version 4). Amended 2026-11-11 (M2/S): stable ids for sync ("Stable ids", DB version 5) and
+hidden sidecar names ("XMP").
 
 ## Context
 
@@ -63,6 +64,16 @@ the nullable, indexed column (`AutoMigration(3, 4)`; existing rows stay null unt
   cleared and computed again; a write checks size and mtime so it never stores a stale value). Matching library
   photos across folders by fingerprint (a folder moved or renamed keeping its edits, duplicates) is **not done yet**;
   it is the prerequisite for sync (M5+), where the fingerprint is the photo's key on the server.
+
+## Stable ids (DB version 5)
+
+`photos.uuid` and `versions.uuid` (`docs/plan/sync.md` "Prepare now"): a random version 4 UUID (lower-case, dashes),
+set on insert (`newUuid()`, the entity default) and never changed, unique-indexed. Room's numeric ids stay the
+foreign keys; the UUID is the id another device or the sync server will know a photo or a version by. The presets
+table (M3) gets the same column when it is created. Version 5 is a **manual** migration (`MIGRATION_4_5`, registered
+through `RevealDatabase.MIGRATIONS`): the column is added with `DEFAULT ''`, every existing row is given a random UUID
+in SQL (`randomblob`), then the unique index is created; an auto-migration cannot fill per-row values before the
+index. Nothing uses the UUIDs yet besides keeping them stable.
 
 **"Remove from library"** sets `hidden`: the row stays (so a rescan does not bring the photo back) and the file is
 never touched. Removing a folder deletes its rows (edits included, after a confirmation) and releases the grant.
@@ -137,8 +148,13 @@ The fields Reveal shares with Hoard (its ADR 0009, section 9), Lightroom, darkta
 | pick (read only) | `xmp:CreatorTool` starting with `Hoard` and no `digiKam:PickLabel` | Hoard writes sidecars only for the shots "Copy picks" copies |
 | label | `xmp:Label` | free text; Lightroom shows colour names as colours |
 
-Sidecar names: `<stem>.xmp` (Lightroom, Hoard; one per pair, named after the RAW), else `<file name>.xmp`
-(darktable). Writing **merges** into the existing sidecar through the DOM: only `xmp:Rating`, `xmp:Label`,
+Sidecar names (`SidecarNames`), in order: `<stem>.xmp` (Lightroom, Hoard; one per pair, named after the RAW), else
+`<file name>.xmp` (darktable) of the RAW, then of the rendering, then the same names **hidden** with a leading dot
+(`.<stem>.xmp`, `.<file name>.xmp`, written by tools that keep sidecars out of sight). A normal name always wins over
+a hidden one; macOS AppleDouble files (`._name.xmp`) are not sidecars. The walk skips hidden files and folders except
+hidden sidecars. Reveal only ever **creates** `<stem>.xmp`: a photo whose sidecar is hidden gets its write merged
+from the hidden file into a new `<stem>.xmp` (which wins from then on; the hidden file is left as it was), except a
+hand-off item, where Reveal cannot create documents and writes into the hidden item it was given. Writing **merges** into the existing sidecar through the DOM: only `xmp:Rating`, `xmp:Label`,
 `digiKam:PickLabel` and `xmp:MetadataDate` change; Lightroom's `crs:` settings, darktable's history, `<?xpacket?>`
 and comments stay; an existing prefix for the XMP namespace (`xap:`) is reused. A new sidecar gets the standard
 `x:xmpmeta/rdf:RDF/rdf:Description` shape with `xmp:CreatorTool="Reveal <version>"`. A sidecar that is not

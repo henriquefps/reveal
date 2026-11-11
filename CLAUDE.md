@@ -121,7 +121,7 @@ plane; `renderOutput` returns the operator's output size (`CpuDevelop.mapping(in
 
 ## Library (`:core:data`, `:feature:library`, M1, ADR 0006)
 
-Room `RevealDatabase` v4 (sources, photos, photo_files, versions, recipes, history, history_cursor, cache_entries);
+Room `RevealDatabase` v5 (sources, photos, photo_files, versions, recipes, history, history_cursor, cache_entries);
 schema change = new version + migration (or `AutoMigration`) + exported `core/data/schemas/*.json`, tested by
 `RevealDatabaseMigrationTest`. `LibraryRepository` (sources, SAF grants, volumes, indexing, ratings/flags with XMP
 write-back), `LibraryIndexer` (walk → diff → sidecars → headers), `XmpReader`/`XmpWriter` (merge, never overwrite a
@@ -153,7 +153,12 @@ Identity (ADR 0006 "Identity", DB v4): a file is its content fingerprint (`FileF
 `photo_files.fingerprint`); hand-offs find their photo by fingerprint (any source, URI+size+mtime only for rows without
 one), never by name; folders fill fingerprints in the background after a walk (`LibraryIndexer.fillFingerprints`).
 Library scope `FromApps` = "Opened from other apps" (newest hand-off first, header per batch). Sidecars are only written
-when the sender included a writable `.xmp` item. Instrumented: `dev.hfps.reveal.handoff.HandoffFlowTest` (same command
+when the sender included a writable `.xmp` item. Culling values (ADR 0011 "Culling"): `HandoffIntents.EXTRA_CULLING`
+(`Bundle` keyed by item URI string -> `Bundle` `rating`/`flag`/`label`, `CULLING_VERSION` 1, `cullingExtra()` builds it)
+-> `HandoffRequest.culling` -> `HandoffRepository.applyRatings` (values win unless the sidecar is newer than the photo's
+previous hand-off; never written back). Sidecar names (normal before hidden `.<stem>.xmp`) live in `xmp/SidecarNames`.
+DB v5: `photos.uuid` / `versions.uuid` (stable sync ids, manual `MIGRATION_4_5`; open the database with
+`addMigrations(*RevealDatabase.MIGRATIONS)`). Instrumented: `dev.hfps.reveal.handoff.HandoffFlowTest` (same command
 shape as the library tests).
 
 ## Editor open flow (`:feature:editor`, M0)

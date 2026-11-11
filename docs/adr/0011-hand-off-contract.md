@@ -1,6 +1,7 @@
 # ADR 0011: Hand-off contract (Hoard and other apps)
 
-Status: accepted (M1, hand-off). Date: 2026-11-11. Builds on ADR 0006 (library data model, XMP) and Hoard's ADR 0006
+Status: accepted (M1, hand-off). Date: 2026-11-11. Amended 2026-11-11 (M2/S): culling values per item ("Culling"),
+hidden sidecar items. Builds on ADR 0006 (library data model, XMP) and Hoard's ADR 0006
 (RAW+JPEG pairing), 0008 and 0009 (sidecars, pick/reject).
 
 ## Context
@@ -20,6 +21,8 @@ sidecars.
 | `ClipData` | payload | The photos: one `ClipData.Item` per content URI, RAW and rendering both (plus sidecars, below). Order is kept. |
 | `dev.hfps.reveal.extra.TITLE` | `String`, optional | Names the batch; shown as the group header in "Opened from other apps" (else the arrival date and time). Trimmed, at most 120 chars. |
 | `dev.hfps.reveal.extra.INITIAL_URI` | `Uri`, optional | One of the URIs sent: open it in the editor at once, with the batch in the library behind it. Ignored if it is not among the URIs. |
+| `dev.hfps.reveal.extra.CULLING` | `Bundle`, optional | The sender's rating / flag / colour label per item, see "Culling". |
+| `dev.hfps.reveal.extra.CULLING_VERSION` | `Int`, optional | Layout version of `CULLING`; absent = 1. Current: **1**. |
 
 Intent flags: `FLAG_GRANT_READ_URI_PERMISSION` (required), `FLAG_GRANT_WRITE_URI_PERMISSION` (only for URIs the sender
 lets Reveal write: sidecars), `FLAG_GRANT_PERSISTABLE_URI_PERMISSION` (optional, see "Grants"). The ClipData's grants
@@ -58,6 +61,45 @@ content URIs: the directory of a SAF document id (`primary:DCIM/Camera/X.ARW` ->
 its last segment (FileProvider paths, one MediaStore collection). So a sender must give both URIs of a pair **in the same
 intent**; the same stem in two different folders stays two photos. The photo opens from its RAW; the rendering is the
 instant preview.
+
+### Culling (rating, pick/reject, colour label)
+
+Hoard keeps culling decisions in its own database for folders it cannot write (read-only SMB shares), so they cannot
+travel in a sidecar. It sends them with the hand-off, **per item**, in one `Bundle` extra:
+
+```
+dev.hfps.reveal.extra.CULLING_VERSION : Int    = 1                   (optional; absent = 1)
+dev.hfps.reveal.extra.CULLING         : Bundle {
+    "<item uri, exactly uri.toString() as put in the ClipData>" : Bundle {
+        "rating" : Int     0..5                                  (optional)
+        "flag"   : String  "pick" | "reject" | "none"            (optional, case-insensitive)
+        "label"  : String  colour label, xmp:Label ("Red", ...)  (optional; "" or blank clears it; max 64 chars)
+    }
+    ...
+}
+```
+
+- **Keyed by URI string, not by position**: Reveal de-duplicates and merges the data, `ClipData` and `EXTRA_STREAM`
+  (see "Parsing"), so an item's index is not stable across actions; a URI is. The same layout serves one item and
+  many (one key per item), with any action (`DEVELOP` normally; `SEND`/`SEND_MULTIPLE` too).
+- An entry may sit on any file of a shot (the RAW, the JPEG or both); per field, the main file's (the RAW's) value is
+  used, else the other file's. Keys that are not among the URIs sent, values of the wrong type, a rating outside
+  0..5 and an unknown flag are ignored **field by field**; a field left out means "no decision sent: keep".
+- **Versioning:** later versions only **add** keys; Reveal reads any `CULLING_VERSION >= 1` with the keys it knows and
+  ignores the rest, so an old Reveal accepts a newer Hoard and a newer Reveal an old Hoard (no `CULLING` = the
+  behaviour before this extra). An incompatible change would use a new extra name. A version below 1 is ignored.
+
+**Precedence.** For each shot that has values: if a sidecar of the shot was sent too and its mtime is **later than
+the photo's previous hand-off** (`photos.handoff_at` before this one; someone rated it after the sender last said what
+it holds), the **sidecar wins**. Otherwise the **values win**; the fields they leave out keep the sidecar's value (or,
+without one, the photo's). On a first hand-off there is no previous one, so the values win. Without values, the
+sidecar applies as before, and with neither a re-sent photo keeps what it has (a rating set in Reveal stays). Values
+also win over ratings embedded in the file (JPEG XMP), which only fill an unrated photo.
+
+**Nothing is written back** on arrival: the values set the photo's rating/flag/label in Reveal's database only; the
+sender's files and sidecar stay untouched (the sender holds the decision already; a read-only source cannot take it).
+A later change made in Reveal goes to the sidecar item under the rules of "What Reveal writes back". A hand-off that
+opens a photo of an **added folder** leaves that photo's ratings alone (its folder and sidecar are the truth there).
 
 ### The "Opened from other apps" source
 
@@ -101,7 +143,8 @@ does not). Releasing happens with the retention rule above.
 
 - **Ratings, pick/reject and labels** go to the XMP sidecar exactly as in ADR 0006 (`xmp:Rating`, `digiKam:PickLabel`,
   `xmp:Label`; merged, never overwriting a malformed file), **only when the hand-off included the sidecar as an item**
-  (`<stem>.xmp`, or `<file name>.xmp`, with a **write grant**): a URI of a document Reveal cannot create beside the photo
+  (`<stem>.xmp`, or `<file name>.xmp`, or their hidden forms `.<stem>.xmp` / `.<file name>.xmp`, with a **write
+  grant**; a normal name wins when both are sent): a URI of a document Reveal cannot create beside the photo
   is the only thing a plain content URI offers, so Reveal never creates sidecars for hand-offs. A sender that wants
   write-back creates (or has) an empty or existing `<stem>.xmp`, includes it in the ClipData, and adds
   `FLAG_GRANT_WRITE_URI_PERMISSION`. The sidecar's rating, label and flag are read on arrival (Hoard's picks arrive as picks).
@@ -134,10 +177,25 @@ Package ids: `dev.hfps.reveal` (release), `dev.hfps.reveal.debug` (debug builds)
 
 ```kotlin
 /** [shots]: for each shot the RAW and/or JPEG content URIs and, if it has one, its writable `.xmp`. */
-fun editInReveal(context: Context, files: List<Uri>, title: String?, openFirst: Uri? = null): Boolean {
+fun editInReveal(
+    context: Context,
+    files: List<Uri>,
+    title: String?,
+    openFirst: Uri? = null,
+    culling: Map<Uri, Triple<Int?, String?, String?>> = emptyMap(),  // uri -> (rating, "pick"/"reject"/"none", label)
+): Boolean {
+    val values = Bundle().apply {
+        for ((uri, v) in culling) putBundle(uri.toString(), Bundle().apply {
+            v.first?.let { putInt("rating", it) }
+            v.second?.let { putString("flag", it) }
+            v.third?.let { putString("label", it) }
+        })
+    }
     val intent = Intent("dev.hfps.reveal.action.DEVELOP")
         .setType("image/*")
         .putExtra("dev.hfps.reveal.extra.TITLE", title)             // optional
+        .putExtra("dev.hfps.reveal.extra.CULLING_VERSION", 1)       // optional
+        .apply { if (!values.isEmpty) putExtra("dev.hfps.reveal.extra.CULLING", values) }
         .apply { if (openFirst != null) putExtra("dev.hfps.reveal.extra.INITIAL_URI", openFirst) }
         .addFlags(
             Intent.FLAG_GRANT_READ_URI_PERMISSION or
@@ -172,6 +230,8 @@ result: Hoard re-reads sidecars (`xmp:Rating`) when it comes back to the foregro
 ## Consequences
 
 - Hoard's side is one function (the example) and a `<queries>` element; no Reveal library is needed.
+- Culling values cost nothing to a sender that has none (no extra) and need no schema change: the precedence uses
+  `photos.handoff_at` and the sidecar's mtime.
 - DB version 3 (auto-migration: `sources.kind`, `photos.handoff_at`, `photos.handoff_title`); version 4 adds
   `photo_files.fingerprint` (ADR 0006 "Identity").
 - Receiving reads up to 2 MiB per new file to fingerprint it (4 at a time); a URI already known with the same size and

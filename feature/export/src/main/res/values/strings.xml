@@ -51,6 +51,7 @@
     <string name="export_progress_background">You can close this sheet: the export goes on in the background.</string>
     <string name="export_cancel">Cancel</string>
     <string name="export_done">Done</string>
+    <string name="export_share_results">Share</string>
     <plurals name="export_result_done">
         <item quantity="one">%1$d photo exported</item>
         <item quantity="other">%1$d photos exported</item>

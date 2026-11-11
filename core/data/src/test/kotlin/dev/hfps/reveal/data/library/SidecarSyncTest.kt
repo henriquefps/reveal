@@ -89,6 +89,32 @@ class SidecarSyncTest {
     }
 
     @Test
+    fun `a hidden sidecar is merged into a new normal one, which wins from then on`() = runTest {
+        File(
+            root,
+            "DSC00002.ARW",
+        ).writeBytes(SyntheticShoot.raw(SyntheticShoot.markerOnlyJpeg(10, 10), SyntheticExif()))
+        val hidden = File(root, ".DSC00002.xmp")
+        hidden.writeText(SyntheticShoot.sidecar(rating = 2, label = "Red", creatorTool = "darktable"))
+        val before = hidden.readText()
+        val sourceId = source(writable = true)
+        LibraryIndexer(db).index(sourceId, FileDocumentTree(root))
+        val id = db.photoDao().rows(PhotoQuerySql.toQuery(PhotoQuery())).single().id
+        assertThat(db.photoDao().get(id)!!.rating).isEqualTo(2)
+
+        db.photoDao().setRating(listOf(id), 4)
+        assertThat(sync().write(listOf(id))).isEqualTo(SidecarOutcome(1, 0))
+        val normal = File(root, "DSC00002.xmp")
+        assertThat(XmpReader.read(normal.readBytes())).isEqualTo(XmpFields(rating = 4, label = "Red"))
+        assertThat(hidden.readText()).isEqualTo(before)
+        assertThat(db.photoDao().get(id)!!.xmpDocumentId).isEqualTo("DSC00002.xmp")
+
+        val again = LibraryIndexer(db).index(sourceId, FileDocumentTree(root))
+        assertThat(again.sidecarsRead).isEqualTo(0)
+        assertThat(db.photoDao().get(id)!!.rating).isEqualTo(4)
+    }
+
+    @Test
     fun `read-only or unplugged sources keep the change in the database`() = runTest {
         File(root, "A.JPG").writeBytes(SyntheticShoot.jpeg(SyntheticShoot.markerOnlyJpeg(10, 10), SyntheticExif()))
         val readOnly = source(writable = false)

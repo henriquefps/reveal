@@ -52,6 +52,7 @@
     <string name="export_progress_background">Pode fechar esta janela: a exportação continua em segundo plano.</string>
     <string name="export_cancel">Cancelar</string>
     <string name="export_done">Concluir</string>
+    <string name="export_share_results">Compartilhar</string>
     <plurals name="export_result_done">
         <item quantity="one">%1$d foto exportada</item>
         <item quantity="many">%1$d fotos exportadas</item>

@@ -8,8 +8,10 @@ import dev.hfps.reveal.data.index.LibraryIndexer
 import dev.hfps.reveal.data.model.FileRole
 import dev.hfps.reveal.data.model.SourceState
 import dev.hfps.reveal.data.storage.DocumentTree
+import dev.hfps.reveal.data.xmp.SidecarNames
 import dev.hfps.reveal.data.xmp.XmpFields
 import dev.hfps.reveal.data.xmp.XmpWriter
+import java.io.IOException
 import java.time.OffsetDateTime
 import java.time.format.DateTimeFormatter
 import java.time.temporal.ChronoUnit
@@ -70,18 +72,26 @@ class SidecarSync(
         val fields =
             XmpFields(rating = photo.rating.coerceIn(0, XmpFields.MAX_RATING), label = photo.label, flag = photo.flag)
         val date = now().truncatedTo(ChronoUnit.SECONDS).format(DateTimeFormatter.ISO_OFFSET_DATE_TIME)
-        val existingId = photo.xmpDocumentId?.takeIf { tree.stat(it) != null }
-        val existing = existingId?.let { tree.readBytes(it, LibraryIndexer.MAX_SIDECAR_BYTES) }
+        val current = photo.xmpDocumentId?.let { tree.stat(it) }
+        val existing = current?.let { tree.readBytes(it.documentId, LibraryIndexer.MAX_SIDECAR_BYTES) }
         val bytes = XmpWriter.update(existing, fields, creatorTool, date)
-        val documentId = if (existingId != null) {
-            tree.writeBytes(existingId, bytes)
-            existingId
+        // A hidden sidecar (`.<stem>.xmp`) is read and merged, but the write goes to the normal `<stem>.xmp`, which
+        // wins over it from then on; the hidden file is left as it was. Only where Reveal cannot create a document (a
+        // hand-off item) does the hidden sidecar itself take the write.
+        val hidden = current?.takeIf { SidecarNames.isHidden(it.name) }
+        val documentId = if (current != null && hidden == null) {
+            tree.writeBytes(current.documentId, bytes)
+            current.documentId
         } else {
             val main = photos.files(photo.id).let { files ->
                 files.firstOrNull { it.role == FileRole.RAW } ?: files.firstOrNull { it.role == FileRole.RENDERED }
             }
             val stem = ImageFormats.stem(main?.name ?: photo.name)
-            val created = tree.create(photo.folderDocumentId, "$stem.xmp", SIDECAR_MIME)
+            val created = try {
+                tree.create(photo.folderDocumentId, "$stem${SidecarNames.SUFFIX}", SIDECAR_MIME)
+            } catch (e: IOException) {
+                hidden ?: throw e
+            }
             tree.writeBytes(created.documentId, bytes)
             created.documentId
         }

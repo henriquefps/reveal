@@ -4,6 +4,7 @@ import android.Manifest
 import android.net.Uri
 import android.provider.MediaStore
 import androidx.compose.ui.test.ExperimentalTestApi
+import androidx.compose.ui.test.assertHasClickAction
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.junit4.v2.createEmptyComposeRule
 import androidx.compose.ui.test.onNodeWithTag
@@ -54,6 +55,8 @@ class ExportSheetTest {
                 compose.waitUntil(TIMEOUT_MS) { runCatching { estimateHasDigits() }.getOrDefault(false) }
                 compose.onNodeWithTag(ExportTags.START).performScrollTo().performClick()
                 compose.waitUntilAtLeastOneExists(hasTestTag(ExportTags.DONE), TIMEOUT_MS)
+                // The saved file can be shared from the result without exporting again.
+                compose.onNodeWithTag(ExportTags.SHARE_RESULTS).assertExists().assertHasClickAction()
                 compose.onNodeWithTag(ExportTags.DONE).performClick()
             }
             assertThat(galleryCount("$name-edit")).isEqualTo(1)

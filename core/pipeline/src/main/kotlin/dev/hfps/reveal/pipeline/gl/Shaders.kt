@@ -61,7 +61,7 @@ void main() {
 """
 
     /**
-     * Last stage: view transform (zoom/pan, mip-mapped bilinear sampling of the working-space texture), output
+     * Last stage: view transform (zoom/pan, texelFetch at 1:1, else textureLod with a CPU-computed LOD), output
      * transform, sRGB OETF and 8-bit dithering. Pixels outside the image get the neutral surround colour.
      */
     const val OUTPUT_FRAG: String = """#version 300 es
@@ -71,10 +71,10 @@ precision highp sampler2D;
 
 layout(std140) uniform Output {
     mat4 workingToOutput;    // OutputTransformOp: upper-left 3x3, column-major
-    vec4 image;              // xy = image size in pixels, z = screen pixels per image pixel
+    vec4 image;              // xy = image size in pixels, z = screen pixels per image pixel, w = explicit LOD
     vec4 viewport;           // xy = image point at the view centre (image px), zw = view size in pixels
     vec4 surround;           // rgb = display-encoded colour outside the image
-    uvec4 dither;            // x = seed, y = 1 when dithering is on
+    uvec4 dither;            // x = seed, y = 1 when dithering is on, z = sampling mode (0 texelFetch, 1 textureLod)
 };
 
 uniform sampler2D uStage;
@@ -105,7 +105,14 @@ void main() {
     vec2 sp = vec2(gl_FragCoord.x, viewport.w - gl_FragCoord.y);
     vec2 ip = (sp - viewport.zw * 0.5) / image.z + viewport.xy;
     bool inside = all(greaterThanEqual(ip, vec2(0.0))) && all(lessThanEqual(ip, image.xy));
-    vec3 c = texture(uStage, clamp(ip, vec2(0.0), image.xy) / image.xy).rgb;
+    vec3 c;
+    if (dither.z == 0u) {
+        // 1:1: the exact texel, no filtering and no mips.
+        c = texelFetch(uStage, clamp(ivec2(floor(ip)), ivec2(0), ivec2(image.xy) - 1), 0).rgb;
+    } else {
+        // Explicit LOD from the CPU (never from derivatives); magnified views run at LOD 0.
+        c = textureLod(uStage, clamp(ip, vec2(0.0), image.xy) / image.xy, image.w).rgb;
+    }
     c = clamp(mat3(workingToOutput) * c, 0.0, 1.0);
     vec3 e = srgbOetf(c);
     float n = dither.y != 0u ? ditherNoise(ivec2(floor(sp)), dither.x) : 0.5;

@@ -144,6 +144,20 @@ is an input texture plus an offset/overlap, stage 1 renders it into a tile-sized
 tile's view transform. Local operators will be extra passes between stage 1 and the output pass reading the
 working-space texture; stage 1 is already isolated for that.
 
+### Output pass sampling (never from derivatives)
+
+The output pass must not depend on a driver's derivative/LOD precision: on Adreno 750 `texture()` on the mipmapped
+stage texture picked a slightly positive LOD at some 1:1 pixels and blended mip 1 into patch edges (up to 9 levels).
+The rule, decided on the CPU (`OutputSampling`):
+
+- view scale exactly 1 (readback, export, and on screen at 100 %): `texelFetch(uStage, floor(ip), 0)`; no filtering, no mips;
+- minified (scale < 1): `textureLod` with the uniform LOD `log2(1 / scale)`, trilinear;
+- magnified (scale > 1): `textureLod` at LOD 0, nearest from 200 %, bilinear below.
+
+Only on-screen pixels at minification can change, so this has no cache key impact. `PIPELINE_VERSION` stays 2:
+readback at 1:1 on a conforming GPU (the emulator, where LOD was already exactly 0) is bit-identical to before, and
+the fix makes other GPUs match it. `GpuParityTest.hardEdgedPatchesMatchCpuWithinOneLevelAtOneToOne` guards it.
+
 ## Output transforms
 
 `OutputSpace.SRGB` and `OutputSpace.DISPLAY_P3` (sRGB curve on P3 primaries): one 3x3 from the working space,

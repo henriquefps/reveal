@@ -159,6 +159,24 @@ class GpuParityTest {
     }
 
     @Test
+    fun hardEdgedPatchesMatchCpuWithinOneLevelAtOneToOne(): Unit = runBlocking {
+        // Regression for derivative-selected mips on Adreno: a patch edge must never pick up its neighbour.
+        for (name in listOf("srgbChart", "checker")) {
+            val input = images.getValue(name)
+            renderer.setInput(input)
+            val settings = OutputSettings(dither = false)
+            val gpu = renderer.renderOutput(Recipe(), settings)
+            val cpu = CpuDevelop.render(input, Recipe(), settings)
+            var maxDiff = 0
+            for (i in cpu.indices) {
+                maxDiff = maxOf(maxDiff, abs((gpu[i].toInt() and 0xff) - (cpu[i].toInt() and 0xff)))
+            }
+            Log.i(TAG, "hard edges $name: max diff $maxDiff levels")
+            assertThat(maxDiff).isAtMost(1)
+        }
+    }
+
+    @Test
     fun gpuIsDeterministic() = runBlocking {
         val image = images.getValue("scene")
         renderer.setInput(image)

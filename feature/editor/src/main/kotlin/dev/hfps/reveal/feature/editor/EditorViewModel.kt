@@ -106,6 +106,10 @@ class EditorViewModel @Inject constructor(
                 ready.upload(input)
                 EditorMetrics.uploaded()
                 EditorMetrics.renderer = ready
+                EditorMetrics.setControl = { id, value ->
+                    setControl(id, value)
+                    commit()
+                }
                 photoInput = colourOnly(input)
                 val scale = maxOf(photo.fullWidth, photo.fullHeight).toFloat() / maxOf(input.width, input.height)
                 _state.update {
@@ -291,6 +295,7 @@ class EditorViewModel @Inject constructor(
         cancel.cancel()
         renderer()?.onHistogram = null
         EditorMetrics.renderer = null
+        EditorMetrics.setControl = null
         // Closes the renderer once it exists (a creation cancelled half-way closes itself).
         gpu.invokeOnCompletion { failure -> if (failure == null) gpu.getCompleted().close() }
     }

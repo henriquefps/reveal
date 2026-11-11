@@ -17,9 +17,11 @@ import dev.hfps.reveal.MainActivity
 import dev.hfps.reveal.feature.editor.EditorMetrics
 import dev.hfps.reveal.feature.editor.EditorTags
 import dev.hfps.reveal.pipeline.gl.FrameStats
+import dev.hfps.reveal.pipeline.recipe.ControlId
 import java.io.File
 import java.util.Locale
 import kotlin.concurrent.thread
+import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assume.assumeTrue
 import org.junit.Before
@@ -81,10 +83,21 @@ class EditorMeasurementsTest {
                 val before = EditorMetrics.frames.size
                 val renderer = checkNotNull(EditorMetrics.renderer)
                 // `-e histogram false` measures the drag without the live histogram (default: on, as in the app).
-                val histogram = InstrumentationRegistry.getArguments().getString("histogram") != "false"
+                val args = InstrumentationRegistry.getArguments()
+                val histogram = args.getString("histogram") != "false"
                 renderer.histogramEnabled = histogram
+                // `-e light true`: the Light sliders are non-neutral (local tone on) while dragging.
+                if (args.getString("light") == "true") {
+                    val set = checkNotNull(EditorMetrics.setControl)
+                    LIGHT_EDIT.forEach { (id, value) -> set(id, value) }
+                    Thread.sleep(SETTLE_MS)
+                }
+                // `-e drag <control>`: the slider dragged (default exposure). `-e profile true`: per-pass times.
+                val dragged = args.getString("drag")?.let { ControlId.valueOf(it.uppercase()) } ?: ControlId.EXPOSURE
+                val profile = args.getString("profile") == "true"
+                renderer.profilePasses = profile
                 val histogramsBefore = renderer.histogramCount
-                val slider = exposureSliderBounds(scenario)
+                val slider = sliderBounds(scenario, EditorTags.control(dragged))
                 dragInRealTime(
                     slider.left + slider.width() * 0.1f,
                     slider.right - slider.width() * 0.1f,
@@ -96,6 +109,12 @@ class EditorMeasurementsTest {
                 Thread.sleep(SETTLE_MS)
                 sampling = false
                 sampler.join()
+                if (profile) {
+                    val passes = runBlocking { renderer.passProfile() }
+                    renderer.profilePasses = false
+                    val text = passes.entries.joinToString { (k, v) -> String.format(Locale.ROOT, "%s %.2f", k, v) }
+                    Log.i(TAG, "$label drag ${dragged.name.lowercase()} passes (ms, glFinish each): $text")
+                }
                 val frames = EditorMetrics.frames.toList().drop(before)
                 val times = EditorMetrics.frameTimesNanos.toList().drop(before)
                 assertThat(frames.size).isAtLeast(MIN_FRAMES)
@@ -152,11 +171,11 @@ class EditorMeasurementsTest {
     }
 
     /** Window bounds of the exposure slider, from the Compose semantics tree of the activity. */
-    private fun exposureSliderBounds(scenario: ActivityScenario<MainActivity>): Rect {
+    private fun sliderBounds(scenario: ActivityScenario<MainActivity>, tag: String): Rect {
         var bounds: Rect? = null
         scenario.onActivity { activity ->
             val root = checkNotNull(findRoot(activity.window.decorView)) { "no Compose root" }
-            val node = checkNotNull(findTagged(root.semanticsOwner.unmergedRootSemanticsNode, EditorTags.EXPOSURE))
+            val node = checkNotNull(findTagged(root.semanticsOwner.unmergedRootSemanticsNode, tag))
             val b = node.boundsInWindow
             bounds = Rect(b.left.toInt(), b.top.toInt(), b.right.toInt(), b.bottom.toInt())
         }
@@ -187,6 +206,14 @@ class EditorMeasurementsTest {
     private fun List<Float>.percentile(p: Double): Float = this[((size - 1) * p).toInt()]
 
     private companion object {
+        /** A typical Light edit: every tone slider away from neutral, so the local (guided-filter) path runs. */
+        val LIGHT_EDIT: List<Pair<ControlId, Float>> = listOf(
+            ControlId.CONTRAST to 25f,
+            ControlId.HIGHLIGHTS to -50f,
+            ControlId.SHADOWS to 40f,
+            ControlId.WHITES to 15f,
+            ControlId.BLACKS to -10f,
+        )
         const val TAG = "REVEAL_MEASURE"
         const val RUNS = 3
         const val DRAG_MS = 4_000L

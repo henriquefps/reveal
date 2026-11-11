@@ -231,7 +231,7 @@ private fun PortraitLayout(
                         WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal),
                     ),
             ) {
-                EditorTopBar(state, actions, compact = false)
+                EditorTopBar(state, actions, compact = false, narrow = true)
             }
         }
         PhotoSlot(

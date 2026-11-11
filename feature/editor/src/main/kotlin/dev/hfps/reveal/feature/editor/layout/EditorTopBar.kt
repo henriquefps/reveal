@@ -41,6 +41,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.disabled
 import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.onLongClick
 import androidx.compose.ui.semantics.role
@@ -68,16 +69,23 @@ import kotlinx.coroutines.withTimeoutOrNull
 /**
  * The editor's top bar (56dp): back, file name (13sp mono, ellipsised in the middle so the extension stays), undo,
  * redo, before/after ◐, more ⋯ and the primary Export. [compact] (landscape phone) keeps only the icons: no file
- * name, Export as an icon.
+ * name, Export as an icon; [narrow] (phone portrait) shows Export as an icon-sized primary pill so the name gets the
+ * width the icons do not need.
  */
 @Composable
-fun EditorTopBar(state: EditorUiState, actions: EditorActions, compact: Boolean, modifier: Modifier = Modifier) {
+fun EditorTopBar(
+    state: EditorUiState,
+    actions: EditorActions,
+    compact: Boolean,
+    modifier: Modifier = Modifier,
+    narrow: Boolean = false,
+) {
     RevealTopBar(
         title = if (compact) "" else state.fileName,
         onBack = actions.onBack,
         backContentDescription = stringResource(R.string.editor_back),
         titleStyle = RevealTheme.typography.mono,
-        titleOverflow = TextOverflow.MiddleEllipsis,
+        titleIsFileName = true,
         modifier = modifier.testTag(EditorTags.TOP_BAR),
     ) {
         // TODO(history worker): enable undo/redo from the history.
@@ -98,16 +106,19 @@ fun EditorTopBar(state: EditorUiState, actions: EditorActions, compact: Boolean,
         CompareButton(state, actions)
         MoreMenu(state, actions)
         // TODO(export worker): enable Export (opens the export sheet).
-        if (compact) {
-            RevealIconButton(
+        when {
+            compact -> RevealIconButton(
                 icon = PhosphorRegular.Export,
                 contentDescription = stringResource(R.string.editor_export),
                 onClick = actions.onExport,
                 enabled = false,
                 modifier = Modifier.testTag(EditorTags.EXPORT),
             )
-        } else {
-            PrimaryButton(
+
+            // Phone portrait: an icon-sized primary pill leaves the file name the room.
+            narrow -> ExportPill(onClick = actions.onExport, enabled = false)
+
+            else -> PrimaryButton(
                 text = stringResource(R.string.editor_export),
                 onClick = actions.onExport,
                 enabled = false,
@@ -344,3 +355,33 @@ private fun CheckItem(text: Int, checked: Boolean, tag: String, onClick: () -> U
 
 /** Longest press that still counts as a tap on ◐ (longer = peek at the original). */
 private const val TAP_MS = 200L
+
+/** Export as an icon-sized primary pill (44dp tall, 48dp target) for narrow top bars. */
+@Composable
+private fun ExportPill(onClick: () -> Unit, enabled: Boolean, modifier: Modifier = Modifier) {
+    val colors = RevealTheme.colors
+    val label = stringResource(R.string.editor_export)
+    Box(
+        modifier = modifier
+            .padding(start = 2.dp, end = 4.dp)
+            .size(width = 48.dp, height = 40.dp)
+            .background(if (enabled) colors.primary else colors.muted, RevealTheme.shapes.control)
+            .semantics {
+                contentDescription = label
+                role = Role.Button
+                if (!enabled) disabled()
+            }
+            .then(
+                if (enabled) Modifier.selectable(selected = false, role = Role.Button, onClick = onClick) else Modifier,
+            )
+            .testTag(EditorTags.EXPORT),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            imageVector = PhosphorRegular.Export,
+            contentDescription = null,
+            tint = if (enabled) colors.primaryForeground else colors.mutedForeground,
+            modifier = Modifier.size(20.dp),
+        )
+    }
+}

@@ -5,6 +5,7 @@ import android.os.SystemClock
 import android.util.Log
 import dev.hfps.reveal.pipeline.gl.FrameStats
 import dev.hfps.reveal.pipeline.gl.GpuDevelopRenderer
+import dev.hfps.reveal.pipeline.recipe.ControlId
 import java.util.Collections
 import java.util.Locale
 
@@ -57,6 +58,9 @@ object EditorMetrics {
      * renders (`renderOutput`). Never used by the app itself.
      */
     @Volatile var renderer: GpuDevelopRenderer? = null
+
+    /** For tests only: sets and commits a recipe control of the open photo, as a slider release would. */
+    @Volatile var setControl: ((ControlId, Float) -> Unit)? = null
         internal set
 
     /** Last error, if the open failed. */

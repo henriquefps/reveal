@@ -117,6 +117,7 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
     private var originalValid = false
     private var sourceFbo = 0
     private val histogram = HistogramReadback()
+    private val profiler = PassProfiler()
     private var histogramDirty = false
     private var histogramPosted = false
     private var histogramPollPosted = false
@@ -201,6 +202,22 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
                 }
             }
         }
+
+    /**
+     * Per-pass profiling of on-screen frames (each section ends with `glFinish`; measurements only). Read the means
+     * with [passProfile]; setting it resets them.
+     */
+    var profilePasses: Boolean
+        get() = profiler.enabled
+        set(value) {
+            handler.post {
+                profiler.reset()
+                profiler.enabled = value
+            }
+        }
+
+    /** Mean milliseconds per section of the profiled frames (see [profilePasses]). */
+    suspend fun passProfile(): Map<String, Float> = onGl { profiler.snapshot() }
 
     /** GL-thread milliseconds of the last histogram (request draw + map + binning), for measurements. */
     val histogramMs: Float get() = histogram.lastMs
@@ -306,6 +323,7 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         framePosted.set(false)
         val image = input
         if (image == null || !egl.hasWindow) return
+        profiler.begin()
         val start = System.nanoTime()
         val req = request.get()
         val (width, height) = egl.windowSize()
@@ -315,17 +333,21 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
             listOfNotNull(req.loupe?.let { CompareLayout.loupePane(it, width, height) })
         if (panes.any { it.original }) ensureOriginal(image)
         val params = DevelopParams.from(image.colour, if (req.showOriginal) Recipe.DEFAULT else req.recipe)
+        profiler.mark("params (CPU)")
         if (params != stageParams) {
             runStage1(params)
             GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, stageTex)
             GLES30.glGenerateMipmap(GLES30.GL_TEXTURE_2D)
+            profiler.mark("mipmaps")
             histogramDirty = true
         }
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
         GLES30.glViewport(0, 0, width, height)
         drawPanes(image, panes, width, height, req)
+        profiler.mark("output pass")
         val submitted = System.nanoTime()
         egl.swap()
+        profiler.mark("swap")
         var gpuWall = lastStats.gpuWallMs
         if (measureGpuTime) {
             GLES20.glFinish()
@@ -349,6 +371,7 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
             if (key != reconKey) {
                 light.reconstruct(sourceTex, params.wbMultipliers, hp)
                 reconKey = key
+                profiler.mark("highlight reconstruction")
             }
         }
         uploadUbo(developUbo, developBlock(params))
@@ -359,7 +382,11 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         bindTextures(sourceTex, if (reconstruct) light.chromaTexture else sourceTex)
         GLES30.glDrawArrays(GLES30.GL_TRIANGLES, 0, 3)
         GlSupport.checkError("scene stage")
-        if (params.tone.localActive) light.guide(sceneTex)
+        profiler.mark("scene pass")
+        if (params.tone.localActive) {
+            light.guide(sceneTex)
+            profiler.mark("guided filter")
+        }
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, stageFbo)
         GLES30.glViewport(0, 0, image.width, image.height)
         GLES30.glUseProgram(developProgram)
@@ -371,6 +398,7 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         )
         GLES30.glDrawArrays(GLES30.GL_TRIANGLES, 0, 3)
         GlSupport.checkError("develop stage")
+        profiler.mark("develop pass")
         stageParams = params
     }
 
@@ -727,10 +755,12 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         val image = input ?: return
         val wait = histogram.waitMs()
         if (wait == 0L) {
+            profiler.begin()
             histogram.request(image.width, image.height) { scale, w, h ->
                 val view = ViewTransform(scale, image.width / 2f, image.height / 2f)
                 drawOutput(image, view, w, h, OutputSettings(dither = false), surround)
             }
+            profiler.mark("histogram request")
             histogramDirty = false
             scheduleHistogramPoll()
         } else if (!histogramPosted) {

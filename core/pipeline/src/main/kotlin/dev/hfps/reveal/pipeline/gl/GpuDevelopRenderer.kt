@@ -1507,4 +1507,4 @@ internal fun bindVignette(
 }
 
 /** Texture unit of the lens tables (vignetting in the scene pass, the lens warp in the output passes). */
-internal const val LENS_UNIT: Int = 3
+internal const val LENS_UNIT: Int = 5

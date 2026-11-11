@@ -23,6 +23,7 @@ with its licence; add a row in the same change that adds the dependency, and mir
 | Hoard image core (`dev.hfps.image`, ported, same owner) | ADR 0004 | AGPL-3.0-or-later |
 | Inter 4.1 variable font (`core/designsystem/src/main/res/font/inter_variable.ttf`; licence text in `core/designsystem/fonts/Inter-OFL-LICENSE.txt`) | rsms/inter release v4.1 | SIL OFL 1.1 |
 | Phosphor Icons 2.1.1 (path data generated into `core/designsystem/.../icons/Phosphor*.kt`) | `scripts/icons/generate_icons.py` (`VERSION`) | MIT |
+| lensfun lens database (`data/db`, converted by `scripts/lensfun/convert_lensfun.py` into `core/pipeline/src/main/resources/lensfun/lensfun.json.gz`; a separate data asset the code reads, the adaptation keeps the same licence, docs/adr/0015) | lensfun commit `52cf1a7b0e82e07e0ecaa3391ee5106a6dd1ee54` (`COMMIT` in the script) | CC BY-SA 3.0 (attribution: the lensfun project and its contributors) |
 
 The shipped list was checked against `./gradlew :app:dependencies --configuration releaseRuntimeClasspath` for 0.1.0
 (every group on that classpath is covered by a row above).

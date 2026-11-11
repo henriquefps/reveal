@@ -77,7 +77,7 @@ class DevelopParams(
     } else {
         DevelopParams(
             wbMultipliers, cameraToWorking, exposureGain, profile, highlights, tone, colour, curve, tools, detail,
-            effects.copy(post = PostParams.NONE),
+            effects.copy(post = PostParams.NONE), vignette, defringe,
         )
     }
 

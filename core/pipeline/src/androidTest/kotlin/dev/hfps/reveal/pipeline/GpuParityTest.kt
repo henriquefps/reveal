@@ -359,6 +359,7 @@ class GpuParityTest {
      */
     @Test
     fun opticsMatchCpuReference() = runBlocking {
+        val failures = mutableListOf<String>()
         var worst = 0
         var sum = 0L
         var count = 0L
@@ -384,11 +385,17 @@ class GpuParityTest {
                     )
                     worst = maxOf(worst, max)
                     val fringe = recipe.optics.purpleAmount > 0f || recipe.optics.greenAmount > 0f
-                    assertThat(max).isAtMost(if (fringe) OUTPUT_MAX_LEVELS_DETAIL else OUTPUT_MAX_LEVELS)
+                    if (max >
+                        (if (fringe) OUTPUT_MAX_LEVELS_DETAIL else OUTPUT_MAX_LEVELS)
+                    ) {
+                        failures +=
+                            "$name x$scale #${OPTICS.indexOf(recipe)}: $max"
+                    }
                 }
             }
         }
         Log.i(TAG, "optics: max diff $worst levels, mean diff ${sum.toDouble() / count}")
+        assertThat(failures).isEmpty()
         assertThat(sum.toDouble() / count).isAtMost(OUTPUT_MEAN_LEVELS)
     }
 

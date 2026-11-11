@@ -124,4 +124,19 @@ class OpticsOpsTest {
         assertThat(DefringeParams.from(Optics(purpleAmount = 5f), 2.5f).radius).isEqualTo(1)
         assertThat(DefringeParams.from(Optics(), 1f).reach).isEqualTo(0)
     }
+
+    @Test
+    fun `the stage keys keep vignetting and defringe`() {
+        val input = dev.hfps.reveal.pipeline.synthetic.SyntheticImages.scene(8, 8).withLens(zv)
+        val recipe = dev.hfps.reveal.pipeline.recipe.Recipe(
+            optics = Optics(lensCorrections = true, purpleAmount = 5f),
+            effects = dev.hfps.reveal.pipeline.recipe.Effects(vignetteAmount = -20f, grainAmount = 10f),
+        )
+        val p = DevelopParams.from(input, recipe)
+        for (derived in listOf(p.withoutPost(), p.withoutDetail())) {
+            assertThat(derived.vignette).isEqualTo(p.vignette)
+            assertThat(derived.defringe).isEqualTo(p.defringe)
+        }
+        assertThat(p.vignette).isNotNull()
+    }
 }

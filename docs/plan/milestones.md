@@ -51,6 +51,11 @@ milestone run in parallel where they do not touch the same files.
   and darktable/Lightroom for the overlapping fields), settings complete, accessibility pass,
   worst-case pass, performance pass on the phone. 1.0.0 = the owner can cancel his subscription.
 
+## MS - Sync and cloud library (proposal; placement to be decided by the owner)
+- Self-hosted Go sync server (`reveal-sync`, on `cachyos-fps` behind Cloudflare Tunnel), edits and
+  library metadata keyed by a content fingerprint, optional smart previews and originals backup,
+  NAS folders served by the server, phone + tablet on the same library. Design: `sync.md`.
+
 ## Later (only if the owner asks)
 AI denoise, on-device inpainting model for larger removals, HDR merge, panorama, Lightroom preset
 import, HDR (Ultra HDR / gain map) export, a Hoard-side shared `:core:image` dependency.

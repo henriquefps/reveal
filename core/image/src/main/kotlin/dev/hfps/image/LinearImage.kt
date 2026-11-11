@@ -63,7 +63,7 @@ class NativeLinearImage(val width: Int, val height: Int, buffer: ByteBuffer, pri
     }
 
     /** A view of the samples (shares the memory); throws once closed. */
-    val samples: ShortBuffer get() = buffer.duplicate().order(ByteOrder.nativeOrder()).asShortBuffer()
+    val samples: ShortBuffer get() = buffer.duplicate().apply { clear() }.order(ByteOrder.nativeOrder()).asShortBuffer()
 
     /** Copies into a heap [LinearImage] (144 MB at 24 MP: may exceed the Java heap). */
     fun toLinearImage(): LinearImage {

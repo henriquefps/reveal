@@ -14,6 +14,8 @@ if [[ ! -x "$bin" || "$here/rawdump.cpp" -nt "$bin" ]]; then
   for s in $srcs; do
     o="$out/obj/$(echo "$s" | tr '/' '_').o"
     if [[ ! -f "$o" ]]; then
+      # At most 4 compilers at a time (the build hosts are also desktops).
+      while (( $(jobs -rp | wc -l) >= 4 )); do wait -n; done
       c++ -std=c++17 -O3 -w -DLIBRAW_NODLL -DLIBRAW_NOTHREADS -I"$libraw" -c "$libraw/$s" -o "$o" &
     fi
     objs+=("$o")

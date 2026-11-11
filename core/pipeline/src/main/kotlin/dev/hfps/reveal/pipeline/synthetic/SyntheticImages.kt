@@ -101,6 +101,43 @@ object SyntheticImages {
         return PipelineInput.linearSrgb(patches.size, 1, data) to source
     }
 
+    /**
+     * A hue sweep for the colour tools: OkLab hue 0..360° along x, rows from dark to light (L 0.35..0.85) at chroma
+     * [chroma], plus a neutral bottom row band (chroma 0); as linear sRGB (Ottosson's sRGB OkLab matrices), so a few
+     * strong colours fall slightly outside sRGB (negative components), which the operators must handle.
+     */
+    fun hueSweep(width: Int, height: Int, chroma: Double = 0.12): PipelineInput {
+        val data = FloatArray(width * height * PipelineInput.CHANNELS)
+        val greyRows = maxOf(1, height / 8)
+        for (y in 0 until height) {
+            val neutral = y >= height - greyRows
+            val l = 0.35 + 0.5 * y / (height - 1).coerceAtLeast(1)
+            for (x in 0 until width) {
+                val h = 2 * PI * x / width
+                val c = if (neutral) 0.0 else chroma
+                val rgb = okLabToLinearSrgb(l, c * cos(h), c * sin(h))
+                val i = (y * width + x) * PipelineInput.CHANNELS
+                for (k in 0 until PipelineInput.CHANNELS) data[i + k] = rgb[k].toFloat()
+            }
+        }
+        return PipelineInput.linearSrgb(width, height, data)
+    }
+
+    /** Ottosson's OkLab to linear sRGB. */
+    private fun okLabToLinearSrgb(l: Double, a: Double, b: Double): DoubleArray {
+        val l1 = l + 0.3963377774 * a + 0.2158037573 * b
+        val m1 = l - 0.1055613458 * a - 0.0638541728 * b
+        val s1 = l - 0.0894841775 * a - 1.2914855480 * b
+        val l3 = l1 * l1 * l1
+        val m3 = m1 * m1 * m1
+        val s3 = s1 * s1 * s1
+        return doubleArrayOf(
+            4.0767416621 * l3 - 3.3077115913 * m3 + 0.2309699292 * s3,
+            -1.2684380046 * l3 + 2.6097574011 * m3 - 0.3413193965 * s3,
+            -0.0041960863 * l3 - 0.7034186147 * m3 + 1.7076147010 * s3,
+        )
+    }
+
     /** Values outside [0, 1]: negative (out-of-gamut), exactly white and far over white, as linear sRGB. */
     fun outOfRange(): PipelineInput {
         val colours = listOf(

@@ -1,8 +1,9 @@
 # ADR 0002: Pipeline order, working space and GPU/CPU numerics
 
 Status: accepted (M0, W5). Date: 2026-11-10. Amended by ADR 0007 (M1 Light: slots 1, 5, 5b, 8; version 3), by
-M1/G (slot 13 geometry, version 5; section "Geometry (slot 13)") and by ADR 0012 (M2: slot 11 Detail, version 6, the
-editor's full-resolution tiles).
+M1/G (slot 13 geometry, version 5; section "Geometry (slot 13)"), by ADR 0012 (M2: slot 11 Detail, version 6, the
+editor's full-resolution tiles) and by ADR 0013 (M2/B: tone curve in slot 8, colour mixer, black & white and colour
+grading in slot 9; version 7).
 
 ## Fixed operator order
 
@@ -38,10 +39,10 @@ Implemented in M0 are marked **(M0)**; the rest are the reserved slots from `doc
    patches) round-trips within 1 level with dither on, on the CPU and on the GPU. Exposure and white balance still
    apply to display-referred input; its out-of-range values clip only at the output.
 7. **White balance fine / tint (M0 handles temperature and tint at step 1-2, see below)**.
-8. **Tone (M1, ADR 0007)**: contrast, whites/blacks (curves later): display-referred, after the base look.
-   Highlights/shadows moved to 5b (scene-referred).
-9. **Colour (M1, ADR 0008: vibrance and saturation in OkLab)**: then HSL, grading, B&W later, in a space where
-   saturation is meaningful.
+8. **Tone (M1, ADR 0007)**: contrast, whites/blacks, then the **tone curve (M2, ADR 0013)**: display-referred, after
+   the base look. Highlights/shadows moved to 5b (scene-referred).
+9. **Colour (M1, ADR 0008: vibrance and saturation in OkLab)**: then the colour mixer (HSL) or black & white, then
+   colour grading (M2, ADR 0013), all in OkLab, where hue and saturation are meaningful.
 10. **Local adjustments / masks (later)**: after global colour so masks adjust the globally graded image.
 11. **Detail (M2, ADR 0012)**: noise reduction then sharpening; NR before sharpening, both before effects. In OkLab,
     a neighbourhood operator at full resolution (the proxy scales its lengths); export tiles carry its apron.
@@ -140,6 +141,8 @@ replace the M0 Standard curve (RAW renders about 1.3 EV brighter, matching the c
 relative white balance of display-referred input exist; a third golden CRC pins them. **Version 5** (M1/G): the
 geometry operator (slot 13); a recipe without geometry renders as before, a fourth golden CRC pins the operator.
 **Version 6** (M2, ADR 0012): the Detail operator (slot 11), identity at its defaults; a fifth golden CRC pins it.
+**Version 7** (M2/B, ADR 0013): the tone curve, colour mixer, black & white and colour grading; identity at their
+defaults (a recipe without them renders as before), a sixth golden CRC pins them.
 
 ## Determinism
 

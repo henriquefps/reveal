@@ -1,6 +1,9 @@
 package dev.hfps.reveal.pipeline
 
 import android.content.Context
+import dev.hfps.reveal.pipeline.recipe.ColourBand
+import dev.hfps.reveal.pipeline.recipe.CurveChannel
+import dev.hfps.reveal.pipeline.recipe.GradeRegion
 import dev.hfps.reveal.pipeline.recipe.HistoryAction
 import dev.hfps.reveal.pipeline.recipe.HistoryField
 import dev.hfps.reveal.pipeline.recipe.HistoryStep
@@ -57,6 +60,8 @@ object HistoryLabels {
         HistoryAction.PREVIOUS to R.string.history_action_previous,
         HistoryAction.AUTO to R.string.history_action_auto,
         HistoryAction.PRESET to R.string.history_action_preset,
+        HistoryAction.AUTO_MIX to R.string.history_action_auto_mix,
+        HistoryAction.CURVE_PRESET to R.string.history_action_curve_preset,
     )
 
     private val GROUP_NAMES: Map<RecipeGroup, Int> = mapOf(
@@ -89,6 +94,8 @@ object HistoryLabels {
 
             field in NO_VALUE_LABELS -> context.getString(NO_VALUE_LABELS.getValue(field))
 
+            field.ordinal > HistoryField.TREATMENT.ordinal -> colourTool(context, field, value)
+
             else -> context.getString(VALUE_LABELS.getValue(field), value)
         }
     }
@@ -111,7 +118,82 @@ object HistoryLabels {
         HistoryField.BASE_LOOK to ("look" to R.string.history_base_look),
         HistoryField.WB_MODE to ("wb" to R.string.history_wb_mode),
         HistoryField.ASPECT to ("aspect" to R.string.history_aspect),
+        HistoryField.TREATMENT to ("treatment" to R.string.history_treatment),
     )
+
+    /** The label of a tone curve, colour mixer, grey mixer or colour grading step (docs/adr/0013). */
+    private fun colourTool(context: Context, field: HistoryField, value: String?): String {
+        val name = field.name
+        val parts = name.split('_')
+        val band = runCatching { ColourBand.valueOf(parts.last()) }.getOrNull()
+        return when {
+            name.startsWith("CURVE_") && field in CURVE_LABELS -> context.getString(CURVE_LABELS.getValue(field), value)
+
+            name.startsWith("CURVE_") -> context.getString(
+                R.string.history_point_curve,
+                context.getString(channelName(CurveChannel.valueOf(name.removePrefix("CURVE_")))),
+            )
+
+            band != null && parts[0] == "GREY" ->
+                context.getString(R.string.history_grey_mix, context.getString(bandName(band)), value)
+
+            band != null -> context.getString(propertyLabel(parts[0]), context.getString(bandName(band)), value)
+
+            field == HistoryField.GRADE_BLENDING -> context.getString(R.string.history_grade_blending, value)
+
+            field == HistoryField.GRADE_BALANCE -> context.getString(R.string.history_grade_balance, value)
+
+            else -> context.getString(
+                propertyLabel(parts[2]),
+                context.getString(regionName(GradeRegion.valueOf(parts[1]))),
+                value,
+            )
+        }
+    }
+
+    private fun propertyLabel(property: String): Int = when (property) {
+        "HUE" -> R.string.history_band_hue
+        "SAT" -> R.string.history_band_saturation
+        else -> R.string.history_band_luminance
+    }
+
+    private val CURVE_LABELS: Map<HistoryField, Int> = mapOf(
+        HistoryField.CURVE_SHADOWS to R.string.history_curve_shadows,
+        HistoryField.CURVE_DARKS to R.string.history_curve_darks,
+        HistoryField.CURVE_LIGHTS to R.string.history_curve_lights,
+        HistoryField.CURVE_HIGHLIGHTS to R.string.history_curve_highlights,
+        HistoryField.CURVE_SPLIT_SHADOWS to R.string.history_curve_split_shadows,
+        HistoryField.CURVE_SPLIT_MIDTONES to R.string.history_curve_split_midtones,
+        HistoryField.CURVE_SPLIT_HIGHLIGHTS to R.string.history_curve_split_highlights,
+    )
+
+    /** Localised colour band name ("Red"), shared with the editor's chips. */
+    fun bandName(band: ColourBand): Int = when (band) {
+        ColourBand.RED -> R.string.colour_band_red
+        ColourBand.ORANGE -> R.string.colour_band_orange
+        ColourBand.YELLOW -> R.string.colour_band_yellow
+        ColourBand.GREEN -> R.string.colour_band_green
+        ColourBand.AQUA -> R.string.colour_band_aqua
+        ColourBand.BLUE -> R.string.colour_band_blue
+        ColourBand.PURPLE -> R.string.colour_band_purple
+        ColourBand.MAGENTA -> R.string.colour_band_magenta
+    }
+
+    /** Localised colour grading wheel name ("Shadows"), shared with the editor. */
+    fun regionName(region: GradeRegion): Int = when (region) {
+        GradeRegion.SHADOWS -> R.string.grade_region_shadows
+        GradeRegion.MIDTONES -> R.string.grade_region_midtones
+        GradeRegion.HIGHLIGHTS -> R.string.grade_region_highlights
+        GradeRegion.GLOBAL -> R.string.grade_region_global
+    }
+
+    /** Localised point-curve channel name ("RGB", "Red"), shared with the editor's chips. */
+    fun channelName(channel: CurveChannel): Int = when (channel) {
+        CurveChannel.RGB -> R.string.curve_channel_rgb
+        CurveChannel.RED -> R.string.curve_channel_red
+        CurveChannel.GREEN -> R.string.curve_channel_green
+        CurveChannel.BLUE -> R.string.curve_channel_blue
+    }
 
     /** Fields shown as "<name> <signed value>". */
     private val VALUE_LABELS: Map<HistoryField, Int> = mapOf(
@@ -169,5 +251,7 @@ object HistoryLabels {
         "aspect_r16_9" to R.string.history_value_aspect_r16_9,
         "aspect_r9_16" to R.string.history_value_aspect_r9_16,
         "aspect_custom" to R.string.history_value_aspect_custom,
+        "treatment_colour" to R.string.history_value_treatment_colour,
+        "treatment_black_white" to R.string.history_value_treatment_black_white,
     )
 }

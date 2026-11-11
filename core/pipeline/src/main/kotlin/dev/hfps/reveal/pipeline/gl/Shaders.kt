@@ -80,9 +80,10 @@ void main() {
 
     /**
      * Stage 2, develop (slots 5b-9): highlights/shadows on scene-linear light, the profile (base look, slot 6,
-     * [ColourShaders]), contrast/whites/blacks on display-referred light, then vibrance/saturation (slot 9). Reads
-     * the scene texture 1:1 and writes the working-space texture (RGBA16F, mip-mapped) the output pass reads, or, when
-     * the Detail operator runs, its OkLab input ([DetailShaders]).
+     * [ColourShaders]), contrast/whites/blacks and the tone curve on display-referred light, then vibrance/saturation,
+     * the colour mixer or black & white, and colour grading (slot 9, [ColourToolShaders]). Reads the scene texture 1:1
+     * and writes the working-space texture (RGBA16F, mip-mapped) the output pass reads, or, when the Detail operator
+     * runs, its OkLab input ([DetailShaders]).
      */
     val DEVELOP_FRAG: String = HEADER + DEVELOP_BLOCK + LightShaders.COMMON + """
 uniform sampler2D uScene;
@@ -93,7 +94,8 @@ uniform ivec2 uOrigin;   // see SCENE_FRAG
 uniform int uLabOut;
 out vec4 outColor;
 
-""" + ColourShaders.BLOCK + ColourShaders.FUNCTIONS + LightShaders.TONE + Q16 + """
+""" + ColourShaders.BLOCK + ColourShaders.FUNCTIONS + ColourToolShaders.BLOCK + ColourToolShaders.FUNCTIONS +
+        LightShaders.TONE + Q16 + """
 void main() {
     ivec2 p = ivec2(gl_FragCoord.xy);
     vec3 c = texelFetch(uScene, p, 0).rgb;
@@ -104,7 +106,8 @@ void main() {
     if (tone.w != 0.0) {
         c = globalTone(c);
     }
-    c = vibranceSaturation(c);
+    c = toneCurve(c);
+    c = colourStage(c);
     outColor = uLabOut == 1 ? vec4(q16(toOkLab(c)), 0.0) : vec4(c, 1.0);
 }
 """

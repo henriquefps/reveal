@@ -39,6 +39,66 @@ enum class HistoryField(val group: RecipeGroup) {
     NR_COLOUR(RecipeGroup.DETAIL),
     NR_COLOUR_DETAIL(RecipeGroup.DETAIL),
     NR_COLOUR_SMOOTHNESS(RecipeGroup.DETAIL),
+
+    // Colour tools (docs/adr/0013). Scalar fields share their ControlId's name.
+    TREATMENT(RecipeGroup.PROFILE),
+    CURVE_SHADOWS(RecipeGroup.LIGHT),
+    CURVE_DARKS(RecipeGroup.LIGHT),
+    CURVE_LIGHTS(RecipeGroup.LIGHT),
+    CURVE_HIGHLIGHTS(RecipeGroup.LIGHT),
+    CURVE_SPLIT_SHADOWS(RecipeGroup.LIGHT),
+    CURVE_SPLIT_MIDTONES(RecipeGroup.LIGHT),
+    CURVE_SPLIT_HIGHLIGHTS(RecipeGroup.LIGHT),
+    CURVE_RGB(RecipeGroup.LIGHT),
+    CURVE_RED(RecipeGroup.LIGHT),
+    CURVE_GREEN(RecipeGroup.LIGHT),
+    CURVE_BLUE(RecipeGroup.LIGHT),
+    HUE_RED(RecipeGroup.COLOUR),
+    HUE_ORANGE(RecipeGroup.COLOUR),
+    HUE_YELLOW(RecipeGroup.COLOUR),
+    HUE_GREEN(RecipeGroup.COLOUR),
+    HUE_AQUA(RecipeGroup.COLOUR),
+    HUE_BLUE(RecipeGroup.COLOUR),
+    HUE_PURPLE(RecipeGroup.COLOUR),
+    HUE_MAGENTA(RecipeGroup.COLOUR),
+    SAT_RED(RecipeGroup.COLOUR),
+    SAT_ORANGE(RecipeGroup.COLOUR),
+    SAT_YELLOW(RecipeGroup.COLOUR),
+    SAT_GREEN(RecipeGroup.COLOUR),
+    SAT_AQUA(RecipeGroup.COLOUR),
+    SAT_BLUE(RecipeGroup.COLOUR),
+    SAT_PURPLE(RecipeGroup.COLOUR),
+    SAT_MAGENTA(RecipeGroup.COLOUR),
+    LUM_RED(RecipeGroup.COLOUR),
+    LUM_ORANGE(RecipeGroup.COLOUR),
+    LUM_YELLOW(RecipeGroup.COLOUR),
+    LUM_GREEN(RecipeGroup.COLOUR),
+    LUM_AQUA(RecipeGroup.COLOUR),
+    LUM_BLUE(RecipeGroup.COLOUR),
+    LUM_PURPLE(RecipeGroup.COLOUR),
+    LUM_MAGENTA(RecipeGroup.COLOUR),
+    GREY_RED(RecipeGroup.COLOUR),
+    GREY_ORANGE(RecipeGroup.COLOUR),
+    GREY_YELLOW(RecipeGroup.COLOUR),
+    GREY_GREEN(RecipeGroup.COLOUR),
+    GREY_AQUA(RecipeGroup.COLOUR),
+    GREY_BLUE(RecipeGroup.COLOUR),
+    GREY_PURPLE(RecipeGroup.COLOUR),
+    GREY_MAGENTA(RecipeGroup.COLOUR),
+    GRADE_SHADOWS_HUE(RecipeGroup.COLOUR),
+    GRADE_SHADOWS_SAT(RecipeGroup.COLOUR),
+    GRADE_SHADOWS_LUM(RecipeGroup.COLOUR),
+    GRADE_MIDTONES_HUE(RecipeGroup.COLOUR),
+    GRADE_MIDTONES_SAT(RecipeGroup.COLOUR),
+    GRADE_MIDTONES_LUM(RecipeGroup.COLOUR),
+    GRADE_HIGHLIGHTS_HUE(RecipeGroup.COLOUR),
+    GRADE_HIGHLIGHTS_SAT(RecipeGroup.COLOUR),
+    GRADE_HIGHLIGHTS_LUM(RecipeGroup.COLOUR),
+    GRADE_GLOBAL_HUE(RecipeGroup.COLOUR),
+    GRADE_GLOBAL_SAT(RecipeGroup.COLOUR),
+    GRADE_GLOBAL_LUM(RecipeGroup.COLOUR),
+    GRADE_BLENDING(RecipeGroup.COLOUR),
+    GRADE_BALANCE(RecipeGroup.COLOUR),
 }
 
 /**
@@ -67,6 +127,7 @@ object RecipeDiff {
     private fun MutableList<HistoryStep>.profile(before: Profile, after: Profile) {
         if (before.base != after.base) add(HistoryStep(HistoryField.BASE_LOOK, key(after.base)))
         scalar(HistoryField.PROFILE_AMOUNT, RecipeRanges.profileAmount, before.amountPercent, after.amountPercent)
+        if (before.treatment != after.treatment) add(HistoryStep(HistoryField.TREATMENT, key(after.treatment)))
     }
 
     private fun MutableList<HistoryStep>.light(before: Light, after: Light) {
@@ -76,6 +137,12 @@ object RecipeDiff {
         scalar(HistoryField.SHADOWS, RecipeRanges.shadows, before.shadows, after.shadows)
         scalar(HistoryField.WHITES, RecipeRanges.whites, before.whites, after.whites)
         scalar(HistoryField.BLACKS, RecipeRanges.blacks, before.blacks, after.blacks)
+        tools(Recipe(light = before), Recipe(light = after), ColourToolControls.parametric + ColourToolControls.splits)
+        CurveChannel.entries.forEach { channel ->
+            if (before.curve[channel] != after.curve[channel]) {
+                add(HistoryStep(HistoryField.valueOf("CURVE_${channel.name}"), null))
+            }
+        }
     }
 
     private fun MutableList<HistoryStep>.colour(before: Colour, after: Colour) {
@@ -99,6 +166,22 @@ object RecipeDiff {
         scalar(HistoryField.REL_TINT, RecipeRanges.relTint, wbBefore.relTint, wbAfter.relTint)
         scalar(HistoryField.VIBRANCE, RecipeRanges.vibrance, before.vibrance, after.vibrance)
         scalar(HistoryField.SATURATION, RecipeRanges.saturation, before.saturation, after.saturation)
+        tools(Recipe(colour = before), Recipe(colour = after), colourControls)
+    }
+
+    private val colourControls: List<ControlId> =
+        ColourToolControls.all.filterNot { it in ColourToolControls.parametric || it in ColourToolControls.splits }
+
+    /** Scalar colour-tool controls in [ids]: their history field has the control's name. */
+    private fun MutableList<HistoryStep>.tools(before: Recipe, after: Recipe, ids: List<ControlId>) {
+        ids.forEach { id ->
+            scalar(
+                HistoryField.valueOf(id.name),
+                RecipeRanges[id],
+                ColourToolControls.get(before, id),
+                ColourToolControls.get(after, id),
+            )
+        }
     }
 
     private fun MutableList<HistoryStep>.detail(before: Detail, after: Detail) {

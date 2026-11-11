@@ -4,17 +4,26 @@ import android.util.Log
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.google.common.truth.Truth.assertThat
 import dev.hfps.reveal.pipeline.cpu.CpuDevelop
+import dev.hfps.reveal.pipeline.cpu.CurveLut
 import dev.hfps.reveal.pipeline.cpu.OutputSettings
 import dev.hfps.reveal.pipeline.cpu.OutputSpace
 import dev.hfps.reveal.pipeline.gl.GpuDevelopRenderer
+import dev.hfps.reveal.pipeline.recipe.BandValues
 import dev.hfps.reveal.pipeline.recipe.BaseLook
 import dev.hfps.reveal.pipeline.recipe.Colour
+import dev.hfps.reveal.pipeline.recipe.ColourGrading
+import dev.hfps.reveal.pipeline.recipe.ColourMixer
 import dev.hfps.reveal.pipeline.recipe.CropRect
+import dev.hfps.reveal.pipeline.recipe.CurvePoint
+import dev.hfps.reveal.pipeline.recipe.Curves
 import dev.hfps.reveal.pipeline.recipe.Detail
 import dev.hfps.reveal.pipeline.recipe.Geometry
+import dev.hfps.reveal.pipeline.recipe.GradeWheel
 import dev.hfps.reveal.pipeline.recipe.Light
+import dev.hfps.reveal.pipeline.recipe.ParametricCurve
 import dev.hfps.reveal.pipeline.recipe.Profile
 import dev.hfps.reveal.pipeline.recipe.Recipe
+import dev.hfps.reveal.pipeline.recipe.Treatment
 import dev.hfps.reveal.pipeline.recipe.WhiteBalance
 import dev.hfps.reveal.pipeline.synthetic.SyntheticImages
 import kotlin.math.abs
@@ -60,36 +69,109 @@ class GpuParityTest {
         // Light group (docs/adr/0007): clipped coloured highlights (reconstruction), a textured step edge (local tone).
         "highlights" to SyntheticImages.clippedHighlights(192, 128),
         "stepEdge" to SyntheticImages.stepEdge(256, 48, dark = 0.02f, bright = 2f, texture = 0.25f),
+        // Colour tools (docs/adr/0013): every hue at several lightnesses plus a neutral band.
+        "hueSweep" to SyntheticImages.hueSweep(180, 24),
     )
 
     private fun recipes(count: Int): List<Recipe> {
         val random = Random(1234)
         fun slider() = if (random.nextBoolean()) random.nextFloat() * 200f - 100f else 0f
-        return listOf(Recipe()) + LIGHT_EXTREMES + COLOUR_EXTREMES + GEOMETRY + DETAIL + List(count) {
+        return listOf(Recipe()) + LIGHT_EXTREMES + COLOUR_EXTREMES + GEOMETRY + DETAIL + TOOL_EXTREMES +
+            toolRecipes(count) +
+            List(count) {
+                Recipe(
+                    light = Light(
+                        random.nextFloat() * 6f - 3f,
+                        contrast = slider(),
+                        highlights = slider(),
+                        shadows = slider(),
+                        whites = slider(),
+                        blacks = slider(),
+                    ),
+                    colour = Colour(
+                        WhiteBalance(
+                            temperatureK = if (random.nextBoolean()) 2500f + random.nextFloat() * 9500f else null,
+                            tint = if (random.nextBoolean()) random.nextFloat() * 160f - 80f else null,
+                            relTemperature = slider(),
+                            relTint = slider(),
+                        ),
+                        vibrance = slider(),
+                        saturation = slider(),
+                    ),
+                    profile = Profile(
+                        BaseLook.entries[random.nextInt(BaseLook.entries.size)],
+                        random.nextFloat() * 200f,
+                    ),
+                )
+            }
+    }
+
+    /** Random colour-tool recipes (own seed, so the other random recipes stay what they were). */
+    private fun toolRecipes(count: Int): List<Recipe> {
+        val random = Random(4321)
+        fun slider() = if (random.nextInt(3) == 0) random.nextFloat() * 200f - 100f else 0f
+        fun bands() = BandValues.of(List(8) { slider() })
+        fun wheel() =
+            GradeWheel(random.nextFloat() * 360f, if (random.nextBoolean()) random.nextFloat() * 100f else 0f, slider())
+
+        // Curves as people draw them: 1-3 interior points, monotone, slopes within about 0.3..3 (the steep and
+        // folded cases are pinned in TOOL_EXTREMES; their error grows with the slope, see ADR 0013).
+        fun points(): List<CurvePoint> {
+            if (random.nextInt(3) != 0) return emptyList()
+            val n = 1 + random.nextInt(3)
+            val xs = (1..n).map { (it + random.nextFloat() * 0.6f - 0.3f) / (n + 1) }
+            val ys = xs.map { (it + random.nextFloat() * 0.2f - 0.1f).coerceIn(0.02f, 0.98f) }.sorted()
+            return listOf(CurvePoint(0f, random.nextFloat() * 0.05f)) + xs.zip(ys).map { (x, y) -> CurvePoint(x, y) } +
+                CurvePoint(1f, 0.95f + random.nextFloat() * 0.05f)
+        }
+        return List(count) {
             Recipe(
+                profile = Profile(
+                    BaseLook.entries[random.nextInt(BaseLook.entries.size)],
+                    treatment = if (random.nextInt(4) == 0) Treatment.BLACK_WHITE else Treatment.COLOUR,
+                ),
                 light = Light(
-                    random.nextFloat() * 6f - 3f,
-                    contrast = slider(),
-                    highlights = slider(),
-                    shadows = slider(),
-                    whites = slider(),
-                    blacks = slider(),
+                    random.nextFloat() * 2f - 1f,
+                    curve = Curves(
+                        ParametricCurve(
+                            slider(),
+                            slider(),
+                            slider(),
+                            slider(),
+                            15f + random.nextFloat() * 20f,
+                            50f,
+                            70f + random.nextFloat() * 20f,
+                        ),
+                        rgb = points(),
+                        red = points(),
+                        green = points(),
+                        blue = points(),
+                    ),
                 ),
                 colour = Colour(
-                    WhiteBalance(
-                        temperatureK = if (random.nextBoolean()) 2500f + random.nextFloat() * 9500f else null,
-                        tint = if (random.nextBoolean()) random.nextFloat() * 160f - 80f else null,
-                        relTemperature = slider(),
-                        relTint = slider(),
-                    ),
                     vibrance = slider(),
-                    saturation = slider(),
+                    mixer = ColourMixer(bands(), bands(), bands()),
+                    grading = ColourGrading(wheel(), wheel(), wheel(), wheel(), random.nextFloat() * 100f, slider()),
+                    greyMixer = bands(),
                 ),
-                profile = Profile(BaseLook.entries[random.nextInt(BaseLook.entries.size)], random.nextFloat() * 200f),
             )
         }
     }
 
+    @Test
+    fun colourToolsAtNeutralAreIdentity() = runBlocking {
+        // Moved splits, blending, balance and grading hues alone change nothing: the passes are skipped exactly.
+        val neutral = Recipe(
+            light = Light(curve = Curves(parametric = ParametricCurve(splitShadows = 35f), rgb = Curves.LINEAR)),
+            colour = Colour(grading = ColourGrading(shadows = GradeWheel(hue = 120f), blending = 90f, balance = 30f)),
+        )
+        for (name in listOf("scene", "hueSweep")) {
+            renderer.setInput(images.getValue(name))
+            assertThat(renderer.renderLinear(neutral)).isEqualTo(renderer.renderLinear(Recipe()))
+        }
+    }
+
+    @Suppress("CyclomaticComplexMethod")
     @Test
     fun linearStageMatchesCpuReference() = runBlocking {
         var maxAbs = 0f
@@ -107,11 +189,13 @@ class GpuParityTest {
                 val light = recipe.light.hasTone() || name in RECONSTRUCTING
                 val colour = recipe.hasColour()
                 val detail = recipe.hasDetail()
+                // Saturated noise with near-zero luminance amplifies the extra OkLab cube roots of the colour tools.
+                val slope = recipe.curveSlope() * if (name == "rawNoise" && recipe.hasTools()) NOISE_TOOLS else 1f
                 for (p in 0 until image.width * image.height) {
                     val scale = maxOf(abs(cpu[p * 3]), abs(cpu[p * 3 + 1]), abs(cpu[p * 3 + 2]))
                     for (c in 0 until 3) {
                         val error = abs(gpu[p * 3 + c] - cpu[p * 3 + c])
-                        val allowed = when {
+                        val allowed = slope * when {
                             detail -> DETAIL_ABS + DETAIL_REL * scale
                             light && colour -> LIGHT_ABS + COLOUR_LIGHT_REL * scale
                             light -> LIGHT_ABS + LIGHT_REL * scale
@@ -202,12 +286,16 @@ class GpuParityTest {
     }
 
     /** The 8-bit limit for [recipe] on image [name]: the image's own, raised for colour and noise+tone cases. */
-    private fun outputAllowed(name: String, recipe: Recipe, imageAllowed: Int): Int = when {
-        name == "rawNoise" && recipe.hasDetail() -> OUTPUT_MAX_LEVELS_NOISE_DETAIL
-        recipe.hasDetail() -> maxOf(imageAllowed, OUTPUT_MAX_LEVELS_DETAIL)
-        recipe.hasColour() -> maxOf(imageAllowed, OUTPUT_MAX_LEVELS_COLOUR)
-        name == "rawNoise" && recipe.light.hasTone() -> OUTPUT_MAX_LEVELS_NOISE_TONE
-        else -> imageAllowed
+    private fun outputAllowed(name: String, recipe: Recipe, imageAllowed: Int): Int {
+        val base = when {
+            name == "rawNoise" && recipe.hasDetail() -> OUTPUT_MAX_LEVELS_NOISE_DETAIL
+            recipe.hasDetail() -> maxOf(imageAllowed, OUTPUT_MAX_LEVELS_DETAIL)
+            recipe.hasColour() -> maxOf(imageAllowed, OUTPUT_MAX_LEVELS_COLOUR)
+            name in SATURATED && recipe.light.hasTone() -> OUTPUT_MAX_LEVELS_NOISE_TONE
+            else -> imageAllowed
+        }
+        // A steep tone curve multiplies the fp16 rounding before it (docs/adr/0013, "Parity").
+        return kotlin.math.ceil(base * recipe.curveSlope()).toInt()
     }
 
     @Test
@@ -441,6 +529,14 @@ class GpuParityTest {
         const val OUTPUT_MAX_LEVELS_NOISE_TONE = 6
         val RECONSTRUCTING = setOf("rawClipped", "highlights")
 
+        // Images of saturated colours with little luminance (the noise stress image, the hue sweep's out-of-sRGB
+        // colours): tone recipes pushing them far over white (Light regression recipe #10: +3 EV, whites +74) reach
+        // 5 levels on Adreno 750 / NVIDIA translator for a few pixels, as ADR 0007 measured for the noise image.
+        val SATURATED = setOf("rawNoise", "hueSweep")
+
+        // Colour tools on the noise stress image (docs/adr/0013): measured 1.13x the colour tolerance on Adreno 750.
+        const val NOISE_TOOLS = 1.5f
+
         // Colour group (docs/adr/0008): recipes with a look other than Standard, vibrance/saturation or relative
         // white balance. The scene texture between the two develop stages is fp16 (ADR 0007); a look's matrix
         // (Camera JPEG match: coefficients up to about ±6 at 200 %) and the OkLab cube roots amplify that one
@@ -453,7 +549,127 @@ class GpuParityTest {
         const val OUTPUT_MAX_LEVELS_COLOUR = 6
 
         fun Recipe.hasColour() = profile.base != BaseLook.STANDARD || colour.vibrance != 0f ||
-            colour.saturation != 0f || colour.whiteBalance.relTemperature != 0f || colour.whiteBalance.relTint != 0f
+            colour.saturation != 0f || colour.whiteBalance.relTemperature != 0f || colour.whiteBalance.relTint != 0f ||
+            hasTools()
+
+        // Colour tools (docs/adr/0013) take the colour tolerance: they add OkLab round trips (cube roots, atan) and the
+        // curve's sRGB transfer to the same fp16 scene texture rounding.
+        fun Recipe.hasTools() = !light.curve.isNeutral || !colour.mixer.isNeutral || !colour.grading.isNeutral ||
+            profile.treatment == Treatment.BLACK_WHITE
+
+        // The tools at their ends: point-curve presets, a steep channel curve, the parametric extremes, every mixer
+        // property at ±100 on alternating bands, B&W with the grey mixer at its ends, every grading wheel.
+        val TOOL_EXTREMES: List<Recipe> = listOf(
+            Recipe(light = Light(curve = Curves(rgb = Curves.STRONG_CONTRAST))),
+            Recipe(
+                light = Light(curve = Curves(parametric = ParametricCurve(100f, -100f, 100f, -100f, 10f, 30f, 90f))),
+            ),
+            Recipe(
+                light = Light(
+                    curve = Curves(
+                        red = listOf(
+                            CurvePoint(0f, 0.1f),
+                            CurvePoint(0.45f, 0.2f),
+                            CurvePoint(0.55f, 0.9f),
+                            CurvePoint(1f, 1f),
+                        ),
+                        blue = listOf(CurvePoint(0f, 0f), CurvePoint(0.5f, 0.3f), CurvePoint(1f, 0.85f)),
+                    ),
+                ),
+            ),
+            Recipe(
+                colour = Colour(
+                    mixer = ColourMixer(
+                        hue = BandValues.of(
+                            List(8) {
+                                if (it % 2 ==
+                                    0
+                                ) {
+                                    100f
+                                } else {
+                                    -100f
+                                }
+                            },
+                        ),
+                    ),
+                ),
+            ),
+            Recipe(
+                colour = Colour(
+                    mixer = ColourMixer(
+                        saturation = BandValues.of(
+                            List(8) {
+                                if (it % 2 ==
+                                    0
+                                ) {
+                                    -100f
+                                } else {
+                                    100f
+                                }
+                            },
+                        ),
+                    ),
+                ),
+            ),
+            Recipe(
+                colour = Colour(
+                    mixer = ColourMixer(
+                        luminance = BandValues.of(
+                            List(8) {
+                                if (it % 2 ==
+                                    0
+                                ) {
+                                    100f
+                                } else {
+                                    -100f
+                                }
+                            },
+                        ),
+                    ),
+                ),
+            ),
+            Recipe(profile = Profile(treatment = Treatment.BLACK_WHITE)),
+            Recipe(
+                profile = Profile(treatment = Treatment.BLACK_WHITE),
+                colour = Colour(greyMixer = BandValues.of(List(8) { if (it % 2 == 0) 100f else -100f })),
+            ),
+            Recipe(
+                colour = Colour(
+                    grading = ColourGrading(
+                        GradeWheel(220f, 100f, -100f),
+                        GradeWheel(40f, 100f, 100f),
+                        GradeWheel(60f, 100f, -100f),
+                        GradeWheel(300f, 50f, 100f),
+                        blending = 0f,
+                        balance = 100f,
+                    ),
+                ),
+            ),
+            Recipe(
+                profile = Profile(BaseLook.CAMERA_MATCH, treatment = Treatment.BLACK_WHITE),
+                light = Light(curve = Curves(rgb = Curves.MEDIUM_CONTRAST)),
+                colour = Colour(
+                    greyMixer = BandValues(red = 40f, blue = -60f),
+                    grading = ColourGrading(shadows = GradeWheel(230f, 30f), highlights = GradeWheel(50f, 25f)),
+                ),
+            ),
+        )
+
+        /**
+         * The tone curve's steepest slope (at least 1): an fp16 rounding of the scene texture before the curve comes
+         * out multiplied by it, so a steep user curve (a point pulled hard against its neighbour) widens the linear
+         * tolerance by the same factor (docs/adr/0013, "Parity").
+         */
+        fun Recipe.curveSlope(): Float {
+            val table = CurveLut.of(light.curve)?.table ?: return 1f
+            var steepest = 1f
+            for (i in 0 until CurveLut.SIZE - 1) {
+                for (c in 0 until 3) {
+                    steepest = maxOf(steepest, (table[(i + 1) * 3 + c] - table[i * 3 + c]) * (CurveLut.SIZE - 1))
+                }
+            }
+            return steepest
+        }
 
         fun Recipe.hasDetail() = detail != Detail()
 

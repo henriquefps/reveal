@@ -3,8 +3,12 @@ package dev.hfps.reveal.feature.editor
 import dev.hfps.reveal.feature.editor.tools.ToolId
 import dev.hfps.reveal.pipeline.recipe.AspectPreset
 import dev.hfps.reveal.pipeline.recipe.BaseLook
+import dev.hfps.reveal.pipeline.recipe.ColourBand
 import dev.hfps.reveal.pipeline.recipe.ControlId
+import dev.hfps.reveal.pipeline.recipe.CurveChannel
+import dev.hfps.reveal.pipeline.recipe.GradeRegion
 import dev.hfps.reveal.pipeline.recipe.RecipeGroup
+import dev.hfps.reveal.pipeline.recipe.Treatment
 import dev.hfps.reveal.pipeline.recipe.WbMode
 
 /** Test tags of the editor, for instrumented and screenshot tests (locale-independent). */
@@ -62,6 +66,34 @@ object EditorTags {
     const val CROP_CONSTRAIN = "editor-crop-constrain"
     const val CROP_RESET = "editor-crop-reset"
     const val CROP_AUTO = "editor-crop-auto"
+    const val TARGETED_HINT = "editor-targeted-hint"
+    const val TARGETED = "editor-targeted"
+    const val TONE_CURVE_ROW = "editor-tone-curve-row"
+    const val CURVE_EDITOR = "editor-curve"
+    const val CURVE_MODE_POINT = "editor-curve-mode-point"
+    const val CURVE_MODE_PARAMETRIC = "editor-curve-mode-parametric"
+    const val MIXER_ROW = "editor-mixer-row"
+    const val GRADING_ROW = "editor-grading-row"
+    const val GREY_MIXER_ROW = "editor-grey-mixer-row"
+    const val AUTO_MIX = "editor-auto-mix"
+    const val GRADING_THREE_WAY = "editor-grading-three-way"
+
+    fun curveChannel(channel: CurveChannel): String = "editor-curve-channel-${channel.name.lowercase()}"
+
+    fun curvePreset(index: Int): String = "editor-curve-preset-$index"
+
+    /** A point handle of the curve editor (its accessibility node). */
+    fun curvePoint(index: Int): String = "editor-curve-point-$index"
+
+    fun band(band: ColourBand): String = "editor-band-${band.name.lowercase()}"
+
+    fun treatment(treatment: Treatment): String = "editor-treatment-${treatment.name.lowercase()}"
+
+    fun targetedTarget(target: TargetedTarget): String = "editor-targeted-${target.name.lowercase()}"
+
+    fun gradeRegion(region: GradeRegion): String = "editor-grade-${region.name.lowercase()}"
+
+    fun gradeWheel(region: GradeRegion): String = "editor-grade-wheel-${region.name.lowercase()}"
 
     /** The slider row of recipe control [id], e.g. `editor-control-exposure`. */
     fun control(id: ControlId): String = "editor-control-${id.name.lowercase()}"

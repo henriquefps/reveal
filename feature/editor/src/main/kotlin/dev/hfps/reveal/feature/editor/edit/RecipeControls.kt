@@ -1,10 +1,14 @@
 package dev.hfps.reveal.feature.editor.edit
 
 import dev.hfps.reveal.pipeline.recipe.BaseLook
+import dev.hfps.reveal.pipeline.recipe.ColourToolControls
 import dev.hfps.reveal.pipeline.recipe.ControlId
 import dev.hfps.reveal.pipeline.recipe.ControlRange
+import dev.hfps.reveal.pipeline.recipe.CurveChannel
+import dev.hfps.reveal.pipeline.recipe.CurvePoint
 import dev.hfps.reveal.pipeline.recipe.Recipe
 import dev.hfps.reveal.pipeline.recipe.RecipeRanges
+import dev.hfps.reveal.pipeline.recipe.Treatment
 import dev.hfps.reveal.pipeline.recipe.WbMode
 import dev.hfps.reveal.pipeline.recipe.WhiteBalance
 
@@ -49,6 +53,7 @@ object RecipeControls {
             ControlId.NR_COLOUR -> detail.nrColour
             ControlId.NR_COLOUR_DETAIL -> detail.nrColourDetail
             ControlId.NR_COLOUR_SMOOTHNESS -> detail.nrColourSmoothness
+            else -> ColourToolControls.get(recipe, id)
         }
     }
 
@@ -85,8 +90,17 @@ object RecipeControls {
             ControlId.NR_COLOUR -> recipe.copy(detail = d.copy(nrColour = v))
             ControlId.NR_COLOUR_DETAIL -> recipe.copy(detail = d.copy(nrColourDetail = v))
             ControlId.NR_COLOUR_SMOOTHNESS -> recipe.copy(detail = d.copy(nrColourSmoothness = v))
+            else -> ColourToolControls.set(recipe, id, v)
         }
     }
+
+    /** [recipe] with [channel]'s point curve set to [points] (a straight line is stored as the empty list). */
+    fun withCurve(recipe: Recipe, channel: CurveChannel, points: List<CurvePoint>): Recipe =
+        recipe.copy(light = recipe.light.copy(curve = recipe.light.curve.with(channel, points)))
+
+    /** [recipe] with the profile's treatment set. */
+    fun withTreatment(recipe: Recipe, treatment: Treatment): Recipe =
+        recipe.copy(profile = recipe.profile.copy(treatment = treatment))
 
     /** [recipe] with [id] back to "no change" (the absolute white balance back to as shot). */
     fun reset(recipe: Recipe, id: ControlId): Recipe {

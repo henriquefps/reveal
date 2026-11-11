@@ -5,9 +5,46 @@ import org.junit.Test
 
 class RecipeGroupsTest {
     private val edited = Recipe(
-        profile = Profile(BaseLook.VIVID, 150f),
-        light = Light(1f, 10f, 20f, 30f, 40f, 50f),
-        colour = Colour(WhiteBalance(5000f, 3f, WbMode.CUSTOM, 5f, 6f), 7f, 8f),
+        profile = Profile(BaseLook.VIVID, 150f, Treatment.BLACK_WHITE),
+        light = Light(
+            1f,
+            10f,
+            20f,
+            30f,
+            40f,
+            50f,
+            Curves(
+                ParametricCurve(1f, 2f, 3f, 4f, 20f, 45f, 70f),
+                Curves.MEDIUM_CONTRAST,
+                Curves.STRONG_CONTRAST,
+                Curves.MEDIUM_CONTRAST,
+                Curves.STRONG_CONTRAST,
+            ),
+        ),
+        colour = Colour(
+            WhiteBalance(5000f, 3f, WbMode.CUSTOM, 5f, 6f),
+            7f,
+            8f,
+            ColourMixer(
+                BandValues.of(List(8) { it + 1f }),
+                BandValues.of(List(8) { it + 2f }),
+                BandValues.of(
+                    List(8) {
+                        it +
+                            3f
+                    },
+                ),
+            ),
+            ColourGrading(
+                GradeWheel(1f, 2f, 3f),
+                GradeWheel(4f, 5f, 6f),
+                GradeWheel(7f, 8f, 9f),
+                GradeWheel(10f, 11f, 12f),
+                13f,
+                14f,
+            ),
+            BandValues.of(List(8) { it + 4f }),
+        ),
         geometry = Geometry(
             CropRect(0f, 0f, 0.5f, 0.5f),
             2f,

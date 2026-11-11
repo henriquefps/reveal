@@ -26,6 +26,9 @@ enum class ValueKind {
 
     /** Unsigned number with one decimal: `1.0`. */
     DECIMAL1,
+
+    /** A hue angle, whole degrees: `210°`. */
+    HUE,
 }
 
 /** Every scalar control the editor sliders and the operators share. */
@@ -54,6 +57,93 @@ enum class ControlId {
     NR_COLOUR,
     NR_COLOUR_DETAIL,
     NR_COLOUR_SMOOTHNESS,
+
+    // Tone curve, parametric (docs/adr/0013).
+    CURVE_SHADOWS,
+    CURVE_DARKS,
+    CURVE_LIGHTS,
+    CURVE_HIGHLIGHTS,
+    CURVE_SPLIT_SHADOWS,
+    CURVE_SPLIT_MIDTONES,
+    CURVE_SPLIT_HIGHLIGHTS,
+
+    // Colour mixer: hue, saturation, luminance per band (ColourBand order).
+    HUE_RED,
+    HUE_ORANGE,
+    HUE_YELLOW,
+    HUE_GREEN,
+    HUE_AQUA,
+    HUE_BLUE,
+    HUE_PURPLE,
+    HUE_MAGENTA,
+    SAT_RED,
+    SAT_ORANGE,
+    SAT_YELLOW,
+    SAT_GREEN,
+    SAT_AQUA,
+    SAT_BLUE,
+    SAT_PURPLE,
+    SAT_MAGENTA,
+    LUM_RED,
+    LUM_ORANGE,
+    LUM_YELLOW,
+    LUM_GREEN,
+    LUM_AQUA,
+    LUM_BLUE,
+    LUM_PURPLE,
+    LUM_MAGENTA,
+
+    // Black & white grey mixer per band.
+    GREY_RED,
+    GREY_ORANGE,
+    GREY_YELLOW,
+    GREY_GREEN,
+    GREY_AQUA,
+    GREY_BLUE,
+    GREY_PURPLE,
+    GREY_MAGENTA,
+
+    // Colour grading: hue, saturation, luminance per wheel (GradeRegion order), blending, balance.
+    GRADE_SHADOWS_HUE,
+    GRADE_SHADOWS_SAT,
+    GRADE_SHADOWS_LUM,
+    GRADE_MIDTONES_HUE,
+    GRADE_MIDTONES_SAT,
+    GRADE_MIDTONES_LUM,
+    GRADE_HIGHLIGHTS_HUE,
+    GRADE_HIGHLIGHTS_SAT,
+    GRADE_HIGHLIGHTS_LUM,
+    GRADE_GLOBAL_HUE,
+    GRADE_GLOBAL_SAT,
+    GRADE_GLOBAL_LUM,
+    GRADE_BLENDING,
+    GRADE_BALANCE,
+    ;
+
+    companion object {
+        /** The colour mixer control of [property] for [band]. */
+        fun mixer(property: MixerProperty, band: ColourBand): ControlId {
+            val prefix = when (property) {
+                MixerProperty.HUE -> "HUE"
+                MixerProperty.SATURATION -> "SAT"
+                MixerProperty.LUMINANCE -> "LUM"
+            }
+            return valueOf("${prefix}_${band.name}")
+        }
+
+        /** The grey mixer control of [band]. */
+        fun grey(band: ColourBand): ControlId = valueOf("GREY_${band.name}")
+
+        /** The colour grading control of [region]'s [property] (saturation for [MixerProperty.SATURATION]). */
+        fun grade(region: GradeRegion, property: MixerProperty): ControlId {
+            val suffix = when (property) {
+                MixerProperty.HUE -> "HUE"
+                MixerProperty.SATURATION -> "SAT"
+                MixerProperty.LUMINANCE -> "LUM"
+            }
+            return valueOf("GRADE_${region.name}_$suffix")
+        }
+    }
 }
 
 /**
@@ -112,6 +202,9 @@ object RecipeRanges {
     private const val RADIUS_MAX = 3f
     private const val RADIUS_STEP = 0.1f
     private const val HALF = 50f
+    private const val SPLIT_MIN = 5f
+    private const val SPLIT_MAX = 95f
+    private const val HUE_MAX = 360f
 
     private fun bipolar(id: ControlId, max: Float, step: Float, fine: Float, kind: ValueKind) =
         ControlRange(id, -max, max, 0f, step, fine, bipolar = true, neutral = 0f, kind = kind)
@@ -156,13 +249,44 @@ object RecipeRanges {
     val nrColourDetail = unipolar(ControlId.NR_COLOUR_DETAIL, TONE, HALF)
     val nrColourSmoothness = unipolar(ControlId.NR_COLOUR_SMOOTHNESS, TONE, HALF)
 
+    private fun split(id: ControlId, neutral: Float) = ControlRange(
+        id, SPLIT_MIN, SPLIT_MAX, neutral, 1f, 1f, bipolar = false, neutral = neutral, kind = ValueKind.PERCENT,
+    )
+
+    private fun unipolarOf(id: ControlId, max: Float, neutral: Float, kind: ValueKind) =
+        ControlRange(id, 0f, max, neutral, 1f, 1f, bipolar = false, neutral = neutral, kind = kind)
+
+    /** Ranges of the tone curve, colour mixer, grey mixer and colour grading controls (docs/adr/0013). */
+    private val colourTools: List<ControlRange> = ControlId.entries.mapNotNull { id ->
+        val name = id.name
+        when {
+            id == ControlId.CURVE_SPLIT_SHADOWS -> split(id, ParametricCurve.DEFAULT_SPLIT_SHADOWS)
+
+            id == ControlId.CURVE_SPLIT_MIDTONES -> split(id, ParametricCurve.DEFAULT_SPLIT_MIDTONES)
+
+            id == ControlId.CURVE_SPLIT_HIGHLIGHTS -> split(id, ParametricCurve.DEFAULT_SPLIT_HIGHLIGHTS)
+
+            id == ControlId.GRADE_BLENDING ->
+                unipolarOf(id, TONE, ColourGrading.DEFAULT_BLENDING, ValueKind.INT)
+
+            name.startsWith("GRADE_") && name.endsWith("_HUE") -> unipolarOf(id, HUE_MAX, 0f, ValueKind.HUE)
+
+            name.startsWith("GRADE_") && name.endsWith("_SAT") -> unipolarOf(id, TONE, 0f, ValueKind.INT)
+
+            name.startsWith("CURVE_") || name.startsWith("HUE_") || name.startsWith("SAT_") ||
+                name.startsWith("LUM_") || name.startsWith("GREY_") || name.startsWith("GRADE_") -> signedInt(id)
+
+            else -> null
+        }
+    }
+
     /** All descriptors in panel order. */
     val all: List<ControlRange> = listOf(
         profileAmount, exposure, contrast, highlights, shadows, whites, blacks,
         temperature, tint, relTemperature, relTint, vibrance, saturation, angle,
         sharpenAmount, sharpenRadius, sharpenDetail, sharpenMasking,
         nrLuminance, nrLuminanceDetail, nrLuminanceContrast, nrColour, nrColourDetail, nrColourSmoothness,
-    )
+    ) + colourTools
 
     private val byId = all.associateBy { it.id }
 
@@ -184,6 +308,7 @@ object ValueFormat {
         ValueKind.DEGREES -> degrees(value)
         ValueKind.INT -> fixed(abs(value), 0)
         ValueKind.DECIMAL1 -> fixed(abs(value), 1)
+        ValueKind.HUE -> "${value.roundToInt()}°"
     }
 
     /** Explicit sign (none for zero), U+2212 for negatives, [decimals] fixed decimals. */

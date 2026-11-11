@@ -24,11 +24,14 @@ import dev.hfps.reveal.feature.editor.EditorTags
 import dev.hfps.reveal.feature.editor.R
 import dev.hfps.reveal.pipeline.R as PipelineR
 import dev.hfps.reveal.pipeline.recipe.ControlId
+import dev.hfps.reveal.pipeline.recipe.Treatment
 import dev.hfps.reveal.pipeline.recipe.WbMode
 
 /**
- * The Colour panel: white balance (mode chips, eyedropper, temperature and tint with gradient tracks: absolute
- * kelvin/tint for RAW, the relative pair for display-referred photos), vibrance and saturation.
+ * The Colour panel: the treatment (colour or black & white), white balance (mode chips, eyedropper, temperature and
+ * tint with gradient tracks: absolute kelvin/tint for RAW, the relative pair for display-referred photos), vibrance
+ * and saturation (off in black & white), and the rows of the colour mixer (the B&W mix in black & white) and colour
+ * grading.
  */
 @Suppress("LongMethod")
 @Composable
@@ -36,7 +39,28 @@ fun ColourPanel(host: PanelHost, modifier: Modifier = Modifier) {
     val edit = host.state.edit
     val wb = edit.recipe.colour.whiteBalance
     val modes = if (edit.isRaw) WbMode.entries else listOf(WbMode.AS_SHOT, WbMode.CUSTOM)
+    val colour = edit.recipe.colour
+    val blackWhite = edit.recipe.profile.treatment == Treatment.BLACK_WHITE
     Column(modifier) {
+        FocusRow(host.focus, null) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState())
+                    .padding(horizontal = 16.dp, vertical = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Treatment.entries.forEach { treatment ->
+                    RevealChip(
+                        label = stringResource(treatmentName(treatment)),
+                        selected = edit.recipe.profile.treatment == treatment,
+                        onClick = { host.actions.onTreatment(treatment) },
+                        enabled = host.state.ready,
+                        modifier = Modifier.testTag(EditorTags.treatment(treatment)),
+                    )
+                }
+            }
+        }
         FocusRow(host.focus, null) {
             Column {
                 Row(
@@ -96,9 +120,40 @@ fun ColourPanel(host: PanelHost, modifier: Modifier = Modifier) {
             )
             ControlSlider(host, ControlId.REL_TINT, R.string.editor_tint, trackBrush = SliderGradients.Tint)
         }
-        ControlSlider(host, ControlId.VIBRANCE, R.string.editor_vibrance)
-        ControlSlider(host, ControlId.SATURATION, R.string.editor_saturation)
+        ControlSlider(host, ControlId.VIBRANCE, R.string.editor_vibrance, enabled = !blackWhite)
+        ControlSlider(host, ControlId.SATURATION, R.string.editor_saturation, enabled = !blackWhite)
+        FocusRow(host.focus, null) {
+            Column {
+                if (blackWhite) {
+                    NavigationRow(
+                        label = stringResource(R.string.editor_bw_mix),
+                        value = stringResource(editedOrOff(!colour.greyMixer.isNeutral)),
+                        onClick = { host.navigator.push(GreyMixerSubPanel) },
+                        modifier = Modifier.testTag(EditorTags.GREY_MIXER_ROW),
+                    )
+                } else {
+                    NavigationRow(
+                        label = stringResource(R.string.editor_colour_mixer),
+                        value = stringResource(editedOrOff(!colour.mixer.isNeutral)),
+                        onClick = { host.navigator.push(ColourMixerSubPanel) },
+                        modifier = Modifier.testTag(EditorTags.MIXER_ROW),
+                    )
+                }
+                NavigationRow(
+                    label = stringResource(R.string.editor_colour_grading),
+                    value = stringResource(editedOrOff(!colour.grading.isNeutral)),
+                    onClick = { host.navigator.push(GradingSubPanel) },
+                    modifier = Modifier.testTag(EditorTags.GRADING_ROW),
+                )
+            }
+        }
     }
+}
+
+/** Localised treatment name (shared with the history labels of `:core:pipeline`). */
+internal fun treatmentName(treatment: Treatment): Int = when (treatment) {
+    Treatment.COLOUR -> PipelineR.string.history_value_treatment_colour
+    Treatment.BLACK_WHITE -> PipelineR.string.history_value_treatment_black_white
 }
 
 /** Localised white-balance mode name (shared with the history labels of `:core:pipeline`). */

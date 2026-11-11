@@ -35,16 +35,41 @@ class RecipeCodecTest {
         assertThat(recipe.isDefault()).isFalse()
     }
 
+    private companion object {
+        const val BANDS = """{"red":0.0,"orange":0.0,"yellow":0.0,"green":0.0,""" +
+            """"aqua":0.0,"blue":0.0,"purple":0.0,"magenta":0.0}"""
+        const val WHEEL = """{"hue":0.0,"saturation":0.0,"luminance":0.0}"""
+    }
+
+    @Test
+    fun `colour tools round trip`() {
+        val recipe = Recipe(
+            profile = Profile(treatment = Treatment.BLACK_WHITE),
+            light = Light(curve = Curves(parametric = ParametricCurve(lights = 20f), red = Curves.MEDIUM_CONTRAST)),
+            colour = Colour(
+                mixer = ColourMixer(hue = BandValues(aqua = -30f)),
+                grading = ColourGrading(midtones = GradeWheel(30f, 20f, -5f), balance = 40f),
+                greyMixer = BandValues(blue = -50f),
+            ),
+        )
+        assertThat(codec.decode(codec.encode(recipe))).isEqualTo(recipe)
+    }
+
     @Test
     fun `default recipe round trips and has explicit field names`() {
         val text = codec.encode(Recipe())
 
         assertThat(text).isEqualTo(
-            """{"v":1,"profile":{"base":"standard","amount":100.0},""" +
+            """{"v":1,"profile":{"base":"standard","amount":100.0,"treatment":"colour"},""" +
                 """"light":{"exposure":0.0,"contrast":0.0,"highlights":0.0,"shadows":0.0,""" +
-                """"whites":0.0,"blacks":0.0},""" +
+                """"whites":0.0,"blacks":0.0,"curve":{"parametric":{"highlights":0.0,"lights":0.0,"darks":0.0,""" +
+                """"shadows":0.0,"splitShadows":25.0,"splitMidtones":50.0,"splitHighlights":75.0},""" +
+                """"rgb":[],"red":[],"green":[],"blue":[]}},""" +
                 """"colour":{"whiteBalance":{"temperature":null,"tint":null,"mode":"as_shot",""" +
-                """"relTemperature":0.0,"relTint":0.0},"vibrance":0.0,"saturation":0.0},""" +
+                """"relTemperature":0.0,"relTint":0.0},"vibrance":0.0,"saturation":0.0,""" +
+                """"mixer":{"hue":$BANDS,"saturation":$BANDS,"luminance":$BANDS},""" +
+                """"grading":{"shadows":$WHEEL,"midtones":$WHEEL,"highlights":$WHEEL,"global":$WHEEL,""" +
+                """"blending":50.0,"balance":0.0},"greyMixer":$BANDS},""" +
                 """"effects":{},"detail":{"sharpenAmount":0.0,"sharpenRadius":1.0,"sharpenDetail":25.0,""" +
                 """"sharpenMasking":0.0,"nrLuminance":0.0,"nrLuminanceDetail":50.0,"nrLuminanceContrast":0.0,""" +
                 """"nrColour":0.0,"nrColourDetail":50.0,"nrColourSmoothness":50.0},"optics":{},""" +

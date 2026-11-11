@@ -68,6 +68,7 @@ import dev.hfps.reveal.feature.editor.EditorTags
 import dev.hfps.reveal.feature.editor.EditorUiState
 import dev.hfps.reveal.feature.editor.R
 import dev.hfps.reveal.feature.editor.open.OpenError
+import dev.hfps.reveal.pipeline.HistoryLabels
 import dev.hfps.reveal.pipeline.geometry.GeometryMapping
 import dev.hfps.reveal.pipeline.gl.CompareMode
 import kotlin.math.roundToInt
@@ -107,6 +108,9 @@ fun PhotoSlot(
             state.view.eyedropper && phase is EditorPhase.Ready ->
                 Modifier.eyedropperGestures(controller, phase, state, actions)
 
+            state.view.targeted != null && phase is EditorPhase.Ready ->
+                Modifier.targetedGestures(controller, phase, state, actions)
+
             else -> Modifier.canvasGestures(zoom, scope, onTap = onToggleChrome, onHold = actions.onShowOriginal)
         }
         val photoDescription = stringResource(R.string.editor_photo_actions)
@@ -139,7 +143,8 @@ fun PhotoSlot(
             if (!state.view.cropping) CompareOverlay(state.view.compare, actions.onCompare)
             modeOverlay?.invoke(this)
             AnimatedVisibility(
-                visible = chromeVisible && state.view.histogram && !state.view.eyedropper && !state.view.cropping,
+                visible = chromeVisible && state.view.histogram && !state.view.eyedropper && !state.view.cropping &&
+                    state.view.targeted == null,
                 enter = fadeIn(RevealMotion.standard()),
                 exit = fadeOut(RevealMotion.fast()),
                 modifier = Modifier
@@ -149,6 +154,7 @@ fun PhotoSlot(
                 HistogramView(state.histogram, state.view.clipping, actions.onClipping)
             }
             if (state.view.eyedropper) EyedropperHint(actions, Modifier.align(Alignment.TopCenter))
+            if (state.view.targeted != null) TargetedHint(state, actions, Modifier.align(Alignment.TopCenter))
             EyedropperLoupe(controller)
         }
     }
@@ -264,6 +270,83 @@ private fun Modifier.eyedropperGestures(
             loupe.finger = null
             controller.showLoupe(null, Offset.Zero, sizePx)
             controller.imagePoint(last, mapping)?.let { currentActions.onPickNeutral(it.x, it.y) }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------------------------- targeted adjustment
+
+/**
+ * The colour mixer's targeted adjustment (docs/adr/0013): a drag on the photo reads the colour where it starts and
+ * changes the bands under it, up = more. Vertical movement only, so a slightly diagonal thumb does the same thing.
+ */
+@Composable
+private fun Modifier.targetedGestures(
+    controller: PhotoController,
+    ready: EditorPhase.Ready,
+    state: EditorUiState,
+    actions: EditorActions,
+): Modifier {
+    val mapping = GeometryMapping.of(state.edit.recipe.geometry, ready.width, ready.height)
+    val currentActions by rememberUpdatedState(actions)
+    return pointerInput(controller, ready, mapping) {
+        awaitEachGesture {
+            val down = awaitFirstDown()
+            down.consume()
+            val image = controller.imagePoint(down.position, mapping) ?: return@awaitEachGesture
+            currentActions.onTargetedStart(image.x, image.y)
+            var change = awaitPointerEvent().changes.firstOrNull { it.id == down.id }
+            while (change != null && change.pressed) {
+                change.consume()
+                currentActions.onTargetedDrag((down.position.y - change.position.y) / density)
+                change = awaitPointerEvent().changes.firstOrNull { it.id == down.id }
+            }
+            change?.consume()
+            currentActions.onTargetedEnd()
+        }
+    }
+}
+
+@Composable
+private fun TargetedHint(state: EditorUiState, actions: EditorActions, modifier: Modifier = Modifier) {
+    val colors = RevealTheme.colors
+    val band = state.edit.targetedBand
+    val text = if (band != null) {
+        stringResource(R.string.editor_targeted_adjusting, stringResource(HistoryLabels.bandName(band)))
+    } else {
+        stringResource(R.string.editor_targeted_hint)
+    }
+    Surface(
+        modifier = modifier
+            .padding(8.dp)
+            .testTag(EditorTags.TARGETED_HINT),
+        shape = RevealTheme.shapes.chip,
+        color = colors.card,
+        border = BorderStroke(1.dp, colors.hairline),
+    ) {
+        Row(
+            modifier = Modifier.padding(start = 16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                PhosphorRegular.CrosshairSimple,
+                contentDescription = null,
+                tint = colors.primary,
+                modifier = Modifier.size(18.dp),
+            )
+            Text(
+                text = text,
+                style = RevealTheme.typography.ui,
+                color = colors.foreground,
+                modifier = Modifier
+                    .padding(start = 8.dp)
+                    .widthIn(max = 240.dp),
+            )
+            RevealIconButton(
+                icon = PhosphorRegular.X,
+                contentDescription = stringResource(R.string.editor_targeted_off),
+                onClick = { actions.onTargeted(null) },
+            )
         }
     }
 }

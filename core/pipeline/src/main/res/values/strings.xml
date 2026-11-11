@@ -86,4 +86,41 @@
     <string name="recipe_group_geometry">Geometry (crop, rotate)</string>
     <string name="recipe_group_masks">Masks</string>
     <string name="recipe_group_heals">Healing</string>
+
+    <!-- Tone curve, colour mixer, grading, black & white (docs/adr/0013) -->
+    <string name="history_curve_shadows">Curve shadows %1$s</string>
+    <string name="history_curve_darks">Curve darks %1$s</string>
+    <string name="history_curve_lights">Curve lights %1$s</string>
+    <string name="history_curve_highlights">Curve highlights %1$s</string>
+    <string name="history_curve_split_shadows">Curve shadows split %1$s</string>
+    <string name="history_curve_split_midtones">Curve midtones split %1$s</string>
+    <string name="history_curve_split_highlights">Curve highlights split %1$s</string>
+    <string name="history_point_curve">Point curve (%1$s)</string>
+    <string name="history_treatment">Treatment: %1$s</string>
+    <string name="history_value_treatment_colour">Colour</string>
+    <string name="history_value_treatment_black_white">Black &amp; white</string>
+    <string name="history_band_hue">%1$s: hue %2$s</string>
+    <string name="history_band_saturation">%1$s: saturation %2$s</string>
+    <string name="history_band_luminance">%1$s: luminance %2$s</string>
+    <string name="history_grey_mix">B&amp;W mix: %1$s %2$s</string>
+    <string name="history_grade_blending">Grading blending %1$s</string>
+    <string name="history_grade_balance">Grading balance %1$s</string>
+    <string name="colour_band_red">Red</string>
+    <string name="colour_band_orange">Orange</string>
+    <string name="colour_band_yellow">Yellow</string>
+    <string name="colour_band_green">Green</string>
+    <string name="colour_band_aqua">Aqua</string>
+    <string name="colour_band_blue">Blue</string>
+    <string name="colour_band_purple">Purple</string>
+    <string name="colour_band_magenta">Magenta</string>
+    <string name="grade_region_shadows">Shadows</string>
+    <string name="grade_region_midtones">Midtones</string>
+    <string name="grade_region_highlights">Highlights</string>
+    <string name="grade_region_global">Global</string>
+    <string name="curve_channel_rgb">RGB</string>
+    <string name="curve_channel_red">Red</string>
+    <string name="curve_channel_green">Green</string>
+    <string name="curve_channel_blue">Blue</string>
+    <string name="history_action_auto_mix">Auto B&amp;W mix</string>
+    <string name="history_action_curve_preset">Curve preset</string>
 </resources>

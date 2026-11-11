@@ -6,6 +6,18 @@ All notable changes to Reveal are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- Tone curve (Light → Tone curve): point curve for RGB and for red, green and blue separately (tap to add a point,
+  drag to move, drag off to remove, double-tap to reset; Linear, Medium and Strong contrast presets) and a parametric
+  curve (highlights, lights, darks, shadows with movable splits), with the photo's histogram behind the curve.
+- Colour mixer (Colour → Colour mixer): hue, saturation and luminance for red, orange, yellow, green, aqua, blue,
+  purple and magenta, with smooth transitions between colours, and a targeted adjustment: drag up or down on the
+  photo to change the colour under your finger.
+- Colour grading (Colour → Colour grading): shadows, midtones, highlights and global colour wheels with luminance,
+  blending and balance; 3-way view or one large wheel.
+- Black & white: a Colour / Black & white switch in the Colour panel, with a grey mix per source colour, Auto mix
+  and the targeted adjustment; colour grading tones black & white photos.
+
 ## [0.2.1] - 2026-11-11
 
 ### Added

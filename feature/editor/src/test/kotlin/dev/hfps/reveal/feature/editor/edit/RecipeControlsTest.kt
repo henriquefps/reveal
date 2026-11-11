@@ -2,6 +2,7 @@ package dev.hfps.reveal.feature.editor.edit
 
 import com.google.common.truth.Truth.assertThat
 import dev.hfps.reveal.pipeline.recipe.BaseLook
+import dev.hfps.reveal.pipeline.recipe.ColourToolControls
 import dev.hfps.reveal.pipeline.recipe.ControlId
 import dev.hfps.reveal.pipeline.recipe.Recipe
 import dev.hfps.reveal.pipeline.recipe.RecipeRanges
@@ -14,7 +15,8 @@ class RecipeControlsTest {
 
     @Test
     fun everyControlRoundTripsThroughTheRecipe() {
-        for (range in RecipeRanges.all) {
+        // The curve splits also stay between their neighbours (ColourToolControls), tested in :core:pipeline.
+        for (range in RecipeRanges.all.filter { it.id !in ColourToolControls.splits }) {
             val inside = range.min + (range.max - range.min) * 0.3f
             val r = RecipeControls.set(Recipe.DEFAULT, range.id, inside)
             assertThat(RecipeControls.get(r, range.id, asShot)).isWithin(1e-4f).of(inside)

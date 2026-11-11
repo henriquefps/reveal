@@ -10,11 +10,16 @@ import dev.hfps.reveal.pipeline.gl.CompareMode
 import dev.hfps.reveal.pipeline.gl.GpuDevelopRenderer
 import dev.hfps.reveal.pipeline.gl.Histogram
 import dev.hfps.reveal.pipeline.recipe.BaseLook
+import dev.hfps.reveal.pipeline.recipe.ColourBand
 import dev.hfps.reveal.pipeline.recipe.ControlId
+import dev.hfps.reveal.pipeline.recipe.CurveChannel
+import dev.hfps.reveal.pipeline.recipe.CurvePoint
 import dev.hfps.reveal.pipeline.recipe.EditHistory
 import dev.hfps.reveal.pipeline.recipe.Geometry
+import dev.hfps.reveal.pipeline.recipe.MixerProperty
 import dev.hfps.reveal.pipeline.recipe.Recipe
 import dev.hfps.reveal.pipeline.recipe.RecipeGroup
+import dev.hfps.reveal.pipeline.recipe.Treatment
 import dev.hfps.reveal.pipeline.recipe.WbMode
 import dev.hfps.reveal.pipeline.recipe.WhiteBalance
 
@@ -61,6 +66,8 @@ data class EditState(
     val hasPrevious: Boolean = false,
     /** The paste chooser is open with these groups ticked; null = closed. */
     val pasteChooser: Set<RecipeGroup>? = null,
+    /** The band the targeted adjustment leads with while a drag on the photo runs (the panel shows it). */
+    val targetedBand: ColourBand? = null,
 ) {
     /** The recipe of the current history step. */
     val committed: Recipe get() = history.current
@@ -85,7 +92,30 @@ data class ViewOptions(
      * `GeometryMapping.editing`) under the crop frame; elsewhere the editor shows the cropped result.
      */
     val cropping: Boolean = false,
+    /**
+     * The targeted adjustment of the colour mixer or grey mixer (docs/adr/0013) is on: a vertical drag on the photo
+     * changes [TargetedTarget] of the bands under the finger. `null` = off.
+     */
+    val targeted: TargetedTarget? = null,
 )
+
+/** What the targeted adjustment changes: one property of the colour mixer, or the B&W grey mixer. */
+enum class TargetedTarget {
+    HUE,
+    SATURATION,
+    LUMINANCE,
+    GREY,
+    ;
+
+    /** The mixer property, `null` for [GREY]. */
+    val property: MixerProperty?
+        get() = when (this) {
+            HUE -> MixerProperty.HUE
+            SATURATION -> MixerProperty.SATURATION
+            LUMINANCE -> MixerProperty.LUMINANCE
+            GREY -> null
+        }
+}
 
 @Immutable
 data class EditorUiState(
@@ -159,4 +189,24 @@ class EditorActions(
     val onAuto: (AutoScope) -> Unit = {},
     /** Detail panel: shows (`true`) or hides the sharpening mask on the photo (while Masking is dragged). */
     val onDetailMask: (Boolean) -> Unit = {},
+    /** Per drag frame, several controls at once (a grading wheel's hue and saturation); not committed. */
+    val onControls: (Map<ControlId, Float>) -> Unit = {},
+    /** Per drag frame: the points of one point curve change (empty = straight line); not committed. */
+    val onCurve: (CurveChannel, List<CurvePoint>) -> Unit = { _, _ -> },
+    /** A point-curve preset applied to the RGB curve, one committed step. */
+    val onCurvePreset: (List<CurvePoint>) -> Unit = {},
+    /** Colour or black & white (the profile's treatment), one committed step. */
+    val onTreatment: (Treatment) -> Unit = {},
+    /** Black & white Auto mix: the grey mixer computed from the photo, one committed step. */
+    val onAutoMix: () -> Unit = {},
+    /** Turns the targeted adjustment on for a target, or off (`null`). */
+    val onTargeted: (TargetedTarget?) -> Unit = {},
+    /** A targeted drag starts on the proxy image point ([imageX], [imageY]). */
+    val onTargetedStart: (imageX: Float, imageY: Float) -> Unit = { _, _ -> },
+    /** The targeted drag has moved [dpUp] dp upwards from where it started (negative = down); not committed. */
+    val onTargetedDrag: (dpUp: Float) -> Unit = {},
+    /** The targeted drag ended: one committed step. */
+    val onTargetedEnd: () -> Unit = {},
+    /** A one-step edit (a sub-panel's own reset): [change] applied to the working recipe and committed. */
+    val onEditAndCommit: ((Recipe) -> Recipe) -> Unit = {},
 )

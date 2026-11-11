@@ -83,7 +83,8 @@ import dev.hfps.reveal.pipeline.geometry.GeometryMapping
 import dev.hfps.reveal.pipeline.gl.CompareMode
 import kotlinx.coroutines.launch
 
-/** The editor of the photo in its [EditorRoute]: always dark (the darkroom). */
+/** The editor of the photo in its [EditorRoute]: always dark (the darkroom). The actions wire one per editor verb. */
+@Suppress("LongMethod")
 @Composable
 fun EditorScreen(onBack: () -> Unit, modifier: Modifier = Modifier, viewModel: EditorViewModel = hiltViewModel()) {
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -128,6 +129,16 @@ fun EditorScreen(onBack: () -> Unit, modifier: Modifier = Modifier, viewModel: E
             onCropCancel = viewModel::cropCancel,
             onExport = { exportRequest = viewModel.exportRequest() },
             onDetailMask = viewModel::setDetailMask,
+            onControls = viewModel::setControls,
+            onCurve = viewModel::setCurve,
+            onCurvePreset = viewModel::applyCurvePreset,
+            onTreatment = viewModel::setTreatment,
+            onAutoMix = viewModel::autoMix,
+            onTargeted = viewModel::setTargeted,
+            onTargetedStart = viewModel::targetedStart,
+            onTargetedDrag = viewModel::targetedDrag,
+            onTargetedEnd = viewModel::targetedEnd,
+            onEditAndCommit = viewModel::editAndCommitStep,
         )
     }
     EditorTheme {
@@ -305,6 +316,11 @@ private fun PortraitLayout(
                 PanelSnap.COLLAPSED at expandedPx
             },
         )
+    }
+    // Sub-panels that need the room (curves, mixers, wheels) open the tall panel.
+    val sub = host.navigator.top
+    LaunchedEffect(sub?.key) {
+        if (sub?.expand == true && sheet.currentValue != PanelSnap.EXPANDED) sheet.animateTo(PanelSnap.EXPANDED)
     }
     val fling = AnchoredDraggableDefaults.flingBehavior(sheet, positionalThreshold = { it * POSITIONAL_THRESHOLD })
     val drag = Modifier.anchoredDraggable(sheet, Orientation.Vertical, flingBehavior = fling)

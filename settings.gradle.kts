@@ -32,6 +32,7 @@ rootProject.name = "reveal"
 enableFeaturePreview("TYPESAFE_PROJECT_ACCESSORS")
 
 include(":app")
+include(":core:designsystem")
 include(":core:image")
 include(":core:pipeline")
 include(":core:ml")

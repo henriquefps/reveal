@@ -1,4 +1,4 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Brand drawables used by later work (splash theme, About screen, empty states): keep lint's UnusedResources quiet. -->
+<!-- Brand drawable used by later work (About screen, empty states): keeps lint's UnusedResources quiet. -->
 <resources xmlns:tools="http://schemas.android.com/tools"
-    tools:keep="@drawable/ic_reveal_logo,@drawable/ic_splash" />
+    tools:keep="@drawable/ic_reveal_logo" />

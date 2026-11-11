@@ -1,4 +1,83 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Reveal</string>
+
+    <!-- Design-system gallery (debug start destination until the library replaces it) -->
+    <string name="gallery_title">Design system</string>
+    <string name="gallery_back">Back</string>
+    <string name="gallery_more">More</string>
+    <string name="gallery_page_foundations">Foundations</string>
+    <string name="gallery_page_icons">Icons</string>
+    <string name="gallery_page_controls">Controls</string>
+    <string name="gallery_page_editor">Editor</string>
+    <string name="gallery_section_theme">Theme</string>
+    <string name="gallery_section_colour">Colour</string>
+    <string name="gallery_section_type">Type scale</string>
+    <string name="gallery_section_icons_regular">Phosphor regular</string>
+    <string name="gallery_section_icons_fill">Phosphor fill</string>
+    <string name="gallery_section_buttons">Buttons</string>
+    <string name="gallery_section_icon_buttons">Icon buttons</string>
+    <string name="gallery_section_chips">Chips</string>
+    <string name="gallery_section_list">List</string>
+    <string name="gallery_section_sheet">Bottom sheet</string>
+    <string name="theme_system">System</string>
+    <string name="theme_light">Light</string>
+    <string name="theme_dark">Dark</string>
+
+    <string name="swatch_background">Background</string>
+    <string name="swatch_card">Card</string>
+    <string name="swatch_primary">Primary</string>
+    <string name="swatch_muted">Muted</string>
+    <string name="swatch_muted_foreground">Muted text</string>
+    <string name="swatch_destructive">Destructive</string>
+    <string name="swatch_warning">Warning</string>
+    <string name="swatch_border">Border</string>
+    <string name="swatch_ring">Ring</string>
+
+    <string name="type_eyebrow">Eyebrow 12</string>
+    <string name="type_ui">UI 14: buttons, labels, menus</string>
+    <string name="type_body">Body 15: detail values and row titles</string>
+    <string name="type_body_large">Body 16: longer reading text</string>
+    <string name="type_title">Title 18 semibold</string>
+    <string name="type_number">20 tabular: 1,284 photos</string>
+    <string name="type_number_large">24 tabular: +0.70 EV</string>
+    <string name="type_mono">Mono 13: DSC01234.ARW</string>
+    <string name="type_mono_small">Mono 12: 5600 K · f/2.8 · 1/250</string>
+
+    <string name="button_primary">Export</string>
+    <string name="button_secondary">Save preset</string>
+    <string name="button_ghost">Cancel</string>
+    <string name="button_disabled">Disabled</string>
+    <string name="action_undo">Undo</string>
+    <string name="action_redo">Redo</string>
+    <string name="action_before_after">Before and after</string>
+    <string name="action_adjustments">Adjustments</string>
+    <string name="chip_original">Original</string>
+    <string name="chip_square">1:1</string>
+    <string name="chip_portrait">4:5</string>
+    <string name="chip_landscape">16:9</string>
+    <string name="row_library">Library</string>
+    <string name="row_library_summary">3 folders · 1,284 photos</string>
+    <string name="row_theme">Theme</string>
+    <string name="row_export">Export defaults</string>
+    <string name="row_export_summary">JPEG · 92 % · long edge 4096 px</string>
+    <string name="row_about">About</string>
+    <string name="sheet_open">Open the sheet</string>
+    <string name="sheet_body">A form or chooser: drag handle, 16 dp radius, the card surface.</string>
+    <string name="sheet_close">Done</string>
+
+    <string name="editor_photo_area">Photo area: neutral grey, zero chroma</string>
+    <string name="editor_panel_light">Light</string>
+    <string name="editor_exposure">Exposure</string>
+    <string name="editor_contrast">Contrast</string>
+    <string name="editor_highlights">Highlights</string>
+    <string name="editor_exposure_value">+0.70</string>
+    <string name="editor_contrast_value">−12</string>
+    <string name="editor_highlights_value">−64</string>
+    <string name="tool_light">Light</string>
+    <string name="tool_colour">Colour</string>
+    <string name="tool_effects">Effects</string>
+    <string name="tool_crop">Crop</string>
+    <string name="tool_masks">Masks</string>
+    <string name="tool_heal">Heal</string>
 </resources>

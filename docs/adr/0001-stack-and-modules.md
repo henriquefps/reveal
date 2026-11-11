@@ -14,8 +14,9 @@ Java 17 bytecode. minSdk 29, compileSdk and targetSdk 37 (Android 17, stable).
 
 ```
 :app ──> :feature:{library,editor,export,settings}
-:app ──> :core:data :core:pipeline :core:ml :core:image   (DI wiring)
+:app ──> :core:data :core:pipeline :core:ml :core:image :core:designsystem   (DI wiring, theme)
 
+:feature:*        ──> :core:designsystem   (every feature screen builds on the hfps theme; ADR 0005)
 :feature:library  ──> :core:image  :core:data
 :feature:editor   ──> :core:image  :core:pipeline  :core:ml  :core:data
 :feature:export   ──> :core:image  :core:pipeline  :core:data
@@ -24,6 +25,7 @@ Java 17 bytecode. minSdk 29, compileSdk and targetSdk 37 (Android 17, stable).
 :core:pipeline    ──> :core:image
 :core:ml          ──> :core:image
 :core:image       ──> (nothing)
+:core:designsystem ──> (nothing)   package dev.hfps.reveal.designsystem: theme, icons, shell components
 ```
 
 Features never depend on each other; they meet in `:app` navigation. `:core:image` is package

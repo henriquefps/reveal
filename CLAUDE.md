@@ -14,6 +14,12 @@ Start with `docs/plan/README.md` (the brief), then `docs/plan/` and `docs/adr/`.
 - Private photos: copies only, never committed, never in screenshots, aggregates only.
 - Workers use emulators; only the orchestrator installs on the owner's phone (`RXCX109VTTM`).
 - Code, identifiers, comments and ADRs in English.
+- Design system (`:core:designsystem`, ADR 0005): wrap screens in `RevealTheme` (the editor in `EditorTheme`), build
+  them with `RevealScaffold`/`RevealTopBar`/`Eyebrow`/`RevealButtons`/`RevealIconButton`/`RevealChip`/`RevealListRow`.
+  Colours only via `RevealTheme.colors` (no raw `Color(0x..)`, no `Color.White` in screens), text only via
+  `RevealTheme.typography` (nothing under 12sp, uppercase only through `Eyebrow`), icons only Phosphor
+  (`PhosphorRegular`/`PhosphorFill`, never `androidx.compose.material.icons`). New icon: add it to
+  `scripts/icons/icons.txt` and regenerate.
 
 ## Commands
 
@@ -30,6 +36,13 @@ skv run reveal -- ./gradlew :app:assembleRelease  # signed release (REVEAL_KEYST
 ./gradlew :app:recordRoborazziDebug               # re-record screenshot goldens (app/src/test/screenshots)
 ./gradlew :app:verifyRoborazziDebug               # compare against goldens
 ANDROID_SERIAL=emulator-<port> ./gradlew :app:connectedDebugAndroidTest :core:pipeline:connectedDebugAndroidTest
+```
+
+Generated design-system files (regenerate, never hand-edit; both scripts have `--check`):
+
+```sh
+python3 scripts/theme/convert_theme.py ~/.agents/skills/hfps-app-ui/assets/theme.css   # RevealTokens.kt + WCAG pairs (fails on regression)
+python3 scripts/icons/generate_icons.py                                                 # PhosphorRegular.kt / PhosphorFill.kt (fetches the pinned npm release)
 ```
 
 Emulator (own AVD, own port 5560-5590, headless, one per worker, delete when done; never the phone):

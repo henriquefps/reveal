@@ -32,6 +32,9 @@ enum class InputKind {
  *   non-RAW use the matrix of the file's colour space ([linearSrgb], [linearDisplayP3]).
  * @property asShotMultipliers camera white-balance multipliers (R, G, B) with G = 1, i.e. the camera's idea of
  *   neutral as `1/multiplier`; `null` for non-RAW images (already neutral, treated as multipliers 1,1,1).
+ * @property saturation value of [linearRgb] at which the sensor saturated (a decoded RAW: the lowest per-channel
+ *   saturation point, at most 1.0); the raw white balance then clips highlights to neutral instead of magenta
+ *   (`RawWhiteBalanceOp`). `null` = no known saturation (synthetic or merged data with real headroom): no clip.
  */
 class PipelineInput(
     val kind: InputKind,
@@ -40,6 +43,7 @@ class PipelineInput(
     val linearRgb: FloatArray,
     val cameraToXyz: Mat3,
     val asShotMultipliers: FloatArray?,
+    val saturation: Float? = null,
 ) {
     init {
         require(width > 0 && height > 0) { "image must not be empty" }
@@ -48,6 +52,7 @@ class PipelineInput(
         require(asShotMultipliers == null || asShotMultipliers.all { it.isFinite() && it > 0f }) {
             "as-shot multipliers must be positive"
         }
+        require(saturation == null || (saturation.isFinite() && saturation > 0f)) { "saturation must be positive" }
     }
 
     /** True for RAW input (has camera multipliers), false for already-balanced JPEG/HEIF input. */

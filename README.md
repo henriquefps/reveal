@@ -9,8 +9,14 @@ read the photo before applying your style. Offline and private: everything runs 
 Reveal is the second stage after [Hoard](https://github.com/henriquefps/hoard): Hoard finds, culls and
 copies your photos; Reveal develops the keepers.
 
-**Status:** in development, M0 (foundations). The plan is in [docs/plan/](docs/plan/README.md); decisions
-are recorded in [docs/adr/](docs/adr/).
+**Status:** 0.1.0, the M0 preview: open a RAW or JPEG from the picker or another app and see it developed
+by Reveal's GPU pipeline, with live exposure and white balance. The library, presets and the full editor come next
+(see [CHANGELOG.md](CHANGELOG.md)). The plan is in [docs/plan/](docs/plan/README.md); decisions are recorded in
+[docs/adr/](docs/adr/).
+
+<img src="docs/screenshots/editor/raw-fit.png" alt="The Reveal editor showing a developed Sony ARW (public CC0 sample from raw.pixls.us) with the exposure, temperature and tint controls" width="300">
+
+*Sony ZV-E10 sample `DSC00002.ARW` from [raw.pixls.us](https://raw.pixls.us/) (CC0), developed on an emulator.*
 
 ## Build
 

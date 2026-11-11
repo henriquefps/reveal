@@ -85,7 +85,38 @@ adb -s emulator-<port> logcat -d -s REVEAL_PARITY REVEAL_BENCH     # measured er
 ```
 
 Debug canvas: `adb -s emulator-<port> shell am start -n dev.hfps.reveal.debug/dev.hfps.reveal.debug.PipelineDebugActivity`
-(debug build only: `app/src/debug`, hosting `EditorDebugScreen`, to be replaced by the editor in M1).
+(debug build only: `app/src/debug`, hosting `EditorDebugScreen` on a synthetic image).
+
+## Editor open flow (`:feature:editor`, M0)
+
+`EditorRoute(uri)` → `EditorViewModel`: `PhotoOpener` (preview via `FirstImageLoader`, proxy via `ProxyBuilder`,
+`PipelineInputMapper` in `:core:pipeline/input`) → `GpuDevelopRenderer.upload` (the CPU copy is dropped) →
+`EditorScreen` (canvas, preview overlay that fades out on the first GPU frame, debug develop panel, `OpenError` states).
+`MainActivity` routes `ACTION_VIEW`/`EDIT`/`SEND` (`OpenIntents`) to the editor; back returns to the calling app.
+`EditorMetrics` holds the timings/memory of the last open (`adb logcat -s RevealEditor`) and, for tests only, the
+renderer. Highlights clip at the input's `saturation` (ADR 0002 slot 1, `PIPELINE_VERSION` 2).
+
+Editor tests and measurements (install both APKs yourself: `connectedDebugAndroidTest` uninstalls the app and its
+`files/samples`):
+
+```sh
+./gradlew :app:assembleDebug :app:assembleDebugAndroidTest
+adb -s emulator-<port> install -r -t app/build/outputs/apk/debug/app-debug.apk
+adb -s emulator-<port> install -r -t app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
+adb -s emulator-<port> push core/image/build/samples/sony-zv-e10.arw /data/local/tmp/
+adb -s emulator-<port> shell "chmod a+r /data/local/tmp/sony-zv-e10.arw && run-as dev.hfps.reveal.debug sh -c 'mkdir -p files/samples && cp /data/local/tmp/sony-zv-e10.arw files/samples/' && rm /data/local/tmp/sony-zv-e10.arw"
+adb -s emulator-<port> shell am instrument -w -e notClass dev.hfps.reveal.editor.EditorMeasurementsTest dev.hfps.reveal.debug.test/androidx.test.runner.AndroidJUnitRunner
+adb -s emulator-<port> shell am instrument -w -e class dev.hfps.reveal.editor.EditorMeasurementsTest dev.hfps.reveal.debug.test/androidx.test.runner.AndroidJUnitRunner
+adb -s emulator-<port> logcat -d -s REVEAL_MEASURE REVEAL_EDITOR_TEST RevealEditor
+```
+
+The tests put photos into MediaStore Downloads (real content URIs) and remove them. Owner's photos (opt-in, copies,
+aggregates only): copy them into `files/private` the same way, run the measurement with `-e private true` (logs
+`file#N`), then `run-as dev.hfps.reveal.debug rm -rf files/private` and delete the copies on the Mac.
+
+Release check without the keystore: `./gradlew :app:assembleRelease`, then sign a local copy with the debug key only to
+install it on an emulator (`zipalign -p 4` + `apksigner sign --ks ~/.android/debug.keystore --ks-pass pass:android`);
+open a RAW through it to prove R8 kept the JNI (`core/image/consumer-rules.pro`) and the serializable routes.
 
 ## `:core:image` harness (ADR 0004)
 

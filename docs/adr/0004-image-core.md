@@ -107,15 +107,25 @@ area-average downscale in linear light (a native implementation, ~8x faster than
 against the Kotlin reference within 1 code); other formats -> platform subsampling + the same resample. It returns
 `ProxyStats` (source, sizes, decode/resample/total ms).
 
-### Mapping onto `PipelineInput` (ADR 0002; done in the integration step)
+### Mapping onto `PipelineInput` (ADR 0002; `PipelineInputMapper` in `:core:pipeline`, M0/W6)
+
+`dev.hfps.reveal.pipeline.input.PipelineInputMapper` (plain Kotlin, `PipelineInputMapperTest`). It lives in
+`:core:pipeline` because that module already depends on `:core:image` (ADR 0001) and the pipeline owns the meaning of
+its input; `:feature:editor` only calls it.
 
 | `PipelineInput` | from |
 | --- | --- |
-| `kind` | RAW: `SCENE_REFERRED`; JPEG/HEIF/PNG/WebP: `DISPLAY_REFERRED` |
-| `linearRgb` | `sample / 65535f` (RAW: black subtracted, white level = 1.0, no WB/matrix/gamma; standard: linear in the file's space) |
-| `cameraToXyz` | `RawColorInfo.cameraToXyz` (null -> unsupported camera) / `StandardColorInfo.toXyz` (`ColorInfo.toXyz` for both) |
-| `asShotMultipliers` | `asShotWhiteBalance` (R, G, B) for RAW, else null; fall back to `daylightWhiteBalance` when the file has none |
-| not in `PipelineInput` yet | `baselineExposureEv` (DNG, apply as exposure), `levels.saturationLinear16` (highlight reconstruction), `orientation`, `activeArea`/`defaultCrop`, `lensCorrection` |
+| `kind` | RAW (`RawColorInfo`): `SCENE_REFERRED`; JPEG/HEIF/PNG/WebP: `DISPLAY_REFERRED` |
+| `width`, `height`, `linearRgb` | `sample / 65535f` (RAW: black subtracted, white level = 1.0, no WB/matrix/gamma; standard: linear in the file's space), **rotated upright** by the EXIF orientation in the same pass (RAW: `RawColorInfo.orientation`; standard: the container's, from `ImageInput.inspection`, since the platform decoder does not report it) |
+| `cameraToXyz` | `RawColorInfo.cameraToXyz` as is (the un-normalised inverse of `cam_xyz`; a RAW without one throws `UnsupportedCameraException`, shown as "camera not supported") / `StandardColorInfo.toXyz` |
+| `asShotMultipliers` | `asShotWhiteBalance`, else `daylightWhiteBalance`, else (1, 1, 1), normalised to G = 1; null for standard images |
+| `saturation` | lowest of `levels.saturationLinear16` (R, G, B) / 65535 (at most 1.0): the raw white balance clips there (ADR 0002 slot 1); null for standard images |
+| not in `PipelineInput` yet | `baselineExposureEv` (DNG, apply as exposure), `activeArea`/`defaultCrop`, `lensCorrection` |
+
+Proxies for the editor: `ProxyBuilder.decodeProxy` with a long edge of the screen's long edge clamped to 2400-3000 px
+(a 24 MP ARW: half-size decode 3012x2012, area-averaged to 2400x1600 on a 1080x2400 screen). `ProxyBuilder` reports
+its steps (`ProxyStep`: open, unpack, decode, resample) for the progress indicator and honours its `CancelToken`
+between them; `RawDecoder.decodeNative` reports `RawPhase` from LibRaw's progress callback.
 
 ## Measurements
 
@@ -156,6 +166,29 @@ Other formats on the emulator: sRGB JPEG 256x192 decodes in a few ms, HEIC in ~1
 matches the sRGB curve within JPEG error, and the Display P3 JPEG reports the P3 primaries.
 
 Public samples decoded (all pass the harness): Sony ZV-E10 ARW, Google Pixel 4a DNG, Nikon D5600 NEF, Canon EOS R6 CR3.
+
+## Measurements of the real open flow (M0/W6)
+
+The editor's open flow on the same emulator (`reveal-integration`, API 36.1 arm64, host GPU, 1080x2400 screen, heap
+growth limit 192 MB): a content URI from MediaStore handed over with `ACTION_VIEW`, preview first, then the proxy, then
+the GPU. `EditorMeasurementsTest`, warm runs; times from the moment the editor's ViewModel starts.
+
+| Step | Public ZV-E10 sample (3 runs) | Owner ZV-E10 (3 files x 3 runs) |
+| --- | --- | --- |
+| First image on screen (embedded preview 1616x1080) | 12-34 ms | 19-60 ms |
+| Proxy decoded and mapped (half-size decode, resample to 2400x1600, upright floats) | 192-286 ms | 347-650 ms |
+| GPU renderer ready (created in parallel with the decode) | 9-21 ms | 8-41 ms |
+| Proxy uploaded (RGBA16F) | 208-312 ms | 362-664 ms |
+| **First developed GPU frame** (time to editable proxy) | **231-359 ms** | **381-696 ms** |
+| Peak Java heap (sampled every 10 ms) | 88 MB | 94-107 MB |
+| Peak native heap | 146-147 MB | 145-146 MB |
+
+Memory: the CPU copies are short-lived. The half-size LibRaw buffer (native) is released after the resample, the
+16-bit proxy (23 MB) after the mapping, the float proxy (46 MB) right after the upload (the renderer keeps only a
+1x1 stand-in with the colour metadata; uploads go through a 128-row staging band). Peak is during the mapping, when the
+16-bit and the float proxies coexist. A 24 MP ARW therefore opens well inside the emulator's 192 MB heap limit, and a
+6 GB phone (256-512 MB heap) has ample margin. Full-size decodes (M2 tiles, export) stay in native memory
+(`NativeLinearImage`).
 
 ## Testing
 

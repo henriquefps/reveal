@@ -10,15 +10,31 @@ import kotlin.math.sqrt
 // is mirrored line for line by a GLSL ES 3.20 function in `gl/Shaders.kt`; the parity test holds them together.
 // Formulas are documented here once; the shader comments only point back to them.
 
-/** Stage 1: raw white balance. `out = in * mul` per channel (G = 1), applied to un-balanced camera RGB. */
+/**
+ * Stage 1: raw white balance with highlight clipping. `out = min(in * mul, clip)` per channel (G = 1), applied to
+ * un-balanced camera RGB.
+ *
+ * Clipping (dcraw's `-H 0`, the placeholder of highlight reconstruction, ADR 0002 slot 5): a RAW channel saturates at
+ * the white level 1.0, which becomes `mul[c]` once balanced. Where one channel has clipped the others no longer carry
+ * the colour, and keeping them shows clipped highlights as magenta (green clips first and red/blue are multiplied
+ * above it). Clamping every balanced channel to the smallest saturation point `clip = saturation * min(mul)` maps a
+ * fully clipped pixel to neutral white. Only for input that knows its saturation (`PipelineInput.saturation`, set
+ * for decoded RAWs); otherwise `clip` is [NO_CLIP].
+ */
 object RawWhiteBalanceOp {
-    /** Multiplies every pixel by [mul] (R, G, B). */
-    fun apply(rgb: FloatArray, mul: FloatArray) {
+    /** No clipping (display-referred input, already neutral and in range). */
+    const val NO_CLIP: Float = 1e30f
+
+    /** The clip level of input saturating at [saturation] once balanced by [mul]: the lowest balanced saturation. */
+    fun clipLevel(mul: FloatArray, saturation: Float = 1f): Float = saturation * min(mul[0], min(mul[1], mul[2]))
+
+    /** Multiplies every pixel by [mul] (R, G, B) and clamps each channel at [clip]. */
+    fun apply(rgb: FloatArray, mul: FloatArray, clip: Float = NO_CLIP) {
         var i = 0
         while (i < rgb.size) {
-            rgb[i] *= mul[0]
-            rgb[i + 1] *= mul[1]
-            rgb[i + 2] *= mul[2]
+            rgb[i] = min(rgb[i] * mul[0], clip)
+            rgb[i + 1] = min(rgb[i + 1] * mul[1], clip)
+            rgb[i + 2] = min(rgb[i + 2] * mul[2], clip)
             i += CHANNELS
         }
     }

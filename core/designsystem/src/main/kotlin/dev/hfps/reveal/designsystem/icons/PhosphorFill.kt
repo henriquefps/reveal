@@ -267,4 +267,28 @@ object PhosphorFill {
             )
         }.build()
     }
+    val ArrowCounterClockwise: ImageVector by lazy {
+        ImageVector.Builder("FillArrowCounterClockwise", 24.dp, 24.dp, 256f, 256f).apply {
+            addPath(
+                PathParser().parsePathString("M224,128a96,96,0,0,1-94.71,96H128A95.38,95.38,0,0,1,62.1,197.8a8,8,0,0,1,11-11.63A80,80,0,1,0,71.43,71.39a3.07,3.07,0,0,1-.26.25L60.63,81.29l17,17A8,8,0,0,1,72,112H24a8,8,0,0,1-8-8V56A8,8,0,0,1,29.66,50.3L49.31,70,60.25,60A96,96,0,0,1,224,128Z").toNodes(),
+                fill = SolidColor(Color.Black),
+            )
+        }.build()
+    }
+    val WarningCircle: ImageVector by lazy {
+        ImageVector.Builder("FillWarningCircle", 24.dp, 24.dp, 256f, 256f).apply {
+            addPath(
+                PathParser().parsePathString("M128,24A104,104,0,1,0,232,128,104.11,104.11,0,0,0,128,24Zm-8,56a8,8,0,0,1,16,0v56a8,8,0,0,1-16,0Zm8,104a12,12,0,1,1,12-12A12,12,0,0,1,128,184Z").toNodes(),
+                fill = SolidColor(Color.Black),
+            )
+        }.build()
+    }
+    val MagnifyingGlassPlus: ImageVector by lazy {
+        ImageVector.Builder("FillMagnifyingGlassPlus", 24.dp, 24.dp, 256f, 256f).apply {
+            addPath(
+                PathParser().parsePathString("M229.66,218.34,179.6,168.28a88.21,88.21,0,1,0-11.32,11.31l50.06,50.07a8,8,0,0,0,11.32-11.32ZM144,120H120v24a8,8,0,0,1-16,0V120H80a8,8,0,0,1,0-16h24V80a8,8,0,0,1,16,0v24h24a8,8,0,0,1,0,16Z").toNodes(),
+                fill = SolidColor(Color.Black),
+            )
+        }.build()
+    }
 }

@@ -267,4 +267,28 @@ object PhosphorRegular {
             )
         }.build()
     }
+    val ArrowCounterClockwise: ImageVector by lazy {
+        ImageVector.Builder("RegularArrowCounterClockwise", 24.dp, 24.dp, 256f, 256f).apply {
+            addPath(
+                PathParser().parsePathString("M224,128a96,96,0,0,1-94.71,96H128A95.38,95.38,0,0,1,62.1,197.8a8,8,0,0,1,11-11.63A80,80,0,1,0,71.43,71.39a3.07,3.07,0,0,1-.26.25L44.59,96H72a8,8,0,0,1,0,16H24a8,8,0,0,1-8-8V56a8,8,0,0,1,16,0V85.8L60.25,60A96,96,0,0,1,224,128Z").toNodes(),
+                fill = SolidColor(Color.Black),
+            )
+        }.build()
+    }
+    val WarningCircle: ImageVector by lazy {
+        ImageVector.Builder("RegularWarningCircle", 24.dp, 24.dp, 256f, 256f).apply {
+            addPath(
+                PathParser().parsePathString("M128,24A104,104,0,1,0,232,128,104.11,104.11,0,0,0,128,24Zm0,192a88,88,0,1,1,88-88A88.1,88.1,0,0,1,128,216Zm-8-80V80a8,8,0,0,1,16,0v56a8,8,0,0,1-16,0Zm20,36a12,12,0,1,1-12-12A12,12,0,0,1,140,172Z").toNodes(),
+                fill = SolidColor(Color.Black),
+            )
+        }.build()
+    }
+    val MagnifyingGlassPlus: ImageVector by lazy {
+        ImageVector.Builder("RegularMagnifyingGlassPlus", 24.dp, 24.dp, 256f, 256f).apply {
+            addPath(
+                PathParser().parsePathString("M152,112a8,8,0,0,1-8,8H120v24a8,8,0,0,1-16,0V120H80a8,8,0,0,1,0-16h24V80a8,8,0,0,1,16,0v24h24A8,8,0,0,1,152,112Zm77.66,117.66a8,8,0,0,1-11.32,0l-50.06-50.07a88.11,88.11,0,1,1,11.31-11.31l50.07,50.06A8,8,0,0,1,229.66,229.66ZM112,184a72,72,0,1,0-72-72A72.08,72.08,0,0,0,112,184Z").toNodes(),
+                fill = SolidColor(Color.Black),
+            )
+        }.build()
+    }
 }

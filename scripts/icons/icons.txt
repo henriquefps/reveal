@@ -32,3 +32,6 @@ eye
 eye-slash
 chart-bar
 info
+arrow-counter-clockwise
+warning-circle
+magnifying-glass-plus

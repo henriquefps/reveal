@@ -15,7 +15,7 @@ object CpuDevelop {
     fun renderLinear(input: PipelineInput, recipe: Recipe): FloatArray {
         val params = DevelopParams.from(input, recipe)
         val rgb = input.linearRgb.copyOf()
-        RawWhiteBalanceOp.apply(rgb, params.wbMultipliers)
+        RawWhiteBalanceOp.apply(rgb, params.wbMultipliers, params.highlightClip)
         CameraMatrixOp.apply(rgb, params.cameraToWorking)
         ExposureOp.apply(rgb, params.exposureGain)
         BaseToneOp.apply(rgb, params.toneKnee)

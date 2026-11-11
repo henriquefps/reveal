@@ -48,6 +48,10 @@ class GpuParityTest {
         "outOfRange" to SyntheticImages.outOfRange(),
         "scene" to SyntheticImages.scene(160, 108),
         "rawNoise" to SyntheticImages.rawNoise(97, 61, seed = 11),
+        // A RAW with a known saturation point: exercises the highlight clip of the raw white balance.
+        "rawClipped" to SyntheticImages.rawRamp(256, 4, max = 1f).let {
+            PipelineInput(it.kind, it.width, it.height, it.linearRgb, it.cameraToXyz, it.asShotMultipliers, 0.8f)
+        },
     )
 
     private fun recipes(count: Int): List<Recipe> {

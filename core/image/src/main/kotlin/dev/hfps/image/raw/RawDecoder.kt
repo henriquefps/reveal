@@ -14,6 +14,7 @@ import dev.hfps.image.source.CancelToken
 import dev.hfps.image.source.CancelledException
 import java.io.File
 import java.io.FileNotFoundException
+import java.util.Locale
 import java.util.concurrent.Semaphore
 
 /** LibRaw demosaic algorithms (`user_qual`). */
@@ -41,6 +42,21 @@ data class RawDecodeOptions(val halfSize: Boolean = false, val demosaic: Demosai
 
 /** A decoded RAW: pixels ([image]), what they mean ([info]) and where the time went ([stats]). */
 data class RawDecodeResult<T>(val image: T, val info: RawColorInfo, val stats: RawDecodeStats)
+
+/** Phases of a RAW decode, in order, as reported to a progress callback. */
+enum class RawPhase {
+    /** Open and identify (header). */
+    OPEN,
+
+    /** Read and decompress the raw data. */
+    UNPACK,
+
+    /** Black subtraction, scaling, demosaic (or half-size binning). */
+    PROCESS,
+
+    /** Hand-off of the pixels to the caller. */
+    OUTPUT,
+}
 
 /** Milliseconds per phase (open + identify, unpack, process, output), for the harness and logs. */
 data class RawDecodeStats(val totalMs: Long, val stageMs: Map<String, Long>)
@@ -89,7 +105,7 @@ object RawDecoder {
         descriptor: ParcelFileDescriptor,
         options: RawDecodeOptions = RawDecodeOptions(),
         cancel: CancelToken = CancelToken.NONE,
-    ): RawDecodeResult<LinearImage> = decodeInternal(descriptor, options, cancel) { handle, w, h ->
+    ): RawDecodeResult<LinearImage> = decodeInternal(descriptor, options, cancel, {}) { handle, w, h ->
         val data = ShortArray(w * h * LinearImage.CHANNELS)
         RawNative.nativeCopyToArray(handle, data)
         LinearImage(w, h, data)
@@ -104,7 +120,8 @@ object RawDecoder {
         descriptor: ParcelFileDescriptor,
         options: RawDecodeOptions = RawDecodeOptions(),
         cancel: CancelToken = CancelToken.NONE,
-    ): RawDecodeResult<NativeLinearImage> = decodeInternal(descriptor, options, cancel, keepSession = true) {
+        onPhase: (RawPhase) -> Unit = {},
+    ): RawDecodeResult<NativeLinearImage> = decodeInternal(descriptor, options, cancel, onPhase, keepSession = true) {
             handle,
             w,
             h,
@@ -135,11 +152,12 @@ object RawDecoder {
         descriptor: ParcelFileDescriptor,
         options: RawDecodeOptions,
         cancel: CancelToken,
+        onPhase: (RawPhase) -> Unit,
         keepSession: Boolean = false,
         copy: (handle: Long, width: Int, height: Int) -> T,
     ): RawDecodeResult<T> {
         check(loaded) { "LibRaw is not available on this device" }
-        val (result, stats) = gated(cancel) { listener ->
+        val (result, stats) = gated(cancel, onPhase) { listener ->
             val handle = RawNative.nativeDecode(descriptor.fd, options.halfSize, options.demosaic.code, listener)
             var transferred = false
             try {
@@ -158,7 +176,11 @@ object RawDecoder {
 
     private fun lensCorrectionOf(descriptor: ParcelFileDescriptor) = SonyLensData.read(descriptor)
 
-    private fun <T> gated(cancel: CancelToken, block: (RawProgressListener) -> T): Pair<T, RawDecodeStats> {
+    private fun <T> gated(
+        cancel: CancelToken,
+        onPhase: (RawPhase) -> Unit = {},
+        block: (RawProgressListener) -> T,
+    ): Pair<T, RawDecodeStats> {
         gate.acquire()
         try {
             cancel.throwIfCancelled()
@@ -166,6 +188,7 @@ object RawDecoder {
             val stages = LinkedHashMap<String, Long>()
             var phase = "open"
             var phaseStart = start
+            onPhase(RawPhase.OPEN)
             val listener = RawProgressListener { stage, _, _ ->
                 val name = phaseOf(stage)
                 if (name != phase) {
@@ -173,6 +196,7 @@ object RawDecoder {
                     stages[phase] = (stages[phase] ?: 0) + (now - phaseStart) / NANOS_PER_MILLI
                     phase = name
                     phaseStart = now
+                    onPhase(RawPhase.valueOf(name.uppercase(Locale.ROOT)))
                 }
                 !cancel.isCancelled
             }

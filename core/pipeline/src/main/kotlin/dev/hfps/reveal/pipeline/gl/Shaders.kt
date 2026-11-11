@@ -29,7 +29,7 @@ precision highp sampler2D;
 
 // One block, one sub-struct per operator (std140): each operator's parameters are uploaded from DevelopParams.
 layout(std140) uniform Develop {
-    vec4 wbMultiplier;       // RawWhiteBalanceOp: rgb = multipliers
+    vec4 wbMultiplier;       // RawWhiteBalanceOp: rgb = multipliers, w = highlight clip level
     mat4 cameraToWorking;    // CameraMatrixOp: upper-left 3x3, column-major
     vec4 exposure;           // ExposureOp: x = linear gain 2^EV
     vec4 baseTone;           // BaseToneOp: x = knee
@@ -53,7 +53,7 @@ float toneCurve(float x) {
 
 void main() {
     vec3 c = texelFetch(uSource, ivec2(gl_FragCoord.xy), 0).rgb;
-    c = c * wbMultiplier.rgb;
+    c = min(c * wbMultiplier.rgb, vec3(wbMultiplier.w));
     c = mat3(cameraToWorking) * c;
     c = c * exposure.x;
     outColor = vec4(toneCurve(c.r), toneCurve(c.g), toneCurve(c.b), 1.0);

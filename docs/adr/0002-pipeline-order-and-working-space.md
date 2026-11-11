@@ -9,7 +9,13 @@ Implemented in M0 are marked **(M0)**; the rest are the reserved slots from `doc
 
 1. **Raw white balance (M0)**: per-channel multipliers on un-balanced camera RGB. Must precede anything that
    clips or mixes channels: sensor saturation happens per channel, and highlight reconstruction needs to know
-   which channels clipped *before* mixing.
+   which channels clipped *before* mixing. **Highlight clip (M0/W6, version 2):** when the input knows where its
+   sensor saturated (`PipelineInput.saturation`, set for decoded RAWs), every balanced channel is clamped to
+   `saturation * min(mul)`, the lowest balanced saturation point (dcraw's `-H 0`). Without it a clipped highlight,
+   where green clips first and red/blue are multiplied above it, renders magenta; with it a fully clipped pixel is
+   neutral white. It costs the colour of channels brighter than that point (bright saturated reds lose some
+   saturation), which highlight reconstruction (slot 5) will recover. Synthetic inputs and future merged data with
+   real headroom leave `saturation` null and are not clipped.
 2. **Camera matrix to working space (M0)**: camera RGB to XYZ (D65), Bradford adaptation, XYZ to Rec.2020. Colour
    operators below assume a defined, wide, well-behaved space.
 3. **Lens corrections (later)**: geometry on coordinates, so it is folded into the final resampling (step 13);
@@ -116,6 +122,8 @@ whose recipe defaults are identity. `CpuDevelopTest` pins a CRC of a full CPU re
 version; a legitimate change makes that test fail and the author updates the CRC and the version together.
 Version 1 is this pipeline. Making the base look identity for display-referred input changes output for such
 inputs, but version 1 has not shipped, so it stays 1 (no cache from an earlier pipeline exists).
+**Version 2** (M0/W6): the highlight clip of slot 1 for input with a known saturation. The golden scene has none,
+so its CRC is unchanged; RAW output changes.
 
 ## Determinism
 
@@ -149,3 +157,24 @@ HDR (Rec.2020 PQ) is a later output transform in the same slot.
 re-run mean 0.84 ms, p95 1.13 ms, max 1.26 ms; upload plus first frame 0.4-0.9 s. On-screen, the debug canvas coalesced 80 updates into 61 frames during a
 slider drag. `GL_TIME_ELAPSED` is not exposed by `android.opengl` (no binding for `EXT_disjoint_timer_query`), so GPU
 time is wall time up to `glFinish`.
+
+## Measurement of the editor (M0/W6, emulator, to be re-measured on the phone)
+
+The real editor (`EditorMeasurementsTest`): a 24 MP ARW opened through `ACTION_VIEW`, 2400x1600 proxy, then a finger
+dragging the exposure slider for 4 s in real time (two `input swipe` gestures; the Compose test clock is not used, so
+the UI runs live). Emulator API 36.1 arm64, host GPU (Apple M4 Pro via the emulator's translator), 60 Hz display,
+`measureGpuTime` on (each frame ends with `glFinish` after the swap).
+
+| | Public ZV-E10 (3 runs) | Owner ZV-E10 (3 files x 3 runs) |
+| --- | --- | --- |
+| Frames presented during the 4 s drag | 235-237 | 230-238 |
+| Interval between presented frames, p50 / p95 / max | 16.6 / 19-20 / 36-79 ms | 16.6 / 19-22 / 30-78 ms |
+| Render + swap per frame (stage 1 + mips + output pass), p50 / p95 | 2.1 / 2.4-2.9 ms | 2.0-2.2 / 2.3-3.7 ms (two runs 10.8-12.5 / 14.5-16.3 ms: host GPU contention) |
+| Updates coalesced | 0 | 0 |
+
+Every slider update was rendered (one per input event, about one per display frame), at the display rate; the frame
+cost (about 2 ms) leaves a wide margin under the 16 ms budget. The occasional 30-80 ms gap is most likely the
+emulator (host scheduling, the start of an `input swipe`): render + swap p95 stayed at or under 16.3 ms even in the
+contended runs.
+Time to the first developed frame: ADR 0004, "Measurements of the real open flow".
+

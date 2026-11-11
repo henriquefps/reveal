@@ -74,10 +74,17 @@ object PerspectiveScenes {
      * A checkerboard (squares of [square] pixels) in linear RGB where red is the green image magnified by [redScale]
      * about the centre and blue by [blueScale] (lateral CA as a lens makes it); `width * height * 3`.
      */
-    fun chromaticChecker(width: Int, height: Int, redScale: Double, blueScale: Double, square: Double = 23.0): FloatArray {
+    fun chromaticChecker(
+        width: Int,
+        height: Int,
+        redScale: Double,
+        blueScale: Double,
+        square: Double = 23.0,
+    ): FloatArray {
         val out = FloatArray(width * height * 3)
         val cx = width / 2.0
         val cy = height / 2.0
+
         // Exact box-filter coverage (supersampling would quantise sub-pixel edge positions): along one axis, the
         // share of [a, b] in the "even" squares.
         fun even(a: Double, b: Double): Double {

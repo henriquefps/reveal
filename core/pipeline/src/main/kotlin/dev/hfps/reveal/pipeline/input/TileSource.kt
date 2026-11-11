@@ -15,8 +15,8 @@ import dev.hfps.image.standard.Linearize
 import dev.hfps.image.standard.StandardDecoder
 import dev.hfps.reveal.pipeline.InputKind
 import dev.hfps.reveal.pipeline.PipelineInput
-import dev.hfps.reveal.pipeline.optics.LensProfile
 import dev.hfps.reveal.pipeline.cpu.Mat3
+import dev.hfps.reveal.pipeline.optics.LensProfile
 import java.nio.ByteBuffer
 import java.nio.ShortBuffer
 

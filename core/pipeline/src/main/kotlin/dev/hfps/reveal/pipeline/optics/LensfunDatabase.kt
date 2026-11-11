@@ -5,6 +5,7 @@ package dev.hfps.reveal.pipeline.optics
 import java.io.InputStream
 import java.util.Locale
 import java.util.zip.GZIPInputStream
+import kotlin.math.abs
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -12,7 +13,6 @@ import kotlinx.serialization.json.double
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
-import kotlin.math.abs
 
 /** What the EXIF says about the shot, for a lensfun lookup. */
 data class ShotOptics(
@@ -89,7 +89,10 @@ class LensfunDatabase private constructor(private val cameras: List<Camera>, pri
         if (make == null || model == null) return null
         val mk = normal(make)
         val md = normal(model)
-        return cameras.firstOrNull { normal(it.model) == md && (mk.contains(normal(it.maker)) || normal(it.maker).contains(mk)) }
+        return cameras.firstOrNull {
+            normal(it.model) == md &&
+                (mk.contains(normal(it.maker)) || normal(it.maker).contains(mk))
+        }
     }
 
     private fun lens(name: String, mount: String?): Lens? {
@@ -124,9 +127,11 @@ class LensfunDatabase private constructor(private val cameras: List<Camera>, pri
 
         /** The database bundled with the app (loaded once, about 30 ms). */
         fun shipped(): LensfunDatabase = shipped ?: synchronized(this) {
-            shipped ?: load(checkNotNull(LensfunDatabase::class.java.getResourceAsStream(RESOURCE)) {
-                "lensfun asset missing"
-            }).also { shipped = it }
+            shipped ?: load(
+                checkNotNull(LensfunDatabase::class.java.getResourceAsStream(RESOURCE)) {
+                    "lensfun asset missing"
+                },
+            ).also { shipped = it }
         }
 
         /** Parses a gzipped asset written by `convert_lensfun.py`. */
@@ -135,7 +140,12 @@ class LensfunDatabase private constructor(private val cameras: List<Camera>, pri
             val root = Json.parseToJsonElement(text).jsonObject
             val cameras = root.getValue("cameras").jsonArray.map {
                 val a = it.jsonArray
-                Camera(a[0].jsonPrimitive.content, a[1].jsonPrimitive.content, a[2].jsonPrimitive.content, a[3].jsonPrimitive.double)
+                Camera(
+                    a[0].jsonPrimitive.content,
+                    a[1].jsonPrimitive.content,
+                    a[2].jsonPrimitive.content,
+                    a[3].jsonPrimitive.double,
+                )
             }
             val lenses = root.getValue("lenses").jsonArray.map { e ->
                 val o = e.jsonObject

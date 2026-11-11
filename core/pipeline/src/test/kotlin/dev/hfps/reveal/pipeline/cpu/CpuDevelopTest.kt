@@ -4,6 +4,7 @@ import com.google.common.truth.Truth.assertThat
 import dev.hfps.reveal.pipeline.InputKind
 import dev.hfps.reveal.pipeline.PIPELINE_VERSION
 import dev.hfps.reveal.pipeline.PipelineInput
+import dev.hfps.reveal.pipeline.optics.SonyLensProfile
 import dev.hfps.reveal.pipeline.recipe.BandValues
 import dev.hfps.reveal.pipeline.recipe.BaseLook
 import dev.hfps.reveal.pipeline.recipe.Colour
@@ -17,15 +18,14 @@ import dev.hfps.reveal.pipeline.recipe.Effects
 import dev.hfps.reveal.pipeline.recipe.Geometry
 import dev.hfps.reveal.pipeline.recipe.GradeWheel
 import dev.hfps.reveal.pipeline.recipe.Light
+import dev.hfps.reveal.pipeline.recipe.Optics
 import dev.hfps.reveal.pipeline.recipe.ParametricCurve
 import dev.hfps.reveal.pipeline.recipe.Profile
 import dev.hfps.reveal.pipeline.recipe.Recipe
+import dev.hfps.reveal.pipeline.recipe.Transform
 import dev.hfps.reveal.pipeline.recipe.Treatment
 import dev.hfps.reveal.pipeline.recipe.WhiteBalance
 import dev.hfps.reveal.pipeline.synthetic.SyntheticImages
-import dev.hfps.reveal.pipeline.optics.SonyLensProfile
-import dev.hfps.reveal.pipeline.recipe.Optics
-import dev.hfps.reveal.pipeline.recipe.Transform
 import java.util.zip.CRC32
 import kotlin.math.abs
 import org.junit.Test

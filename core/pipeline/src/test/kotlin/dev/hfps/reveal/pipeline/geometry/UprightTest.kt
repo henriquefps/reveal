@@ -97,8 +97,10 @@ class UprightTest {
             val a = checkNotNull(back.map(x, y0))
             val b = checkNotNull(back.map(x, y1))
             return GuideLine(
-                ((a.x * half + w / 2) / w).toFloat(), ((a.y * half + h / 2) / h).toFloat(),
-                ((b.x * half + w / 2) / w).toFloat(), ((b.y * half + h / 2) / h).toFloat(),
+                ((a.x * half + w / 2) / w).toFloat(),
+                ((a.y * half + h / 2) / h).toFloat(),
+                ((b.x * half + w / 2) / w).toFloat(),
+                ((b.y * half + h / 2) / h).toFloat(),
             )
         }
         val guides = listOf(guide(-0.62, -0.4, 0.35), guide(0.62, -0.4, 0.35))

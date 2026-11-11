@@ -21,7 +21,10 @@ class Homography(val m: DoubleArray) {
     operator fun times(o: Homography): Homography {
         val r = DoubleArray(9)
         for (i in 0 until 3) {
-            for (j in 0 until 3) r[i * 3 + j] = m[i * 3] * o.m[j] + m[i * 3 + 1] * o.m[3 + j] + m[i * 3 + 2] * o.m[6 + j]
+            for (j in 0 until 3) {
+                r[i * 3 + j] =
+                    m[i * 3] * o.m[j] + m[i * 3 + 1] * o.m[3 + j] + m[i * 3 + 2] * o.m[6 + j]
+            }
         }
         return Homography(r)
     }

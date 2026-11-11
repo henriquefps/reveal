@@ -62,6 +62,7 @@ object HistoryLabels {
         HistoryAction.PRESET to R.string.history_action_preset,
         HistoryAction.AUTO_MIX to R.string.history_action_auto_mix,
         HistoryAction.CURVE_PRESET to R.string.history_action_curve_preset,
+        HistoryAction.LENS_PROFILE to R.string.history_action_lens_profile,
     )
 
     private val GROUP_NAMES: Map<RecipeGroup, Int> = mapOf(
@@ -119,6 +120,9 @@ object HistoryLabels {
         HistoryField.WB_MODE to ("wb" to R.string.history_wb_mode),
         HistoryField.ASPECT to ("aspect" to R.string.history_aspect),
         HistoryField.TREATMENT to ("treatment" to R.string.history_treatment),
+        HistoryField.LENS_CORRECTIONS to ("toggle" to R.string.history_lens_corrections),
+        HistoryField.REMOVE_CA to ("toggle" to R.string.history_remove_ca),
+        HistoryField.UPRIGHT to ("upright" to R.string.history_upright),
     )
 
     /** The label of a tone curve, colour mixer, grey mixer or colour grading step (docs/adr/0013). */
@@ -233,6 +237,20 @@ object HistoryLabels {
         HistoryField.GRAIN_AMOUNT to R.string.history_grain_amount,
         HistoryField.GRAIN_SIZE to R.string.history_grain_size,
         HistoryField.GRAIN_ROUGHNESS to R.string.history_grain_roughness,
+        HistoryField.LENS_DISTORTION to R.string.history_lens_distortion,
+        HistoryField.LENS_VIGNETTING to R.string.history_lens_vignetting,
+        HistoryField.DEFRINGE_PURPLE_AMOUNT to R.string.history_defringe_purple_amount,
+        HistoryField.DEFRINGE_PURPLE_HUE to R.string.history_defringe_purple_hue,
+        HistoryField.DEFRINGE_GREEN_AMOUNT to R.string.history_defringe_green_amount,
+        HistoryField.DEFRINGE_GREEN_HUE to R.string.history_defringe_green_hue,
+        HistoryField.GUIDES to R.string.history_guides,
+        HistoryField.TRANSFORM_VERTICAL to R.string.history_transform_vertical,
+        HistoryField.TRANSFORM_HORIZONTAL to R.string.history_transform_horizontal,
+        HistoryField.TRANSFORM_ROTATE to R.string.history_transform_rotate,
+        HistoryField.TRANSFORM_ASPECT to R.string.history_transform_aspect,
+        HistoryField.TRANSFORM_SCALE to R.string.history_transform_scale,
+        HistoryField.TRANSFORM_OFFSET_X to R.string.history_transform_offset_x,
+        HistoryField.TRANSFORM_OFFSET_Y to R.string.history_transform_offset_y,
     )
 
     private val VALUE_NAMES: Map<String, Int> = mapOf(
@@ -264,5 +282,13 @@ object HistoryLabels {
         "aspect_custom" to R.string.history_value_aspect_custom,
         "treatment_colour" to R.string.history_value_treatment_colour,
         "treatment_black_white" to R.string.history_value_treatment_black_white,
+        "toggle_on" to R.string.history_value_toggle_on,
+        "toggle_off" to R.string.history_value_toggle_off,
+        "upright_off" to R.string.upright_off,
+        "upright_auto" to R.string.upright_auto,
+        "upright_level" to R.string.upright_level,
+        "upright_vertical" to R.string.upright_vertical,
+        "upright_full" to R.string.upright_full,
+        "upright_guided" to R.string.upright_guided,
     )
 }

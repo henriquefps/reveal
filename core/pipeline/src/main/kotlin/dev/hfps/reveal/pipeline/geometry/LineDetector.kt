@@ -56,7 +56,12 @@ object LineDetector {
      * Segments of the [width] x [height] luminance [gray] (row-major), longest-weighted first; [minLength] in pixels
      * (default 4 % of the long edge).
      */
-    fun detect(gray: FloatArray, width: Int, height: Int, minLength: Double = 0.04 * max(width, height)): List<Segment> {
+    fun detect(
+        gray: FloatArray,
+        width: Int,
+        height: Int,
+        minLength: Double = 0.04 * max(width, height),
+    ): List<Segment> {
         require(gray.size == width * height) { "gray must be width * height" }
         if (width < 4 || height < 4) return emptyList()
         val img = blur(gray, width, height)

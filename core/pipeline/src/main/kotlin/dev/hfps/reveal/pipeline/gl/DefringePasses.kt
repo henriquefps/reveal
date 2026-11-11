@@ -23,7 +23,9 @@ uniform int uRgbOut;       // 1: linear Rec.2020 out; 0: OkLab out (the Detail p
 out vec4 outColor;
 """ + ColourShaders.OKLAB + Shaders.Q16 + """
 float defringeWindow(float h, float lo, float hi) {
-    return smoothstep(lo - ${f(DefringeParams.FEATHER)}, lo, h) * (1.0 - smoothstep(hi, hi + ${f(DefringeParams.FEATHER)}, h));
+    return smoothstep(lo - ${f(
+        DefringeParams.FEATHER,
+    )}, lo, h) * (1.0 - smoothstep(hi, hi + ${f(DefringeParams.FEATHER)}, h));
 }
 
 // DefringeOp.weight

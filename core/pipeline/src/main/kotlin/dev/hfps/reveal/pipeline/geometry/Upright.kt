@@ -47,7 +47,14 @@ object Upright {
     private const val MAX_LINES = 400
 
     /** A line of the corrected image (normalised) with its weight and its axis. */
-    private class Line(val x0: Double, val y0: Double, val x1: Double, val y1: Double, val w: Double, val vertical: Boolean)
+    private class Line(
+        val x0: Double,
+        val y0: Double,
+        val x1: Double,
+        val y1: Double,
+        val w: Double,
+        val vertical: Boolean,
+    )
 
     /**
      * Detector [segments] (pixels of the **source** image, [width] x [height]) in normalised corrected-image

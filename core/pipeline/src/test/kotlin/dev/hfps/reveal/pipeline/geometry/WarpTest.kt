@@ -27,7 +27,9 @@ class WarpTest {
 
     @Test
     fun `homography inverse and composition`() {
-        val f = Perspective.forward(Transform(vertical = 30f, horizontal = -20f, rotate = 3f, aspect = 10f, scale = 90f))
+        val f = Perspective.forward(
+            Transform(vertical = 30f, horizontal = -20f, rotate = 3f, aspect = 10f, scale = 90f),
+        )
         val id = f * f.inverse()
         for (i in 0 until 9) assertThat(id.m[i]).isWithin(1e-12).of(Homography.IDENTITY.m[i])
         assertThat(Perspective.toCorrected(Transform()).isIdentity).isTrue()
@@ -87,7 +89,11 @@ class WarpTest {
                 val ip = mapping.outputToImage(x + 0.5, y + 0.5)
                 check(warp.sourcePoint(ip.x.toFloat(), ip.y.toFloat(), src))
                 // Away from the clamped edge taps.
-                if (src.any { it < 3f } || src[0] > w - 3 || src[2] > w - 3 || src[4] > w - 3 || src[3] > h - 3) continue
+                if (src.any { it < 3f } || src[0] > w - 3 || src[2] > w - 3 || src[4] > w - 3 ||
+                    src[3] > h - 3
+                ) {
+                    continue
+                }
                 val o = (y * w + x) * 3
                 assertThat(out[o].toDouble()).isWithin(2e-3).of(src[0] - 0.5)
                 assertThat(out[o + 1].toDouble()).isWithin(2e-3).of(src[3] - 0.5)
@@ -186,6 +192,12 @@ class WarpTest {
         val m = GeometryMapping.of(Geometry(), 100, 60, zv, Optics())
         assertThat(m.warp).isNull()
         assertThat(m.isIdentity).isTrue()
-        assertThat(GeometryMapping.of(Geometry(transform = Transform(upright = dev.hfps.reveal.pipeline.recipe.UprightMode.AUTO)), 100, 60).warp).isNull()
+        assertThat(
+            GeometryMapping.of(
+                Geometry(transform = Transform(upright = dev.hfps.reveal.pipeline.recipe.UprightMode.AUTO)),
+                100,
+                60,
+            ).warp,
+        ).isNull()
     }
 }

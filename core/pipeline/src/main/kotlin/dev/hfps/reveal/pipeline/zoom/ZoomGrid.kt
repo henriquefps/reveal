@@ -117,7 +117,13 @@ class ZoomView(val k: Float, val proxyOutputWidth: Int, val proxyOutputHeight: I
      * Full-resolution **source** point (where the tiles are) of window pixel ([sx], [sy]): [imagePoint] through the
      * mapping's warp (green), or `null` behind the horizon.
      */
-    fun sourcePoint(view: ViewTransform, windowWidth: Int, windowHeight: Int, sx: Float, sy: Float): Pair<Float, Float>? {
+    fun sourcePoint(
+        view: ViewTransform,
+        windowWidth: Int,
+        windowHeight: Int,
+        sx: Float,
+        sy: Float,
+    ): Pair<Float, Float>? {
         val (x, y) = imagePoint(view, windowWidth, windowHeight, sx, sy)
         val warp = full.warp ?: return x to y
         val s = warp.source(x.toDouble(), y.toDouble(), 1) ?: return null

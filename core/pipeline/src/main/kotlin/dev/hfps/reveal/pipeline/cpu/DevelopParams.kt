@@ -63,11 +63,10 @@ class DevelopParams(
      * The same parameters without Detail and Effects: what the stages before slot 11 (and the Effects grid, which is
      * built from the develop output) depend on.
      */
-    fun withoutDetail(): DevelopParams =
-        DevelopParams(
-            wbMultipliers, cameraToWorking, exposureGain, profile, highlights, tone, colour, curve, tools,
-            vignette = vignette, defringe = defringe,
-        )
+    fun withoutDetail(): DevelopParams = DevelopParams(
+        wbMultipliers, cameraToWorking, exposureGain, profile, highlights, tone, colour, curve, tools,
+        vignette = vignette, defringe = defringe,
+    )
 
     /**
      * The same parameters without the post-crop vignette and grain: what the working texture depends on (they are

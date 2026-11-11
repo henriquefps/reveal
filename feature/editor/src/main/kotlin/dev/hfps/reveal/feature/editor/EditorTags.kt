@@ -66,6 +66,14 @@ object EditorTags {
     const val CROP_CONSTRAIN = "editor-crop-constrain"
     const val CROP_RESET = "editor-crop-reset"
     const val CROP_AUTO = "editor-crop-auto"
+    const val CROP_TAB_CROP = "editor-crop-tab-crop"
+    const val CROP_TAB_TRANSFORM = "editor-crop-tab-transform"
+    const val UPRIGHT_FAILED = "editor-upright-failed"
+    const val GUIDES_HINT = "editor-guides-hint"
+    const val GUIDES_CLEAR = "editor-guides-clear"
+    const val OPTICS_PROFILE = "editor-optics-profile"
+    const val OPTICS_LENS = "editor-optics-lens"
+    const val OPTICS_CA = "editor-optics-ca"
     const val TARGETED_HINT = "editor-targeted-hint"
     const val TARGETED = "editor-targeted"
     const val TONE_CURVE_ROW = "editor-tone-curve-row"
@@ -116,4 +124,6 @@ object EditorTags {
     fun pasteGroup(group: RecipeGroup): String = "$PASTE_CHOOSER-$group"
 
     fun aspect(preset: AspectPreset): String = "editor-crop-aspect-${preset.name.lowercase()}"
+
+    fun upright(mode: dev.hfps.reveal.pipeline.recipe.UprightMode): String = "editor-upright-${mode.name.lowercase()}"
 }

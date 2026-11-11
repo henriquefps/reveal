@@ -20,6 +20,9 @@ enum class CropGrid(val divisions: Int) {
     FINE(9),
 }
 
+/** The Crop mode's two tabs: the crop frame and straightening, or the Transform panel with Upright. */
+enum class CropTab { CROP, TRANSFORM }
+
 /**
  * UI-only state of the Crop mode, shared by its overlay (frame, handles, gestures) and its controls (dial, chips,
  * buttons). The geometry itself lives in the recipe; this is only what the screen needs while the mode is open.
@@ -43,6 +46,15 @@ class CropSession {
 
     /** The custom aspect chooser is open. */
     var customAspect: Boolean by mutableStateOf(false)
+
+    /** The tab the controls show. */
+    var tab: CropTab by mutableStateOf(CropTab.CROP)
+
+    /** Guided Upright is armed: a drag on the photo draws a guide line (docs/adr/0015). */
+    var guideTool: Boolean by mutableStateOf(false)
+
+    /** The guide being drawn (slot pixels), `null` when none. */
+    var guideLine: Pair<Offset, Offset>? by mutableStateOf(null)
 }
 
 /**

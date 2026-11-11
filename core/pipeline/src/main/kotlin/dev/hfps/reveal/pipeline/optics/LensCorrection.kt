@@ -87,8 +87,14 @@ class LensWarp private constructor(val table: FloatArray, val scale: Double, val
         fun cached(profile: LensProfile?, optics: Optics, width: Int, height: Int): LensWarp? {
             if (profile == null && !optics.removeCa) return null
             val key = Key(
-                profile, optics.lensCorrections, optics.distortionPercent, optics.removeCa, optics.caRed, optics.caBlue,
-                width, height,
+                profile,
+                optics.lensCorrections,
+                optics.distortionPercent,
+                optics.removeCa,
+                optics.caRed,
+                optics.caBlue,
+                width,
+                height,
             )
             last?.let { (k, v) -> if (k == key) return v }
             return of(profile, optics, width, height).also { last = key to it }
@@ -112,6 +118,7 @@ class LensWarp private constructor(val table: FloatArray, val scale: Double, val
             if (!active) return null
             val chromatic: (Int, Double) -> Double = when {
                 profileCa -> { c, r -> checkNotNull(profile).chromatic(c, r) }
+
                 autoCa -> { c, _ ->
                     when (c) {
                         0 -> 1.0 + optics.caRed * CA_UNIT
@@ -119,6 +126,7 @@ class LensWarp private constructor(val table: FloatArray, val scale: Double, val
                         else -> 1.0
                     }
                 }
+
                 else -> { _, _ -> 1.0 }
             }
             val l = { c: Int, r: Double -> distortion(r) * chromatic(c, r) }

@@ -317,11 +317,22 @@ object RecipeRanges {
 
     /** The optics and transform ranges (docs/adr/0015), in panel order. */
     val optics: List<ControlRange> = listOf(
-        lensDistortion, lensVignetting, defringePurpleAmount, defringePurpleHueLow, defringePurpleHueHigh,
-        defringeGreenAmount, defringeGreenHueLow, defringeGreenHueHigh,
+        lensDistortion,
+        lensVignetting,
+        defringePurpleAmount,
+        defringePurpleHueLow,
+        defringePurpleHueHigh,
+        defringeGreenAmount,
+        defringeGreenHueLow,
+        defringeGreenHueHigh,
     )
     val transform: List<ControlRange> = listOf(
-        transformVertical, transformHorizontal, transformRotate, transformAspect, transformScale, transformOffsetX,
+        transformVertical,
+        transformHorizontal,
+        transformRotate,
+        transformAspect,
+        transformScale,
+        transformOffsetX,
         transformOffsetY,
     )
 

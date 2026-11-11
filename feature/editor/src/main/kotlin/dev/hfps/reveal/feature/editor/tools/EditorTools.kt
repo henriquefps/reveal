@@ -19,6 +19,7 @@ import dev.hfps.reveal.feature.editor.panels.DetailPanel
 import dev.hfps.reveal.feature.editor.panels.EffectsPanel
 import dev.hfps.reveal.feature.editor.panels.HistoryPanel
 import dev.hfps.reveal.feature.editor.panels.LightPanel
+import dev.hfps.reveal.feature.editor.panels.OpticsPanel
 import dev.hfps.reveal.feature.editor.panels.PanelHost
 import dev.hfps.reveal.pipeline.auto.AutoScope
 import dev.hfps.reveal.pipeline.recipe.RecipeGroup
@@ -89,7 +90,7 @@ class EditorTool(
 
 /**
  * The registry of editor tools. M1 enables Crop (a mode), Light and Colour; Auto is wired by its own worker by
- * replacing [ToolBehaviour.Unavailable] with a [ToolBehaviour.Action] here; M2 adds Detail and Effects.
+ * replacing [ToolBehaviour.Unavailable] with a [ToolBehaviour.Action] here; M2 adds Detail, Effects and Optics.
  */
 object EditorTools {
     val all: List<EditorTool> = listOf(
@@ -154,7 +155,7 @@ object EditorTools {
             R.string.editor_tool_optics,
             PhosphorRegular.Aperture,
             PhosphorFill.Aperture,
-            ToolBehaviour.Unavailable,
+            ToolBehaviour.Panel(R.string.editor_tool_optics, RecipeGroup.OPTICS) { OpticsPanel(it) },
         ),
         EditorTool(
             ToolId.MASKS,

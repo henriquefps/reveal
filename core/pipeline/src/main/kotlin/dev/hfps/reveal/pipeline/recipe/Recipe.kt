@@ -28,6 +28,13 @@ data class Recipe(
     /** True when nothing is edited, i.e. this recipe renders the original. */
     fun isDefault(): Boolean = this == Recipe(v = v)
 
+    /**
+     * True when the user changed nothing: the default recipe, or the default plus only the lens corrections a new
+     * photo starts with ([Optics.forNewPhoto], docs/adr/0015). The library's "edited" mark follows this.
+     */
+    fun isUnedited(): Boolean = isDefault() ||
+        (copy(optics = Optics()).isDefault() && optics in Optics.NEW_PHOTO_DEFAULTS)
+
     companion object {
         /** The recipe that changes nothing. */
         val DEFAULT: Recipe = Recipe()
@@ -330,6 +337,13 @@ data class Optics(
          * and CA removal on when that profile carries CA data. JPEG/HEIF were usually corrected by the camera already:
          * their profile is offered but off.
          */
+
+        /** Every optics [forNewPhoto] can give with a profile. */
+        val NEW_PHOTO_DEFAULTS: Set<Optics> = setOf(
+            Optics(lensCorrections = true),
+            Optics(lensCorrections = true, removeCa = true),
+        )
+
         fun forNewPhoto(hasProfile: Boolean, profileHasCa: Boolean, isRaw: Boolean): Optics {
             val on = hasProfile && isRaw
             return Optics(lensCorrections = on, removeCa = on && profileHasCa)

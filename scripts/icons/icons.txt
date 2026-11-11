@@ -76,3 +76,5 @@ lock-simple-open
 swap
 frame-corners
 crosshair-simple
+perspective
+line-segments

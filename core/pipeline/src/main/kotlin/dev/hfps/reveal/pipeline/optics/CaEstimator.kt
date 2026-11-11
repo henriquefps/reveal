@@ -40,7 +40,8 @@ object CaEstimator {
         // Perceptual-ish channels so edges in shadows count too.
         // A light blur (sigma 1 px) first: on very sharp edges sub-pixel shifts would otherwise read through the
         // interpolation's phase bias (towards whole pixels).
-        val ch = Array(3) { c -> blur(FloatArray(width * height) { i -> sqrt(max(0f, rgb[i * 3 + c])) }, width, height) }
+        val ch =
+            Array(3) { c -> blur(FloatArray(width * height) { i -> sqrt(max(0f, rgb[i * 3 + c])) }, width, height) }
         val points = ArrayList<DoubleArray>()
         for (y in 2 until height - 2 step STEP) {
             for (x in 2 until width - 2 step STEP) {

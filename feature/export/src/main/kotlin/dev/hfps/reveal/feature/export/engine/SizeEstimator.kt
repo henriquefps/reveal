@@ -43,14 +43,23 @@ class SizeEstimator private constructor(
     /** Full-resolution size of the picture (the geometry operator's output: cropped, turned). */
     val pictureSize: PixelSize
         get() = ExportPlan.of(
-            fullSize.width, fullSize.height, recipe.geometry, ExportSize.Original, lens = lens, optics = recipe.optics,
+            fullSize.width,
+            fullSize.height,
+            recipe.geometry,
+            ExportSize.Original,
+            lens = lens,
+            optics = recipe.optics,
         ).output
 
     /** Output pixel size for [options] (crop and size option applied). */
-    fun outputSize(options: ExportOptions): PixelSize =
-        ExportPlan.of(
-            fullSize.width, fullSize.height, recipe.geometry, options.size, lens = lens, optics = recipe.optics,
-        ).output
+    fun outputSize(options: ExportOptions): PixelSize = ExportPlan.of(
+        fullSize.width,
+        fullSize.height,
+        recipe.geometry,
+        options.size,
+        lens = lens,
+        optics = recipe.optics,
+    ).output
 
     /** Estimated bytes of the exported file. */
     fun estimate(context: Context, options: ExportOptions): Long {

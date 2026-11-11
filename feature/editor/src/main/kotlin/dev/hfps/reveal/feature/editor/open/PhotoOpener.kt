@@ -21,9 +21,9 @@ import dev.hfps.reveal.pipeline.input.NativeRawTileSource
 import dev.hfps.reveal.pipeline.input.PipelineInputMapper
 import dev.hfps.reveal.pipeline.input.RegionTileSource
 import dev.hfps.reveal.pipeline.input.TileSource
+import dev.hfps.reveal.pipeline.input.UnsupportedCameraException
 import dev.hfps.reveal.pipeline.input.withLens
 import dev.hfps.reveal.pipeline.optics.LensProfile
-import dev.hfps.reveal.pipeline.input.UnsupportedCameraException
 import java.io.FileNotFoundException
 import java.io.IOException
 

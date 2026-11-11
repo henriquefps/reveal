@@ -37,9 +37,9 @@ import dev.hfps.reveal.pipeline.gl.TiledRenderer
 import dev.hfps.reveal.pipeline.input.BitmapTileSource
 import dev.hfps.reveal.pipeline.input.LensResolver
 import dev.hfps.reveal.pipeline.input.NativeRawTileSource
-import dev.hfps.reveal.pipeline.input.withLens
 import dev.hfps.reveal.pipeline.input.TileSource
 import dev.hfps.reveal.pipeline.input.UnsupportedCameraException
+import dev.hfps.reveal.pipeline.input.withLens
 import dev.hfps.reveal.pipeline.recipe.Recipe
 import java.io.File
 import java.io.FileNotFoundException

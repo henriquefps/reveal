@@ -7,6 +7,7 @@ import dev.hfps.reveal.pipeline.recipe.ControlRange
 import dev.hfps.reveal.pipeline.recipe.CurveChannel
 import dev.hfps.reveal.pipeline.recipe.CurvePoint
 import dev.hfps.reveal.pipeline.recipe.Effects
+import dev.hfps.reveal.pipeline.recipe.OpticsControls
 import dev.hfps.reveal.pipeline.recipe.Recipe
 import dev.hfps.reveal.pipeline.recipe.RecipeRanges
 import dev.hfps.reveal.pipeline.recipe.Treatment
@@ -55,6 +56,7 @@ object RecipeControls {
             ControlId.NR_COLOUR_DETAIL -> detail.nrColourDetail
             ControlId.NR_COLOUR_SMOOTHNESS -> detail.nrColourSmoothness
             in EFFECTS_IDS -> effects(recipe.effects, id)
+            in OpticsControls.optics, in OpticsControls.transform -> OpticsControls.get(recipe, id)
             else -> ColourToolControls.get(recipe, id)
         }
     }
@@ -93,6 +95,7 @@ object RecipeControls {
             ControlId.NR_COLOUR_DETAIL -> recipe.copy(detail = d.copy(nrColourDetail = v))
             ControlId.NR_COLOUR_SMOOTHNESS -> recipe.copy(detail = d.copy(nrColourSmoothness = v))
             in EFFECTS_IDS -> recipe.copy(effects = withEffect(recipe.effects, id, v))
+            in OpticsControls.optics, in OpticsControls.transform -> OpticsControls.set(recipe, id, v)
             else -> ColourToolControls.set(recipe, id, v)
         }
     }

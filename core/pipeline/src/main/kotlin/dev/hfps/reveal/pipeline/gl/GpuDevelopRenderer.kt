@@ -9,6 +9,9 @@ import android.os.HandlerThread
 import android.view.Surface
 import dev.hfps.reveal.pipeline.PipelineInput
 import dev.hfps.reveal.pipeline.cpu.DevelopParams
+import dev.hfps.reveal.pipeline.cpu.GlobalToneOp
+import dev.hfps.reveal.pipeline.cpu.HighlightReconstructionOp
+import dev.hfps.reveal.pipeline.cpu.LowResGrid
 import dev.hfps.reveal.pipeline.cpu.OutputSettings
 import dev.hfps.reveal.pipeline.cpu.OutputSpace
 import dev.hfps.reveal.pipeline.cpu.OutputTransformOp
@@ -38,8 +41,10 @@ data class FrameStats(
 )
 
 /**
- * The GPU develop pipeline: OpenGL ES 3 on a dedicated thread, float16 working textures, fused stage 1 (raw WB,
- * camera matrix, exposure, base tone) into a mip-mapped RGBA16F texture, then the view + output pass into the
+ * The GPU develop pipeline: OpenGL ES 3 on a dedicated thread, float16 working textures. The scene stage (raw WB,
+ * highlight reconstruction, camera matrix, exposure) writes a scene-linear RGBA16F texture; the Light group's
+ * low-res passes ([LightPasses], skipped when not needed) read it; the develop stage (highlights/shadows, base tone,
+ * contrast/whites/blacks) writes the mip-mapped RGBA16F working texture; then the view + output pass draws into the
  * window surface (or an RGBA8 target for readback). The UI thread never touches GL: every public method either
  * posts to the GL thread or suspends until it has run.
  *
@@ -84,7 +89,13 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         private set
 
     // ---- GL-thread state ----
+    private var sceneProgram = 0
     private var developProgram = 0
+    private var lightUbo = 0
+    private val light = LightPasses()
+    private var sceneTex = 0
+    private var sceneFbo = 0
+    private var reconKey: Pair<List<Float>, Any>? = null
     private var outputProgram = 0
     private var developUbo = 0
     private var outputUbo = 0
@@ -185,6 +196,8 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         recipes.map { recipe ->
             val start = System.nanoTime()
             runStage1(DevelopParams.from(image.colour, recipe))
+            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, stageTex)
+            GLES30.glGenerateMipmap(GLES30.GL_TEXTURE_2D)
             drawOutputOffscreen(OutputSettings(dither = true))
             GLES20.glFinish()
             (System.nanoTime() - start) / NANOS_PER_MS
@@ -244,17 +257,48 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
 
     // ------------------------------------------------------------------ GL work (GL thread only)
 
+    /** Scene stage, the Light passes that are needed, then the develop stage into the working texture. */
     private fun runStage1(params: DevelopParams) {
         val image = checkNotNull(input) { "no input" }
+        val hp = params.highlights
+        val reconstruct = hp != null && image.needsReconstruction
+        if (reconstruct) {
+            val key = params.wbMultipliers.toList() to checkNotNull(hp)
+            if (key != reconKey) {
+                light.reconstruct(sourceTex, params.wbMultipliers, hp)
+                reconKey = key
+            }
+        }
+        uploadUbo(developUbo, developBlock(params))
+        uploadUbo(lightUbo, lightBlock(params, image.grid, reconstruct))
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, sceneFbo)
+        GLES30.glViewport(0, 0, image.width, image.height)
+        GLES30.glUseProgram(sceneProgram)
+        bindTextures(sourceTex, if (reconstruct) light.chromaTexture else sourceTex)
+        GLES30.glDrawArrays(GLES30.GL_TRIANGLES, 0, 3)
+        GlSupport.checkError("scene stage")
+        if (params.tone.localActive) light.guide(sceneTex)
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, stageFbo)
         GLES30.glViewport(0, 0, image.width, image.height)
         GLES30.glUseProgram(developProgram)
-        uploadUbo(developUbo, developBlock(params))
-        GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, sourceTex)
+        val local = params.tone.localActive
+        bindTextures(
+            sceneTex,
+            if (local) light.coefTexture else sceneTex,
+            if (local) light.momentsTexture else sceneTex,
+        )
         GLES30.glDrawArrays(GLES30.GL_TRIANGLES, 0, 3)
         GlSupport.checkError("develop stage")
         stageParams = params
+    }
+
+    private fun bindTextures(unit0: Int, unit1: Int, unit2: Int = unit1) {
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE2)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, unit2)
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE1)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, unit1)
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, unit0)
     }
 
     private fun drawOutput(
@@ -325,16 +369,24 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         egl.create()
         info = GlSupport.query()
         GlSupport.require(info)
+        sceneProgram = GlSupport.compile(Shaders.FULLSCREEN_VERT, Shaders.SCENE_FRAG)
         developProgram = GlSupport.compile(Shaders.FULLSCREEN_VERT, Shaders.DEVELOP_FRAG)
         outputProgram = GlSupport.compile(Shaders.FULLSCREEN_VERT, Shaders.OUTPUT_FRAG)
-        bindBlock(developProgram, "Develop", DEVELOP_BINDING, "uSource")
+        bindBlock(sceneProgram, "Develop", DEVELOP_BINDING, "uSource")
+        bindBlock(sceneProgram, "Light", LIGHT_BINDING, "uChroma", unit = 1)
+        bindBlock(developProgram, "Develop", DEVELOP_BINDING, "uScene")
+        bindBlock(developProgram, "Light", LIGHT_BINDING, "uCoef", unit = 1)
+        GLES30.glUniform1i(GLES30.glGetUniformLocation(developProgram, "uMoments"), 2)
         bindBlock(outputProgram, "Output", OUTPUT_BINDING, "uStage")
-        val ids = IntArray(2)
-        GLES30.glGenBuffers(2, ids, 0)
+        val ids = IntArray(3)
+        GLES30.glGenBuffers(3, ids, 0)
         developUbo = ids[0]
         outputUbo = ids[1]
+        lightUbo = ids[2]
         GLES30.glBindBufferBase(GLES30.GL_UNIFORM_BUFFER, DEVELOP_BINDING, developUbo)
         GLES30.glBindBufferBase(GLES30.GL_UNIFORM_BUFFER, OUTPUT_BINDING, outputUbo)
+        GLES30.glBindBufferBase(GLES30.GL_UNIFORM_BUFFER, LIGHT_BINDING, lightUbo)
+        light.init()
         val vaos = IntArray(1)
         GLES30.glGenVertexArrays(1, vaos, 0)
         vao = vaos[0]
@@ -370,22 +422,27 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         }
     }
 
-    private fun bindBlock(program: Int, block: String, binding: Int, sampler: String) {
+    private fun bindBlock(program: Int, block: String, binding: Int, sampler: String, unit: Int = 0) {
         val index = GLES30.glGetUniformBlockIndex(program, block)
         check(index != GLES30.GL_INVALID_INDEX) { "uniform block $block missing" }
         GLES30.glUniformBlockBinding(program, index, binding)
         GLES30.glUseProgram(program)
-        GLES30.glUniform1i(GLES30.glGetUniformLocation(program, sampler), 0)
+        GLES30.glUniform1i(GLES30.glGetUniformLocation(program, sampler), unit)
     }
 
     private fun uploadInput(image: PipelineInput) {
         deleteImageTextures()
-        input = UploadedImage(image.width, image.height, image.colourOnly())
+        val grid = light.allocate(image.width, image.height)
+        val reconstruct = image.saturation?.let { HighlightReconstructionOp.needed(image.linearRgb, it) } ?: false
+        input = UploadedImage(image.width, image.height, image.colourOnly(), grid, reconstruct)
         stageParams = null
+        reconKey = null
         val levels = 32 - Integer.numberOfLeadingZeros(maxOf(image.width, image.height))
         sourceTex = newTexture(1, image.width, image.height, GLES30.GL_NEAREST, GLES30.GL_NEAREST)
         stageTex = newTexture(levels, image.width, image.height, GLES30.GL_LINEAR_MIPMAP_LINEAR, GLES30.GL_LINEAR)
         readTex = newTexture(1, image.width, image.height, GLES30.GL_NEAREST, GLES30.GL_NEAREST, GLES30.GL_RGBA8)
+        sceneTex = newTexture(1, image.width, image.height, GLES30.GL_NEAREST, GLES30.GL_NEAREST)
+        sceneFbo = newFramebuffer(sceneTex)
         stageFbo = newFramebuffer(stageTex)
         readFbo = newFramebuffer(readTex)
         // Upload in bands so the RGB -> RGBA float staging buffer stays small even for a 2400 px proxy.
@@ -457,8 +514,10 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
     }
 
     private fun deleteImageTextures() {
-        GLES30.glDeleteTextures(3, intArrayOf(sourceTex, stageTex, readTex), 0)
-        GLES30.glDeleteFramebuffers(2, intArrayOf(stageFbo, readFbo), 0)
+        GLES30.glDeleteTextures(4, intArrayOf(sourceTex, stageTex, readTex, sceneTex), 0)
+        GLES30.glDeleteFramebuffers(3, intArrayOf(stageFbo, readFbo, sceneFbo), 0)
+        sceneTex = 0
+        sceneFbo = 0
         sourceTex = 0
         stageTex = 0
         readTex = 0
@@ -469,8 +528,10 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
     private fun releaseGl() {
         if (!::info.isInitialized) return
         deleteImageTextures()
-        GLES30.glDeleteBuffers(2, intArrayOf(developUbo, outputUbo), 0)
+        light.release()
+        GLES30.glDeleteBuffers(3, intArrayOf(developUbo, outputUbo, lightUbo), 0)
         GLES30.glDeleteVertexArrays(1, intArrayOf(vao), 0)
+        GLES30.glDeleteProgram(sceneProgram)
         GLES30.glDeleteProgram(developProgram)
         GLES30.glDeleteProgram(outputProgram)
     }
@@ -497,6 +558,7 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
     companion object {
         private const val DEVELOP_BINDING = 0
         private const val OUTPUT_BINDING = 1
+        private const val LIGHT_BINDING = 2
         private const val RGBA = 4
         private const val UPLOAD_ROWS = 128
         private const val NANOS_PER_MS = 1_000_000f
@@ -522,12 +584,32 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         /** std140 block of the develop stage: wb (vec4), cameraToWorking (mat4), exposure (vec4), baseTone (vec4). */
         internal fun developBlock(p: DevelopParams): ByteBuffer {
             val b = ByteBuffer.allocateDirect(DEVELOP_BLOCK_FLOATS * Float.SIZE_BYTES).order(ByteOrder.nativeOrder())
-            b.putFloat(
-                p.wbMultipliers[0],
-            ).putFloat(p.wbMultipliers[1]).putFloat(p.wbMultipliers[2]).putFloat(p.highlightClip)
+            b.putFloat(p.wbMultipliers[0]).putFloat(p.wbMultipliers[1]).putFloat(p.wbMultipliers[2]).putFloat(0f)
             putMat4(b, p.cameraToWorking)
             b.putFloat(p.exposureGain).putFloat(0f).putFloat(0f).putFloat(0f)
             b.putFloat(p.toneKnee).putFloat(0f).putFloat(0f).putFloat(0f)
+            b.flip()
+            return b
+        }
+
+        /**
+         * std140 block of the Light group: grid (cell, size, reconstruction on), clip levels (rgb, max),
+         * tone (highlight stops, shadow stops, local on, global on), tone2 (contrast gamma, whites, blacks, pivot).
+         */
+        internal fun lightBlock(p: DevelopParams, grid: LowResGrid, reconstruct: Boolean): ByteBuffer {
+            val b = ByteBuffer.allocateDirect(LIGHT_BLOCK_FLOATS * Float.SIZE_BYTES).order(ByteOrder.nativeOrder())
+            b.putFloat(grid.cell.toFloat()).putFloat(grid.gridWidth.toFloat()).putFloat(grid.gridHeight.toFloat())
+                .putFloat(if (reconstruct) 1f else 0f)
+            val hp = p.highlights
+            if (hp != null) {
+                b.putFloat(hp.clipR).putFloat(hp.clipG).putFloat(hp.clipB).putFloat(hp.maxClip)
+            } else {
+                b.putFloat(1f).putFloat(1f).putFloat(1f).putFloat(1f)
+            }
+            val t = p.tone
+            b.putFloat(t.highlightStops).putFloat(t.shadowStops).putFloat(if (t.localActive) 1f else 0f)
+                .putFloat(if (t.globalActive) 1f else 0f)
+            b.putFloat(t.contrastGamma).putFloat(t.whitesShift).putFloat(t.blacksShift).putFloat(GlobalToneOp.PIVOT)
             b.flip()
             return b
         }
@@ -564,12 +646,23 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         }
 
         private const val DEVELOP_BLOCK_FLOATS = 28
+        private const val LIGHT_BLOCK_FLOATS = 16
         private const val OUTPUT_BLOCK_FLOATS = 32
     }
 }
 
-/** What the GL thread keeps of an uploaded input: its size and a 1x1 stand-in carrying the colour metadata. */
-private class UploadedImage(val width: Int, val height: Int, val colour: PipelineInput)
+/**
+ * What the GL thread keeps of an uploaded input: its size, a 1x1 stand-in carrying the colour metadata, the Light
+ * grid, and whether any pixel reaches the clip ramp (otherwise highlight reconstruction is skipped: it would be the
+ * identity).
+ */
+private class UploadedImage(
+    val width: Int,
+    val height: Int,
+    val colour: PipelineInput,
+    val grid: LowResGrid,
+    val needsReconstruction: Boolean,
+)
 
 /** The same input without its pixels (one black pixel): enough for [DevelopParams.from]. */
 private fun PipelineInput.colourOnly(): PipelineInput =

@@ -177,15 +177,42 @@ class CpuDevelopTest {
 
         val crc = CRC32().apply { update(CpuDevelop.render(input, recipe)) }.value
 
-        // Version 2 added highlight clipping for input with a known saturation; this scene has none, so its CRC is
-        // the same as version 1's.
+        // Version 2 added highlight clipping for input with a known saturation, version 3 replaced it with highlight
+        // reconstruction and added the Light tone operators; this scene has no saturation and the recipe no tone
+        // slider, so its CRC is still version 1's. The Light operators are pinned by the test below.
         // If this fails the pipeline output changed: that is only legitimate together with a PIPELINE_VERSION bump
         // (docs/adr/0002, "PIPELINE_VERSION rules"); update both here.
-        assertThat(PIPELINE_VERSION).isEqualTo(2)
-        assertThat(crc).isEqualTo(GOLDEN_CRC_V2)
+        assertThat(PIPELINE_VERSION).isEqualTo(3)
+        assertThat(crc).isEqualTo(GOLDEN_CRC_V1)
+    }
+
+    @Test
+    fun `golden checksum pins the Light operators to PIPELINE_VERSION`() {
+        val clipped = SyntheticImages.clippedHighlights(64, 48)
+        val scene = SyntheticImages.scene(64, 48)
+        val recipe = Recipe(
+            light = Light(
+                exposureEv = -0.5f,
+                contrast = 30f,
+                highlights = -70f,
+                shadows = 60f,
+                whites = 20f,
+                blacks = -15f,
+            ),
+        )
+
+        val crc = CRC32().apply {
+            update(CpuDevelop.render(clipped, recipe))
+            update(CpuDevelop.render(scene, recipe))
+        }.value
+
+        // Version 3: highlight reconstruction, highlights/shadows, contrast/whites/blacks (docs/adr/0007).
+        assertThat(PIPELINE_VERSION).isEqualTo(3)
+        assertThat(crc).isEqualTo(GOLDEN_CRC_LIGHT_V3)
     }
 
     private companion object {
-        const val GOLDEN_CRC_V2: Long = 1568956133L
+        const val GOLDEN_CRC_V1: Long = 1568956133L
+        const val GOLDEN_CRC_LIGHT_V3: Long = 757965997L
     }
 }

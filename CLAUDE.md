@@ -77,6 +77,11 @@ own thread), `synthetic/` (generated test images). `PipelineInput` is the pipeli
 5. Extend `GpuParityTest` recipes so the operator is exercised; keep within the tolerance of ADR 0002.
 6. If any pixel output changes: bump `PIPELINE_VERSION` and the golden CRC in `CpuDevelopTest`.
 
+Stages (ADR 0007): `SCENE_FRAG` (WB, highlight reconstruction, matrix, exposure) -> scene texture -> Light low-res passes
+(`gl/LightPasses.kt`, on the `LowResGrid`, RGBA32F, skipped when neutral) -> `DEVELOP_FRAG` (highlights/shadows, base
+look, contrast/whites/blacks) -> working texture -> output. A neighbourhood operator gathers at most one grid cell at full
+res and does the rest on the grid (no tile overlap); upsample with explicit fp32 weights, never hardware bilinear.
+
 Parity and benchmark (emulator or phone, GLES 3.0+ with `EXT_color_buffer_float`):
 
 ```sh

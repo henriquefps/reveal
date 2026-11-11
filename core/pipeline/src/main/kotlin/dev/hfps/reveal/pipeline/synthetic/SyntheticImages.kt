@@ -126,6 +126,69 @@ object SyntheticImages {
     }
 
     /**
+     * A neutral scene-referred step edge (RAW-like, camera neutral under the as-shot light): [dark] on the left half,
+     * [bright] on the right, each modulated by a fine texture of +-[texture] stops (a 2D sine of period 8 px), so
+     * tests can measure halos next to the edge and whether local texture survives a tone change.
+     */
+    fun stepEdge(width: Int, height: Int, dark: Float, bright: Float, texture: Float = 0f): PipelineInput {
+        val data = FloatArray(width * height * PipelineInput.CHANNELS)
+        for (y in 0 until height) {
+            for (x in 0 until width) {
+                val level = if (x < width / 2) dark else bright
+                val t = sin(x * TEXTURE_FREQ) * sin(y * TEXTURE_FREQ)
+                val v = level * StrictMath.pow(2.0, (texture * t).toDouble()).toFloat()
+                for (c in 0 until PipelineInput.CHANNELS) {
+                    data[(y * width + x) * PipelineInput.CHANNELS + c] = v / TEST_AS_SHOT[c]
+                }
+            }
+        }
+        return PipelineInput(InputKind.SCENE_REFERRED, width, height, data, TEST_CAMERA_TO_XYZ, TEST_AS_SHOT)
+    }
+
+    /**
+     * Clipped highlights as a decoded RAW would deliver them (saturation 1.0, every channel clipped at 1.0): a dim
+     * blue-grey background with two Gaussian light blobs in raw camera units. The left blob's colour (raw
+     * `HIGHLIGHT_COLOUR`) peaks at 2.4x the clip in green, so green and red clip in its core while blue survives;
+     * the right blob peaks at 6x and clips every channel. [truth] = true returns the unclipped values (what a sensor
+     * with more headroom would have recorded), for measuring the reconstruction error.
+     */
+    @Suppress("NestedBlockDepth")
+    fun clippedHighlights(width: Int, height: Int, truth: Boolean = false): PipelineInput {
+        val data = FloatArray(width * height * PipelineInput.CHANNELS)
+        val sigma = 0.16f * height
+        for (y in 0 until height) {
+            for (x in 0 until width) {
+                val i = (y * width + x) * PipelineInput.CHANNELS
+                val a = blob(x - width * 0.3f, y - height * 0.5f, sigma) * PARTIAL_PEAK
+                val b = blob(x - width * 0.75f, y - height * 0.5f, sigma * 0.6f) * FULL_PEAK
+                for (c in 0 until PipelineInput.CHANNELS) {
+                    val v = HIGHLIGHT_BACKGROUND[c] + (a + b) * HIGHLIGHT_COLOUR[c]
+                    data[i + c] = if (truth) v else minOf(v, 1f)
+                }
+            }
+        }
+        return PipelineInput(
+            InputKind.SCENE_REFERRED,
+            width,
+            height,
+            data,
+            TEST_CAMERA_TO_XYZ,
+            TEST_AS_SHOT,
+            saturation = if (truth) null else 1f,
+        )
+    }
+
+    private fun blob(dx: Float, dy: Float, sigma: Float): Float =
+        StrictMath.exp((-(dx * dx + dy * dy) / (2f * sigma * sigma)).toDouble()).toFloat()
+
+    /** Raw colour of the highlight blobs (green brightest, as on a real sensor), normalised to green = 1. */
+    val HIGHLIGHT_COLOUR: FloatArray = floatArrayOf(0.55f, 1f, 0.3f)
+    private val HIGHLIGHT_BACKGROUND = floatArrayOf(0.04f, 0.08f, 0.09f)
+    private const val PARTIAL_PEAK = 2.4f
+    private const val FULL_PEAK = 6f
+    private const val TEXTURE_FREQ = 2f * PI.toFloat() / 8f
+
+    /**
      * A demo "scene" as RAW-like linear camera data: sky gradient, sun with over-white core, hills, a colourful
      * foreground of rings, a grey ramp and a colour-checker strip. Meant to look like a photo when developed.
      */

@@ -1,6 +1,6 @@
 # ADR 0002: Pipeline order, working space and GPU/CPU numerics
 
-Status: accepted (M0, W5). Date: 2026-11-10.
+Status: accepted (M0, W5). Date: 2026-11-10. Amended by ADR 0007 (M1 Light: slots 1, 5, 5b, 8; version 3).
 
 ## Fixed operator order
 
@@ -15,15 +15,18 @@ Implemented in M0 are marked **(M0)**; the rest are the reserved slots from `doc
    where green clips first and red/blue are multiplied above it, renders magenta; with it a fully clipped pixel is
    neutral white. It costs the colour of channels brighter than that point (bright saturated reds lose some
    saturation), which highlight reconstruction (slot 5) will recover. Synthetic inputs and future merged data with
-   real headroom leave `saturation` null and are not clipped.
+   real headroom leave `saturation` null and are not clipped. **Replaced in version 3** (ADR 0007): no clamp here
+   any more; highlight reconstruction runs right after this step, in balanced camera space.
 2. **Camera matrix to working space (M0)**: camera RGB to XYZ (D65), Bradford adaptation, XYZ to Rec.2020. Colour
    operators below assume a defined, wide, well-behaved space.
 3. **Lens corrections (later)**: geometry on coordinates, so it is folded into the final resampling (step 13);
    vignetting/CA gains sit here because they act on scene-linear light.
 4. **Exposure (M0)**: a linear gain `2^EV` on scene-linear data. Before the tone curve so +EV recovers highlight
    headroom the curve then rolls off, instead of scaling already-compressed values.
-5. **Highlight reconstruction (later)**: needs scene-linear, balanced, exposure-scaled data and the clipped-channel
-   mask from step 1.
+5. **Highlight reconstruction (M1, ADR 0007)**: needs balanced data and the clipped-channel mask from step 1. It runs
+   right after step 1 in camera space (exposure, a scalar gain, commutes with it).
+   **5b. Highlights / Shadows (M1, ADR 0007)**: edge-aware local tone on scene-linear light, before the base look,
+   so negative highlights can bring the RAW's headroom back before the shoulder compresses it.
 6. **Profile / base look (M0, the "Standard" tone curve)**: turns scene-linear into display-referred values. Every
    user adjustment below acts on this base, so presets and profiles define the look and sliders refine it.
    **Only for scene-referred input.** `PipelineInput.kind` is `SCENE_REFERRED` (demosaiced RAW) or `DISPLAY_REFERRED`
@@ -33,8 +36,8 @@ Implemented in M0 are marked **(M0)**; the rest are the reserved slots from `doc
    patches) round-trips within 1 level with dither on, on the CPU and on the GPU. Exposure and white balance still
    apply to display-referred input; its out-of-range values clip only at the output.
 7. **White balance fine / tint (M0 handles temperature and tint at step 1-2, see below)**.
-8. **Tone (later)**: contrast, highlights/shadows (edge-aware), whites/blacks, curves: display-referred, after the
-   base look.
+8. **Tone (M1, ADR 0007)**: contrast, whites/blacks (curves later): display-referred, after the base look.
+   Highlights/shadows moved to 5b (scene-referred).
 9. **Colour (later)**: vibrance, saturation, HSL, grading, B&W: in a space where saturation is meaningful.
 10. **Local adjustments / masks (later)**: after global colour so masks adjust the globally graded image.
 11. **Detail (later)**: noise reduction then sharpening; NR before sharpening, both before effects.
@@ -123,7 +126,8 @@ version; a legitimate change makes that test fail and the author updates the CRC
 Version 1 is this pipeline. Making the base look identity for display-referred input changes output for such
 inputs, but version 1 has not shipped, so it stays 1 (no cache from an earlier pipeline exists).
 **Version 2** (M0/W6): the highlight clip of slot 1 for input with a known saturation. The golden scene has none,
-so its CRC is unchanged; RAW output changes.
+so its CRC is unchanged; RAW output changes. **Version 3** (M1, ADR 0007): highlight reconstruction replaces that
+clip, and the Light operators exist; a second golden CRC pins them.
 
 ## Determinism
 
@@ -142,7 +146,9 @@ writes the working-space texture 1:1 with `texelFetch`, and the output pass samp
 transform (zoom/pan, mip-mapped bilinear, nearest above 200 % zoom). Tiles (M2) reuse both passes unchanged: a tile
 is an input texture plus an offset/overlap, stage 1 renders it into a tile-sized target, the output pass takes the
 tile's view transform. Local operators will be extra passes between stage 1 and the output pass reading the
-working-space texture; stage 1 is already isolated for that.
+working-space texture; stage 1 is already isolated for that. Since M1 (ADR 0007) stage 1 is two full-res stages
+(scene, develop) with the Light group's low-res passes between them; they need no tile overlap, only cell-aligned
+tiles and a grid pre-pass.
 
 ### Output pass sampling (never from derivatives)
 

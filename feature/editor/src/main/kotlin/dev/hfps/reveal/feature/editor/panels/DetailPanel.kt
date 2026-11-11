@@ -74,9 +74,9 @@ fun DetailPanel(host: PanelHost, modifier: Modifier = Modifier) {
     }
 }
 
-/** A section title of the panel; hidden while a slider is dragged. */
+/** A section title of a panel; hidden while a slider is dragged. */
 @Composable
-private fun Section(host: PanelHost, title: Int) {
+internal fun Section(host: PanelHost, title: Int) {
     FocusRow(host.focus, null) {
         Eyebrow(
             stringResource(title),

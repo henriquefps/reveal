@@ -39,6 +39,17 @@ enum class HistoryField(val group: RecipeGroup) {
     NR_COLOUR(RecipeGroup.DETAIL),
     NR_COLOUR_DETAIL(RecipeGroup.DETAIL),
     NR_COLOUR_SMOOTHNESS(RecipeGroup.DETAIL),
+    TEXTURE(RecipeGroup.EFFECTS),
+    CLARITY(RecipeGroup.EFFECTS),
+    DEHAZE(RecipeGroup.EFFECTS),
+    VIGNETTE_AMOUNT(RecipeGroup.EFFECTS),
+    VIGNETTE_MIDPOINT(RecipeGroup.EFFECTS),
+    VIGNETTE_ROUNDNESS(RecipeGroup.EFFECTS),
+    VIGNETTE_FEATHER(RecipeGroup.EFFECTS),
+    VIGNETTE_HIGHLIGHTS(RecipeGroup.EFFECTS),
+    GRAIN_AMOUNT(RecipeGroup.EFFECTS),
+    GRAIN_SIZE(RecipeGroup.EFFECTS),
+    GRAIN_ROUGHNESS(RecipeGroup.EFFECTS),
 
     // Colour tools (docs/adr/0013). Scalar fields share their ControlId's name.
     TREATMENT(RecipeGroup.PROFILE),
@@ -121,6 +132,7 @@ object RecipeDiff {
         light(before.light, after.light)
         colour(before.colour, after.colour)
         detail(before.detail, after.detail)
+        effects(before.effects, after.effects)
         geometry(before.geometry, after.geometry)
     }
 
@@ -206,6 +218,26 @@ object RecipeDiff {
         scalar(HistoryField.SHARPEN_RADIUS, r.sharpenRadius, before.sharpenRadius, after.sharpenRadius)
         scalar(HistoryField.SHARPEN_DETAIL, r.sharpenDetail, before.sharpenDetail, after.sharpenDetail)
         scalar(HistoryField.SHARPEN_MASKING, r.sharpenMasking, before.sharpenMasking, after.sharpenMasking)
+    }
+
+    private fun MutableList<HistoryStep>.effects(before: Effects, after: Effects) {
+        val r = RecipeRanges
+        scalar(HistoryField.TEXTURE, r.texture, before.texture, after.texture)
+        scalar(HistoryField.CLARITY, r.clarity, before.clarity, after.clarity)
+        scalar(HistoryField.DEHAZE, r.dehaze, before.dehaze, after.dehaze)
+        scalar(HistoryField.VIGNETTE_AMOUNT, r.vignetteAmount, before.vignetteAmount, after.vignetteAmount)
+        scalar(HistoryField.VIGNETTE_MIDPOINT, r.vignetteMidpoint, before.vignetteMidpoint, after.vignetteMidpoint)
+        scalar(HistoryField.VIGNETTE_ROUNDNESS, r.vignetteRoundness, before.vignetteRoundness, after.vignetteRoundness)
+        scalar(HistoryField.VIGNETTE_FEATHER, r.vignetteFeather, before.vignetteFeather, after.vignetteFeather)
+        scalar(
+            HistoryField.VIGNETTE_HIGHLIGHTS,
+            r.vignetteHighlights,
+            before.vignetteHighlights,
+            after.vignetteHighlights,
+        )
+        scalar(HistoryField.GRAIN_AMOUNT, r.grainAmount, before.grainAmount, after.grainAmount)
+        scalar(HistoryField.GRAIN_SIZE, r.grainSize, before.grainSize, after.grainSize)
+        scalar(HistoryField.GRAIN_ROUGHNESS, r.grainRoughness, before.grainRoughness, after.grainRoughness)
     }
 
     private fun MutableList<HistoryStep>.geometry(before: Geometry, after: Geometry) {

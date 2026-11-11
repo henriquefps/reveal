@@ -6,6 +6,7 @@ import dev.hfps.reveal.pipeline.recipe.ControlId
 import dev.hfps.reveal.pipeline.recipe.ControlRange
 import dev.hfps.reveal.pipeline.recipe.CurveChannel
 import dev.hfps.reveal.pipeline.recipe.CurvePoint
+import dev.hfps.reveal.pipeline.recipe.Effects
 import dev.hfps.reveal.pipeline.recipe.Recipe
 import dev.hfps.reveal.pipeline.recipe.RecipeRanges
 import dev.hfps.reveal.pipeline.recipe.Treatment
@@ -53,6 +54,7 @@ object RecipeControls {
             ControlId.NR_COLOUR -> detail.nrColour
             ControlId.NR_COLOUR_DETAIL -> detail.nrColourDetail
             ControlId.NR_COLOUR_SMOOTHNESS -> detail.nrColourSmoothness
+            in EFFECTS_IDS -> effects(recipe.effects, id)
             else -> ColourToolControls.get(recipe, id)
         }
     }
@@ -90,6 +92,7 @@ object RecipeControls {
             ControlId.NR_COLOUR -> recipe.copy(detail = d.copy(nrColour = v))
             ControlId.NR_COLOUR_DETAIL -> recipe.copy(detail = d.copy(nrColourDetail = v))
             ControlId.NR_COLOUR_SMOOTHNESS -> recipe.copy(detail = d.copy(nrColourSmoothness = v))
+            in EFFECTS_IDS -> recipe.copy(effects = withEffect(recipe.effects, id, v))
             else -> ColourToolControls.set(recipe, id, v)
         }
     }
@@ -101,6 +104,53 @@ object RecipeControls {
     /** [recipe] with the profile's treatment set. */
     fun withTreatment(recipe: Recipe, treatment: Treatment): Recipe =
         recipe.copy(profile = recipe.profile.copy(treatment = treatment))
+
+    private val EFFECTS_IDS = setOf(
+        ControlId.TEXTURE,
+        ControlId.CLARITY,
+        ControlId.DEHAZE,
+        ControlId.VIGNETTE_AMOUNT,
+        ControlId.VIGNETTE_MIDPOINT,
+        ControlId.VIGNETTE_ROUNDNESS,
+        ControlId.VIGNETTE_FEATHER,
+        ControlId.VIGNETTE_HIGHLIGHTS,
+        ControlId.GRAIN_AMOUNT,
+        ControlId.GRAIN_SIZE,
+        ControlId.GRAIN_ROUGHNESS,
+    )
+
+    /** The Effects group's controls (docs/adr/0014). */
+    @Suppress("CyclomaticComplexMethod")
+    private fun effects(e: Effects, id: ControlId): Float = when (id) {
+        ControlId.TEXTURE -> e.texture
+        ControlId.CLARITY -> e.clarity
+        ControlId.DEHAZE -> e.dehaze
+        ControlId.VIGNETTE_AMOUNT -> e.vignetteAmount
+        ControlId.VIGNETTE_MIDPOINT -> e.vignetteMidpoint
+        ControlId.VIGNETTE_ROUNDNESS -> e.vignetteRoundness
+        ControlId.VIGNETTE_FEATHER -> e.vignetteFeather
+        ControlId.VIGNETTE_HIGHLIGHTS -> e.vignetteHighlights
+        ControlId.GRAIN_AMOUNT -> e.grainAmount
+        ControlId.GRAIN_SIZE -> e.grainSize
+        ControlId.GRAIN_ROUGHNESS -> e.grainRoughness
+        else -> error("$id is not an effects control")
+    }
+
+    @Suppress("CyclomaticComplexMethod")
+    private fun withEffect(e: Effects, id: ControlId, v: Float): Effects = when (id) {
+        ControlId.TEXTURE -> e.copy(texture = v)
+        ControlId.CLARITY -> e.copy(clarity = v)
+        ControlId.DEHAZE -> e.copy(dehaze = v)
+        ControlId.VIGNETTE_AMOUNT -> e.copy(vignetteAmount = v)
+        ControlId.VIGNETTE_MIDPOINT -> e.copy(vignetteMidpoint = v)
+        ControlId.VIGNETTE_ROUNDNESS -> e.copy(vignetteRoundness = v)
+        ControlId.VIGNETTE_FEATHER -> e.copy(vignetteFeather = v)
+        ControlId.VIGNETTE_HIGHLIGHTS -> e.copy(vignetteHighlights = v)
+        ControlId.GRAIN_AMOUNT -> e.copy(grainAmount = v)
+        ControlId.GRAIN_SIZE -> e.copy(grainSize = v)
+        ControlId.GRAIN_ROUGHNESS -> e.copy(grainRoughness = v)
+        else -> error("$id is not an effects control")
+    }
 
     /** [recipe] with [id] back to "no change" (the absolute white balance back to as shot). */
     fun reset(recipe: Recipe, id: ControlId): Recipe {

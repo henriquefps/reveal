@@ -67,6 +67,7 @@ int main(int argc, char **argv) {
     fprintf(f, "baseline_exposure %.17g\n",
             (c.dng_levels.parsedfields & LIBRAW_DNGFM_BASELINEEXPOSURE) ? c.dng_levels.baseline_exposure : NAN);
     fprintf(f, "model %s\n", raw.imgdata.idata.model);
+    fprintf(f, "iso %d\n", (int)raw.imgdata.other.iso_speed);
     fprintf(f, "data\n");
     auto *img = raw.imgdata.image;
     for (size_t i = 0; i < (size_t)w * h; i++) {

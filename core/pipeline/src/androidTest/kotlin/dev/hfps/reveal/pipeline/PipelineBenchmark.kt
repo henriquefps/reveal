@@ -2,6 +2,7 @@ package dev.hfps.reveal.pipeline
 
 import android.util.Log
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.test.platform.app.InstrumentationRegistry
 import dev.hfps.reveal.pipeline.gl.GpuDevelopRenderer
 import dev.hfps.reveal.pipeline.recipe.BandValues
 import dev.hfps.reveal.pipeline.recipe.BaseLook
@@ -11,6 +12,7 @@ import dev.hfps.reveal.pipeline.recipe.ColourMixer
 import dev.hfps.reveal.pipeline.recipe.CurvePoint
 import dev.hfps.reveal.pipeline.recipe.Curves
 import dev.hfps.reveal.pipeline.recipe.Detail
+import dev.hfps.reveal.pipeline.recipe.Effects
 import dev.hfps.reveal.pipeline.recipe.GradeWheel
 import dev.hfps.reveal.pipeline.recipe.Light
 import dev.hfps.reveal.pipeline.recipe.ParametricCurve
@@ -160,7 +162,75 @@ class PipelineBenchmark {
         }
     }
 
+    /**
+     * Every Detail and Effects slider dragged on the proxy of a 24 MP photo (pixel scale 2.5) with the rest of the
+     * panel on (luminance and colour NR, sharpening with masking, texture, clarity, dehaze, vignette, grain): one
+     * `REVEAL_BENCH` line per slider. The develop output, the Effects grid and the slot 11 intermediates the slider
+     * does not change are cached, as on screen (docs/adr/0012, "Drag cost"; docs/adr/0014).
+     */
+    @Test
+    fun detailAndEffectsSliderDrags(): Unit = runBlocking {
+        val detail = Detail(
+            nrLuminance = 40f,
+            nrColour = 50f,
+            sharpenAmount = 50f,
+            sharpenMasking = 30f,
+        )
+        val effects = Effects(
+            texture = 30f,
+            clarity = 25f,
+            dehaze = 20f,
+            vignetteAmount = -30f,
+            grainAmount = 25f,
+        )
+        val base = Recipe(light = Light(0.2f, contrast = 15f), detail = detail, effects = effects)
+        val sliders: List<Pair<String, (Recipe, Float) -> Recipe>> = listOf(
+            "luminance" to { r, t -> r.copy(detail = r.detail.copy(nrLuminance = 100f * t)) },
+            "luminance detail" to { r, t -> r.copy(detail = r.detail.copy(nrLuminanceDetail = 100f * t)) },
+            "luminance contrast" to { r, t -> r.copy(detail = r.detail.copy(nrLuminanceContrast = 100f * t)) },
+            "colour" to { r, t -> r.copy(detail = r.detail.copy(nrColour = 1f + 99f * t)) },
+            "colour detail" to { r, t -> r.copy(detail = r.detail.copy(nrColourDetail = 100f * t)) },
+            "colour smoothness" to { r, t -> r.copy(detail = r.detail.copy(nrColourSmoothness = 100f * t)) },
+            "sharpening amount" to { r, t -> r.copy(detail = r.detail.copy(sharpenAmount = 1f + 149f * t)) },
+            "sharpening radius" to { r, t -> r.copy(detail = r.detail.copy(sharpenRadius = 0.5f + 2.5f * t)) },
+            "sharpening detail" to { r, t -> r.copy(detail = r.detail.copy(sharpenDetail = 100f * t)) },
+            "sharpening masking" to { r, t -> r.copy(detail = r.detail.copy(sharpenMasking = 100f * t)) },
+            "texture" to { r, t -> r.copy(effects = r.effects.copy(texture = -100f + 200f * t)) },
+            "clarity" to { r, t -> r.copy(effects = r.effects.copy(clarity = -100f + 200f * t)) },
+            "dehaze" to { r, t -> r.copy(effects = r.effects.copy(dehaze = -100f + 200f * t)) },
+            "vignette" to { r, t -> r.copy(effects = r.effects.copy(vignetteAmount = -100f + 200f * t)) },
+            "grain" to { r, t -> r.copy(effects = r.effects.copy(grainAmount = 1f + 99f * t)) },
+        )
+        val image = noisy()
+        val profile = InstrumentationRegistry.getArguments().getString("profile") == "true"
+        for ((name, at) in sliders) {
+            if (profile) {
+                profileDrag(name, image) { at(base, it) }
+                continue
+            }
+            drag("drag $name (Detail + Effects on, proxy of 24 MP)", image, PROXY_SCALE) {
+                at(base, it)
+            }
+        }
+    }
+
     private fun noisy() = SyntheticImages.noisyCard(WIDTH, HEIGHT, seed = 5)
+
+    /** [drag] with `glFinish` after every section (`-e profile true`): mean ms per pass, `REVEAL_BENCH profile`. */
+    private suspend fun profileDrag(name: String, image: PipelineInput, recipeAt: (Float) -> Recipe) {
+        val renderer = GpuDevelopRenderer.create()
+        try {
+            renderer.setInput(image, PROXY_SCALE)
+            val sweep = List(FRAMES) { recipeAt(it.toFloat() / (FRAMES - 1)) }
+            renderer.benchmark(sweep.take(WARMUP))
+            renderer.profilePasses = true
+            renderer.benchmark(sweep)
+            val sections = renderer.passProfile().entries.joinToString { (k, v) -> "$k %.2f".format(v) }
+            Log.i(TAG, "profile $name: $sections")
+        } finally {
+            renderer.close()
+        }
+    }
 
     private suspend fun drag(name: String, image: PipelineInput, pixelScale: Float = 1f, recipeAt: (Float) -> Recipe) {
         val renderer = GpuDevelopRenderer.create()

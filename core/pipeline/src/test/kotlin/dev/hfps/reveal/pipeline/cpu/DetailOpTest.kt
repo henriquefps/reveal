@@ -157,13 +157,16 @@ class DetailOpTest {
 
     @Test
     fun `scale keeps full resolution lengths`() {
-        val full = DetailParams.from(Detail(nrLuminance = 50f, sharpenAmount = 50f), 1f)
-        assertThat(full.step).containsExactly(1, 2, 4, 8, 16).inOrder()
+        val full = DetailParams.from(Detail(nrLuminance = 50f, nrColour = 50f, sharpenAmount = 50f), 1f)
+        assertThat(full.lumStep).containsExactly(1, 2, 4, 8, 16).inOrder()
+        // Colour runs on the 2x2-binned copy: half-resolution steps, its finest level is the binning itself.
+        assertThat(full.chromaStep).containsExactly(0, 1, 2, 4, 8).inOrder()
         assertThat(full.blurRadius).isEqualTo(3)
-        assertThat(full.reach).isEqualTo(2 * 31 + 3)
-        val proxy = DetailParams.from(Detail(nrLuminance = 50f, sharpenAmount = 50f), 2.5f)
-        // Level 0 (1 px at 100 %) is below a proxy pixel: averaged away by the proxy's binning.
-        assertThat(proxy.step).containsExactly(0, 1, 2, 3, 6).inOrder()
+        assertThat(full.reach(full.sharpenReach)).isEqualTo(2 * 31 + 3)
+        val proxy = DetailParams.from(Detail(nrLuminance = 50f, nrColour = 50f, sharpenAmount = 50f), 2.5f)
+        // Levels 0 and 1 (1 and 2 px at 100 %) are below a proxy pixel: averaged away by the proxy's binning.
+        assertThat(proxy.lumStep).containsExactly(0, 0, 2, 3, 6).inOrder()
+        assertThat(proxy.chromaStep).containsExactly(0, 0, 0, 2, 3).inOrder()
         // Radius 1 px is 0.4 proxy px: held at 0.5 with the amount reduced in proportion.
         assertThat(proxy.sharpenGain).isWithin(1e-6f).of(full.sharpenGain * 0.8f)
         assertThat(proxy.gradientScale).isWithin(1e-6f).of(0.4f)
@@ -178,7 +181,18 @@ class DetailOpTest {
             ),
             1f,
         )
-        assertThat(widest.reach).isEqualTo(DetailParams.MAX_REACH)
+        assertThat(widest.reach(widest.sharpenReach)).isEqualTo(DetailParams.MAX_REACH)
+    }
+
+    @Test
+    fun `the noise factor scales both thresholds`() {
+        val d = Detail(nrLuminance = 50f, nrColour = 50f)
+        val ref = DetailParams.from(d, 1f, 1f)
+        val noisy = DetailParams.from(d, 1f, 2f)
+        for (i in 0 until DetailParams.LEVELS) assertThat(noisy.lumTau[i]).isWithin(1e-7f).of(2f * ref.lumTau[i])
+        // Range weights are 1 / (2 sigma^2): twice the sigma, a quarter of the weight.
+        assertThat(noisy.chromaRange).isWithin(1e-3f * ref.chromaRange).of(ref.chromaRange / 4f)
+        assertThat(noisy.lumStep).isEqualTo(ref.lumStep)
     }
 
     @Test

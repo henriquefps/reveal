@@ -6,6 +6,7 @@ import dev.hfps.image.color.Matrix3
 import dev.hfps.image.color.RawColorInfo
 import dev.hfps.image.color.WhiteBalance
 import dev.hfps.reveal.pipeline.InputKind
+import dev.hfps.reveal.pipeline.NoiseInfo
 import dev.hfps.reveal.pipeline.PipelineInput
 import dev.hfps.reveal.pipeline.cpu.Mat3
 
@@ -47,6 +48,7 @@ object PipelineInputMapper {
                 cameraToXyz = matrix.toMat3(),
                 asShotMultipliers = multipliers(raw),
                 saturation = saturation(raw),
+                noise = noise(raw),
             )
         } else {
             PipelineInput(
@@ -56,9 +58,14 @@ object PipelineInputMapper {
                 linearRgb = pixels,
                 cameraToXyz = info.toXyz.toMat3(),
                 asShotMultipliers = null,
+                noise = noise(info),
             )
         }
     }
+
+    /** The noise model's facts from [info]: ISO (RAW only: standard decoders do not report it), make and model. */
+    fun noise(info: ColorInfo): NoiseInfo =
+        NoiseInfo(iso = (info as? RawColorInfo)?.iso, make = info.make, model = info.model)
 
     /** As-shot multipliers (R, G, B) with G = 1: the file's, else daylight, else neutral. */
     fun multipliers(info: RawColorInfo): FloatArray {

@@ -4,7 +4,7 @@ import android.util.Log
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.google.common.truth.Truth.assertThat
 import dev.hfps.reveal.pipeline.cpu.CpuDevelop
-import dev.hfps.reveal.pipeline.cpu.DetailParams
+import dev.hfps.reveal.pipeline.cpu.DevelopParams
 import dev.hfps.reveal.pipeline.cpu.OutputSettings
 import dev.hfps.reveal.pipeline.export.ExportPlan
 import dev.hfps.reveal.pipeline.export.ExportSize
@@ -208,7 +208,7 @@ class ZoomTilesTest {
     private fun exportFull(recipe: Recipe): ByteArray {
         val tiled = TiledRenderer.create(1024)
         try {
-            val reach = DetailParams.from(recipe.detail, 1f).reach
+            val reach = DevelopParams.reach(recipe)
             val plan = ExportPlan.of(FULL_W, FULL_H, recipe.geometry, ExportSize.Original, 1024, reach)
             val width = plan.output.width
             val pixels = ByteArray(width * plan.output.height * 4)

@@ -34,6 +34,17 @@
     <string name="history_nr_colour">Redução de ruído de cor %1$s</string>
     <string name="history_nr_colour_detail">Detalhe de cor %1$s</string>
     <string name="history_nr_colour_smoothness">Suavidade de cor %1$s</string>
+    <string name="history_texture">Textura %1$s</string>
+    <string name="history_clarity">Claridade %1$s</string>
+    <string name="history_dehaze">Remover névoa %1$s</string>
+    <string name="history_vignette_amount">Vinheta %1$s</string>
+    <string name="history_vignette_midpoint">Ponto médio da vinheta %1$s</string>
+    <string name="history_vignette_roundness">Arredondamento da vinheta %1$s</string>
+    <string name="history_vignette_feather">Suavização da vinheta %1$s</string>
+    <string name="history_vignette_highlights">Realces da vinheta %1$s</string>
+    <string name="history_grain_amount">Granulação %1$s</string>
+    <string name="history_grain_size">Tamanho da granulação %1$s</string>
+    <string name="history_grain_roughness">Aspereza da granulação %1$s</string>
     <string name="history_flip_h">Espelhar na horizontal</string>
     <string name="history_flip_v">Espelhar na vertical</string>
     <string name="history_aspect">Proporção: %1$s</string>

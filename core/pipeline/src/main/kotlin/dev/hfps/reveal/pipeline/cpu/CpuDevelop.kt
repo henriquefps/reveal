@@ -13,8 +13,9 @@ object CpuDevelop {
     /**
      * Runs raw WB, highlight reconstruction, camera matrix, exposure, highlights/shadows, the profile (base look),
      * contrast/whites/blacks, the tone curve, vibrance/saturation, the colour mixer or black & white, colour grading
-     * (docs/adr/0013) and Detail (noise reduction, sharpening), returning linear Rec.2020 RGB (`width*height*3`,
-     * display-referred below 1.0) before the output transform. [input] is not modified.
+     * (docs/adr/0013), Detail (noise reduction, sharpening) and the local Effects (texture, clarity, dehaze;
+     * docs/adr/0014), returning linear Rec.2020 RGB (`width*height*3`, display-referred below 1.0) before the output
+     * transform. [input] is not modified.
      * [pixelScale]: full-resolution pixels per pixel of [input] (a proxy's downscale; the Detail operator's scale).
      */
     fun renderLinear(input: PipelineInput, recipe: Recipe, pixelScale: Float = 1f): FloatArray {
@@ -41,13 +42,14 @@ object CpuDevelop {
         } else {
             VibranceSaturationOp.apply(rgb, params.colour)
         }
-        DetailOp.apply(rgb, input.width, input.height, params.detail)
+        DetailOp.apply(rgb, input.width, input.height, params.detail, params.effects, grid)
         return rgb
     }
 
     /**
-     * Slots 1-13: [renderLinear] then the geometry operator (crop, straighten, quarter turns, flips; [GeometryOp]).
-     * The result is [mapping]'s output size (`outputWidth*outputHeight*3`).
+     * Slots 1-13: [renderLinear], the geometry operator (crop, straighten, quarter turns, flips; [GeometryOp]), then
+     * the post-crop vignette and grain ([PostCropOp]). The result is [mapping]'s output size
+     * (`outputWidth*outputHeight*3`).
      */
     fun renderGeometry(
         input: PipelineInput,
@@ -56,7 +58,9 @@ object CpuDevelop {
         pixelScale: Float = 1f,
     ): FloatArray {
         val linear = renderLinear(input, recipe, pixelScale)
-        return if (mapping.isIdentity) linear else GeometryOp.apply(linear, mapping)
+        val out = if (mapping.isIdentity) linear else GeometryOp.apply(linear, mapping)
+        PostCropOp.apply(out, mapping.outputWidth, mapping.outputHeight, PostParams.from(recipe.effects))
+        return out
     }
 
     /** The geometry mapping of [recipe] on [input]: its output size is the size of [render]'s result. */

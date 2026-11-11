@@ -70,7 +70,10 @@ class RecipeCodecTest {
                 """"mixer":{"hue":$BANDS,"saturation":$BANDS,"luminance":$BANDS},""" +
                 """"grading":{"shadows":$WHEEL,"midtones":$WHEEL,"highlights":$WHEEL,"global":$WHEEL,""" +
                 """"blending":50.0,"balance":0.0},"greyMixer":$BANDS},""" +
-                """"effects":{},"detail":{"sharpenAmount":0.0,"sharpenRadius":1.0,"sharpenDetail":25.0,""" +
+                """"effects":{"texture":0.0,"clarity":0.0,"dehaze":0.0,"vignetteAmount":0.0,""" +
+                """"vignetteMidpoint":50.0,"vignetteRoundness":0.0,"vignetteFeather":50.0,"vignetteHighlights":0.0,""" +
+                """"grainAmount":0.0,"grainSize":25.0,"grainRoughness":50.0},""" +
+                """"detail":{"sharpenAmount":0.0,"sharpenRadius":1.0,"sharpenDetail":25.0,""" +
                 """"sharpenMasking":0.0,"nrLuminance":0.0,"nrLuminanceDetail":50.0,"nrLuminanceContrast":0.0,""" +
                 """"nrColour":0.0,"nrColourDetail":50.0,"nrColourSmoothness":50.0},"optics":{},""" +
                 """"geometry":{"crop":null,"angle":0.0,"rotate":0,"flipH":false,"flipV":false,""" +
@@ -86,6 +89,16 @@ class RecipeCodecTest {
 
         assertThat(recipe).isEqualTo(Recipe(light = Light(0.5f)))
         val edited = Recipe(detail = Detail(sharpenAmount = 40f, nrLuminance = 25f, nrColourSmoothness = 70f))
+        assertThat(codec.decode(codec.encode(edited))).isEqualTo(edited)
+    }
+
+    @Test
+    fun `a recipe stored before Effects had fields reads its defaults`() {
+        // Effects was an empty reserved object until M2/C (docs/adr/0014): additive, no RECIPE_VERSION bump.
+        val recipe = codec.decode("""{"v":1,"light":{"exposure":0.5},"effects":{}}""")
+
+        assertThat(recipe).isEqualTo(Recipe(light = Light(0.5f)))
+        val edited = Recipe(effects = Effects(clarity = 30f, vignetteAmount = -40f, grainAmount = 20f))
         assertThat(codec.decode(codec.encode(edited))).isEqualTo(edited)
     }
 

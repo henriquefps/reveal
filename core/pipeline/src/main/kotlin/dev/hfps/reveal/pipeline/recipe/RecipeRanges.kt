@@ -57,6 +57,17 @@ enum class ControlId {
     NR_COLOUR,
     NR_COLOUR_DETAIL,
     NR_COLOUR_SMOOTHNESS,
+    TEXTURE,
+    CLARITY,
+    DEHAZE,
+    VIGNETTE_AMOUNT,
+    VIGNETTE_MIDPOINT,
+    VIGNETTE_ROUNDNESS,
+    VIGNETTE_FEATHER,
+    VIGNETTE_HIGHLIGHTS,
+    GRAIN_AMOUNT,
+    GRAIN_SIZE,
+    GRAIN_ROUGHNESS,
 
     // Tone curve, parametric (docs/adr/0013).
     CURVE_SHADOWS,
@@ -205,6 +216,7 @@ object RecipeRanges {
     private const val SPLIT_MIN = 5f
     private const val SPLIT_MAX = 95f
     private const val HUE_MAX = 360f
+    private const val GRAIN_SIZE_DEFAULT = 25f
 
     private fun bipolar(id: ControlId, max: Float, step: Float, fine: Float, kind: ValueKind) =
         ControlRange(id, -max, max, 0f, step, fine, bipolar = true, neutral = 0f, kind = kind)
@@ -248,6 +260,17 @@ object RecipeRanges {
     val nrColour = unipolar(ControlId.NR_COLOUR, TONE, 0f)
     val nrColourDetail = unipolar(ControlId.NR_COLOUR_DETAIL, TONE, HALF)
     val nrColourSmoothness = unipolar(ControlId.NR_COLOUR_SMOOTHNESS, TONE, HALF)
+    val texture = signedInt(ControlId.TEXTURE)
+    val clarity = signedInt(ControlId.CLARITY)
+    val dehaze = signedInt(ControlId.DEHAZE)
+    val vignetteAmount = signedInt(ControlId.VIGNETTE_AMOUNT)
+    val vignetteMidpoint = unipolar(ControlId.VIGNETTE_MIDPOINT, TONE, HALF)
+    val vignetteRoundness = signedInt(ControlId.VIGNETTE_ROUNDNESS)
+    val vignetteFeather = unipolar(ControlId.VIGNETTE_FEATHER, TONE, HALF)
+    val vignetteHighlights = unipolar(ControlId.VIGNETTE_HIGHLIGHTS, TONE, 0f)
+    val grainAmount = unipolar(ControlId.GRAIN_AMOUNT, TONE, 0f)
+    val grainSize = unipolar(ControlId.GRAIN_SIZE, TONE, GRAIN_SIZE_DEFAULT)
+    val grainRoughness = unipolar(ControlId.GRAIN_ROUGHNESS, TONE, HALF)
 
     private fun split(id: ControlId, neutral: Float) = ControlRange(
         id, SPLIT_MIN, SPLIT_MAX, neutral, 1f, 1f, bipolar = false, neutral = neutral, kind = ValueKind.PERCENT,
@@ -286,6 +309,8 @@ object RecipeRanges {
         temperature, tint, relTemperature, relTint, vibrance, saturation, angle,
         sharpenAmount, sharpenRadius, sharpenDetail, sharpenMasking,
         nrLuminance, nrLuminanceDetail, nrLuminanceContrast, nrColour, nrColourDetail, nrColourSmoothness,
+        texture, clarity, dehaze, vignetteAmount, vignetteMidpoint, vignetteRoundness, vignetteFeather,
+        vignetteHighlights, grainAmount, grainSize, grainRoughness,
     ) + colourTools
 
     private val byId = all.associateBy { it.id }

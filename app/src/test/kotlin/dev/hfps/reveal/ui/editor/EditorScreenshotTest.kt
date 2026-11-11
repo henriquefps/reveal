@@ -59,6 +59,7 @@ import dev.hfps.reveal.pipeline.recipe.CurvePoint
 import dev.hfps.reveal.pipeline.recipe.Curves
 import dev.hfps.reveal.pipeline.recipe.Detail
 import dev.hfps.reveal.pipeline.recipe.EditHistory
+import dev.hfps.reveal.pipeline.recipe.Effects
 import dev.hfps.reveal.pipeline.recipe.Geometry
 import dev.hfps.reveal.pipeline.recipe.GradeRegion
 import dev.hfps.reveal.pipeline.recipe.GradeWheel
@@ -192,6 +193,18 @@ class EditorPhoneScreenshotTest : EditorScreenshotBase("phone") {
         capture("grading_font200")
     }
 
+    /** Effects (docs/adr/0014): every amount at 0, so the shaping sliders are disabled. */
+    @Test fun effects() = shoot("effects") { Editor(tool = ToolId.EFFECTS) }
+
+    /** Effects with presence, a vignette and grain on, the whole panel. */
+    @Test fun effectsEdited() = shoot("effects_edited") {
+        Editor(tool = ToolId.EFFECTS, snap = PanelSnap.EXPANDED, effects = Photos.effects)
+    }
+
+    @Test fun effectsFontScale200() = shoot("effects_font200") {
+        Scaled(2f) { Editor(tool = ToolId.EFFECTS, effects = Photos.effects) }
+    }
+
     @Test fun historyPanel() = shoot("history") {
         Editor(tool = ToolId.HISTORY, snap = PanelSnap.EXPANDED, history = Photos.history)
     }
@@ -262,6 +275,8 @@ class EditorLandscapeScreenshotTest : EditorScreenshotBase("landscape") {
     @Test fun colourMixer() = subPanel("colour_mixer", ToolId.COLOUR, EditorTags.MIXER_ROW)
 
     @Test fun grading() = subPanel("grading", ToolId.COLOUR, EditorTags.GRADING_ROW)
+
+    @Test fun effects() = shoot("effects") { Editor(tool = ToolId.EFFECTS, effects = Photos.effects) }
 }
 
 @RunWith(AndroidJUnit4::class)
@@ -314,8 +329,9 @@ abstract class EditorScreenshotBase(private val size: String) {
         detail: Detail = Detail(),
         base: Recipe = Photos.recipe,
         preview: ImageBitmap = Photos.edited,
+        effects: Effects = Effects(),
     ) {
-        val recipe = base.copy(geometry = geometry, detail = detail)
+        val recipe = base.copy(geometry = geometry, detail = detail, effects = effects)
         EditorTheme {
             EditorContent(
                 state = EditorUiState(
@@ -385,6 +401,9 @@ private object Photos {
         light = Light(exposureEv = 0.7f, contrast = 18f, highlights = -64f, shadows = 35f),
         colour = Colour(WhiteBalance(temperatureK = 5600f, tint = 8f, mode = WbMode.CUSTOM), vibrance = 20f),
     )
+
+    /** A typical Effects edit: some presence, a darkening vignette and fine grain. */
+    val effects = Effects(texture = 20f, clarity = 25f, dehaze = 10f, vignetteAmount = -30f, grainAmount = 20f)
 
     /** A typical high-ISO Detail edit. */
     val detail = Detail(sharpenAmount = 45f, sharpenMasking = 30f, nrLuminance = 35f, nrColour = 40f)

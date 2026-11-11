@@ -13,6 +13,7 @@ import dev.hfps.reveal.pipeline.recipe.CropRect
 import dev.hfps.reveal.pipeline.recipe.CurvePoint
 import dev.hfps.reveal.pipeline.recipe.Curves
 import dev.hfps.reveal.pipeline.recipe.Detail
+import dev.hfps.reveal.pipeline.recipe.Effects
 import dev.hfps.reveal.pipeline.recipe.Geometry
 import dev.hfps.reveal.pipeline.recipe.GradeWheel
 import dev.hfps.reveal.pipeline.recipe.Light
@@ -197,7 +198,7 @@ class CpuDevelopTest {
         // If this fails the pipeline output changed: that is only legitimate together with a PIPELINE_VERSION bump
         // (docs/adr/0002, "PIPELINE_VERSION rules"); update both here. Version 5 added geometry (slot 13), which a
         // recipe without geometry leaves out: same CRC.
-        assertThat(PIPELINE_VERSION).isEqualTo(7)
+        assertThat(PIPELINE_VERSION).isEqualTo(8)
         assertThat(crc).isEqualTo(GOLDEN_CRC_V4)
     }
 
@@ -223,7 +224,7 @@ class CpuDevelopTest {
 
         // Version 3: highlight reconstruction, highlights/shadows, contrast/whites/blacks (docs/adr/0007); version 4
         // the new Standard under them (docs/adr/0008).
-        assertThat(PIPELINE_VERSION).isEqualTo(7)
+        assertThat(PIPELINE_VERSION).isEqualTo(8)
         assertThat(crc).isEqualTo(GOLDEN_CRC_LIGHT_V4)
     }
 
@@ -243,7 +244,7 @@ class CpuDevelopTest {
         }.value
 
         // Version 4: profiles, vibrance/saturation, relative white balance (docs/adr/0008).
-        assertThat(PIPELINE_VERSION).isEqualTo(7)
+        assertThat(PIPELINE_VERSION).isEqualTo(8)
         assertThat(crc).isEqualTo(GOLDEN_CRC_COLOUR_V4)
     }
 
@@ -262,7 +263,7 @@ class CpuDevelopTest {
         }.value
 
         // Version 5: crop, straighten (Catmull-Rom), quarter turns and flips as one resampling (docs/adr/0002).
-        assertThat(PIPELINE_VERSION).isEqualTo(7)
+        assertThat(PIPELINE_VERSION).isEqualTo(8)
         assertThat(crc).isEqualTo(GOLDEN_CRC_GEOMETRY_V5)
     }
 
@@ -294,8 +295,44 @@ class CpuDevelopTest {
         }.value
 
         // Version 6: Detail (slot 11), noise reduction and sharpening (docs/adr/0012); identity at its defaults.
-        assertThat(PIPELINE_VERSION).isEqualTo(7)
-        assertThat(crc).isEqualTo(GOLDEN_CRC_DETAIL_V6)
+        // Version 8: separable luminance levels, colour on a half-resolution copy, the noise model (M2/C).
+        assertThat(PIPELINE_VERSION).isEqualTo(8)
+        assertThat(crc).isEqualTo(GOLDEN_CRC_DETAIL_V8)
+    }
+
+    @Test
+    fun `golden checksum pins the effects to PIPELINE_VERSION`() {
+        val scene = SyntheticImages.scene(96, 64)
+        val card = SyntheticImages.noisyCard(96, 64, seed = 4)
+        val local = Recipe(light = Light(0.2f), effects = Effects(texture = 40f, clarity = 60f, dehaze = 35f))
+        val negative = Recipe(
+            detail = Detail(nrLuminance = 30f, sharpenAmount = 40f),
+            effects = Effects(texture = -70f, clarity = -50f, dehaze = -60f),
+        )
+        val post = Recipe(
+            geometry = Geometry(crop = CropRect(0.1f, 0.05f, 0.9f, 0.95f), angle = 3f),
+            effects = Effects(
+                vignetteAmount = -60f,
+                vignetteRoundness = 40f,
+                vignetteHighlights = 50f,
+                grainAmount = 50f,
+                grainSize = 60f,
+                grainRoughness = 70f,
+            ),
+        )
+        val light = Recipe(effects = Effects(vignetteAmount = 50f, vignetteRoundness = -80f, vignetteFeather = 10f))
+
+        val crc = CRC32().apply {
+            update(CpuDevelop.render(scene, local))
+            update(CpuDevelop.render(card, negative))
+            update(CpuDevelop.render(scene, post))
+            update(CpuDevelop.render(scene, light))
+            update(CpuDevelop.render(scene, local, pixelScale = 2.5f))
+        }.value
+
+        // Version 8: Effects (slot 12 and the post-crop finish, docs/adr/0014); identity at their defaults.
+        assertThat(PIPELINE_VERSION).isEqualTo(8)
+        assertThat(crc).isEqualTo(GOLDEN_CRC_EFFECTS_V8)
     }
 
     @Test
@@ -344,12 +381,13 @@ class CpuDevelopTest {
         }.value
 
         // Version 7: tone curve, colour mixer, black & white, colour grading (docs/adr/0013).
-        assertThat(PIPELINE_VERSION).isEqualTo(7)
+        assertThat(PIPELINE_VERSION).isEqualTo(8)
         assertThat(crc).isEqualTo(GOLDEN_CRC_TOOLS_V6)
     }
 
     private companion object {
-        const val GOLDEN_CRC_DETAIL_V6: Long = 2313595005L
+        const val GOLDEN_CRC_DETAIL_V8: Long = 645044156L
+        const val GOLDEN_CRC_EFFECTS_V8: Long = 864947348L
         const val GOLDEN_CRC_TOOLS_V6: Long = 1217209347L
         const val GOLDEN_CRC_V4: Long = 3273411752L
         const val GOLDEN_CRC_LIGHT_V4: Long = 2469709740L

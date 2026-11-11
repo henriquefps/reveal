@@ -209,6 +209,47 @@ object SyntheticImages {
         return PipelineInput(InputKind.SCENE_REFERRED, width, height, data, TEST_CAMERA_TO_XYZ, TEST_AS_SHOT)
     }
 
+    /**
+     * A hazy landscape for Dehaze (docs/adr/0014), display-referred linear sRGB: a haze-free scene `J` (saturated
+     * colour patches, shadows, a sky band) seen through the haze model `I = J t + A (1 - t)` with the atmospheric light
+     * [HAZE_AIR] and a transmission `t = exp(-2.2 * depth)` that falls towards the top (far away). [truth] = true
+     * returns `J`, what a perfect dehaze recovers.
+     */
+    @Suppress("NestedBlockDepth")
+    fun hazy(width: Int, height: Int, truth: Boolean = false): PipelineInput {
+        val data = FloatArray(width * height * PipelineInput.CHANNELS)
+        for (y in 0 until height) {
+            for (x in 0 until width) {
+                val fy = y.toFloat() / height
+                val depth = 1f - fy
+                val t = StrictMath.exp(-HAZE_DENSITY * depth.toDouble()).toFloat()
+                val j = when {
+                    fy < 0.15f -> floatArrayOf(0.25f, 0.4f, 0.75f)
+
+                    else -> {
+                        val patch = (x * 6 / width + (y * 4 / height)) % 4
+                        val shade = if ((x / 12 + y / 12) % 2 == 0) 1f else 0.35f
+                        when (patch) {
+                            0 -> floatArrayOf(0.5f, 0.08f, 0.05f)
+                            1 -> floatArrayOf(0.06f, 0.35f, 0.08f)
+                            2 -> floatArrayOf(0.05f, 0.1f, 0.45f)
+                            else -> floatArrayOf(0.3f, 0.25f, 0.04f)
+                        }.map { it * shade }.toFloatArray()
+                    }
+                }
+                val i = (y * width + x) * PipelineInput.CHANNELS
+                for (c in 0 until PipelineInput.CHANNELS) {
+                    data[i + c] = if (truth) j[c] else j[c] * t + HAZE_AIR[c] * (1f - t)
+                }
+            }
+        }
+        return PipelineInput.linearSrgb(width, height, data)
+    }
+
+    /** The atmospheric light of [hazy] (linear sRGB, slightly blue). */
+    val HAZE_AIR: FloatArray = floatArrayOf(0.78f, 0.82f, 0.88f)
+    private const val HAZE_DENSITY = 2.2
+
     /** A standard normal sample (Box-Muller), deterministic for a seeded [random]. */
     private fun gaussian(random: Random): Float {
         val u = random.nextDouble().coerceAtLeast(1e-12)

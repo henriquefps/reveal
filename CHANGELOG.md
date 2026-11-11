@@ -17,6 +17,17 @@ All notable changes to Reveal are documented here. The format follows
   blending and balance; 3-way view or one large wheel.
 - Black & white: a Colour / Black & white switch in the Colour panel, with a grey mix per source colour, Auto mix
   and the targeted adjustment; colour grading tones black & white photos.
+- Effects panel: Texture (medium detail such as skin and foliage, negative to smooth it), Clarity (midtone local
+  contrast) and Dehaze (removes or adds atmospheric haze), all edge-aware with no halos; a vignette after crop (amount,
+  midpoint, roundness, feather, highlights) that follows the crop; grain (amount, size, roughness) that keeps its size
+  relative to the picture and looks the same in the editor, at 100 % and in exports of any size.
+- Noise reduction now knows how noisy the photo should be (ISO and camera from the RAW), so an amount means the same
+  at ISO 200 and ISO 12800.
+
+### Changed
+- Detail sliders respond faster while dragging: sharpening on its own now keeps up with the 120 Hz display, and
+  luminance noise reduction drags cost about a quarter less. Colour noise reduction removes slightly more colour noise.
+  Photos edited with Detail look marginally different (pipeline version 8).
 
 ## [0.2.1] - 2026-11-11
 

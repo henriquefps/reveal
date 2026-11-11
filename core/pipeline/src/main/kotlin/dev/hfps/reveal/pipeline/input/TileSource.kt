@@ -87,6 +87,7 @@ class NativeRawTileSource(
         },
         asShotMultipliers = PipelineInputMapper.multipliers(info),
         saturation = PipelineInputMapper.saturation(info),
+        noise = PipelineInputMapper.noise(info),
     )
     private val samples: ShortBuffer = image.samples
     private var row = ShortArray(0)
@@ -314,8 +315,16 @@ private fun linearise(
 }
 
 /** The same input without its pixels (one black pixel): enough for `DevelopParams.from`. */
-fun PipelineInput.colourOnly(): PipelineInput =
-    PipelineInput(kind, 1, 1, FloatArray(PipelineInput.CHANNELS), cameraToXyz, asShotMultipliers?.copyOf(), saturation)
+fun PipelineInput.colourOnly(): PipelineInput = PipelineInput(
+    kind,
+    1,
+    1,
+    FloatArray(PipelineInput.CHANNELS),
+    cameraToXyz,
+    asShotMultipliers?.copyOf(),
+    saturation,
+    noise,
+)
 
 private const val RGBA = 4
 private const val MASK = 0xFFFF

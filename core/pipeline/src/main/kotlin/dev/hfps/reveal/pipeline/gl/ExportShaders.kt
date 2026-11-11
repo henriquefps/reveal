@@ -123,7 +123,9 @@ void main() {
 """
 
     /**
-     * The output transform of an export tile: the working-space texel 1:1 (`texelFetch`), the output matrix, clamp,
+     * The output transform of an export tile: the working-space texel 1:1 (`texelFetch`), the post-crop vignette and
+     * grain at the output pixel (docs/adr/0014: at the export's own size, so grain keeps its size relative to the
+     * picture), the output matrix, clamp,
      * sRGB OETF, then either 8-bit quantisation with the dither of the output pixel `uOrigin + p` (the same noise as
      * `OutputTransformOp` and the on-screen pass), or (`uHigh = 1`) the encoded value unquantised for 10/16-bit
      * outputs. Row 0 of the target is the top row of the tile.
@@ -134,11 +136,18 @@ uniform mat3 uToOutput;
 uniform ivec2 uOrigin;
 uniform uvec2 uDither;     // x = seed, y = 1 when dithering is on
 uniform int uHigh;
+uniform vec4 uPost0;       // post-crop vignette and grain (EffectsShaders.POST); uPost1.w = 0 when off
+uniform vec4 uPost1;
+uniform vec4 uPost2;
+uniform vec3 uPostOut;     // xy = output size, z = lattice cells per output pixel
 out vec4 outColor;
-""" + Shaders.OUTPUT_FUNCTIONS + """
+""" + Shaders.OUTPUT_FUNCTIONS + EffectsShaders.POST + """
 void main() {
     ivec2 p = ivec2(gl_FragCoord.xy);
     vec3 c = texelFetch(uStage, p, 0).rgb;
+    if (uPost1.w != 0.0) {
+        c = postCrop(c, vec2(p + uOrigin) + 0.5, uPostOut.xy, uPostOut.z, uPost0, uPost1, uPost2);
+    }
     c = clamp(uToOutput * c, 0.0, 1.0);
     vec3 e = srgbOetf(c);
     if (uHigh == 1) {

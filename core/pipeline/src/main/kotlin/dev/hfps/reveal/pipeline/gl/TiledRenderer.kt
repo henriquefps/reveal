@@ -10,6 +10,7 @@ import dev.hfps.reveal.pipeline.cpu.DevelopParams
 import dev.hfps.reveal.pipeline.cpu.HighlightReconstructionOp
 import dev.hfps.reveal.pipeline.cpu.OutputSettings
 import dev.hfps.reveal.pipeline.cpu.OutputTransformOp
+import dev.hfps.reveal.pipeline.cpu.PostParams
 import dev.hfps.reveal.pipeline.export.ExportPlan
 import dev.hfps.reveal.pipeline.export.PixelBox
 import dev.hfps.reveal.pipeline.export.PixelSize
@@ -55,7 +56,7 @@ data class TiledRenderStats(
  *    chroma statistics, and (after the chroma grid is finished) of the local-tone guide on the scene stage; each
  *    grid is then finished once for the whole image ([LightPasses]). Same sums in the same order as a whole-image
  *    render: the grids are bit-identical, so tiles agree with each other and with an untiled render.
- * 2. **Main pass** per output tile: upload its input region (with the Detail operator's apron), scene stage, develop
+ * 2. **Main pass** per output tile: upload its input region (with the apron of slots 11-12), scene stage, develop
  *    stage, Detail (slot 11, [DetailPasses], on textures that are free at that point), the geometry operator (slot
  *    13, `GeometryOp`: crop, straighten, quarter turns, flips; an exact copy that cuts off the apron when only Detail
  *    needs it), then (when the size changes) the two Lanczos passes, then the output transform with the output
@@ -112,6 +113,11 @@ class TiledRenderer private constructor(requestedTile: Int, private val share: E
     private var colsFbo = 0
     private var outFbo = 0
     private var outHigh = false
+    private var lumHTex = 0
+    private var lumHFbo = 0
+    private val halfTex = IntArray(3)
+    private val halfFbo = IntArray(3)
+    private val effects = EffectsPasses()
 
     /**
      * Develops [source] with [recipe] as [plan] says and streams the output to [sink]. Blocking (runs on the renderer's
@@ -133,8 +139,8 @@ class TiledRenderer private constructor(requestedTile: Int, private val share: E
     ): TiledRenderStats = onGl {
         require(plan.maxTile <= tileSize) { "plan tiles ${plan.maxTile} exceed the allocated $tileSize" }
         require(plan.imageWidth == source.width && plan.imageHeight == source.height) { "plan is for another image" }
-        require(plan.reach >= DevelopParams.from(source.colour, recipe).detail.reach) {
-            "plan apron ${plan.reach} below the Detail operator's reach"
+        require(plan.reach >= DevelopParams.from(source.colour, recipe).reach) {
+            "plan apron ${plan.reach} below the reach of Detail and Effects"
         }
         renderOnGl(source, recipe, plan, output, sink, high, cancel, progress)
     }
@@ -156,7 +162,8 @@ class TiledRenderer private constructor(requestedTile: Int, private val share: E
         val grid = light.allocate(source.width, source.height)
         val prepass = plan.prepassTiles(grid)
         val tiles = plan.outputTiles()
-        val prepassRuns = (if (params.highlights != null) 1 else 0) + (if (params.tone.localActive) 1 else 0)
+        val prepassRuns = (if (params.highlights != null) 1 else 0) + (if (params.tone.localActive) 1 else 0) +
+            (if (params.effects.gridActive) 1 else 0)
         val steps = tiles.size + prepassRuns * prepass.size
         var done = 0
         fun step() {
@@ -164,11 +171,12 @@ class TiledRenderer private constructor(requestedTile: Int, private val share: E
             progress(done++.toFloat() / steps)
         }
         val uploader = Uploader(source)
-        val timing = LongArray(2)
+        val timing = LongArray(3)
         val reconstruct = buildGrids(params, prepass, uploader, ::step, timing)
         val t2 = System.nanoTime()
         // 2. The output tiles.
         val matrix = OutputTransformOp.workingToOutput(output.space).toFloatArray()
+        val post = params.effects.post
         val band = readBand(high)
         for (tile in tiles) {
             step()
@@ -192,7 +200,7 @@ class TiledRenderer private constructor(requestedTile: Int, private val share: E
                 resample(colsFbo, rowsTex, horizontal = false, plan, out, box, out.width, out.height)
                 stage = colsTex
             }
-            outputPass(stage, tile.output, matrix, output, high)
+            outputPass(stage, tile.output, matrix, output, high, post, plan.output)
             readBack(tile.output, band, high, sink)
         }
         GLES30.glFinish()
@@ -203,7 +211,7 @@ class TiledRenderer private constructor(requestedTile: Int, private val share: E
             prepassTiles = prepass.size,
             outputTiles = tiles.size,
             reconstructMs = timing[0] / NANOS_PER_MS,
-            guideMs = timing[1] / NANOS_PER_MS,
+            guideMs = (timing[1] + timing[2]) / NANOS_PER_MS,
             mainMs = (t3 - t2) / NANOS_PER_MS,
             uploadMs = uploader.nanos / NANOS_PER_MS,
         )
@@ -212,8 +220,9 @@ class TiledRenderer private constructor(requestedTile: Int, private val share: E
     /**
      * The grid pre-passes over [prepass] (cell-aligned tiles of the whole image) and the UBOs of [params]: 1a.
      * highlight reconstruction's chroma grid (only when some pixel reaches the clip ramp, as in the preview), 1b. the
-     * local-tone guide from the scene stage of every pre-pass tile. Returns whether reconstruction runs; [timing] gets
-     * the nanoseconds of each.
+     * local-tone guide from the scene stage of every pre-pass tile, 1c. the Effects grid (clarity, dehaze) from the
+     * develop stage of every pre-pass tile (docs/adr/0014). Returns whether reconstruction runs; [timing] gets the
+     * nanoseconds of each.
      */
     private fun buildGrids(
         params: DevelopParams,
@@ -251,8 +260,22 @@ class TiledRenderer private constructor(requestedTile: Int, private val share: E
             }
             light.guideFinish()
         }
+        val t2 = System.nanoTime()
+        if (params.effects.gridActive) {
+            val g = checkNotNull(light.grid)
+            effects.allocate(g.width, g.height)
+            for (tile in prepass) {
+                step()
+                uploader.upload(tile)
+                scenePass(tile, reconstruct)
+                developPass(tile, params.tone.localActive, labOut = true)
+                effects.rows(workTex, tile.x, tile.y, tile.width, tile.height)
+            }
+            effects.finish()
+        }
         timing[0] = t1 - t0
-        timing[1] = System.nanoTime() - t1
+        timing[1] = t2 - t1
+        if (timing.size > 2) timing[2] = System.nanoTime() - t2
         return reconstruct
     }
 
@@ -264,20 +287,27 @@ class TiledRenderer private constructor(requestedTile: Int, private val share: E
     }
 
     /**
-     * Develop stage of the uploaded [region] (after its scene stage), then Detail when it runs; returns the texture
-     * holding the region's working-space result.
+     * Develop stage of the uploaded [region] (after its scene stage), then Detail and the local Effects when they run
+     * (the Effects grid must be built: [buildGrids]); returns the texture holding the region's working-space result.
      */
     private fun developRegion(region: PixelBox, params: DevelopParams, imageWidth: Int, imageHeight: Int): Int {
-        val d = params.detail
-        developPass(region, params.tone.localActive, labOut = d.active)
-        if (!d.active) return workTex
+        developPass(region, params.tone.localActive, labOut = params.localActive)
+        if (!params.localActive) return workTex
         return detail.run(
-            d,
+            params.detail,
+            params.effects,
+            grid = if (params.effects.gridActive) effects else null,
             lab = workTex,
-            levelA = GlTarget(sourceTex, sourceFbo),
-            levelB = GlTarget(sceneTex, sceneFbo),
-            blurA = GlTarget(rowsTex, rowsFbo),
-            blurB = GlTarget(colsTex, colsFbo),
+            t = DetailPasses.Targets(
+                lumA = GlTarget(sourceTex, sourceFbo),
+                lumB = GlTarget(sceneTex, sceneFbo),
+                lumH = GlTarget(lumHTex, lumHFbo),
+                halfD = GlTarget(halfTex[0], halfFbo[0]),
+                halfA = GlTarget(halfTex[1], halfFbo[1]),
+                halfB = GlTarget(halfTex[2], halfFbo[2]),
+                blurA = GlTarget(rowsTex, rowsFbo),
+                blurB = GlTarget(colsTex, colsFbo),
+            ),
             output = null,
             region = DetailPasses.Region(region.x, region.y, region.width, region.height, imageWidth, imageHeight),
         ).texture
@@ -300,6 +330,8 @@ class TiledRenderer private constructor(requestedTile: Int, private val share: E
             exposure = params.exposureGain,
             highlights = params.highlights,
             local = params.tone.localActive,
+            // The Effects grid is built from the develop output: everything before slot 11 (never the amounts).
+            develop = if (params.effects.gridActive) params.withoutDetail() else null,
         )
         if (key != gridKey || zoomSource !== source) {
             if (light.grid?.let { it.width != source.width || it.height != source.height } != false) {
@@ -317,7 +349,7 @@ class TiledRenderer private constructor(requestedTile: Int, private val share: E
                 plan.prepassTiles(checkNotNull(light.grid)),
                 Uploader(source),
                 {},
-                LongArray(2),
+                LongArray(3),
             )
             gridKey = key
             zoomSource = source
@@ -349,7 +381,7 @@ class TiledRenderer private constructor(requestedTile: Int, private val share: E
         check(zoomSource === source && gridKey != null) { "prepareZoom first" }
         val start = System.nanoTime()
         val params = DevelopParams.from(source.colour, recipe)
-        val region = ExportPlan.grow(core, border + params.detail.reach, source.width, source.height)
+        val region = ExportPlan.grow(core, border + params.reach, source.width, source.height)
         require(region.width <= tileSize && region.height <= tileSize) { "tile region exceeds $tileSize" }
         uploadParams(params, gridReconstruct)
         Uploader(source).upload(region)
@@ -407,6 +439,7 @@ class TiledRenderer private constructor(requestedTile: Int, private val share: E
         val exposure: Float,
         val highlights: Any?,
         val local: Boolean,
+        val develop: DevelopParams?,
     )
 
     // ------------------------------------------------------------------ passes
@@ -483,7 +516,16 @@ class TiledRenderer private constructor(requestedTile: Int, private val share: E
         GlSupport.checkError("export resampling")
     }
 
-    private fun outputPass(stage: Int, out: PixelBox, matrix: FloatArray, settings: OutputSettings, high: Boolean) {
+    @Suppress("LongParameterList")
+    private fun outputPass(
+        stage: Int,
+        out: PixelBox,
+        matrix: FloatArray,
+        settings: OutputSettings,
+        high: Boolean,
+        post: PostParams,
+        size: PixelSize,
+    ) {
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, outFbo)
         GLES30.glViewport(0, 0, out.width, out.height)
         val p = outputProgram
@@ -498,6 +540,28 @@ class TiledRenderer private constructor(requestedTile: Int, private val share: E
             if (settings.dither) 1 else 0,
         )
         GLES30.glUniform1i(GLES30.glGetUniformLocation(p, "uHigh"), if (high) 1 else 0)
+        val flags = (if (post.vignetteActive) 1 else 0) or (if (post.grainActive) 2 else 0)
+        GLES30.glUniform4f(
+            GLES30.glGetUniformLocation(p, "uPost0"),
+            post.vignette,
+            post.midpoint,
+            post.feather,
+            post.highlights,
+        )
+        GLES30.glUniform4f(
+            GLES30.glGetUniformLocation(p, "uPost1"),
+            post.round,
+            post.exponent,
+            post.norm,
+            flags.toFloat(),
+        )
+        GLES30.glUniform4f(GLES30.glGetUniformLocation(p, "uPost2"), post.grain, post.roughness, 0f, 0f)
+        GLES30.glUniform3f(
+            GLES30.glGetUniformLocation(p, "uPostOut"),
+            size.width.toFloat(),
+            size.height.toFloat(),
+            post.grainScale(maxOf(size.width, size.height)),
+        )
         bind(stage, stage)
         GLES30.glDrawArrays(GLES30.GL_TRIANGLES, 0, 3)
         GlSupport.checkError("export output pass")
@@ -617,6 +681,7 @@ class TiledRenderer private constructor(requestedTile: Int, private val share: E
         tools = ColourToolShaders.Gl(developProgram)
         light.init()
         detail.init()
+        effects.init()
         val vaos = IntArray(1)
         GLES30.glGenVertexArrays(1, vaos, 0)
         vao = vaos[0]
@@ -653,6 +718,14 @@ class TiledRenderer private constructor(requestedTile: Int, private val share: E
         outHigh = false
         outTex = texture(size, size, GLES30.GL_RGBA8)
         outFbo = framebuffer(outTex)
+        // Slots 11-12 (DetailPasses): the luminance levels' horizontal axis, the colour path's half-resolution copies.
+        lumHTex = texture(size, size, GLES30.GL_R16F)
+        lumHFbo = framebuffer(lumHTex)
+        val half = DetailPasses.HalfRegion.maxSize(size)
+        for (i in 0 until 3) {
+            halfTex[i] = texture(half, half, GLES30.GL_RGBA16F)
+            halfFbo[i] = framebuffer(halfTex[i])
+        }
     }
 
     private fun ensureOutputTarget(high: Boolean) {
@@ -665,8 +738,10 @@ class TiledRenderer private constructor(requestedTile: Int, private val share: E
     }
 
     private fun deleteTiles() {
-        val textures = intArrayOf(sourceTex, sceneTex, workTex, rowsTex, colsTex, outTex).filter { it != 0 }
-        val fbos = intArrayOf(sourceFbo, sceneFbo, workFbo, rowsFbo, colsFbo, outFbo).filter { it != 0 }
+        val textures = (intArrayOf(sourceTex, sceneTex, workTex, rowsTex, colsTex, outTex, lumHTex) + halfTex)
+            .filter { it != 0 }
+        val fbos = (intArrayOf(sourceFbo, sceneFbo, workFbo, rowsFbo, colsFbo, outFbo, lumHFbo) + halfFbo)
+            .filter { it != 0 }
         if (textures.isNotEmpty()) GLES30.glDeleteTextures(textures.size, textures.toIntArray(), 0)
         if (fbos.isNotEmpty()) GLES30.glDeleteFramebuffers(fbos.size, fbos.toIntArray(), 0)
         sourceTex = 0
@@ -681,6 +756,10 @@ class TiledRenderer private constructor(requestedTile: Int, private val share: E
         rowsFbo = 0
         colsFbo = 0
         outFbo = 0
+        lumHTex = 0
+        lumHFbo = 0
+        halfTex.fill(0)
+        halfFbo.fill(0)
         GLES30.glGetError()
     }
 
@@ -737,6 +816,7 @@ class TiledRenderer private constructor(requestedTile: Int, private val share: E
                     deleteTiles()
                     light.release()
                     detail.release()
+                    effects.release()
                     GLES30.glDeleteFramebuffers(2, intArrayOf(atlasFbo0, atlasFbo1), 0)
                     GLES30.glDeleteProgram(copyProgram)
                     GLES30.glDeleteBuffers(3, intArrayOf(developUbo, lightUbo, lookUbo), 0)

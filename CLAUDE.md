@@ -114,6 +114,8 @@ ANDROID_SERIAL=emulator-<port> ./gradlew :core:pipeline:connectedDebugAndroidTes
 adb -s emulator-<port> logcat -d -s REVEAL_PARITY REVEAL_BENCH     # measured errors and frame times
 ```
 
+Slot 12 (Effects, ADR 0014) and the post-crop vignette and grain: see "Effects and Detail speed" below.
+
 Debug canvas: `adb -s emulator-<port> shell am start -n dev.hfps.reveal.debug/dev.hfps.reveal.debug.PipelineDebugActivity`
 (debug build only: `app/src/debug`, hosting `EditorDebugScreen` on a synthetic image).
 
@@ -274,7 +276,7 @@ Detail is slot 11: `cpu/DetailOp.kt` (`DetailParams.from(detail, pixelScale)`: l
 `gl/DetailPasses.kt` (the caller owns the textures). The develop stage writes OkLab when Detail runs (`uLabOut`). Every
 value a pass stores in RGBA16F goes through `q16` / `Half.round` (explicit float16 rounding, same on CPU and GPU):
 keep that for any new stored intermediate, a driver's own rounding biased the cascade by half a level. A neighbourhood
-operator needs an apron in tiles: export plans take `reach` (`ExportPlan.of(..., reach)`, `DetailParams.reach`).
+operator needs an apron in tiles: export plans take `reach` (`ExportPlan.of(..., reach)`, `DevelopParams.reach`: Detail and Effects' texture).
 The panel is `panels/DetailPanel.kt`; the Masking drag shows the mask (`GpuDevelopRenderer.setDetailMask`).
 
 Zoom: `EditorViewModel.loadFullResolution` decodes the original after the proxy (`PhotoOpener.openFullResolution`:
@@ -296,6 +298,32 @@ adb -s emulator-<port> logcat -d -s REVEAL_BENCH REVEAL_ZOOM REVEAL_EDITOR_TEST 
 scripts/calibration/rawdump.sh core/image/build/samples/sony-a7c-iso12800.arw build/calibration/a7c.rdump full
 REVEAL_DETAIL_DUMP=$PWD/build/calibration/a7c.rdump REVEAL_DETAIL_OUT=$PWD/build/calibration/a7c REVEAL_DETAIL_CROP=4000,1650,480,480 \
   ./gradlew :core:pipeline:testDebugUnitTest --tests '*DetailRenderSheetTest*' --rerun
+```
+
+## Effects and Detail speed (`:core:pipeline`, `:feature:editor`, M2/C, ADR 0014 and ADR 0012 "M2/C")
+
+Slot 12 shares Detail's final pass (`DetailShaders.FINAL_FRAG`, CPU `DetailOp.render`): the develop stage writes OkLab
+when `DevelopParams.localActive`; texture is the second channel of the blur passes (cross-bilateral), clarity and dehaze
+read the Effects grid (`cpu/EffectsOp.kt` `EffectsGrid`, GPU `gl/EffectsPasses.kt`, built from the develop output
+before Detail, never from the amounts). Vignette and grain (`PostParams`, `PostCropOp`, GLSL `EffectsShaders.POST`) are
+post-crop: in the output passes (`OUTPUT_FRAG` with `post0..3`, the export's `uPost*` at the export's own size), on the
+geometry operator's output. Apron: `DevelopParams.reach` / `DevelopParams.reach(recipe)` (Detail + texture) for
+`ExportPlan.of(..., reach)` and zoom tiles; the tiled renderer runs an Effects pre-pass (scene + develop of every
+pre-pass tile). Detail: separable luminance levels (RG16F), colour on a half-resolution copy (`DetailPasses.HalfRegion`),
+per-slider caching in `DetailPasses` (`invalidate()` when the develop output changes), uniform locations cached. Noise
+model: `cpu/NoiseModel.kt` (`PipelineInput.noise` = ISO + model from `PipelineInputMapper.noise`). The panel is
+`panels/EffectsPanel.kt`. Positive dehaze has a 4x parity tolerance (`GpuParityTest.dehazeGain`).
+
+```sh
+./gradlew :core:pipeline:testDebugUnitTest --tests '*EffectsOpTest*' --tests '*DetailOpTest*' --tests '*NoiseModelTest*'
+adb -s emulator-<port> shell am instrument -w -e class dev.hfps.reveal.pipeline.PipelineBenchmark#detailAndEffectsSliderDrags dev.hfps.reveal.pipeline.test/androidx.test.runner.AndroidJUnitRunner
+adb -s emulator-<port> logcat -d -s REVEAL_BENCH    # one line per Detail / Effects slider
+adb -s emulator-<port> shell am instrument -w -e class dev.hfps.reveal.editor.EditorEffectsTest dev.hfps.reveal.debug.test/androidx.test.runner.AndroidJUnitRunner
+# CC0 before/after sheets (docs/screenshots/effects) and the noise model check (rawdump now records the ISO):
+scripts/calibration/rawdump.sh core/image/build/samples/nikon-d5600.nef build/calibration/nikon-d5600.rdump
+REVEAL_EFFECTS_DUMPS=$PWD/build/calibration/nikon-d5600.rdump REVEAL_EFFECTS_OUT=$PWD/build/calibration/fx \
+  ./gradlew :core:pipeline:testDebugUnitTest --tests '*EffectsRenderSheetTest*' --rerun
+REVEAL_NOISE_DUMPS=<full-size rdumps, comma separated> ./gradlew :core:pipeline:testDebugUnitTest --tests '*NoiseCalibrationTest*' --rerun -i
 ```
 
 ## Auto (`:core:pipeline/auto`, ADR 0010)

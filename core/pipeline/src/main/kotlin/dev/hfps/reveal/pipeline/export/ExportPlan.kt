@@ -31,9 +31,9 @@ data class OutputTile(val output: PixelBox, val geometry: PixelBox, val input: P
  *   of a whole-image render (ADR 0007, "Tile seam").
  * - **Output tiles** cover the output. Each one's geometry box is what its Lanczos taps reach (the box itself without
  *   resizing), and its input region is what the geometry operator reads for that box
- *   ([GeometryMapping.sourceRegion], filter margin included), grown by the Detail operator's [reach] (slot 11 reads a
- *   neighbourhood: docs/adr/0012, "Tiles") and clamped to the image. Tiles are sized so the input region fits in
- *   [maxTile].
+ *   ([GeometryMapping.sourceRegion], filter margin included), grown by the [reach] of Detail and texture (slots
+ *   11-12 read a neighbourhood: docs/adr/0012, "Tiles") and clamped to the image. Tiles are sized so the input region
+ *   fits in [maxTile].
  */
 class ExportPlan(
     val imageWidth: Int,
@@ -158,7 +158,7 @@ class ExportPlan(
 
         /**
          * The plan for an upright [width] x [height] image with the recipe's [geometry] at [size]; [reach] is the
-         * Detail operator's apron at full resolution (`DetailParams.reach`).
+         * apron of Detail and Effects' texture at full resolution (`DevelopParams.reach`).
          */
         @Suppress("LongParameterList")
         fun of(

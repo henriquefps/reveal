@@ -6,6 +6,8 @@ All notable changes to Reveal are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-11-11
+
 ### Added
 - Export: a Share button on the result shares the photos just saved (gallery or folder) without exporting again.
 - Hand-off from Hoard: ratings, pick/reject and colour labels travel with the photos (`dev.hfps.reveal.extra.CULLING`,

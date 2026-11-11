@@ -90,6 +90,7 @@ other cameras it is "Sony-like", not a match); and the owner's main complaint, b
 colorimetric, the camera is more saturated in reds/greens. For an owner who compares with his camera JPEGs, **Camera
 JPEG match is one tap away** and is what the planned Settings "default profile" (product.md) should offer; making it
 the default is a one-line change (`Profile.base`'s default) plus a recipe-default decision, left to the owner.
+**Decided by the owner (2026-11-11): Standard stays the default.**
 
 ## Calibration (Camera JPEG match)
 

@@ -26,12 +26,12 @@ class HandoffIntentsTest {
         val intent = Intent(HandoffIntents.ACTION_DEVELOP).apply {
             type = "image/*"
             clipData = clip(a, b, c)
-            putExtra(HandoffIntents.EXTRA_TITLE, "  Celine culling ")
+            putExtra(HandoffIntents.EXTRA_TITLE, "  Beach culling ")
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
         }
         val request = HandoffIntents.parse(intent)!!
         assertThat(request.uris).containsExactly(a, b, c).inOrder()
-        assertThat(request.title).isEqualTo("Celine culling")
+        assertThat(request.title).isEqualTo("Beach culling")
         assertThat(request.initial).isNull()
         assertThat(request.persistable).isFalse()
     }

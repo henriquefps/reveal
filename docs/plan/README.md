@@ -29,8 +29,8 @@ you do not report to the session that wrote this plan. The owner is Henrique; wr
   Workers use their own emulators (own AVD names and ports, `-no-window`), never the phone.
 - **Credentials** only through the `skv` skill: create the release keystore and passwords in a new
   skv group `reveal` (`skv set`), build with `skv run reveal -- …`; never commit or print them.
-- **Private photos:** the owner's ZV-E10 files in `/Volumes/StorageExtension/2026-08-07 - Celine` and
-  `/Volumes/StorageExtension/2026-08-09 - Dia dos pais` are private family photos, read-only. Use
+- **Private photos:** the owner's ZV-E10 files (two private shoots on his external drive; the
+  orchestrator gives workers the paths when needed) are private family photos, read-only. Use
   copies, delete them after, never commit them or screenshots showing them (the repo is public),
   report aggregates only. Committed fixtures and PR screenshots use public-domain/CC0 images
   (e.g. raw.pixls.us) or synthetic ones.

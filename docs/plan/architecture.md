@@ -114,7 +114,7 @@ spike may overturn one, but only with measurements written in the ADR.
 - Performance on the owner's phone (release builds only): time to first image, time to editable
   proxy, frame time while dragging (target ≤ 16 ms at the screen proxy), 100 % tile time, export time
   for a 24 MP ARW, peak memory. Recorded in the relevant ADR.
-- Real photos: the owner's ZV-E10 RAW+JPEG pairs in `/Volumes/StorageExtension/2026-08-07 - Celine`
-  and `/Volumes/StorageExtension/2026-08-09 - Dia dos pais` are private and read-only: use copies,
+- Real photos: the owner's ZV-E10 RAW+JPEG pairs (two private shoots, paths given by the
+  orchestrator, never written in the repo) are private and read-only: use copies,
   never commit them or screenshots that show them, report aggregates only. Public test RAWs
   (raw.pixls.us, CC0) for committed fixtures.

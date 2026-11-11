@@ -11,6 +11,10 @@ import dev.hfps.reveal.data.model.PhotoFormat
 import dev.hfps.reveal.data.model.PickFlag
 import dev.hfps.reveal.data.model.SourceKind
 import dev.hfps.reveal.data.model.SourceState
+import java.util.UUID
+
+/** A new random (version 4) UUID, lower-case with dashes: the stable id of a synced row (ADR 0006 "Stable ids"). */
+fun newUuid(): String = UUID.randomUUID().toString()
 
 /**
  * An added folder: a Storage Access Framework tree the user granted (persisted). ADR 0006.
@@ -55,10 +59,13 @@ data class SourceEntity(
         Index(value = ["source_id", "sort_time"]),
         Index(value = ["sort_time"]),
         Index(value = ["last_opened_at"]),
+        Index(value = ["uuid"], unique = true),
     ],
 )
 data class PhotoEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    /** Stable id for sync (`docs/plan/sync.md`, ADR 0006 "Stable ids"): random, set on insert, never changes. */
+    @ColumnInfo(defaultValue = "") val uuid: String = newUuid(),
     @ColumnInfo(name = "source_id") val sourceId: Long,
     /** Folder path relative to the source root, `/`-separated, "" for the root. */
     val folder: String,
@@ -151,10 +158,12 @@ data class PhotoFileEntity(
             onDelete = ForeignKey.CASCADE,
         ),
     ],
-    indices = [Index(value = ["photo_id", "position"], unique = true)],
+    indices = [Index(value = ["photo_id", "position"], unique = true), Index(value = ["uuid"], unique = true)],
 )
 data class VersionEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    /** Stable id for sync, as [PhotoEntity.uuid]. */
+    @ColumnInfo(defaultValue = "") val uuid: String = newUuid(),
     @ColumnInfo(name = "photo_id") val photoId: Long,
     val position: Int = 0,
     val name: String? = null,

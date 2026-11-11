@@ -6,6 +6,14 @@ All notable changes to Reveal are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- Export: a Share button on the result shares the photos just saved (gallery or folder) without exporting again.
+- Hand-off from Hoard: ratings, pick/reject and colour labels travel with the photos (`dev.hfps.reveal.extra.CULLING`,
+  ADR 0011), so culling done on read-only folders shows up in Reveal; a sidecar edited since the last hand-off wins.
+- Hidden XMP sidecars (`.<name>.xmp`) are read; the normal name wins when both exist, and Reveal keeps writing the
+  normal name.
+- Stable ids (UUIDs) on photos and versions, ready for sync (database version 5).
+
 ## [0.2.0] - 2026-11-11
 
 ### Added

@@ -3,8 +3,10 @@ package dev.hfps.reveal.data.handoff
 import android.content.ClipData
 import android.content.Intent
 import android.net.Uri
+import android.os.Bundle
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.google.common.truth.Truth.assertThat
+import dev.hfps.reveal.data.model.PickFlag
 import org.junit.Test
 import org.junit.runner.RunWith
 
@@ -114,5 +116,77 @@ class HandoffIntentsTest {
             HandoffIntents.ACTION_DEVELOP,
         ).setData(a).putExtra(HandoffIntents.EXTRA_TITLE, "x".repeat(500))
         assertThat(HandoffIntents.parse(long)!!.title).hasLength(120)
+    }
+
+    @Test
+    fun `culling values travel per item, keyed by uri, for one or several items`() {
+        val single = Intent(HandoffIntents.ACTION_DEVELOP).apply {
+            clipData = clip(a)
+            putExtra(
+                HandoffIntents.EXTRA_CULLING,
+                HandoffIntents.cullingExtra(mapOf(a to HandoffCulling(rating = 3, flag = PickFlag.PICK))),
+            )
+        }
+        assertThat(HandoffIntents.parse(single)!!.culling).containsExactly(a, HandoffCulling(3, PickFlag.PICK))
+
+        val several = Intent(HandoffIntents.ACTION_DEVELOP).apply {
+            clipData = clip(a, b, c)
+            putExtra(HandoffIntents.EXTRA_CULLING_VERSION, HandoffIntents.CULLING_VERSION)
+            putExtra(
+                HandoffIntents.EXTRA_CULLING,
+                HandoffIntents.cullingExtra(
+                    mapOf(
+                        c to HandoffCulling(flag = PickFlag.REJECT),
+                        a to HandoffCulling(rating = 5, label = "Red"),
+                    ),
+                ),
+            )
+        }
+        val request = HandoffIntents.parse(several)!!
+        assertThat(request.uris).containsExactly(a, b, c).inOrder()
+        assertThat(request.culling).containsExactly(
+            a,
+            HandoffCulling(rating = 5, label = "Red"),
+            c,
+            HandoffCulling(flag = PickFlag.REJECT),
+        )
+    }
+
+    @Test
+    fun `invalid culling values are dropped field by field, unknown uris and keys ignored`() {
+        val values = Bundle().apply {
+            putBundle(
+                a.toString(),
+                Bundle().apply {
+                    putInt(HandoffIntents.KEY_RATING, 7)
+                    putString(HandoffIntents.KEY_FLAG, " Reject ")
+                    putString(HandoffIntents.KEY_LABEL, "  ")
+                    putString("future_key", "x")
+                },
+            )
+            putBundle(b.toString(), Bundle().apply { putString(HandoffIntents.KEY_RATING, "4") })
+            putBundle(c.toString(), Bundle().apply { putInt(HandoffIntents.KEY_RATING, 2) })
+            putString("content://elsewhere/x.ARW", "not a bundle")
+        }
+        val intent = Intent(HandoffIntents.ACTION_DEVELOP).apply {
+            clipData = clip(a, b)
+            putExtra(HandoffIntents.EXTRA_CULLING_VERSION, 2)
+            putExtra(HandoffIntents.EXTRA_CULLING, values)
+        }
+        // A later version is read with the keys this one knows; c was not sent, b's rating has the wrong type.
+        assertThat(HandoffIntents.parse(intent)!!.culling)
+            .containsExactly(a, HandoffCulling(rating = null, flag = PickFlag.REJECT, label = ""))
+    }
+
+    @Test
+    fun `no culling extra, or a version below 1, means no values`() {
+        val plain = Intent(HandoffIntents.ACTION_DEVELOP).apply { clipData = clip(a) }
+        assertThat(HandoffIntents.parse(plain)!!.culling).isEmpty()
+        val old = Intent(HandoffIntents.ACTION_DEVELOP).apply {
+            clipData = clip(a)
+            putExtra(HandoffIntents.EXTRA_CULLING_VERSION, 0)
+            putExtra(HandoffIntents.EXTRA_CULLING, HandoffIntents.cullingExtra(mapOf(a to HandoffCulling(rating = 1))))
+        }
+        assertThat(HandoffIntents.parse(old)!!.culling).isEmpty()
     }
 }

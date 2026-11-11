@@ -404,4 +404,122 @@ class HandoffRepositoryTest {
         assertThat(photos.first { it.format == PhotoFormat.RAW_PAIR }.let { db.photoDao().files(it.id) }.size)
             .isEqualTo(2)
     }
+
+    // ---- culling values from the sender (ADR 0011 "Culling")
+
+    private fun stamp(uri: Uri, millis: Long) = check(File(uri.path!!).setLastModified(millis))
+
+    @Test
+    fun `the sender's culling values rate a photo that has no sidecar, keyed by any file of the pair`() = runTest {
+        val dir = temp.newFolder("cull")
+        val arw = raw(dir, "DSC00021.ARW")
+        val jpg = jpeg(dir, "DSC00021.JPG")
+        val other = raw(dir, "DSC00022.ARW")
+        repo.receive(
+            HandoffRequest(
+                listOf(arw, jpg, other),
+                culling = mapOf(
+                    jpg to HandoffCulling(rating = 4, flag = PickFlag.PICK, label = "Red"),
+                    other to HandoffCulling(flag = PickFlag.REJECT),
+                ),
+            ),
+        )
+        val photos = rows().associateBy { it.name }
+        with(photos.getValue("DSC00021.ARW")) {
+            assertThat(rating).isEqualTo(4)
+            assertThat(flag).isEqualTo(PickFlag.PICK)
+            assertThat(label).isEqualTo("Red")
+        }
+        with(photos.getValue("DSC00022.ARW")) {
+            assertThat(rating).isEqualTo(0)
+            assertThat(flag).isEqualTo(PickFlag.REJECT)
+        }
+    }
+
+    @Test
+    fun `on a first hand-off the values win over the sidecar, which fills what they leave out`() = runTest {
+        val dir = temp.newFolder("first")
+        val sidecar = file(dir, "DSC00031.xmp", SyntheticShoot.sidecar(rating = 2, label = "Blue").toByteArray())
+        val bytes = File(sidecar.path!!).readBytes()
+        val arw = raw(dir, "DSC00031.ARW")
+        now = 5_000_000_000_000L
+        repo.receive(HandoffRequest(listOf(arw, sidecar), culling = mapOf(arw to HandoffCulling(rating = 5))))
+        val photo = rows().single()
+        assertThat(photo.rating).isEqualTo(5)
+        assertThat(photo.label).isEqualTo("Blue")
+        // Nothing is written back: the sender's sidecar is as it was.
+        assertThat(File(sidecar.path!!).readBytes()).isEqualTo(bytes)
+    }
+
+    @Test
+    fun `a sidecar changed after the previous hand-off wins, an older one does not`() = runTest {
+        val dir = temp.newFolder("again")
+        val sidecar = file(dir, "DSC00041.xmp", SyntheticShoot.sidecar(rating = 1).toByteArray())
+        val arw = raw(dir, "DSC00041.ARW")
+        stamp(sidecar, 1_000_000_000L)
+        now = 2_000_000_000L
+        repo.receive(HandoffRequest(listOf(arw, sidecar), culling = mapOf(arw to HandoffCulling(rating = 3))))
+        assertThat(rows().single().rating).isEqualTo(3)
+
+        // Sent again, sidecar untouched since: the sender's new values win.
+        now = 3_000_000_000L
+        repo.receive(HandoffRequest(listOf(arw, sidecar), culling = mapOf(arw to HandoffCulling(rating = 4))))
+        assertThat(rows().single().rating).isEqualTo(4)
+
+        // Someone rated it in the sidecar after that hand-off: the sidecar wins over the values sent now.
+        File(sidecar.path!!).writeText(SyntheticShoot.sidecar(rating = 2, label = "Green", creatorTool = "darktable"))
+        stamp(sidecar, 3_500_000_000L)
+        now = 4_000_000_000L
+        repo.receive(
+            HandoffRequest(
+                listOf(arw, sidecar),
+                culling = mapOf(arw to HandoffCulling(rating = 5, flag = PickFlag.PICK)),
+            ),
+        )
+        with(rows().single()) {
+            assertThat(rating).isEqualTo(2)
+            assertThat(label).isEqualTo("Green")
+            assertThat(flag).isEqualTo(PickFlag.NONE)
+        }
+    }
+
+    @Test
+    fun `without values a re-sent photo keeps the rating set in Reveal, with values the sender's win`() = runTest {
+        val dir = temp.newFolder("keep")
+        val arw = raw(dir, "DSC00051.ARW")
+        repo.receive(HandoffRequest(listOf(arw)))
+        val id = rows().single().id
+        db.photoDao().setRating(listOf(id), 2)
+        now = 2_000L
+        repo.receive(HandoffRequest(listOf(arw)))
+        assertThat(rows().single().rating).isEqualTo(2)
+        now = 3_000L
+        repo.receive(HandoffRequest(listOf(arw), culling = mapOf(arw to HandoffCulling(label = "Yellow"))))
+        with(rows().single()) {
+            assertThat(rating).isEqualTo(2)
+            assertThat(label).isEqualTo("Yellow")
+        }
+        now = 4_000L
+        repo.receive(HandoffRequest(listOf(arw), culling = mapOf(arw to HandoffCulling(rating = 0, label = ""))))
+        with(rows().single()) {
+            assertThat(rating).isEqualTo(0)
+            assertThat(label).isNull()
+        }
+    }
+
+    @Test
+    fun `a hidden sidecar item is read, the normal name wins when both are sent`() = runTest {
+        val dir = temp.newFolder("hidden")
+        val hidden = file(dir, ".DSC00061.xmp", SyntheticShoot.sidecar(rating = 3).toByteArray())
+        repo.receive(HandoffRequest(listOf(raw(dir, "DSC00061.ARW"), hidden)))
+        assertThat(rows().single { it.name == "DSC00061.ARW" }.rating).isEqualTo(3)
+
+        val dir2 = temp.newFolder("both")
+        val hidden2 = file(dir2, ".DSC00062.ARW.xmp", SyntheticShoot.sidecar(rating = 1).toByteArray())
+        val normal = file(dir2, "DSC00062.xmp", SyntheticShoot.sidecar(rating = 5).toByteArray())
+        repo.receive(HandoffRequest(listOf(hidden2, raw(dir2, "DSC00062.ARW"), normal)))
+        val photo = rows().single { it.name == "DSC00062.ARW" }
+        assertThat(photo.rating).isEqualTo(5)
+        assertThat(db.photoDao().get(photo.id)!!.xmpDocumentId).isEqualTo(normal.toString())
+    }
 }

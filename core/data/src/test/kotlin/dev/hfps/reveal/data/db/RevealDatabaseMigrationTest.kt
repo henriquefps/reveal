@@ -25,10 +25,11 @@ class RevealDatabaseMigrationTest {
         helper.createDatabase(name, 1).use { db ->
             db.execSQL("INSERT INTO meta (`key`, value) VALUES ('seed', 'm0')")
         }
-        helper.runMigrationsAndValidate(name, RevealDatabase.VERSION, true).close()
+        helper.runMigrationsAndValidate(name, RevealDatabase.VERSION, true, *RevealDatabase.MIGRATIONS).close()
 
         val context = ApplicationProvider.getApplicationContext<Context>()
-        val database = Room.databaseBuilder(context, RevealDatabase::class.java, name).allowMainThreadQueries().build()
+        val database = Room.databaseBuilder(context, RevealDatabase::class.java, name)
+            .addMigrations(*RevealDatabase.MIGRATIONS).allowMainThreadQueries().build()
         try {
             runBlocking {
                 assertThat(database.metaDao().get("seed")).isEqualTo("m0")
@@ -78,6 +79,65 @@ class RevealDatabaseMigrationTest {
                 assertThat(c.getString(0)).isEqualTo("DSC1.ARW")
                 assertThat(c.isNull(1)).isTrue()
             }
+        }
+    }
+
+    @Test
+    fun `version 4 gets a distinct stable uuid on every photo and version, and new rows get one too`() {
+        helper.createDatabase(name, 4).use { db ->
+            db.execSQL(
+                "INSERT INTO sources (id, tree_uri, root_document_id, display_name, state, writable, added_at, kind) " +
+                    "VALUES (1, 'content://t', 'r', 'Shoot', 'AVAILABLE', 1, 5, 'FOLDER')",
+            )
+            for (id in 1..3) {
+                db.execSQL(
+                    "INSERT INTO photos (id, source_id, folder, folder_document_id, stem_key, name, format, " +
+                        "has_raw, sort_time, added_at, rating, flag, has_edit, metadata_state, orientation, hidden) " +
+                        "VALUES ($id, 1, 'f', 'f', 'dsc$id', 'DSC$id.ARW', 'RAW', 1, 0, 0, 0, 'NONE', 0, 'PENDING', " +
+                        "1, 0)",
+                )
+                db.execSQL("INSERT INTO versions (id, photo_id, position, created_at) VALUES ($id, $id, 0, 0)")
+            }
+        }
+        val uuid = Regex("[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}")
+        val before = HashMap<String, List<String>>()
+        helper.runMigrationsAndValidate(name, 5, true, RevealDatabase.MIGRATION_4_5).use { db ->
+            for (table in listOf("photos", "versions")) {
+                val ids = db.query("SELECT uuid FROM $table ORDER BY id").use { c ->
+                    buildList { while (c.moveToNext()) add(c.getString(0)) }
+                }
+                assertThat(ids).hasSize(3)
+                assertThat(ids.toSet()).hasSize(3)
+                ids.forEach { assertThat(it).matches(uuid.pattern) }
+                before[table] = ids
+            }
+        }
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val database = Room.databaseBuilder(context, RevealDatabase::class.java, name)
+            .addMigrations(*RevealDatabase.MIGRATIONS).allowMainThreadQueries().build()
+        try {
+            runBlocking {
+                val photos = database.photoDao()
+                // Stable: reading again gives the same ids; a new row gets its own.
+                assertThat(photos.getAll(listOf(1L, 2L, 3L)).sortedBy { it.id }.map { it.uuid })
+                    .isEqualTo(before["photos"])
+                val id = photos.insertPhoto(
+                    PhotoEntity(
+                        sourceId = 1, folder = "f", folderDocumentId = "f", stemKey = "dsc9", name = "DSC9.ARW",
+                        format = dev.hfps.reveal.data.model.PhotoFormat.RAW, hasRaw = true, sortTime = 0, addedAt = 0,
+                    ),
+                )
+                val fresh = checkNotNull(photos.get(id)).uuid
+                assertThat(fresh).matches(uuid.pattern)
+                assertThat(before.getValue("photos")).doesNotContain(fresh)
+                val version = photos.insertVersion(VersionEntity(photoId = id, createdAt = 0))
+                database.query("SELECT uuid FROM versions WHERE id = ?", arrayOf(version)).use { c ->
+                    assertThat(c.moveToFirst()).isTrue()
+                    assertThat(c.getString(0)).matches(uuid.pattern)
+                }
+            }
+        } finally {
+            database.close()
         }
     }
 

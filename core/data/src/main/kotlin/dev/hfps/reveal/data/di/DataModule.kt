@@ -43,8 +43,11 @@ annotation class DataScope
 object DataModule {
     @Provides
     @Singleton
+    @Suppress("SpreadOperator") // once, at startup
     fun provideDatabase(@ApplicationContext context: Context): RevealDatabase =
-        Room.databaseBuilder(context, RevealDatabase::class.java, RevealDatabase.NAME).build()
+        Room.databaseBuilder(context, RevealDatabase::class.java, RevealDatabase.NAME)
+            .addMigrations(*RevealDatabase.MIGRATIONS)
+            .build()
 
     @Provides
     fun provideMetaDao(database: RevealDatabase): MetaDao = database.metaDao()

@@ -22,6 +22,8 @@ import dev.hfps.reveal.data.model.SourceState
 import dev.hfps.reveal.data.storage.DocumentEntry
 import dev.hfps.reveal.data.storage.DocumentTree
 import dev.hfps.reveal.data.storage.fingerprint
+import dev.hfps.reveal.data.xmp.SidecarNames
+import dev.hfps.reveal.data.xmp.XmpFields
 import dev.hfps.reveal.data.xmp.XmpReader
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -89,7 +91,7 @@ class HandoffRepository(
                 entry ?: DocumentEntry(uri.toString(), uri.lastPathSegment.orEmpty().substringAfterLast('/'), "", 0, 0),
             )
         }
-        val (sidecarItems, imageItems) = items.partition { it.name.endsWith(XMP_SUFFIX, ignoreCase = true) }
+        val (sidecarItems, imageItems) = items.partition { SidecarNames.isSidecar(it.name) }
         val displayable = imageItems.filter { ImageFormats.classify(it.name).isDisplayable }
         if (displayable.isEmpty()) {
             // Keep M0's behaviour for a single unrecognised name: the editor opens it by URI and explains.
@@ -109,8 +111,10 @@ class HandoffRepository(
             for (shot in shots) stored += shot to store(source.id, shot, now, request.title)
             photos.deleteEmptyPhotos(source.id)
         }
-        applySidecars(stored)
+        // Headers first: what is embedded in a file (JPEG XMP) only fills an unrated photo, and the sender's culling
+        // values or the sidecar applied next win over it.
         indexer.readMetadata(source.id, tree)
+        applyRatings(stored, request.culling)
         prune(source.id)
         val initial = request.initial?.let { wanted ->
             stored.firstOrNull { (shot, _) ->
@@ -135,8 +139,16 @@ class HandoffRepository(
         }
     }
 
-    /** [foreign]: the photo of an added folder that holds the same file (left untouched by the hand-off). */
-    private class StoredShot(val photoId: Long, val versionId: Long, val foreign: Boolean = false)
+    /**
+     * [foreign]: the photo of an added folder that holds the same file (left untouched by the hand-off).
+     * [previousHandoff]: when the photo was handed over before this request (null: a new photo).
+     */
+    private class StoredShot(
+        val photoId: Long,
+        val versionId: Long,
+        val foreign: Boolean = false,
+        val previousHandoff: Long? = null,
+    )
 
     /**
      * Fingerprints [items] (ADR 0006 "Identity"; at most 2 MiB read per file, [FINGERPRINT_PARALLELISM] at a time).
@@ -188,13 +200,13 @@ class HandoffRepository(
         return out
     }
 
-    /** `<stem>.xmp` (Lightroom, Hoard), else `<file name>.xmp` (darktable); names compare case-insensitively. */
+    /**
+     * The shot's sidecar among the items ([SidecarNames]): `<stem>.xmp` (Lightroom, Hoard), else `<file name>.xmp`
+     * (darktable), then the hidden `.<stem>.xmp` / `.<file name>.xmp`; names compare case-insensitively.
+     */
     private fun sidecarFor(shot: Shot, sidecars: List<Item>): Item? {
         if (sidecars.isEmpty()) return null
-        val candidates = buildList {
-            add("${shot.stem}$XMP_SUFFIX")
-            shot.files.forEach { add("${it.first.name.lowercase()}$XMP_SUFFIX") }
-        }
+        val candidates = SidecarNames.candidates(shot.stem, shot.files.map { it.first.name })
         val sameParent = sidecars.filter { it.parent == shot.folder }.ifEmpty { sidecars }
         return candidates.firstNotNullOfOrNull { c -> sameParent.firstOrNull { it.name.lowercase() == c } }
     }
@@ -272,6 +284,7 @@ class HandoffRepository(
         val existing = match?.file?.photoId
         val photoId: Long
         val versionId: Long
+        var previous: Long? = null
         if (existing == null) {
             photoId = photos.insertPhoto(
                 PhotoEntity(
@@ -292,6 +305,7 @@ class HandoffRepository(
             versionId = photos.insertVersion(VersionEntity(photoId = photoId, createdAt = now))
         } else {
             val photo = checkNotNull(photos.get(existing))
+            previous = photo.handoffAt
             photoId = existing
             versionId = checkNotNull(photos.firstVersion(photoId))
             photos.deleteFilesOf(photoId)
@@ -315,7 +329,7 @@ class HandoffRepository(
                 )
             },
         )
-        return StoredShot(photoId, versionId)
+        return StoredShot(photoId, versionId, previousHandoff = previous)
     }
 
     /**
@@ -332,25 +346,56 @@ class HandoffRepository(
         return key
     }
 
-    /** Applies the rating/label/flag of each shot's sidecar, as the folder indexer does. */
-    private suspend fun applySidecars(stored: List<Pair<Shot, StoredShot>>) {
-        for ((shot, ids) in stored.filterNot { it.second.foreign }) {
-            val sidecar = shot.sidecar ?: continue
-            val fields = runCatching {
-                XmpReader.read(tree.readBytes(sidecar.uri.toString(), LibraryIndexer.MAX_SIDECAR_BYTES))
-            }.getOrNull()
-            if (fields == null) {
-                photos.setSidecar(ids.photoId, sidecar.uri.toString(), sidecar.entry.modified)
-            } else {
-                photos.applyXmp(
-                    ids.photoId,
-                    fields.rating,
-                    fields.label,
-                    fields.flag,
-                    sidecar.uri.toString(),
-                    sidecar.entry.modified,
-                )
-            }
+    /**
+     * Sets each shot's rating, flag and label (ADR 0011 "Culling"). Without culling values from the sender, the
+     * sidecar's apply, as the folder indexer does. With values, they win unless the shot's sidecar was modified after
+     * the photo's previous hand-off (someone rated it since the sender last said what it holds): then the sidecar
+     * wins. Fields the sender left out keep the sidecar's (or the photo's) value. Nothing is written back: the values
+     * live in Reveal's database, and the sender's files stay as they are.
+     */
+    private suspend fun applyRatings(stored: List<Pair<Shot, StoredShot>>, culling: Map<Uri, HandoffCulling>) {
+        for ((shot, ids) in stored.filterNot { it.second.foreign }) applyRatings(shot, ids, cullingFor(shot, culling))
+    }
+
+    private suspend fun applyRatings(shot: Shot, ids: StoredShot, values: HandoffCulling?) {
+        val sidecar = shot.sidecar
+        if (sidecar == null && values == null) return
+        val fields = sidecar?.let(::readSidecar)
+        val sidecarId = sidecar?.uri?.toString()
+        val sidecarTime = sidecar?.entry?.modified
+        val previous = ids.previousHandoff
+        val sidecarNewer = fields != null && previous != null && sidecarTime != null && sidecarTime > previous
+        val result = when {
+            values != null && !sidecarNewer -> merge(values, fields ?: storedFields(ids.photoId))
+            else -> fields
+        }
+        if (result == null) {
+            // Unreadable sidecar, no values: remember it so it is not read again until it changes.
+            photos.setSidecar(ids.photoId, sidecarId, sidecarTime)
+        } else {
+            photos.applyXmp(ids.photoId, result.rating, result.label, result.flag, sidecarId, sidecarTime)
+        }
+    }
+
+    private fun readSidecar(item: Item): XmpFields? = runCatching {
+        XmpReader.read(tree.readBytes(item.uri.toString(), LibraryIndexer.MAX_SIDECAR_BYTES))
+    }.getOrNull()
+
+    private suspend fun storedFields(photoId: Long): XmpFields = photos.get(photoId)?.let {
+        XmpFields(it.rating.coerceIn(0, XmpFields.MAX_RATING), it.label, it.flag)
+    } ?: XmpFields()
+
+    /** The sender's values for [shot]: per field, the first file (main first) that has one; null if none. */
+    private fun cullingFor(shot: Shot, culling: Map<Uri, HandoffCulling>): HandoffCulling? {
+        val all = shot.files.mapNotNull { culling[it.first.uri] }
+        return if (all.isEmpty()) {
+            null
+        } else {
+            HandoffCulling(
+                rating = all.firstNotNullOfOrNull { it.rating },
+                flag = all.firstNotNullOfOrNull { it.flag },
+                label = all.firstNotNullOfOrNull { it.label },
+            )
         }
     }
 
@@ -407,13 +452,23 @@ class HandoffRepository(
 
     companion object {
         private const val TAG = "RevealHandoff"
-        private const val XMP_SUFFIX = ".xmp"
         const val HANDOFF_TREE = "reveal-handoff:"
 
         /** Hand-off photos kept (unedited ones beyond this are forgotten, with their grants). */
         const val MAX_PHOTOS = 400
         private const val SQL_ARGS = 900
         private const val FINGERPRINT_PARALLELISM = 4
+
+        /** [values] over [base]: a field the sender left out keeps [base]'s; a label of `""` clears it. */
+        internal fun merge(values: HandoffCulling, base: XmpFields) = XmpFields(
+            rating = values.rating ?: base.rating,
+            label = when (values.label) {
+                null -> base.label
+                "" -> null
+                else -> values.label
+            },
+            flag = values.flag ?: base.flag,
+        )
 
         /**
          * Whether a stored file row and a document under the same URI are the same file (ADR 0006 identity: path +

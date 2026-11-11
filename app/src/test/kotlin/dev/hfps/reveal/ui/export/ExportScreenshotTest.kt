@@ -1,5 +1,6 @@
 package dev.hfps.reveal.ui.export
 
+import android.net.Uri
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -90,6 +91,7 @@ class ExportScreenshotTest {
                         finished = true,
                         failures = listOf("DSC00007.ARW" to ExportFailure.DESTINATION_UNAVAILABLE),
                         exported = 4,
+                        results = (1..4).map { Uri.parse("content://media/external/images/media/$it") },
                     ),
                 ),
             )

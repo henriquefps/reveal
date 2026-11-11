@@ -40,6 +40,8 @@ data class Profile(
     @SerialName("base") val base: BaseLook = BaseLook.STANDARD,
     /** Strength of the look in percent (0..200); 100 = the look as designed. Ignored by [BaseLook.STANDARD]. */
     @SerialName("amount") val amountPercent: Float = 100f,
+    /** Colour or black & white (docs/adr/0013); B&W converts with [Colour.greyMixer]. */
+    @SerialName("treatment") val treatment: Treatment = Treatment.COLOUR,
 ) {
     init {
         require(amountPercent.isFinite()) { "profile amount must be finite" }
@@ -76,8 +78,9 @@ enum class BaseLook {
 }
 
 /**
- * Light: exposure and the five tone sliders. Tone sliders are -100..+100 (0 = no change); ranges and steps live in
- * [RecipeRanges]. Highlight recovery is not a field: it is an always-on reconstruction, not a user control.
+ * Light: exposure, the five tone sliders and the tone curve. Tone sliders are -100..+100 (0 = no change); ranges and
+ * steps live in [RecipeRanges]. Highlight recovery is not a field: it is an always-on reconstruction, not a user
+ * control.
  */
 @Serializable
 data class Light(
@@ -88,6 +91,8 @@ data class Light(
     @SerialName("shadows") val shadows: Float = 0f,
     @SerialName("whites") val whites: Float = 0f,
     @SerialName("blacks") val blacks: Float = 0f,
+    /** The tone curve (parametric + point curves, docs/adr/0013). */
+    @SerialName("curve") val curve: Curves = Curves(),
 ) {
     init {
         require(exposureEv.isFinite()) { "exposure must be finite" }
@@ -96,7 +101,10 @@ data class Light(
     }
 }
 
-/** Colour: white balance, vibrance and saturation now; HSL, colour grading and B&W later. */
+/**
+ * Colour: white balance, vibrance and saturation, the colour mixer (HSL), colour grading and the grey mixer of the
+ * black & white treatment ([Profile.treatment], docs/adr/0013).
+ */
 @Serializable
 data class Colour(
     @SerialName("whiteBalance") val whiteBalance: WhiteBalance = WhiteBalance(),
@@ -104,6 +112,12 @@ data class Colour(
     @SerialName("vibrance") val vibrance: Float = 0f,
     /** Saturation, -100..+100 (0 = no change). */
     @SerialName("saturation") val saturation: Float = 0f,
+    /** The colour mixer (HSL, 8 bands); not applied in black & white. */
+    @SerialName("mixer") val mixer: ColourMixer = ColourMixer(),
+    /** Colour grading (shadows / midtones / highlights / global wheels). */
+    @SerialName("grading") val grading: ColourGrading = ColourGrading(),
+    /** Black & white: grey brightness per source colour, -100..+100; used only by [Treatment.BLACK_WHITE]. */
+    @SerialName("greyMixer") val greyMixer: BandValues = BandValues(),
 ) {
     init {
         require(vibrance.isFinite() && saturation.isFinite()) { "vibrance and saturation must be finite" }

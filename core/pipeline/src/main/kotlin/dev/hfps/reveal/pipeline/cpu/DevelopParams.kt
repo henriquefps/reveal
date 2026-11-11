@@ -4,6 +4,7 @@ import dev.hfps.reveal.pipeline.InputKind
 import dev.hfps.reveal.pipeline.PipelineInput
 import dev.hfps.reveal.pipeline.recipe.Recipe
 import dev.hfps.reveal.pipeline.recipe.RecipeRanges
+import dev.hfps.reveal.pipeline.recipe.Treatment
 
 /**
  * The numbers every operator needs for one (input, recipe) pair, computed once in double precision on the CPU and
@@ -17,7 +18,9 @@ import dev.hfps.reveal.pipeline.recipe.RecipeRanges
  * @property exposureGain linear gain `2^EV`.
  * @property profile the profile (base look, slot 6) resolved for this input; identity for display-referred input.
  * @property tone the Light group's tone sliders ([LocalToneOp], [GlobalToneOp]).
- * @property colour vibrance and saturation (slot 9).
+ * @property colour vibrance and saturation (slot 9); none in black & white.
+ * @property curve the tone curve (slot 8, after contrast/whites/blacks), `null` when it is the identity.
+ * @property tools the colour mixer, black & white and colour grading (slot 9, after vibrance/saturation).
  * @property detail noise reduction and sharpening (slot 11, [DetailOp]) at this render's pixel scale.
  */
 class DevelopParams(
@@ -28,6 +31,8 @@ class DevelopParams(
     val highlights: HighlightParams? = null,
     val tone: ToneParams = ToneParams(),
     val colour: ColourParams = ColourParams.NONE,
+    val curve: CurveLut? = null,
+    val tools: ColourToolParams = ColourToolParams.NONE,
     val detail: DetailParams = DetailParams.NONE,
 ) {
     override fun equals(other: Any?): Boolean = other is DevelopParams &&
@@ -38,11 +43,13 @@ class DevelopParams(
         highlights == other.highlights &&
         tone == other.tone &&
         colour == other.colour &&
+        curve == other.curve &&
+        tools == other.tools &&
         detail == other.detail
 
     /** The same parameters without the Detail operator: what the stages before slot 11 depend on. */
     fun withoutDetail(): DevelopParams =
-        DevelopParams(wbMultipliers, cameraToWorking, exposureGain, profile, highlights, tone, colour)
+        DevelopParams(wbMultipliers, cameraToWorking, exposureGain, profile, highlights, tone, colour, curve, tools)
 
     override fun hashCode(): Int {
         var h = wbMultipliers.contentHashCode()
@@ -52,6 +59,8 @@ class DevelopParams(
         h = h * HASH + highlights.hashCode()
         h = h * HASH + tone.hashCode()
         h = h * HASH + colour.hashCode()
+        h = h * HASH + curve.hashCode()
+        h = h * HASH + tools.hashCode()
         return h * HASH + detail.hashCode()
     }
 
@@ -68,6 +77,8 @@ class DevelopParams(
             val wb = WhiteBalanceModel.solve(input, recipe.colour.whiteBalance)
             val multipliers = FloatArray(PipelineInput.CHANNELS) { wb.multipliers[it].toFloat() }
             val scene = input.kind == InputKind.SCENE_REFERRED
+            val colour = recipe.colour
+            val blackWhite = recipe.profile.treatment == Treatment.BLACK_WHITE
             return DevelopParams(
                 wbMultipliers = multipliers,
                 cameraToWorking = wb.balancedToWorking.toFloatArray(),
@@ -75,9 +86,20 @@ class DevelopParams(
                 profile = if (scene) ProfileLooks.resolve(recipe.profile) else ProfileParams.IDENTITY,
                 highlights = input.saturation?.let { HighlightParams.from(multipliers, it) },
                 tone = ToneParams.from(recipe.light),
-                colour = ColourParams(
-                    saturation = RecipeRanges.saturation.clamp(recipe.colour.saturation) / PERCENT,
-                    vibrance = RecipeRanges.vibrance.clamp(recipe.colour.vibrance) / PERCENT,
+                // Black & white replaces vibrance/saturation and the colour mixer with its grey mixer (ADR 0013).
+                colour = if (blackWhite) {
+                    ColourParams.NONE
+                } else {
+                    ColourParams(
+                        saturation = RecipeRanges.saturation.clamp(colour.saturation) / PERCENT,
+                        vibrance = RecipeRanges.vibrance.clamp(colour.vibrance) / PERCENT,
+                    )
+                },
+                curve = CurveLut.of(recipe.light.curve),
+                tools = ColourToolParams(
+                    mixer = if (blackWhite) null else MixerParams.from(colour.mixer),
+                    grey = if (blackWhite) GreyParams.from(colour.greyMixer) else null,
+                    grading = GradingParams.from(colour.grading),
                 ),
                 detail = DetailParams.from(recipe.detail, pixelScale),
             )

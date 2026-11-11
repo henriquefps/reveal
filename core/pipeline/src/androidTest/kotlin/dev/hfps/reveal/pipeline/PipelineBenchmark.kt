@@ -3,10 +3,17 @@ package dev.hfps.reveal.pipeline
 import android.util.Log
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import dev.hfps.reveal.pipeline.gl.GpuDevelopRenderer
+import dev.hfps.reveal.pipeline.recipe.BandValues
 import dev.hfps.reveal.pipeline.recipe.BaseLook
 import dev.hfps.reveal.pipeline.recipe.Colour
 import dev.hfps.reveal.pipeline.recipe.Detail
+import dev.hfps.reveal.pipeline.recipe.ColourGrading
+import dev.hfps.reveal.pipeline.recipe.ColourMixer
+import dev.hfps.reveal.pipeline.recipe.CurvePoint
+import dev.hfps.reveal.pipeline.recipe.Curves
+import dev.hfps.reveal.pipeline.recipe.GradeWheel
 import dev.hfps.reveal.pipeline.recipe.Light
+import dev.hfps.reveal.pipeline.recipe.ParametricCurve
 import dev.hfps.reveal.pipeline.recipe.Profile
 import dev.hfps.reveal.pipeline.recipe.Recipe
 import dev.hfps.reveal.pipeline.recipe.WhiteBalance
@@ -97,6 +104,59 @@ class PipelineBenchmark {
     fun sharpenDragFrameTime(): Unit = runBlocking {
         drag("detail (sharpening drag, masking 30, proxy of 24 MP)", noisy(), PROXY_SCALE) {
             Recipe(light = Light(0.2f), detail = Detail(sharpenAmount = 150f * it, sharpenMasking = 30f))
+        }
+    }
+
+    /**
+     * The tone curve (docs/adr/0013): a point of the RGB curve dragged up and down over a medium-contrast curve with
+     * a red channel curve and the parametric curve on (the lookup table is rebuilt and uploaded every frame), with
+     * Light's tone sliders on.
+     */
+    @Test
+    fun curveDragFrameTime(): Unit = runBlocking {
+        drag("curve (point drag, parametric + channel curve, light on)", SyntheticImages.scene(WIDTH, HEIGHT)) {
+            val y = 0.35f + 0.3f * it
+            Recipe(
+                light = Light(
+                    0.3f,
+                    contrast = 20f,
+                    highlights = -40f,
+                    shadows = 30f,
+                    curve = Curves(
+                        parametric = ParametricCurve(highlights = -20f, shadows = 15f),
+                        rgb = listOf(
+                            CurvePoint(0f, 0f),
+                            CurvePoint(0.25f, 0.2f),
+                            CurvePoint(0.5f, y),
+                            CurvePoint(1f, 1f),
+                        ),
+                        red = Curves.MEDIUM_CONTRAST,
+                    ),
+                ),
+            )
+        }
+    }
+
+    /**
+     * The colour mixer (docs/adr/0013): a hue drag of one band with saturation/luminance on other bands, colour
+     * grading on and Camera JPEG match (the most expensive look), so every OkLab round trip of the develop pass runs.
+     */
+    @Test
+    fun hslDragFrameTime(): Unit = runBlocking {
+        drag("hsl (mixer hue drag, grading on, camera match)", SyntheticImages.scene(WIDTH, HEIGHT)) {
+            Recipe(
+                profile = Profile(BaseLook.CAMERA_MATCH, 120f),
+                light = Light(0.3f, contrast = 20f),
+                colour = Colour(
+                    vibrance = 20f,
+                    mixer = ColourMixer(
+                        hue = BandValues(orange = -100f + 200f * it),
+                        saturation = BandValues(blue = 30f, green = -20f),
+                        luminance = BandValues(blue = -40f),
+                    ),
+                    grading = ColourGrading(shadows = GradeWheel(220f, 20f), highlights = GradeWheel(50f, 15f)),
+                ),
+            )
         }
     }
 

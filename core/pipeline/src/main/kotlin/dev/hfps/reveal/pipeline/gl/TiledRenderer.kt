@@ -94,6 +94,7 @@ class TiledRenderer private constructor(requestedTile: Int, private val share: E
     private var lightUbo = 0
     private var lookUbo = 0
     private var copyProgram = 0
+    private lateinit var tools: ColourToolShaders.Gl
     private var vao = 0
     private val light = LightPasses()
     private val detail = DetailPasses()
@@ -259,6 +260,7 @@ class TiledRenderer private constructor(requestedTile: Int, private val share: E
         uploadUbo(developUbo, GpuDevelopRenderer.developBlock(params))
         uploadUbo(lightUbo, GpuDevelopRenderer.lightBlock(params, checkNotNull(light.grid), reconstruct))
         uploadUbo(lookUbo, ColourShaders.lookBlock(params))
+        tools.upload(params)
     }
 
     /**
@@ -612,6 +614,7 @@ class TiledRenderer private constructor(requestedTile: Int, private val share: E
         GLES30.glBindBufferBase(GLES30.GL_UNIFORM_BUFFER, DEVELOP_BINDING, developUbo)
         GLES30.glBindBufferBase(GLES30.GL_UNIFORM_BUFFER, LIGHT_BINDING, lightUbo)
         GLES30.glBindBufferBase(GLES30.GL_UNIFORM_BUFFER, ColourShaders.BINDING, lookUbo)
+        tools = ColourToolShaders.Gl(developProgram)
         light.init()
         detail.init()
         val vaos = IntArray(1)
@@ -737,6 +740,7 @@ class TiledRenderer private constructor(requestedTile: Int, private val share: E
                     GLES30.glDeleteFramebuffers(2, intArrayOf(atlasFbo0, atlasFbo1), 0)
                     GLES30.glDeleteProgram(copyProgram)
                     GLES30.glDeleteBuffers(3, intArrayOf(developUbo, lightUbo, lookUbo), 0)
+                    if (::tools.isInitialized) tools.release()
                     GLES30.glDeleteVertexArrays(1, intArrayOf(vao), 0)
                     for (p in intArrayOf(
                         sceneProgram,

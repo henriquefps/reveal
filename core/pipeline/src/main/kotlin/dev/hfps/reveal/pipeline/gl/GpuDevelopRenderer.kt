@@ -119,6 +119,7 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
     private var developUbo = 0
     private var outputUbo = 0
     private var lookUbo = 0
+    private lateinit var tools: ColourToolShaders.Gl
     private var vao = 0
     private var sourceTex = 0
     private var stageTex = 0
@@ -616,6 +617,7 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         uploadUbo(developUbo, developBlock(params))
         uploadUbo(lightUbo, lightBlock(params, image.grid, reconstruct))
         uploadUbo(lookUbo, ColourShaders.lookBlock(params))
+        tools.upload(params)
         // The scene texture and the guide depend only on what reaches scene-linear light (white balance, matrix,
         // exposure, reconstruction): a drag of a tone slider re-runs only the develop pass.
         val scene = SceneKey(
@@ -823,6 +825,7 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         GLES30.glBindBufferBase(GLES30.GL_UNIFORM_BUFFER, OUTPUT_BINDING, outputUbo)
         GLES30.glBindBufferBase(GLES30.GL_UNIFORM_BUFFER, LIGHT_BINDING, lightUbo)
         GLES30.glBindBufferBase(GLES30.GL_UNIFORM_BUFFER, ColourShaders.BINDING, lookUbo)
+        tools = ColourToolShaders.Gl(developProgram)
         light.init()
         detail.init()
         val vaos = IntArray(1)
@@ -976,6 +979,7 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         light.release()
         detail.release()
         GLES30.glDeleteBuffers(4, intArrayOf(developUbo, outputUbo, lightUbo, lookUbo), 0)
+        if (::tools.isInitialized) tools.release()
         GLES30.glDeleteVertexArrays(1, intArrayOf(vao), 0)
         GLES30.glDeleteProgram(sceneProgram)
         GLES30.glDeleteProgram(developProgram)

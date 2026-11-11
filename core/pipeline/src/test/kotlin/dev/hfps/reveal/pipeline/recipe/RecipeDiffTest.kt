@@ -53,7 +53,8 @@ class RecipeDiffTest {
         val english = java.io.File("src/main/res/values/strings.xml").readText()
         val portuguese = java.io.File("src/main/res/values-pt-rBR/strings.xml").readText()
 
-        for (field in HistoryField.entries) {
+        // Colour-tool fields after TREATMENT share templates ("%1$s: hue %2$s"), checked below.
+        for (field in HistoryField.entries.filter { it.ordinal <= HistoryField.TREATMENT.ordinal }) {
             val name = "history_${field.name.lowercase()}"
             assertThat(english).contains("name=\"$name\"")
             assertThat(portuguese).contains("name=\"$name\"")
@@ -92,6 +93,69 @@ class RecipeDiffTest {
         assertThat(one(base.copy(geometry = Geometry(flipV = true)))).isEqualTo(HistoryStep(HistoryField.FLIP_V, null))
         assertThat(one(base.copy(geometry = Geometry(aspect = Aspect(AspectPreset.R16_9)))))
             .isEqualTo(HistoryStep(HistoryField.ASPECT, "r16_9"))
+    }
+
+    @Test
+    fun `colour tool templates and names exist in both languages`() {
+        val english = java.io.File("src/main/res/values/strings.xml").readText()
+        val portuguese = java.io.File("src/main/res/values-pt-rBR/strings.xml").readText()
+        val names = listOf(
+            "history_curve_shadows", "history_curve_darks", "history_curve_lights", "history_curve_highlights",
+            "history_curve_split_shadows", "history_curve_split_midtones", "history_curve_split_highlights",
+            "history_point_curve", "history_band_hue", "history_band_saturation", "history_band_luminance",
+            "history_grey_mix", "history_grade_blending", "history_grade_balance", "history_value_treatment_colour",
+            "history_value_treatment_black_white", "history_action_auto_mix", "history_action_curve_preset",
+        ) + ColourBand.entries.map { "colour_band_${it.name.lowercase()}" } +
+            GradeRegion.entries.map { "grade_region_${it.name.lowercase()}" } +
+            CurveChannel.entries.map { "curve_channel_${it.name.lowercase()}" }
+        for (name in names) {
+            assertThat(english).contains("name=\"$name\"")
+            assertThat(portuguese).contains("name=\"$name\"")
+        }
+    }
+
+    @Test
+    fun `colour tool fields have labelled steps`() {
+        fun one(after: Recipe) = RecipeDiff.between(base, after).single()
+
+        assertThat(one(base.copy(profile = Profile(treatment = Treatment.BLACK_WHITE))))
+            .isEqualTo(HistoryStep(HistoryField.TREATMENT, "black_white"))
+        assertThat(one(base.copy(light = Light(curve = Curves(parametric = ParametricCurve(darks = -20f))))))
+            .isEqualTo(HistoryStep(HistoryField.CURVE_DARKS, "−20"))
+        assertThat(one(base.copy(light = Light(curve = Curves(parametric = ParametricCurve(splitShadows = 30f))))))
+            .isEqualTo(HistoryStep(HistoryField.CURVE_SPLIT_SHADOWS, "30 %"))
+        assertThat(one(base.copy(light = Light(curve = Curves(green = Curves.MEDIUM_CONTRAST)))))
+            .isEqualTo(HistoryStep(HistoryField.CURVE_GREEN, null))
+        assertThat(one(base.copy(colour = Colour(mixer = ColourMixer(hue = BandValues(aqua = 15f))))))
+            .isEqualTo(HistoryStep(HistoryField.HUE_AQUA, "+15"))
+        assertThat(one(base.copy(colour = Colour(mixer = ColourMixer(luminance = BandValues(blue = -40f))))))
+            .isEqualTo(HistoryStep(HistoryField.LUM_BLUE, "−40"))
+        assertThat(one(base.copy(colour = Colour(greyMixer = BandValues(red = 22f)))))
+            .isEqualTo(HistoryStep(HistoryField.GREY_RED, "+22"))
+        assertThat(one(base.copy(colour = Colour(grading = ColourGrading(shadows = GradeWheel(hue = 210f))))))
+            .isEqualTo(HistoryStep(HistoryField.GRADE_SHADOWS_HUE, "210°"))
+        assertThat(one(base.copy(colour = Colour(grading = ColourGrading(global = GradeWheel(saturation = 35f))))))
+            .isEqualTo(HistoryStep(HistoryField.GRADE_GLOBAL_SAT, "35"))
+        assertThat(one(base.copy(colour = Colour(grading = ColourGrading(blending = 70f)))))
+            .isEqualTo(HistoryStep(HistoryField.GRADE_BLENDING, "70"))
+    }
+
+    @Test
+    fun `colour tool controls read and write the recipe and keep splits in order`() {
+        for (id in ColourToolControls.all) {
+            val range = RecipeRanges[id]
+            val target = if (range.bipolar) range.max * 0.4f else range.min + (range.max - range.min) * 0.3f
+            val r = ColourToolControls.set(base, id, target)
+            if (id !in ColourToolControls.splits) {
+                assertThat(ColourToolControls.get(r, id)).isWithin(1e-4f).of(range.clamp(target))
+                // No other control moved.
+                ColourToolControls.all.filter { it != id }.forEach { other ->
+                    assertThat(ColourToolControls.get(r, other)).isEqualTo(ColourToolControls.get(base, other))
+                }
+            }
+        }
+        val crossed = ColourToolControls.set(base, ControlId.CURVE_SPLIT_SHADOWS, 90f)
+        assertThat(crossed.light.curve.parametric.splitShadows).isEqualTo(45f)
     }
 
     @Test

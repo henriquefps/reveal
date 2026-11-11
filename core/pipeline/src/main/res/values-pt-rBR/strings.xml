@@ -87,4 +87,41 @@
     <string name="recipe_group_geometry">Geometria (corte, rotação)</string>
     <string name="recipe_group_masks">Máscaras</string>
     <string name="recipe_group_heals">Correção</string>
+
+    <!-- Curva de tons, mixer de cores, gradação, preto e branco (docs/adr/0013) -->
+    <string name="history_curve_shadows">Curva: sombras %1$s</string>
+    <string name="history_curve_darks">Curva: escuros %1$s</string>
+    <string name="history_curve_lights">Curva: claros %1$s</string>
+    <string name="history_curve_highlights">Curva: realces %1$s</string>
+    <string name="history_curve_split_shadows">Curva: divisão das sombras %1$s</string>
+    <string name="history_curve_split_midtones">Curva: divisão dos meios-tons %1$s</string>
+    <string name="history_curve_split_highlights">Curva: divisão dos realces %1$s</string>
+    <string name="history_point_curve">Curva de pontos (%1$s)</string>
+    <string name="history_treatment">Tratamento: %1$s</string>
+    <string name="history_value_treatment_colour">Cor</string>
+    <string name="history_value_treatment_black_white">Preto e branco</string>
+    <string name="history_band_hue">%1$s: matiz %2$s</string>
+    <string name="history_band_saturation">%1$s: saturação %2$s</string>
+    <string name="history_band_luminance">%1$s: luminância %2$s</string>
+    <string name="history_grey_mix">Mistura P&amp;B: %1$s %2$s</string>
+    <string name="history_grade_blending">Gradação: mesclagem %1$s</string>
+    <string name="history_grade_balance">Gradação: equilíbrio %1$s</string>
+    <string name="colour_band_red">Vermelho</string>
+    <string name="colour_band_orange">Laranja</string>
+    <string name="colour_band_yellow">Amarelo</string>
+    <string name="colour_band_green">Verde</string>
+    <string name="colour_band_aqua">Água</string>
+    <string name="colour_band_blue">Azul</string>
+    <string name="colour_band_purple">Roxo</string>
+    <string name="colour_band_magenta">Magenta</string>
+    <string name="grade_region_shadows">Sombras</string>
+    <string name="grade_region_midtones">Meios-tons</string>
+    <string name="grade_region_highlights">Realces</string>
+    <string name="grade_region_global">Global</string>
+    <string name="curve_channel_rgb">RGB</string>
+    <string name="curve_channel_red">Vermelho</string>
+    <string name="curve_channel_green">Verde</string>
+    <string name="curve_channel_blue">Azul</string>
+    <string name="history_action_auto_mix">Mistura P&amp;B automática</string>
+    <string name="history_action_curve_preset">Predefinição de curva</string>
 </resources>

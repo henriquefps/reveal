@@ -122,6 +122,35 @@ output pass and the export tiles via `sourceRegion`), `geometry/CropEditing` (cr
 plane). Crop/turn/flip copy pixels; straightening is Catmull-Rom. Renderer: `setGeometryEditing(true)` shows the editing
 plane; `renderOutput` returns the operator's output size (`CpuDevelop.mapping(input, recipe)`).
 
+## Colour tools (`:core:pipeline`, `:feature:editor`, M2/B, ADR 0013)
+
+Slot 8 ends with the tone curve, slot 9 with the colour mixer *or* black & white, then colour grading (all skipped at
+their defaults). Recipe: `light.curve` (`Curves`: parametric + `rgb/red/green/blue` point lists, empty = straight),
+`colour.mixer` (`ColourMixer`: hue/saturation/luminance `BandValues`), `colour.grading` (`ColourGrading`: 4
+`GradeWheel` + blending/balance), `colour.greyMixer`, `profile.treatment` (`Treatment.BLACK_WHITE` skips
+vibrance/saturation and the mixer). CPU: `cpu/Curves.kt` (`MonotoneSpline` Fritsch-Butland, `ParametricCurveShape`,
+`CurveLut`: encoded `table` + operator `linear` sampled in sqrt(v), baked in `DevelopParams`; `CurveOp`), `ColourStageOp` (one OkLab round trip for slot 9 when a tool is on), `cpu/ColourTools.kt` (`HueBands` smoothstep band
+interpolation, `MixerParams`/`ColourMixerOp`, `BlackWhiteOp`, `GradingParams`/`ColourGradingOp`). GLSL:
+`gl/ColourToolShaders.kt` (`Tools` block, binding 5, plus the curve table as a 512x1 RGBA32F texture on unit 3: never
+put big arrays in a uniform block, SwiftShader counts them against the default-uniform limit; both renderers own a
+`ColourToolShaders.Gl`). Controls:
+`ControlId.CURVE_*`, `HUE_/SAT_/LUM_/GREY_<band>`, `GRADE_<region>_<HUE|SAT|LUM>`, `GRADE_BLENDING/BALANCE`, read and
+written by `ColourToolControls` (history fields share the control's name; labels are templates in
+`HistoryLabels.colourTool`). Targeted adjustment and Auto mix: `auto/ColourSampling.kt` (`SourceColours` = Auto's
+sample rendered without mixer/grading/B&W, `TargetedAdjust`, `AutoBlackWhite`). Editor: `panels/ToneCurvePanel.kt` +
+`CurveEditor.kt` (pure maths in `edit/CurveEditing.kt`), `panels/MixerPanels.kt`, `panels/GradingPanel.kt`
+(`edit/WheelMath.kt`); a `SubPanel(expand = true, reset = …)` opens the tall panel and resets only its tool; content
+colours from `OkLabColors` (`:core:designsystem`). Tests: `CurvesTest`, `ColourToolsTest`, `ColourSamplingTest`, the
+`GpuParityTest` tool recipes (tolerance x the curve's steepest slope), `ColourToolsInteractionTest` (instrumented),
+goldens `phone_tone_curve*`, `phone_colour_mixer*`, `phone_grading*`, `phone_bw*`. Benchmarks and sheets:
+
+```sh
+adb -s emulator-<port> shell am instrument -w -e class dev.hfps.reveal.editor.ColourToolsInteractionTest dev.hfps.reveal.debug.test/androidx.test.runner.AndroidJUnitRunner
+ANDROID_SERIAL=emulator-<port> ./gradlew :core:pipeline:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=dev.hfps.reveal.pipeline.PipelineBenchmark   # REVEAL_BENCH curve/hsl drags
+REVEAL_COLOUR_SHEET_DIR=$PWD/build/calibration REVEAL_RENDER_OUT=$PWD/docs/screenshots/colour-tools/colour-tools \
+  ./gradlew :core:pipeline:testDebugUnitTest --tests '*ColourToolsRenderSheetTest*' --rerun   # CC0 before/after sheets
+```
+
 ## Library (`:core:data`, `:feature:library`, M1, ADR 0006)
 
 Room `RevealDatabase` v5 (sources, photos, photo_files, versions, recipes, history, history_cursor, cache_entries);

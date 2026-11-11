@@ -25,6 +25,7 @@ import dev.hfps.reveal.feature.editor.EditorUiState
 import dev.hfps.reveal.feature.editor.edit.RecipeControls
 import dev.hfps.reveal.pipeline.recipe.ControlId
 import dev.hfps.reveal.pipeline.recipe.ControlRange
+import dev.hfps.reveal.pipeline.recipe.Recipe
 import dev.hfps.reveal.pipeline.recipe.RecipeGroup
 import dev.hfps.reveal.pipeline.recipe.RecipeRanges
 
@@ -46,6 +47,10 @@ class SubPanel(
     @param:StringRes val title: Int,
     /** The recipe group the title's reset clears, if any. */
     val group: RecipeGroup?,
+    /** The title's reset when narrower than a whole group (the tone curve, the colour mixer); wins over [group]. */
+    val reset: ((Recipe) -> Recipe)? = null,
+    /** Opening it snaps the portrait panel to its tall position (curves, mixers, wheels need the room). */
+    val expand: Boolean = false,
     val content: @Composable (PanelHost) -> Unit,
 )
 

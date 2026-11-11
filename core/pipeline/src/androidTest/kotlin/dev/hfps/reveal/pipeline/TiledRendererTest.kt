@@ -16,11 +16,19 @@ import dev.hfps.reveal.pipeline.gl.RenderCancelledException
 import dev.hfps.reveal.pipeline.gl.TileSink
 import dev.hfps.reveal.pipeline.gl.TiledRenderer
 import dev.hfps.reveal.pipeline.input.PipelineInputTileSource
+import dev.hfps.reveal.pipeline.recipe.BandValues
+import dev.hfps.reveal.pipeline.recipe.Colour
+import dev.hfps.reveal.pipeline.recipe.ColourGrading
+import dev.hfps.reveal.pipeline.recipe.ColourMixer
 import dev.hfps.reveal.pipeline.recipe.CropRect
 import dev.hfps.reveal.pipeline.recipe.Detail
+import dev.hfps.reveal.pipeline.recipe.Curves
 import dev.hfps.reveal.pipeline.recipe.Geometry
+import dev.hfps.reveal.pipeline.recipe.GradeWheel
 import dev.hfps.reveal.pipeline.recipe.Light
+import dev.hfps.reveal.pipeline.recipe.Profile
 import dev.hfps.reveal.pipeline.recipe.Recipe
+import dev.hfps.reveal.pipeline.recipe.Treatment
 import dev.hfps.reveal.pipeline.synthetic.SyntheticImages
 import java.nio.ByteBuffer
 import java.nio.FloatBuffer
@@ -91,6 +99,36 @@ class TiledRendererTest {
             val diff = maxDiff(expected, actual)
             Log.i(TAG, "tiled vs preview renderer: max ${diff.first} levels, ${diff.second} values differ")
             assertThat(diff.first).isAtMost(1)
+        } finally {
+            preview.close()
+        }
+    }
+
+    @Test
+    fun colourToolsExportLikeThePreview() = runBlocking {
+        // Tone curve, mixer and grading (docs/adr/0013), then black & white: the export binds the Tools block too.
+        val tools = recipe.copy(
+            light = recipe.light.copy(curve = Curves(rgb = Curves.STRONG_CONTRAST, red = Curves.MEDIUM_CONTRAST)),
+            colour = Colour(
+                mixer = ColourMixer(hue = BandValues(red = 40f), luminance = BandValues(blue = -50f)),
+                grading = ColourGrading(shadows = GradeWheel(220f, 40f), highlights = GradeWheel(50f, 30f, 10f)),
+            ),
+        )
+        val bw = tools.copy(
+            profile = Profile(treatment = Treatment.BLACK_WHITE),
+            colour = tools.colour.copy(greyMixer = BandValues(red = 50f, blue = -50f)),
+        )
+        val preview = GpuDevelopRenderer.create()
+        try {
+            preview.upload(image)
+            for (r in listOf(tools, bw)) {
+                val expected = preview.renderOutput(r)
+                val actual = render(plan(256), with = r)
+                val diff = maxDiff(expected, actual)
+                Log.i(TAG, "colour tools, tiled vs preview renderer: max ${diff.first} levels, ${diff.second} differ")
+                assertThat(diff.first).isAtMost(1)
+                assertThat(actual.contentEquals(render(plan(256)))).isFalse()
+            }
         } finally {
             preview.close()
         }

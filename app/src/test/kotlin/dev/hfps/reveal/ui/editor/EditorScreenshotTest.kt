@@ -19,6 +19,7 @@ import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
@@ -34,6 +35,7 @@ import dev.hfps.reveal.feature.editor.EditorContent
 import dev.hfps.reveal.feature.editor.EditorPhase
 import dev.hfps.reveal.feature.editor.EditorTags
 import dev.hfps.reveal.feature.editor.EditorUiState
+import dev.hfps.reveal.feature.editor.TargetedTarget
 import dev.hfps.reveal.feature.editor.ViewOptions
 import dev.hfps.reveal.feature.editor.edit.AsShot
 import dev.hfps.reveal.feature.editor.layout.PanelSnap
@@ -49,16 +51,26 @@ import dev.hfps.reveal.pipeline.gl.CompareMode
 import dev.hfps.reveal.pipeline.gl.Histogram
 import dev.hfps.reveal.pipeline.recipe.Aspect
 import dev.hfps.reveal.pipeline.recipe.AspectPreset
+import dev.hfps.reveal.pipeline.recipe.BandValues
 import dev.hfps.reveal.pipeline.recipe.Colour
 import dev.hfps.reveal.pipeline.recipe.Detail
+import dev.hfps.reveal.pipeline.recipe.ColourGrading
+import dev.hfps.reveal.pipeline.recipe.ColourMixer
+import dev.hfps.reveal.pipeline.recipe.CurvePoint
+import dev.hfps.reveal.pipeline.recipe.Curves
 import dev.hfps.reveal.pipeline.recipe.EditHistory
 import dev.hfps.reveal.pipeline.recipe.Geometry
+import dev.hfps.reveal.pipeline.recipe.GradeRegion
+import dev.hfps.reveal.pipeline.recipe.GradeWheel
 import dev.hfps.reveal.pipeline.recipe.HistoryAction
 import dev.hfps.reveal.pipeline.recipe.Light
+import dev.hfps.reveal.pipeline.recipe.ParametricCurve
+import dev.hfps.reveal.pipeline.recipe.Profile
 import dev.hfps.reveal.pipeline.recipe.Recipe
 import dev.hfps.reveal.pipeline.recipe.RecipeGroup
 import dev.hfps.reveal.pipeline.recipe.RecipePaste
 import dev.hfps.reveal.pipeline.recipe.RecipeRanges
+import dev.hfps.reveal.pipeline.recipe.Treatment
 import dev.hfps.reveal.pipeline.recipe.WbMode
 import dev.hfps.reveal.pipeline.recipe.WhiteBalance
 import dev.hfps.reveal.pipeline.synthetic.SyntheticImages
@@ -136,6 +148,50 @@ class EditorPhoneScreenshotTest : EditorScreenshotBase("phone") {
         Scaled(2f) { Editor(tool = ToolId.DETAIL, detail = Photos.detail) }
     }
 
+    @Test fun toneCurve() = subPanel("tone_curve", ToolId.LIGHT, EditorTags.TONE_CURVE_ROW)
+
+    @Test fun toneCurveParametric() = subPanel("tone_curve_parametric", ToolId.LIGHT, EditorTags.TONE_CURVE_ROW) {
+        composeRule.onNodeWithTag(EditorTags.CURVE_MODE_PARAMETRIC).performClick()
+        composeRule.waitForIdle()
+    }
+
+    @Test fun colourMixer() = subPanel("colour_mixer", ToolId.COLOUR, EditorTags.MIXER_ROW)
+
+    @Test fun colourMixerTargeted() {
+        composeRule.setContent { ToolsEditor(ToolId.COLOUR, view = ViewOptions(targeted = TargetedTarget.SATURATION)) }
+        openRow(EditorTags.MIXER_ROW)
+        capture("colour_mixer_targeted")
+    }
+
+    @Test fun grading() = subPanel("grading", ToolId.COLOUR, EditorTags.GRADING_ROW)
+
+    @Test fun gradingSingle() = subPanel("grading_shadows", ToolId.COLOUR, EditorTags.GRADING_ROW) {
+        composeRule.onNodeWithTag(EditorTags.gradeRegion(GradeRegion.SHADOWS)).performClick()
+        composeRule.waitForIdle()
+    }
+
+    @Test fun blackWhite() = shoot("bw") { ToolsEditor(ToolId.COLOUR, bw = true) }
+
+    @Test fun blackWhiteMix() = subPanel("bw_mix", ToolId.COLOUR, EditorTags.GREY_MIXER_ROW, bw = true)
+
+    @Test fun toneCurveFontScale200() {
+        composeRule.setContent { Scaled(2f) { ToolsEditor(ToolId.LIGHT) } }
+        openRow(EditorTags.TONE_CURVE_ROW)
+        capture("tone_curve_font200")
+    }
+
+    @Test fun colourMixerFontScale200() {
+        composeRule.setContent { Scaled(2f) { ToolsEditor(ToolId.COLOUR) } }
+        openRow(EditorTags.MIXER_ROW)
+        capture("colour_mixer_font200")
+    }
+
+    @Test fun gradingFontScale200() {
+        composeRule.setContent { Scaled(2f) { ToolsEditor(ToolId.COLOUR) } }
+        openRow(EditorTags.GRADING_ROW)
+        capture("grading_font200")
+    }
+
     @Test fun historyPanel() = shoot("history") {
         Editor(tool = ToolId.HISTORY, snap = PanelSnap.EXPANDED, history = Photos.history)
     }
@@ -200,6 +256,11 @@ class EditorLandscapeScreenshotTest : EditorScreenshotBase("landscape") {
     @Test fun cropMode() = shoot("crop") { CropEditor() }
 
     @Test fun detail() = shoot("detail") { Editor(tool = ToolId.DETAIL, detail = Photos.detail) }
+    @Test fun toneCurve() = subPanel("tone_curve", ToolId.LIGHT, EditorTags.TONE_CURVE_ROW)
+
+    @Test fun colourMixer() = subPanel("colour_mixer", ToolId.COLOUR, EditorTags.MIXER_ROW)
+
+    @Test fun grading() = subPanel("grading", ToolId.COLOUR, EditorTags.GRADING_ROW)
 }
 
 @RunWith(AndroidJUnit4::class)
@@ -250,13 +311,15 @@ abstract class EditorScreenshotBase(private val size: String) {
         geometry: Geometry = Geometry(),
         mode: ToolId? = null,
         detail: Detail = Detail(),
+        base: Recipe = Photos.recipe,
+        preview: ImageBitmap = Photos.edited,
     ) {
-        val recipe = Photos.recipe.copy(geometry = geometry, detail = detail)
+        val recipe = base.copy(geometry = geometry, detail = detail)
         EditorTheme {
             EditorContent(
                 state = EditorUiState(
                     fileName = "DSC01234.ARW",
-                    preview = Photos.edited,
+                    preview = preview,
                     stillOriginal = Photos.original,
                     phase = EditorPhase.Ready(null, Photos.WIDTH, Photos.HEIGHT, 1f),
                     developed = true,
@@ -277,6 +340,27 @@ abstract class EditorScreenshotBase(private val size: String) {
                 initialMode = mode,
             )
         }
+    }
+
+    /** The editor on the colour-tools recipe, with the sub-panel behind [row] opened. */
+    protected fun subPanel(name: String, tool: ToolId, row: String, bw: Boolean = false, then: () -> Unit = {}) {
+        composeRule.setContent { ToolsEditor(tool, bw) }
+        openRow(row)
+        then()
+        capture(name)
+    }
+
+    @Composable
+    protected fun ToolsEditor(tool: ToolId, bw: Boolean = false, view: ViewOptions = ViewOptions()) = Editor(
+        tool = tool,
+        view = view,
+        base = if (bw) Photos.bw else Photos.tools,
+        preview = if (bw) Photos.bwEdited else Photos.toolsEdited,
+    )
+
+    protected fun openRow(tag: String) {
+        composeRule.onNodeWithTag(tag).performScrollTo().performClick()
+        composeRule.waitForIdle()
     }
 
     /** The Crop mode open on a straightened 4:5 crop. */
@@ -342,6 +426,37 @@ private object Photos {
         )
     }
     private val editedRgba = CpuDevelop.render(input, recipe)
+
+    /** The colour tools in use: a tone curve, the mixer, grading (docs/adr/0013). */
+    val tools = recipe.copy(
+        light = recipe.light.copy(
+            curve = Curves(
+                rgb = Curves.MEDIUM_CONTRAST,
+                red = listOf(CurvePoint(0f, 0f), CurvePoint(0.55f, 0.6f), CurvePoint(1f, 1f)),
+                parametric = ParametricCurve(highlights = -20f, shadows = 15f),
+            ),
+        ),
+        colour = recipe.colour.copy(
+            mixer = ColourMixer(
+                hue = BandValues(red = 20f),
+                saturation = BandValues(red = 25f, blue = 30f, green = -20f),
+                luminance = BandValues(blue = -35f),
+            ),
+            grading = ColourGrading(
+                shadows = GradeWheel(225f, 30f, -10f),
+                midtones = GradeWheel(40f, 8f),
+                highlights = GradeWheel(55f, 22f, 5f),
+            ),
+        ),
+    )
+    val toolsEdited: ImageBitmap = bitmap(CpuDevelop.render(input, tools))
+
+    /** Black & white with a grey mix and a split tone. */
+    val bw = tools.copy(
+        profile = Profile(treatment = Treatment.BLACK_WHITE),
+        colour = tools.colour.copy(greyMixer = BandValues(red = 25f, orange = 15f, blue = -40f, aqua = -20f)),
+    )
+    val bwEdited: ImageBitmap = bitmap(CpuDevelop.render(input, bw))
 
     val edited: ImageBitmap = bitmap(editedRgba)
     val original: ImageBitmap = bitmap(CpuDevelop.render(input, Recipe.DEFAULT))

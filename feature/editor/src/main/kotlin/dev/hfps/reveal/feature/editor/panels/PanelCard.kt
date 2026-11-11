@@ -67,7 +67,9 @@ fun PanelCardContent(
     val title = stringResource(sub?.title ?: panel.title)
     val group = if (sub != null) sub.group else panel.group
     val recipe = host.state.edit.recipe
-    val canReset = group != null && group.reset(recipe) != recipe && host.state.ready
+    val subReset = sub?.reset
+    val canReset = host.state.ready &&
+        if (subReset != null) subReset(recipe) != recipe else group != null && group.reset(recipe) != recipe
     val haptics = LocalHapticFeedback.current
     val density = LocalDensity.current
     var backProgress by remember { mutableFloatStateOf(0f) }
@@ -82,8 +84,11 @@ fun PanelCardContent(
         backProgress = 0f
     }
     fun resetGroup() {
-        if (group != null && canReset) {
-            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+        if (!canReset) return
+        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+        if (subReset != null) {
+            host.actions.onEditAndCommit(subReset)
+        } else if (group != null) {
             host.actions.onResetGroup(group)
         }
     }

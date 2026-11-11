@@ -75,3 +75,4 @@ lock-simple
 lock-simple-open
 swap
 frame-corners
+crosshair-simple

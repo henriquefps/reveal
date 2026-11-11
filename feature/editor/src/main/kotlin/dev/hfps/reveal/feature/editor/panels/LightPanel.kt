@@ -31,7 +31,8 @@ import dev.hfps.reveal.pipeline.recipe.RecipeGroup
 
 /**
  * The Light panel: the profile row (opens the Profile sub-panel; Lightroom-style, the base look sits at the top of
- * the basic adjustments rather than in a tool of its own) and exposure, contrast, highlights, shadows, whites, blacks.
+ * the basic adjustments rather than in a tool of its own), exposure, contrast, highlights, shadows, whites, blacks and
+ * the Tone curve row.
  */
 @Composable
 fun LightPanel(host: PanelHost, modifier: Modifier = Modifier) {
@@ -50,8 +51,19 @@ fun LightPanel(host: PanelHost, modifier: Modifier = Modifier) {
         ControlSlider(host, ControlId.SHADOWS, R.string.editor_shadows)
         ControlSlider(host, ControlId.WHITES, R.string.editor_whites)
         ControlSlider(host, ControlId.BLACKS, R.string.editor_blacks)
+        FocusRow(host.focus, null) {
+            NavigationRow(
+                label = stringResource(R.string.editor_tone_curve),
+                value = stringResource(editedOrOff(!host.state.edit.recipe.light.curve.isNeutral)),
+                onClick = { host.navigator.push(ToneCurveSubPanel) },
+                modifier = Modifier.testTag(EditorTags.TONE_CURVE_ROW),
+            )
+        }
     }
 }
+
+/** "Edited" / "Off" for a navigation row's value. */
+internal fun editedOrOff(edited: Boolean): Int = if (edited) R.string.editor_value_edited else R.string.editor_value_off
 
 /** The Profile sub-panel: look chips and the amount (0-200 %, ignored by Standard). */
 val ProfileSubPanel = SubPanel("profile", R.string.editor_profile, RecipeGroup.PROFILE) { host -> ProfilePanel(host) }

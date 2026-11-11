@@ -25,6 +25,12 @@ enum class HistoryAction {
 
     /** A preset applied (reserved for the presets workstream). */
     PRESET,
+
+    /** Black & white Auto mix (docs/adr/0013): the grey mixer computed from the photo. */
+    AUTO_MIX,
+
+    /** A tone curve preset (Linear, Medium contrast, Strong contrast) applied to the point curve. */
+    CURVE_PRESET,
 }
 
 /**

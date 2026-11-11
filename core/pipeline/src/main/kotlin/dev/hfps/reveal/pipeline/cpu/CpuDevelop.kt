@@ -12,8 +12,9 @@ import dev.hfps.reveal.pipeline.recipe.Recipe
 object CpuDevelop {
     /**
      * Runs raw WB, highlight reconstruction, camera matrix, exposure, highlights/shadows, the profile (base look),
-     * contrast/whites/blacks, vibrance/saturation and Detail (noise reduction, sharpening), returning linear Rec.2020
-     * RGB (`width*height*3`, display-referred below 1.0) before the output transform. [input] is not modified.
+     * contrast/whites/blacks, the tone curve, vibrance/saturation, the colour mixer or black & white, colour grading
+     * (docs/adr/0013) and Detail (noise reduction, sharpening), returning linear Rec.2020 RGB (`width*height*3`,
+     * display-referred below 1.0) before the output transform. [input] is not modified.
      * [pixelScale]: full-resolution pixels per pixel of [input] (a proxy's downscale; the Detail operator's scale).
      */
     fun renderLinear(input: PipelineInput, recipe: Recipe, pixelScale: Float = 1f): FloatArray {
@@ -34,7 +35,12 @@ object CpuDevelop {
         }
         ProfileOp.apply(rgb, params.profile)
         if (params.tone.globalActive) GlobalToneOp.apply(rgb, params.tone)
-        VibranceSaturationOp.apply(rgb, params.colour)
+        params.curve?.let { CurveOp.apply(rgb, it) }
+        if (params.tools.active) {
+            ColourStageOp.apply(rgb, params.colour, params.tools)
+        } else {
+            VibranceSaturationOp.apply(rgb, params.colour)
+        }
         DetailOp.apply(rgb, input.width, input.height, params.detail)
         return rgb
     }

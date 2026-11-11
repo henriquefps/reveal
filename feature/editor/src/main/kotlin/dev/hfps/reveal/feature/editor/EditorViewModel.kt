@@ -28,8 +28,11 @@ import dev.hfps.reveal.feature.editor.open.PhotoOpener
 import dev.hfps.reveal.feature.export.ui.ExportRequest
 import dev.hfps.reveal.pipeline.PipelineInput
 import dev.hfps.reveal.pipeline.auto.AutoAnalyser
+import dev.hfps.reveal.pipeline.auto.AutoBlackWhite
 import dev.hfps.reveal.pipeline.auto.AutoRules
 import dev.hfps.reveal.pipeline.auto.AutoScope
+import dev.hfps.reveal.pipeline.auto.SourceColours
+import dev.hfps.reveal.pipeline.auto.TargetedAdjust
 import dev.hfps.reveal.pipeline.cpu.AutoWhiteBalance
 import dev.hfps.reveal.pipeline.cpu.WbAnalysis
 import dev.hfps.reveal.pipeline.cpu.WhiteBalanceModel
@@ -38,7 +41,11 @@ import dev.hfps.reveal.pipeline.gl.ClippingWarnings
 import dev.hfps.reveal.pipeline.gl.CompareMode
 import dev.hfps.reveal.pipeline.gl.GpuDevelopRenderer
 import dev.hfps.reveal.pipeline.recipe.BaseLook
+import dev.hfps.reveal.pipeline.recipe.ColourBand
+import dev.hfps.reveal.pipeline.recipe.ColourToolControls
 import dev.hfps.reveal.pipeline.recipe.ControlId
+import dev.hfps.reveal.pipeline.recipe.CurveChannel
+import dev.hfps.reveal.pipeline.recipe.CurvePoint
 import dev.hfps.reveal.pipeline.recipe.EditHistory
 import dev.hfps.reveal.pipeline.recipe.Geometry
 import dev.hfps.reveal.pipeline.recipe.HistoryAction
@@ -46,6 +53,7 @@ import dev.hfps.reveal.pipeline.recipe.Recipe
 import dev.hfps.reveal.pipeline.recipe.RecipeGroup
 import dev.hfps.reveal.pipeline.recipe.RecipePaste
 import dev.hfps.reveal.pipeline.recipe.RecipeRanges
+import dev.hfps.reveal.pipeline.recipe.Treatment
 import dev.hfps.reveal.pipeline.recipe.WbMode
 import dev.hfps.reveal.pipeline.recipe.WhiteBalance
 import javax.inject.Inject
@@ -399,6 +407,128 @@ class EditorViewModel @Inject constructor(
 
     fun setWbMode(mode: WbMode) = editAndCommit { RecipeControls.withWbMode(it, mode, _state.value.edit.autoWb) }
 
+    // ------------------------------------------------------------------ colour tools (docs/adr/0013)
+
+    /** Per drag frame: several controls at once (a grading wheel's hue and saturation); not committed. */
+    fun setControls(values: Map<ControlId, Float>) =
+        edit { values.entries.fold(it) { r, (id, v) -> RecipeControls.set(r, id, v) } }
+
+    /** Per drag frame: one point curve's points; not committed (the editor commits on release). */
+    fun setCurve(channel: CurveChannel, points: List<CurvePoint>) =
+        edit { RecipeControls.withCurve(it, channel, points) }
+
+    /** A point-curve preset on the RGB curve, one step. */
+    fun applyCurvePreset(points: List<CurvePoint>) =
+        editAndCommit(HistoryAction.CURVE_PRESET, listOf(RecipeGroup.LIGHT)) {
+            RecipeControls.withCurve(it, CurveChannel.RGB, points)
+        }
+
+    /** One committed step from [change] (a sub-panel's reset). */
+    fun editAndCommitStep(change: (Recipe) -> Recipe) = editAndCommit(change = change)
+
+    fun setTreatment(treatment: Treatment) = editAndCommit { RecipeControls.withTreatment(it, treatment) }
+
+    /** Black & white Auto mix: the grey mixer from the photo's colours as the recipe shows them, one step. */
+    fun autoMix() {
+        if (autoMixJob?.isActive == true) return
+        autoMixJob = viewModelScope.launch {
+            val colours = sourceColours() ?: return@launch
+            val mix = withContext(Dispatchers.Default) { AutoBlackWhite.mix(colours) }
+            editAndCommit(HistoryAction.AUTO_MIX, listOf(RecipeGroup.COLOUR)) {
+                it.copy(colour = it.colour.copy(greyMixer = mix))
+            }
+        }
+    }
+
+    /** Turns the targeted adjustment on for [target] (off for `null`); prepares the colours it reads. */
+    fun setTargeted(target: TargetedTarget?) {
+        updateView { it.copy(targeted = target, eyedropper = if (target != null) false else it.eyedropper) }
+        if (target != null) viewModelScope.launch { sourceColours() }
+    }
+
+    /**
+     * A targeted drag starts at the proxy image point ([imageX], [imageY]): the colour there (before the mixer, so
+     * a hue already moved still picks its own band) chooses the bands and their shares ([TargetedAdjust]).
+     */
+    fun targetedStart(imageX: Float, imageY: Float) {
+        val target = _state.value.view.targeted ?: return
+        val ready = _state.value.phase as? EditorPhase.Ready ?: return
+        val drag = TargetedDrag(_state.value.edit.recipe, target)
+        targeted = drag
+        viewModelScope.launch {
+            val colours = sourceColours()
+            val sx = (imageX * colours?.width.orZero() / ready.width).toInt()
+            val sy = (imageY * colours?.height.orZero() / ready.height).toInt()
+            val weights = colours?.let { TargetedAdjust.weights(it.mean(sx, sy, TARGETED_RADIUS)) }
+            drag.weights = weights ?: FloatArray(ColourBand.entries.size)
+            _state.update { it.copy(edit = it.edit.copy(targetedBand = weights?.let(TargetedAdjust::lead))) }
+            applyTargeted(drag)
+            if (drag.ended) finishTargeted(drag)
+        }
+    }
+
+    /** The targeted drag moved [dpUp] dp up from its start (negative = down). */
+    fun targetedDrag(dpUp: Float) {
+        val drag = targeted ?: return
+        drag.dpUp = dpUp
+        applyTargeted(drag)
+    }
+
+    /** The targeted drag ended: one step (nothing when the colour had no band). */
+    fun targetedEnd() {
+        val drag = targeted ?: return
+        drag.ended = true
+        if (drag.weights != null) finishTargeted(drag)
+    }
+
+    private fun applyTargeted(drag: TargetedDrag) {
+        val weights = drag.weights ?: return
+        if (targeted !== drag) return
+        val deltas = TargetedAdjust.deltas(weights, drag.dpUp)
+        val property = drag.target.property
+        edit {
+            if (property == null) {
+                ColourToolControls.nudgeGrey(drag.start, deltas)
+            } else {
+                ColourToolControls.nudgeMixer(drag.start, property, deltas)
+            }
+        }
+    }
+
+    private fun finishTargeted(drag: TargetedDrag) {
+        if (targeted !== drag) return
+        targeted = null
+        _state.update { it.copy(edit = it.edit.copy(targetedBand = null)) }
+        commit()
+    }
+
+    /**
+     * The colours the colour tools see ([SourceColours]) for the current recipe, rendered on the CPU from Auto's
+     * analysis sample and cached until something before the colour tools changes; `null` before the photo is open.
+     */
+    @Suppress("ReturnCount")
+    private suspend fun sourceColours(): SourceColours? {
+        val sample = autoInputs?.sample ?: return null
+        val key = SourceColours.sourceRecipe(_state.value.edit.recipe).copy(geometry = Geometry())
+        sourceCache?.let { (k, v) -> if (k == key) return v }
+        val colours = withContext(Dispatchers.Default) { SourceColours.render(sample, key) }
+        sourceCache = key to colours
+        return colours
+    }
+
+    private fun Int?.orZero(): Int = this ?: 0
+
+    /** One targeted drag: the recipe it started from, the bands' shares (null until the colour is read). */
+    private class TargetedDrag(val start: Recipe, val target: TargetedTarget) {
+        var weights: FloatArray? = null
+        var dpUp: Float = 0f
+        var ended: Boolean = false
+    }
+
+    private var targeted: TargetedDrag? = null
+    private var sourceCache: Pair<Recipe, SourceColours>? = null
+    private var autoMixJob: Job? = null
+
     /** What the export sheet exports: this photo with the recipe on screen; null until the photo is open. */
     fun exportRequest(): ExportRequest? {
         val current = _state.value
@@ -429,7 +559,7 @@ class EditorViewModel @Inject constructor(
         renderer()?.setShowOriginal(show)
     }
 
-    fun setEyedropper(on: Boolean) = updateView { it.copy(eyedropper = on) }
+    fun setEyedropper(on: Boolean) = updateView { it.copy(eyedropper = on, targeted = if (on) null else it.targeted) }
 
     /** The Detail panel's masking overlay: the photo shows the sharpening mask while Masking is dragged. */
     fun setDetailMask(show: Boolean) {
@@ -589,6 +719,9 @@ class EditorViewModel @Inject constructor(
 
         /** Half-size of the eyedropper's sampled square, in proxy pixels (a 9x9 average). */
         const val EYEDROPPER_RADIUS = 4
+
+        /** Half-size of the targeted adjustment's sampled square, in analysis-sample pixels (a 3x3 average). */
+        const val TARGETED_RADIUS = 1
 
         /** "No version" for queries that exclude the current one. */
         const val NO_VERSION = -1L

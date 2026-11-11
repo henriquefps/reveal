@@ -88,13 +88,17 @@ class GeometryMappingTest {
 
     @Test
     fun `a turn as seen is the same picture turned, whatever the flips`() {
-        for (flipH in listOf(false, true)) for (flipV in listOf(false, true)) for (k in 0..3) {
-            val g = Geometry(rotate = k, flipH = flipH, flipV = flipV)
-            val before = GeometryMapping.of(g, w, h)
-            val after = GeometryMapping.of(CropEditing.rotate90(g, clockwise = true), w, h)
-            // Clockwise as seen: output (x, y) of the old picture goes to (H' - y, x) with H' the old height.
-            val p = before.imageToOutput(12.5, 34.5)
-            assertThat(after.imageToOutput(12.5, 34.5)).isEqualTo(Point(before.outputHeight - p.y, p.x))
+        for (flipH in listOf(false, true)) {
+            for (flipV in listOf(false, true)) {
+                for (k in 0..3) {
+                    val g = Geometry(rotate = k, flipH = flipH, flipV = flipV)
+                    val before = GeometryMapping.of(g, w, h)
+                    val after = GeometryMapping.of(CropEditing.rotate90(g, clockwise = true), w, h)
+                    // Clockwise as seen: output (x, y) of the old picture goes to (H' - y, x) with H' the old height.
+                    val p = before.imageToOutput(12.5, 34.5)
+                    assertThat(after.imageToOutput(12.5, 34.5)).isEqualTo(Point(before.outputHeight - p.y, p.x))
+                }
+            }
         }
     }
 
@@ -180,13 +184,15 @@ class GeometryMappingTest {
         val g = Geometry(crop = CropRect(0.1f, 0.1f, 0.9f, 0.9f), angle = 20f)
         val m = GeometryMapping.of(g, w, h)
         val region = checkNotNull(m.sourceRegion(10, 20, 64, 48))
-        for (y in 20 until 68) for (x in 10 until 74) {
-            val p = m.outputToImage(x + 0.5, y + 0.5)
-            if (p.x !in 0.0..w.toDouble() || p.y !in 0.0..h.toDouble()) continue
-            assertThat(p.x - 2).isAtLeast(region.left - 1e-9)
-            assertThat(p.x + 2).isAtMost(region.right + 1e-9)
-            assertThat(p.y - 2).isAtLeast(region.top - 1e-9)
-            assertThat(p.y + 2).isAtMost(region.bottom + 1e-9)
+        for (y in 20 until 68) {
+            for (x in 10 until 74) {
+                val p = m.outputToImage(x + 0.5, y + 0.5)
+                if (p.x !in 0.0..w.toDouble() || p.y !in 0.0..h.toDouble()) continue
+                assertThat(p.x - 2).isAtLeast(region.left - 1e-9)
+                assertThat(p.x + 2).isAtMost(region.right + 1e-9)
+                assertThat(p.y - 2).isAtLeast(region.top - 1e-9)
+                assertThat(p.y + 2).isAtMost(region.bottom + 1e-9)
+            }
         }
     }
 }

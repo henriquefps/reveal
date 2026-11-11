@@ -186,6 +186,7 @@ class GeometryMapping private constructor(
          * The crop rectangle in image pixels, the full image when the recipe has none. [snap] rounds the edges to
          * whole pixels (at least one pixel wide and tall), as the operator does.
          */
+        @Suppress("ReturnCount")
         fun cropBox(geometry: Geometry, width: Int, height: Int, snap: Boolean): Box {
             val crop = geometry.crop ?: return Box(0.0, 0.0, width.toDouble(), height.toDouble())
             if (!snap) {

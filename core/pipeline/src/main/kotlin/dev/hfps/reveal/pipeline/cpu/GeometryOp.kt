@@ -49,7 +49,7 @@ object GeometryOp {
                 val ix = m[0] * ox + m[1] * oy + m[2]
                 val iy = m[3] * ox + m[4] * oy + m[5]
                 val o = (y * w + x) * CHANNELS
-                if (ix < 0f || iy < 0f || ix > width || iy > height) continue
+                if (!inside(ix, iy, width, height)) continue
                 if (mapping.axisAligned) {
                     val i = (texel(iy, height) * width + texel(ix, width)) * CHANNELS
                     out[o] = rgb[i]
@@ -108,6 +108,9 @@ object GeometryOp {
         ((-1.5f * t + 2f) * t + 0.5f) * t,
         (0.5f * t - 0.5f) * t * t,
     )
+
+    private fun inside(x: Float, y: Float, width: Int, height: Int): Boolean =
+        x >= 0f && y >= 0f && x <= width && y <= height
 
     private fun texel(v: Float, size: Int): Int = floor(v).toInt().coerceIn(0, size - 1)
 

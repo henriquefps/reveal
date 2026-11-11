@@ -84,7 +84,11 @@ class CropEditingTest {
         val random = Random(3)
         for (ratio in listOf(null, 1.5, 0.8)) {
             var g = CropEditing.straighten(Geometry(), 8f, w, h)
-            if (ratio != null) g = CropEditing.withAspect(g, Aspect(AspectPreset.CUSTOM, (ratio * 10).toInt(), 10, true), w, h)
+            if (ratio !=
+                null
+            ) {
+                g = CropEditing.withAspect(g, Aspect(AspectPreset.CUSTOM, (ratio * 10).toInt(), 10, true), w, h)
+            }
             repeat(300) {
                 val start = CropEditing.frame(g, w, h)
                 val handle = CropHandle.entries[random.nextInt(CropHandle.entries.size)]

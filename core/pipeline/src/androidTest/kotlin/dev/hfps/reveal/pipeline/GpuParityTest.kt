@@ -180,8 +180,8 @@ class GpuParityTest {
                         recipeMax = maxOf(recipeMax, diff)
                         if (diff > imageMax) {
                             imageMax = diff
-                            where = "recipe #$r ${recipe.light} ${recipe.profile} ${recipe.colour}, " +
-                                "pixel ${i / 4 % image.width}, ${i / 4 / image.width}"
+                            where = "recipe #$r ${recipe.light} ${recipe.profile} ${recipe.colour} " +
+                                "${recipe.geometry}, pixel ${i / 4 % outWidth}, ${i / 4 / outWidth}"
                         }
                     }
                     if (recipeMax > allowed) failures += "$space $name recipe #$r"
@@ -268,10 +268,9 @@ class GpuParityTest {
         const val TAG = "REVEAL_PARITY"
 
         /** The Light sliders at their ends, alone and together (always in the parity set). */
-        /**
-         * Geometry (slot 13): pixel-exact crops, quarter turns and flips, Catmull-Rom straightening (constrained and
-         * with black empty corners), a tiny angle; with an exposure so the stage is not the identity.
-         */
+
+        // Geometry (slot 13): pixel-exact crops, quarter turns and flips, Catmull-Rom straightening (constrained and
+        // with black empty corners), a tiny angle; with an exposure so the stage is not the identity.
         val GEOMETRY: List<Recipe> = listOf(
             Geometry(crop = CropRect(0.1f, 0.2f, 0.8f, 0.9f)),
             Geometry(crop = CropRect(0.05f, 0f, 0.6f, 0.75f), rotate = 1, flipH = true),

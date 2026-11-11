@@ -50,6 +50,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import dev.hfps.reveal.designsystem.components.Eyebrow
 import dev.hfps.reveal.designsystem.components.RevealIconButton
 import dev.hfps.reveal.designsystem.icons.PhosphorRegular
 import dev.hfps.reveal.designsystem.theme.EditorTheme
@@ -74,6 +75,7 @@ import dev.hfps.reveal.feature.editor.tools.EditorTools
 import dev.hfps.reveal.feature.editor.tools.ModeHost
 import dev.hfps.reveal.feature.editor.tools.ToolBehaviour
 import dev.hfps.reveal.feature.editor.tools.ToolId
+import dev.hfps.reveal.pipeline.geometry.GeometryMapping
 import dev.hfps.reveal.pipeline.gl.CompareMode
 import kotlinx.coroutines.launch
 
@@ -114,6 +116,10 @@ fun EditorScreen(onBack: () -> Unit, modifier: Modifier = Modifier, viewModel: E
             onPrevious = viewModel::previous,
             onResetAll = viewModel::resetAll,
             onResetAsOpened = viewModel::resetAsOpened,
+            onGeometry = viewModel::setGeometry,
+            onCropMode = viewModel::setCropMode,
+            onCropDone = viewModel::cropDone,
+            onCropCancel = viewModel::cropCancel,
         )
     }
     EditorTheme {
@@ -134,10 +140,17 @@ fun EditorContent(
     modifier: Modifier = Modifier,
     initialTool: ToolId = ToolId.LIGHT,
     initialSnap: PanelSnap = PanelSnap.HALF,
+    initialMode: ToolId? = null,
 ) {
     val colors = RevealTheme.colors
     val photo = rememberPhotoController(state.phase)
-    val chrome = rememberEditorChrome(initialTool, initialSnap)
+    val chrome = rememberEditorChrome(initialTool, initialSnap, initialMode)
+    PhotoContentSize(photo, state)
+    LaunchedEffect(chrome.activeMode) {
+        for (tool in EditorTools.all) {
+            (tool.behaviour as? ToolBehaviour.Mode)?.onActive?.invoke(actions, chrome.activeMode == tool.id)
+        }
+    }
     val scope = rememberCoroutineScope()
     val chromeVisible = !chrome.immersive
     SystemBarsHidden(chrome.immersive)
@@ -162,7 +175,10 @@ fun EditorContent(
     }
     BackHandler(enabled = chrome.immersive) { chrome.immersive = false }
     BackHandler(enabled = state.view.compare != CompareMode.Off) { actions.onCompare(CompareMode.Off) }
-    BackHandler(enabled = chrome.activeMode != null) { chrome.activeMode = null }
+    BackHandler(enabled = chrome.activeMode != null) {
+        chrome.activeMode?.let { (EditorTools[it].behaviour as? ToolBehaviour.Mode)?.cancel?.invoke(actions) }
+        chrome.activeMode = null
+    }
     BackHandler(enabled = state.view.eyedropper) { actions.onEyedropper(false) }
     val pasteGroups = state.edit.pasteChooser
     val copied = state.edit.clipboard
@@ -176,6 +192,43 @@ fun EditorContent(
         )
     }
     LaunchedEffect(state.phase is EditorPhase.Ready) { chrome.focus.dragging = null }
+}
+
+/** The [ModeHost] of the active [mode]: Done and Cancel run the mode's exits and close it. */
+private fun EditorChrome.modeHost(
+    mode: ToolBehaviour.Mode,
+    state: EditorUiState,
+    actions: EditorActions,
+    photo: PhotoController,
+    vertical: Boolean,
+) = ModeHost(
+    state = state,
+    actions = actions,
+    photo = photo,
+    crop = crop,
+    vertical = vertical,
+    onDone = {
+        mode.done(actions)
+        activeMode = null
+    },
+    onCancel = {
+        mode.cancel(actions)
+        activeMode = null
+    },
+)
+
+/**
+ * Keeps the zoom's content the size of what is shown: the geometry operator's output (the cropped, turned picture);
+ * re-fits when it changes and when the Crop mode closes (the mode drives the view itself while open).
+ */
+@Composable
+private fun PhotoContentSize(photo: PhotoController, state: EditorUiState) {
+    val ready = state.phase as? EditorPhase.Ready ?: return
+    val mapping = GeometryMapping.of(state.edit.recipe.geometry, ready.width, ready.height)
+    val cropping = state.view.cropping
+    LaunchedEffect(photo.zoom, mapping.outputWidth, mapping.outputHeight, cropping) {
+        if (!cropping) photo.setContentSize(mapping.outputWidth, mapping.outputHeight)
+    }
 }
 
 /** What selecting [tool] does: open/collapse its panel, run its action or enter its mode. */
@@ -274,7 +327,7 @@ private fun PortraitLayout(
             modifier = Modifier
                 .weight(1f)
                 .fillMaxWidth(),
-            modeOverlay = mode?.let { m -> { m.overlay(this, ModeHost(state, actions) { chrome.activeMode = null }) } },
+            modeOverlay = mode?.let { m -> { m.overlay(this, chrome.modeHost(m, state, actions, photo, false)) } },
         )
         AnimatedVisibility(
             visible = chromeVisible && state.phase !is EditorPhase.Failed,
@@ -290,7 +343,7 @@ private fun PortraitLayout(
                     ),
             ) {
                 if (mode != null) {
-                    ModeControls(mode, ModeHost(state, actions) { chrome.activeMode = null })
+                    ModeControls(mode, chrome.modeHost(mode, state, actions, photo, vertical = false))
                 } else {
                     val panel = EditorTools[chrome.activeTool].behaviour as? ToolBehaviour.Panel
                     val offset = sheet.offset.takeUnless { it.isNaN() } ?: (expandedPx - halfPx)
@@ -393,7 +446,7 @@ private fun SideLayout(
                     .fillMaxWidth()
                     .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Start)),
                 modeOverlay = mode?.let { m ->
-                    { m.overlay(this, ModeHost(state, actions) { chrome.activeMode = null }) }
+                    { m.overlay(this, chrome.modeHost(m, state, actions, photo, vertical = true)) }
                 },
             )
         }
@@ -434,7 +487,14 @@ private fun SideLayout(
                     ),
             ) {
                 if (mode != null) {
-                    ModeControls(mode, ModeHost(state, actions) { chrome.activeMode = null })
+                    // A mode's controls take the panel column's width (the rail is too narrow for them).
+                    PanelSurface(
+                        modifier = Modifier
+                            .width(kind.panelWidth)
+                            .padding(8.dp),
+                    ) {
+                        ModeControls(mode, chrome.modeHost(mode, state, actions, photo, vertical = true))
+                    }
                 } else {
                     ToolStrip(tools = EditorTools.all, active = chrome.activeTool, onSelect = select, vertical = true)
                 }
@@ -456,17 +516,31 @@ private fun PanelSurface(modifier: Modifier = Modifier, content: @Composable () 
     )
 }
 
-/** A mode's own controls in place of the tool strip, with the Done check. */
+/** A mode's own controls in place of the tool strip, above a row with Cancel, the mode's title and the Done check. */
 @Composable
 private fun ModeControls(mode: ToolBehaviour.Mode, host: ModeHost, modifier: Modifier = Modifier) {
-    Row(modifier, verticalAlignment = Alignment.CenterVertically) {
-        Box(Modifier.weight(1f, fill = false)) { mode.controls(host) }
-        RevealIconButton(
-            icon = PhosphorRegular.Check,
-            contentDescription = stringResource(R.string.editor_mode_done),
-            onClick = host.onDone,
-            active = true,
-        )
+    Column(modifier.testTag(EditorTags.MODE_CONTROLS)) {
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .then(if (host.vertical) Modifier.weight(1f, fill = false) else Modifier),
+        ) { mode.controls(host) }
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            RevealIconButton(
+                icon = PhosphorRegular.X,
+                contentDescription = stringResource(R.string.editor_mode_cancel),
+                onClick = host.onCancel,
+                modifier = Modifier.testTag(EditorTags.MODE_CANCEL),
+            )
+            Box(Modifier.weight(1f), contentAlignment = Alignment.Center) { Eyebrow(stringResource(mode.title)) }
+            RevealIconButton(
+                icon = PhosphorRegular.Check,
+                contentDescription = stringResource(R.string.editor_mode_done),
+                onClick = host.onDone,
+                active = true,
+                modifier = Modifier.testTag(EditorTags.MODE_DONE),
+            )
+        }
     }
 }
 

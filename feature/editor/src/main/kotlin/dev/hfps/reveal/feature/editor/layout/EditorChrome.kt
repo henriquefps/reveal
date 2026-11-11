@@ -19,6 +19,7 @@ import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import dev.hfps.reveal.feature.editor.crop.CropSession
 import dev.hfps.reveal.feature.editor.panels.PanelNavigator
 import dev.hfps.reveal.feature.editor.panels.SliderFocus
 import dev.hfps.reveal.feature.editor.tools.ToolId
@@ -77,18 +78,27 @@ class EditorChrome(initialTool: ToolId, initialImmersive: Boolean, val sheet: An
     var sidePanelOpen: Boolean by mutableStateOf(true)
     val focus = SliderFocus()
     val navigator = PanelNavigator()
+
+    /** UI state of the Crop mode (grids, horizon tool, frozen view during a handle drag). */
+    val crop = CropSession()
 }
 
 /** An [EditorChrome] that keeps the active tool, immersive mode and the sheet's snap across configuration changes. */
 @Composable
-fun rememberEditorChrome(initialTool: ToolId = ToolId.LIGHT, initialSnap: PanelSnap = PanelSnap.HALF): EditorChrome {
+fun rememberEditorChrome(
+    initialTool: ToolId = ToolId.LIGHT,
+    initialSnap: PanelSnap = PanelSnap.HALF,
+    initialMode: ToolId? = null,
+): EditorChrome {
     var tool by rememberSaveable { mutableStateOf(initialTool) }
     var immersive by rememberSaveable { mutableStateOf(false) }
     val sheet = rememberSaveable(saver = AnchoredDraggableState.Saver()) { AnchoredDraggableState(initialSnap) }
-    val chrome = remember(sheet) { EditorChrome(tool, immersive, sheet) }
+    var mode by rememberSaveable { mutableStateOf(initialMode) }
+    val chrome = remember(sheet) { EditorChrome(tool, immersive, sheet).also { it.activeMode = mode } }
     SideEffect {
         tool = chrome.activeTool
         immersive = chrome.immersive
+        mode = chrome.activeMode
     }
     return chrome
 }

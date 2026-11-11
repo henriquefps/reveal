@@ -10,6 +10,10 @@ import dev.hfps.reveal.designsystem.icons.PhosphorRegular
 import dev.hfps.reveal.feature.editor.EditorActions
 import dev.hfps.reveal.feature.editor.EditorUiState
 import dev.hfps.reveal.feature.editor.R
+import dev.hfps.reveal.feature.editor.canvas.PhotoController
+import dev.hfps.reveal.feature.editor.crop.CropControls
+import dev.hfps.reveal.feature.editor.crop.CropOverlay
+import dev.hfps.reveal.feature.editor.crop.CropSession
 import dev.hfps.reveal.feature.editor.panels.ColourPanel
 import dev.hfps.reveal.feature.editor.panels.HistoryPanel
 import dev.hfps.reveal.feature.editor.panels.LightPanel
@@ -19,9 +23,21 @@ import dev.hfps.reveal.pipeline.recipe.RecipeGroup
 /** The tools of the strip, in strip order (docs/plan/ux.md, "Phone, portrait"). */
 enum class ToolId { PRESETS, AUTO, CROP, LIGHT, COLOUR, EFFECTS, DETAIL, OPTICS, MASKS, HEAL, HISTORY }
 
-/** What a mode (Crop, Masks, Heal) gets from the editor while it is active. */
+/**
+ * What a mode (Crop, Masks, Heal) gets from the editor while it is active: the state and actions, whether its
+ * controls are laid out [vertical]ly (the landscape/tablet column), the editor's photo [photo] controller (the view
+ * the overlay draws in), the crop mode's UI [crop] session, and the Done / Cancel exits.
+ */
 @Stable
-class ModeHost(val state: EditorUiState, val actions: EditorActions, val onDone: () -> Unit)
+class ModeHost(
+    val state: EditorUiState,
+    val actions: EditorActions,
+    val photo: PhotoController,
+    val crop: CropSession,
+    val vertical: Boolean,
+    val onDone: () -> Unit,
+    val onCancel: () -> Unit,
+)
 
 /** What selecting a tool does. Adding a tool never touches the layout: give its [EditorTool] a behaviour. */
 sealed interface ToolBehaviour {
@@ -37,12 +53,17 @@ sealed interface ToolBehaviour {
     ) : ToolBehaviour
 
     /**
-     * A mode (docs/plan/ux.md: Crop, Masks, Heal): entering it swaps the tool strip for [controls] plus a Done check,
-     * and draws [overlay] over the photo (in the photo frame's coordinates).
+     * A mode (docs/plan/ux.md: Crop, Masks, Heal): entering it swaps the tool strip for [controls] plus Cancel and a
+     * Done check under its [title], and draws [overlay] over the photo (in the photo frame's coordinates).
+     * [onActive] is told when the mode opens and closes; [done] and [cancel] run on its exits (Cancel, back).
      */
     class Mode(
+        @param:StringRes val title: Int,
         val controls: @Composable (ModeHost) -> Unit,
         val overlay: @Composable BoxScope.(ModeHost) -> Unit = {},
+        val onActive: (EditorActions, Boolean) -> Unit = { _, _ -> },
+        val done: (EditorActions) -> Unit = {},
+        val cancel: (EditorActions) -> Unit = {},
     ) : ToolBehaviour
 
     /** A one-shot action (Auto). */
@@ -64,8 +85,8 @@ class EditorTool(
 }
 
 /**
- * The registry of editor tools. M1 enables Light and Colour; Crop and Auto are wired by their own workers by
- * replacing [ToolBehaviour.Unavailable] with a [ToolBehaviour.Mode] / [ToolBehaviour.Action] here.
+ * The registry of editor tools. M1 enables Crop (a mode), Light and Colour; Auto is wired by its own worker by
+ * replacing [ToolBehaviour.Unavailable] with a [ToolBehaviour.Action] here.
  */
 object EditorTools {
     val all: List<EditorTool> = listOf(
@@ -84,13 +105,19 @@ object EditorTools {
             PhosphorFill.MagicWand,
             ToolBehaviour.Unavailable,
         ),
-        // TODO(crop worker): ToolBehaviour.Mode(controls = aspect chips + straighten dial, overlay = crop frame).
         EditorTool(
             ToolId.CROP,
             R.string.editor_tool_crop,
             PhosphorRegular.Crop,
             PhosphorFill.Crop,
-            ToolBehaviour.Unavailable,
+            ToolBehaviour.Mode(
+                title = R.string.editor_tool_crop,
+                controls = { CropControls(it) },
+                overlay = { CropOverlay(it) },
+                onActive = { actions, active -> actions.onCropMode(active) },
+                done = { it.onCropDone() },
+                cancel = { it.onCropCancel() },
+            ),
         ),
         EditorTool(
             ToolId.LIGHT,

@@ -21,9 +21,11 @@ import androidx.compose.ui.viewinterop.AndroidView
 import dev.hfps.reveal.designsystem.theme.EditorNeutrals
 import dev.hfps.reveal.feature.editor.EditorMetrics
 import dev.hfps.reveal.feature.editor.EditorPhase
+import dev.hfps.reveal.pipeline.geometry.GeometryMapping
 import dev.hfps.reveal.pipeline.gl.GpuDevelopRenderer
 import dev.hfps.reveal.pipeline.gl.Loupe
 import dev.hfps.reveal.pipeline.gl.ViewFrame
+import dev.hfps.reveal.pipeline.gl.ViewTransform
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.roundToInt
 
@@ -56,19 +58,58 @@ class PhotoController {
         private set
 
     /**
+     * The Crop mode's view of the editing plane (it follows the crop frame), `null` outside the mode; while set the
+     * mode drives the renderer's view and the [zoom] stays where it was.
+     */
+    var cropView: ViewTransform? by mutableStateOf(null)
+
+    /** The view shown now, in content (output or editing-plane) pixels: [cropView] or the [zoom]'s. */
+    val view: ViewTransform?
+        get() = cropView ?: zoom?.let { ViewTransform(it.scale, it.centerX, it.centerY) }
+
+    private var contentWidth = 0
+    private var contentHeight = 0
+
+    /**
      * Binds the photo of [ready] (or none): a new zoom wired to its renderer, fitted to the frame already known, so
      * the renderer gets the frame even when the slot does not move when the photo arrives.
      */
     fun bind(ready: EditorPhase.Ready?) {
         val r = ready?.renderer
         renderer = r
-        zoom = r?.let { renderer ->
-            ZoomState(hundredPercentScale = ready.hundredPercentScale, onChange = renderer::setView).also {
-                it.setImageSize(ready.width, ready.height)
+        // A still photo (no renderer: screenshot tests) gets a zoom too, so overlays have a view to draw in.
+        zoom = ready?.let {
+            ZoomState(hundredPercentScale = it.hundredPercentScale, onChange = { v -> r?.setView(v) }).also { z ->
+                z.setImageSize(it.width, it.height)
             }
         }
+        contentWidth = ready?.width ?: 0
+        contentHeight = ready?.height ?: 0
+        cropView = null
         frame = null
         slot?.let(::onSlotPlaced)
+    }
+
+    /**
+     * The size of what the zoom frames: the geometry operator's output. A new size re-fits; the same size re-publishes
+     * the zoom's view (the Crop mode moved the renderer's view while it was open).
+     */
+    fun setContentSize(width: Int, height: Int) {
+        val z = zoom ?: return
+        cropView = null
+        if (width != contentWidth || height != contentHeight) {
+            contentWidth = width
+            contentHeight = height
+            z.setImageSize(width, height)
+        } else {
+            renderer?.setView(ViewTransform(z.scale, z.centerX, z.centerY))
+        }
+    }
+
+    /** Shows [view] (editing-plane pixels) for the Crop mode. */
+    fun showCropView(view: ViewTransform) {
+        cropView = view
+        renderer?.setView(view)
     }
 
     fun onRootPlaced(coordinates: LayoutCoordinates) {
@@ -87,13 +128,19 @@ class PhotoController {
         zoom?.setViewSize(b.width.roundToInt(), b.height.roundToInt())
     }
 
-    /** The proxy image pixel under slot point [p], or `null` outside the image. */
-    fun imagePoint(p: Offset, imageWidth: Int, imageHeight: Int): Offset? {
+    /**
+     * The proxy image pixel under slot point [p] through the geometry [mapping] (the zoom frames its output), or
+     * `null` outside the picture.
+     */
+    fun imagePoint(p: Offset, mapping: GeometryMapping): Offset? {
         val z = zoom ?: return null
         val f = frame ?: return null
-        val x = z.centerX + (p.x - f.width / 2f) / z.scale
-        val y = z.centerY + (p.y - f.height / 2f) / z.scale
-        return if (x in 0f..imageWidth.toFloat() && y in 0f..imageHeight.toFloat()) Offset(x, y) else null
+        val ox = z.centerX + (p.x - f.width / 2f) / z.scale
+        val oy = z.centerY + (p.y - f.height / 2f) / z.scale
+        if (ox !in 0f..mapping.outputWidth.toFloat() || oy !in 0f..mapping.outputHeight.toFloat()) return null
+        val ip = mapping.outputToImage(ox.toDouble(), oy.toDouble())
+        val inside = ip.x in 0.0..mapping.imageWidth.toDouble() && ip.y in 0.0..mapping.imageHeight.toDouble()
+        return if (inside) Offset(ip.x.toFloat(), ip.y.toFloat()) else null
     }
 
     /**

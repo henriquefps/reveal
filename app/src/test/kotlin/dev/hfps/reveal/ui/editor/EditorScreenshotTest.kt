@@ -43,12 +43,16 @@ import dev.hfps.reveal.feature.editor.tools.ToolId
 import dev.hfps.reveal.pipeline.PipelineInput
 import dev.hfps.reveal.pipeline.cpu.CpuDevelop
 import dev.hfps.reveal.pipeline.cpu.ProfileLooks
+import dev.hfps.reveal.pipeline.geometry.CropEditing
 import dev.hfps.reveal.pipeline.gl.ClippingWarnings
 import dev.hfps.reveal.pipeline.gl.CompareMode
 import dev.hfps.reveal.pipeline.gl.Histogram
+import dev.hfps.reveal.pipeline.recipe.Aspect
+import dev.hfps.reveal.pipeline.recipe.AspectPreset
 import dev.hfps.reveal.pipeline.recipe.Colour
 import dev.hfps.reveal.pipeline.recipe.EditHistory
 import dev.hfps.reveal.pipeline.recipe.HistoryAction
+import dev.hfps.reveal.pipeline.recipe.Geometry
 import dev.hfps.reveal.pipeline.recipe.Light
 import dev.hfps.reveal.pipeline.recipe.Recipe
 import dev.hfps.reveal.pipeline.recipe.RecipeGroup
@@ -108,6 +112,14 @@ class EditorPhoneScreenshotTest : EditorScreenshotBase("phone") {
     }
 
     @Test fun lightFontScale200() = shoot("light_font200") { Scaled(2f) { Editor() } }
+
+    @Test fun cropMode() = shoot("crop") { CropEditor() }
+
+    @Test fun cropModeStraightenedTurned() = shoot("crop_turned") {
+        CropEditor(Photos.straightened.copy(rotate = 1, aspect = Aspect(AspectPreset.R5_4, locked = true)))
+    }
+
+    @Test fun croppedResult() = shoot("cropped") { Editor(geometry = Photos.straightened) }
 
     @Test fun colourFontScale200() = shoot("colour_font200") { Scaled(2f) { Editor(tool = ToolId.COLOUR) } }
 
@@ -171,6 +183,8 @@ class EditorLandscapeScreenshotTest : EditorScreenshotBase("landscape") {
     @Test fun light() = shoot("light") { Editor() }
 
     @Test fun colour() = shoot("colour") { Editor(tool = ToolId.COLOUR) }
+
+    @Test fun cropMode() = shoot("crop") { CropEditor() }
 }
 
 @RunWith(AndroidJUnit4::class)
@@ -218,7 +232,10 @@ abstract class EditorScreenshotBase(private val size: String) {
         snap: PanelSnap = PanelSnap.HALF,
         view: ViewOptions = ViewOptions(),
         history: EditHistory = EditHistory(),
+        geometry: Geometry = Geometry(),
+        mode: ToolId? = null,
     ) {
+        val recipe = Photos.recipe.copy(geometry = geometry)
         EditorTheme {
             EditorContent(
                 state = EditorUiState(
@@ -228,7 +245,7 @@ abstract class EditorScreenshotBase(private val size: String) {
                     phase = EditorPhase.Ready(null, Photos.WIDTH, Photos.HEIGHT, 1f),
                     developed = true,
                     edit = EditState(
-                        recipe = Photos.recipe,
+                        recipe = recipe,
                         history = history,
                         isRaw = true,
                         asShot = AsShot(5200f, 4f),
@@ -240,9 +257,15 @@ abstract class EditorScreenshotBase(private val size: String) {
                 actions = EditorActions(onBack = {}),
                 initialTool = tool,
                 initialSnap = snap,
+                initialMode = mode,
             )
         }
     }
+
+    /** The Crop mode open on a straightened 4:5 crop. */
+    @Composable
+    protected fun CropEditor(geometry: Geometry = Photos.straightened) =
+        Editor(view = ViewOptions(cropping = true), geometry = geometry, mode = ToolId.CROP)
 
     @Composable
     protected fun Scaled(fontScale: Float, content: @Composable () -> Unit) {
@@ -277,6 +300,14 @@ private object Photos {
         h = h.commit(recipe.copy(colour = recipe.colour.copy(vibrance = 45f)))!!
         h.undo()!!
     }
+
+    /** A straightened, constrained 4:5 crop of the scene (the crop mode's frame and the cropped result). */
+    val straightened: Geometry = CropEditing.straighten(
+        CropEditing.withAspect(Geometry(), Aspect(AspectPreset.R4_5, locked = true), WIDTH, HEIGHT),
+        -6.5f,
+        WIDTH,
+        HEIGHT,
+    )
 
     private val input = SyntheticImages.scene(WIDTH, HEIGHT).let { scene ->
         val k = (1.0 / ProfileLooks.STANDARD_FILMIC.gain).toFloat()

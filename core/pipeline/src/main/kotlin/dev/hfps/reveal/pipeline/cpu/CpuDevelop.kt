@@ -5,7 +5,8 @@ import dev.hfps.reveal.pipeline.geometry.GeometryMapping
 import dev.hfps.reveal.pipeline.recipe.Recipe
 
 /**
- * The CPU reference pipeline: the operators in their fixed order (docs/adr/0002, docs/adr/0007; geometry is slot 13). Pure Kotlin over
+ * The CPU reference pipeline: the operators in their fixed order (docs/adr/0002, docs/adr/0007; geometry is
+ * slot 13). Pure Kotlin over
  * float arrays, deterministic (no threads, no platform-dependent maths), the oracle for unit tests and GPU parity.
  */
 object CpuDevelop {
@@ -40,7 +41,11 @@ object CpuDevelop {
      * Slots 1-13: [renderLinear] then the geometry operator (crop, straighten, quarter turns, flips; [GeometryOp]).
      * The result is [mapping]'s output size (`outputWidth*outputHeight*3`).
      */
-    fun renderGeometry(input: PipelineInput, recipe: Recipe, mapping: GeometryMapping = mapping(input, recipe)): FloatArray {
+    fun renderGeometry(
+        input: PipelineInput,
+        recipe: Recipe,
+        mapping: GeometryMapping = mapping(input, recipe),
+    ): FloatArray {
         val linear = renderLinear(input, recipe)
         return if (mapping.isIdentity) linear else GeometryOp.apply(linear, mapping)
     }

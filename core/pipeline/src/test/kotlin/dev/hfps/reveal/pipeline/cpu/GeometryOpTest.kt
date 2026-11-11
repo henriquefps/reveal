@@ -13,11 +13,13 @@ import org.junit.Test
 class GeometryOpTest {
     /** A W x H image whose pixel (x, y) is (x, y, x + 1000 y): every pixel is identifiable. */
     private fun coordinates(w: Int, h: Int) = FloatArray(w * h * 3).also {
-        for (y in 0 until h) for (x in 0 until w) {
-            val i = (y * w + x) * 3
-            it[i] = x.toFloat()
-            it[i + 1] = y.toFloat()
-            it[i + 2] = x + 1000f * y
+        for (y in 0 until h) {
+            for (x in 0 until w) {
+                val i = (y * w + x) * 3
+                it[i] = x.toFloat()
+                it[i + 1] = y.toFloat()
+                it[i + 2] = x + 1000f * y
+            }
         }
     }
 
@@ -54,11 +56,13 @@ class GeometryOpTest {
 
         assertThat(m.outputWidth).isEqualTo(6)
         assertThat(m.outputHeight).isEqualTo(8)
-        for (y in 0 until m.outputHeight) for (x in 0 until m.outputWidth) {
-            val p = m.outputToImage(x + 0.5, y + 0.5)
-            val i = (y * m.outputWidth + x) * 3
-            assertThat(out[i]).isEqualTo((p.x - 0.5).toFloat())
-            assertThat(out[i + 1]).isEqualTo((p.y - 0.5).toFloat())
+        for (y in 0 until m.outputHeight) {
+            for (x in 0 until m.outputWidth) {
+                val p = m.outputToImage(x + 0.5, y + 0.5)
+                val i = (y * m.outputWidth + x) * 3
+                assertThat(out[i]).isEqualTo((p.x - 0.5).toFloat())
+                assertThat(out[i + 1]).isEqualTo((p.y - 0.5).toFloat())
+            }
         }
         // Rotate 90 + flip H is a transpose: output (x, y) shows crop pixel (y, x).
         assertThat(out[0]).isEqualTo(2f)
@@ -98,8 +102,17 @@ class GeometryOpTest {
             val x0 = random.nextInt(m.outputWidth - 8)
             val y0 = random.nextInt(m.outputHeight - 8)
             val tile = GeometryOp.apply(linear, m, x0, y0, 8, 8)
-            for (y in 0 until 8) for (x in 0 until 8) for (c in 0 until 3) {
-                assertThat(tile[(y * 8 + x) * 3 + c]).isEqualTo(whole[((y0 + y) * m.outputWidth + x0 + x) * 3 + c])
+            for (y in 0 until 8) {
+                for (x in 0 until 8) {
+                    for (c in 0 until 3) {
+                        assertThat(tile[(y * 8 + x) * 3 + c]).isEqualTo(
+                            whole[
+                                ((y0 + y) * m.outputWidth + x0 + x) * 3 +
+                                    c,
+                            ],
+                        )
+                    }
+                }
             }
         }
     }

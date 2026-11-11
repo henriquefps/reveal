@@ -34,6 +34,7 @@ import dev.hfps.reveal.pipeline.recipe.BaseLook
 import dev.hfps.reveal.pipeline.recipe.ControlId
 import dev.hfps.reveal.pipeline.recipe.EditHistory
 import dev.hfps.reveal.pipeline.recipe.HistoryAction
+import dev.hfps.reveal.pipeline.recipe.Geometry
 import dev.hfps.reveal.pipeline.recipe.Recipe
 import dev.hfps.reveal.pipeline.recipe.RecipeGroup
 import dev.hfps.reveal.pipeline.recipe.RecipePaste
@@ -152,6 +153,7 @@ class EditorViewModel @Inject constructor(
                     setControl(id, value)
                     commit()
                 }
+                EditorMetrics.recipes = { _state.value.edit.let { it.recipe to it.committed } }
                 photoInput = colourOnly(input)
                 val scale = maxOf(photo.fullWidth, photo.fullHeight).toFloat() / maxOf(input.width, input.height)
                 _state.update {
@@ -350,6 +352,30 @@ class EditorViewModel @Inject constructor(
 
     fun setEyedropper(on: Boolean) = updateView { it.copy(eyedropper = on) }
 
+    // ------------------------------------------------------------------ crop mode
+
+    /** Crop mode gesture frame: the working geometry changes; nothing is committed until Done. */
+    fun setGeometry(geometry: Geometry) = edit { it.copy(geometry = geometry) }
+
+    /** The Crop mode opens or closes: the renderer shows the editing plane while it is open. */
+    fun setCropMode(open: Boolean) {
+        if (_state.value.view.cropping == open) return
+        updateView { it.copy(cropping = open) }
+        renderer()?.setGeometryEditing(open)
+    }
+
+    /** Done: everything changed in the mode becomes one committed step (one history entry). */
+    fun cropDone() {
+        commit()
+        setCropMode(false)
+    }
+
+    /** Cancel / back: the geometry returns to the committed one (the mode never commits until Done). */
+    fun cropCancel() {
+        edit { it.copy(geometry = _state.value.edit.committed.geometry) }
+        setCropMode(false)
+    }
+
     /**
      * Eyedropper: reads the mean raw colour around the proxy pixel ([imageX], [imageY]) from the renderer's source
      * and sets the white balance that makes it neutral (Custom). Leaves the mode either way.
@@ -419,6 +445,7 @@ class EditorViewModel @Inject constructor(
         renderer.setRecipe(current.edit.recipe)
         renderer.setClippingWarnings(current.view.clipping)
         renderer.setCompare(current.view.compare)
+        renderer.setGeometryEditing(current.view.cropping)
         renderer.onHistogram = { histogram -> _state.update { it.copy(histogram = histogram) } }
         renderer.histogramEnabled = current.view.histogram
     }
@@ -429,6 +456,7 @@ class EditorViewModel @Inject constructor(
         renderer()?.onHistogram = null
         EditorMetrics.renderer = null
         EditorMetrics.setControl = null
+        EditorMetrics.recipes = null
         // Closes the renderer once it exists (a creation cancelled half-way closes itself).
         gpu.invokeOnCompletion { failure -> if (failure == null) gpu.getCompleted().close() }
     }

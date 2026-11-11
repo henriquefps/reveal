@@ -1,3 +1,5 @@
+@file:Suppress("MagicNumber")
+
 package dev.hfps.reveal.pipeline.geometry
 
 import kotlin.math.cos
@@ -28,21 +30,13 @@ data class Box(val left: Double, val top: Double, val right: Double, val bottom:
  * function application: `(f * g)(p) = f(g(p))`. Equality is numeric (`-0.0 == 0.0`).
  */
 @Suppress("DataClassContainsFunctions")
-data class Affine(
-    val a: Double,
-    val b: Double,
-    val c: Double,
-    val d: Double,
-    val tx: Double,
-    val ty: Double,
-) {
+data class Affine(val a: Double, val b: Double, val c: Double, val d: Double, val tx: Double, val ty: Double) {
     fun mapX(x: Double, y: Double): Double = a * x + b * y + tx
 
     override fun equals(other: Any?): Boolean = other is Affine &&
         a == other.a && b == other.b && c == other.c && d == other.d && tx == other.tx && ty == other.ty
 
-    override fun hashCode(): Int =
-        listOf(a, b, c, d, tx, ty).fold(0) { h, v -> h * HASH + (v + 0.0).hashCode() }
+    override fun hashCode(): Int = listOf(a, b, c, d, tx, ty).fold(0) { h, v -> h * HASH + (v + 0.0).hashCode() }
 
     fun mapY(x: Double, y: Double): Double = c * x + d * y + ty
 

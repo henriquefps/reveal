@@ -1,3 +1,5 @@
+@file:Suppress("MagicNumber")
+
 package dev.hfps.reveal.pipeline.geometry
 
 import dev.hfps.reveal.pipeline.recipe.Aspect
@@ -37,7 +39,7 @@ enum class CropHandle(val hx: Int, val hy: Int) {
  * when [Geometry.constrain] is on, its straightened rectangle does too (no empty corner). Gestures move from a valid
  * frame toward the requested one and stop at the last valid position ([limit]).
  */
-@Suppress("TooManyFunctions")
+@Suppress("TooManyFunctions", "ReturnCount")
 object CropEditing {
     /** Validity tolerance in pixels: covers the float rounding of the recipe's normalised crop. */
     private const val EPS = 1e-3
@@ -86,10 +88,11 @@ object CropEditing {
 
     /** Whether [frame] is allowed for [g] (see the class comment), within [tolerance] pixels. */
     fun isValid(g: Geometry, frame: Box, width: Int, height: Int, tolerance: Double = EPS): Boolean {
-        
         if (frame.width <= 0.0 || frame.height <= 0.0) return false
         val r = imageRect(g, frame, width, height)
-        val inside = r.left >= -tolerance && r.top >= -tolerance && r.right <= width + tolerance && r.bottom <= height + tolerance
+        val inside =
+            r.left >= -tolerance && r.top >= -tolerance && r.right <= width + tolerance &&
+                r.bottom <= height + tolerance
         if (!inside) return false
         if (!g.constrain) return true
         val rad = Math.toRadians(GeometryMapping.angle(g))
@@ -251,7 +254,11 @@ object CropEditing {
         // Direction does not matter: fold into (-90, 90], then a near-vertical line is made plumb.
         if (seen > SQUARE_ANGLE) seen -= STRAIGHT_ANGLE
         if (seen <= -SQUARE_ANGLE) seen += STRAIGHT_ANGLE
-        if (seen > HALF_RIGHT_ANGLE) seen -= SQUARE_ANGLE else if (seen < -HALF_RIGHT_ANGLE) seen += SQUARE_ANGLE
+        if (seen > HALF_RIGHT_ANGLE) {
+            seen -= SQUARE_ANGLE
+        } else if (seen < -HALF_RIGHT_ANGLE) {
+            seen += SQUARE_ANGLE
+        }
         // Turning by -seen as seen; a mirrored picture turns the other way in recipe terms.
         val recipeDelta = -seen * mirrorSign(g)
         return RecipeRanges.angle.clamp((g.angle + recipeDelta).toFloat())
@@ -318,7 +325,10 @@ object CropEditing {
         val next = g.copy(
             aspect = when (g.aspect.preset) {
                 // "Original" turned is a custom ratio: the original's height:width.
-                AspectPreset.ORIGINAL -> planeSize(g, width, height).let { (w, h) -> Aspect(AspectPreset.CUSTOM, h, w, true) }
+                AspectPreset.ORIGINAL -> planeSize(g, width, height).let { (w, h) ->
+                    Aspect(AspectPreset.CUSTOM, h, w, true)
+                }
+
                 else -> transposed(g.aspect)
             },
         )

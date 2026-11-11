@@ -307,7 +307,10 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
             runStage1(DevelopParams.from(image.colour, recipe))
             GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, stageTex)
             GLES30.glGenerateMipmap(GLES30.GL_TEXTURE_2D)
-            drawOutputOffscreen(OutputSettings(dither = true), mapping = GeometryMapping.identity(image.width, image.height))
+            drawOutputOffscreen(
+                OutputSettings(dither = true),
+                mapping = GeometryMapping.identity(image.width, image.height),
+            )
             GLES20.glFinish()
             (System.nanoTime() - start) / NANOS_PER_MS
         }
@@ -355,7 +358,13 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         }
         if (!req.geometryEditing) shownMapping = mapping
         val panes = CompareLayout.panes(
-            compare, frame, width, height, mapping.outputWidth, mapping.outputHeight, req.view,
+            compare,
+            frame,
+            width,
+            height,
+            mapping.outputWidth,
+            mapping.outputHeight,
+            req.view,
         ) + listOfNotNull(req.loupe?.let { CompareLayout.loupePane(it, width, height) })
         if (panes.any { it.original }) ensureOriginal(image)
         val params = DevelopParams.from(image.colour, if (req.showOriginal) Recipe.DEFAULT else req.recipe)

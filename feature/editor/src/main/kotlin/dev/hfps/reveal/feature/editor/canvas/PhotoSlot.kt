@@ -1,10 +1,13 @@
 package dev.hfps.reveal.feature.editor.canvas
 
+import android.graphics.Matrix
+import android.graphics.Paint
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -40,6 +43,8 @@ import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asAndroidBitmap
+import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -51,6 +56,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import androidx.core.graphics.withSave
 import dev.hfps.reveal.designsystem.components.PrimaryButton
 import dev.hfps.reveal.designsystem.components.RevealIconButton
 import dev.hfps.reveal.designsystem.icons.PhosphorRegular
@@ -62,6 +68,7 @@ import dev.hfps.reveal.feature.editor.EditorTags
 import dev.hfps.reveal.feature.editor.EditorUiState
 import dev.hfps.reveal.feature.editor.R
 import dev.hfps.reveal.feature.editor.open.OpenError
+import dev.hfps.reveal.pipeline.geometry.GeometryMapping
 import dev.hfps.reveal.pipeline.gl.CompareMode
 import kotlin.math.roundToInt
 
@@ -98,7 +105,7 @@ fun PhotoSlot(
             zoom == null -> Modifier
 
             state.view.eyedropper && phase is EditorPhase.Ready ->
-                Modifier.eyedropperGestures(controller, phase, actions)
+                Modifier.eyedropperGestures(controller, phase, state, actions)
 
             else -> Modifier.canvasGestures(zoom, scope, onTap = onToggleChrome, onHold = actions.onShowOriginal)
         }
@@ -110,7 +117,17 @@ fun PhotoSlot(
                 .then(gestures),
         )
         if (phase is EditorPhase.Ready && controller.renderer == null) {
-            StillPhoto(state.preview, state.stillOriginal, state.view.compare)
+            val geometry = state.edit.recipe.geometry
+            val mapping = if (state.view.cropping) {
+                GeometryMapping.editing(geometry, phase.width, phase.height)
+            } else {
+                GeometryMapping.of(geometry, phase.width, phase.height)
+            }
+            if (mapping.isIdentity) {
+                StillPhoto(state.preview, state.stillOriginal, state.view.compare)
+            } else {
+                StillGeometryPhoto(state.preview, mapping, controller)
+            }
         }
         PreviewOverlay(state, onFadeOut = actions.onPreviewHidden)
         when (phase) {
@@ -119,10 +136,10 @@ fun PhotoSlot(
             is EditorPhase.Ready -> if (state.developed) Box(Modifier.size(1.dp).testTag(EditorTags.DEVELOPED))
         }
         if (phase is EditorPhase.Ready) {
-            CompareOverlay(state.view.compare, actions.onCompare)
+            if (!state.view.cropping) CompareOverlay(state.view.compare, actions.onCompare)
             modeOverlay?.invoke(this)
             AnimatedVisibility(
-                visible = chromeVisible && state.view.histogram && !state.view.eyedropper,
+                visible = chromeVisible && state.view.histogram && !state.view.eyedropper && !state.view.cropping,
                 enter = fadeIn(RevealMotion.standard()),
                 exit = fadeOut(RevealMotion.fast()),
                 modifier = Modifier
@@ -169,20 +186,58 @@ private fun StillPhoto(edited: ImageBitmap?, original: ImageBitmap?, compare: Co
     }
 }
 
+/**
+ * The still photo through a geometry [mapping] (screenshot tests and previews have no renderer): the un-cropped
+ * [image] drawn with the mapping and the current view, clipped to the output (the crop) or, in the Crop mode's
+ * editing plane, unclipped (the frame overlay dims the outside).
+ */
+@Composable
+private fun StillGeometryPhoto(image: ImageBitmap?, mapping: GeometryMapping, controller: PhotoController) {
+    if (image == null) return
+    val bitmap = image.asAndroidBitmap()
+    Canvas(Modifier.fillMaxSize()) {
+        val view = controller.view ?: return@Canvas
+        // Screen = (output - centre) * scale + slot centre; output = toOutput(image).
+        val m = mapping.toOutput
+        val matrix = Matrix().apply {
+            setValues(
+                floatArrayOf(
+                    m.a.toFloat(), m.b.toFloat(), m.tx.toFloat(),
+                    m.c.toFloat(), m.d.toFloat(), m.ty.toFloat(),
+                    0f, 0f, 1f,
+                ),
+            )
+            postTranslate(-view.centerX, -view.centerY)
+            postScale(view.scale, view.scale)
+            postTranslate(size.width / 2f, size.height / 2f)
+        }
+        drawContext.canvas.nativeCanvas.withSave {
+            if (!mapping.emptyIsSurround) {
+                val left = (0f - view.centerX) * view.scale + size.width / 2f
+                val top = (0f - view.centerY) * view.scale + size.height / 2f
+                clipRect(left, top, left + mapping.outputWidth * view.scale, top + mapping.outputHeight * view.scale)
+            }
+            drawBitmap(bitmap, matrix, Paint(Paint.FILTER_BITMAP_FLAG))
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------------------------- eyedropper
 
 @Composable
 private fun Modifier.eyedropperGestures(
     controller: PhotoController,
     ready: EditorPhase.Ready,
+    state: EditorUiState,
     actions: EditorActions,
 ): Modifier {
+    val mapping = GeometryMapping.of(state.edit.recipe.geometry, ready.width, ready.height)
     val density = LocalDensity.current
     val sizePx = with(density) { LOUPE_SIZE.toPx() }
     val liftPx = with(density) { LOUPE_LIFT.toPx() }
     val currentActions by rememberUpdatedState(actions)
     val loupe = controller.loupe
-    return pointerInput(controller, ready) {
+    return pointerInput(controller, ready, mapping) {
         fun place(finger: Offset) {
             val half = sizePx / 2f
             val at = Offset(
@@ -208,7 +263,7 @@ private fun Modifier.eyedropperGestures(
             change?.consume()
             loupe.finger = null
             controller.showLoupe(null, Offset.Zero, sizePx)
-            controller.imagePoint(last, ready.width, ready.height)?.let { currentActions.onPickNeutral(it.x, it.y) }
+            controller.imagePoint(last, mapping)?.let { currentActions.onPickNeutral(it.x, it.y) }
         }
     }
 }

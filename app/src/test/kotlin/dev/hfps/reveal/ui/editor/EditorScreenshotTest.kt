@@ -53,11 +53,11 @@ import dev.hfps.reveal.pipeline.recipe.Aspect
 import dev.hfps.reveal.pipeline.recipe.AspectPreset
 import dev.hfps.reveal.pipeline.recipe.BandValues
 import dev.hfps.reveal.pipeline.recipe.Colour
-import dev.hfps.reveal.pipeline.recipe.Detail
 import dev.hfps.reveal.pipeline.recipe.ColourGrading
 import dev.hfps.reveal.pipeline.recipe.ColourMixer
 import dev.hfps.reveal.pipeline.recipe.CurvePoint
 import dev.hfps.reveal.pipeline.recipe.Curves
+import dev.hfps.reveal.pipeline.recipe.Detail
 import dev.hfps.reveal.pipeline.recipe.EditHistory
 import dev.hfps.reveal.pipeline.recipe.Geometry
 import dev.hfps.reveal.pipeline.recipe.GradeRegion
@@ -256,6 +256,7 @@ class EditorLandscapeScreenshotTest : EditorScreenshotBase("landscape") {
     @Test fun cropMode() = shoot("crop") { CropEditor() }
 
     @Test fun detail() = shoot("detail") { Editor(tool = ToolId.DETAIL, detail = Photos.detail) }
+
     @Test fun toneCurve() = subPanel("tone_curve", ToolId.LIGHT, EditorTags.TONE_CURVE_ROW)
 
     @Test fun colourMixer() = subPanel("colour_mixer", ToolId.COLOUR, EditorTags.MIXER_ROW)

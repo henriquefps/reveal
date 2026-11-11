@@ -83,7 +83,8 @@ import dev.hfps.reveal.pipeline.geometry.GeometryMapping
 import dev.hfps.reveal.pipeline.gl.CompareMode
 import kotlinx.coroutines.launch
 
-/** The editor of the photo in its [EditorRoute]: always dark (the darkroom). */
+/** The editor of the photo in its [EditorRoute]: always dark (the darkroom). The actions wire one per editor verb. */
+@Suppress("LongMethod")
 @Composable
 fun EditorScreen(onBack: () -> Unit, modifier: Modifier = Modifier, viewModel: EditorViewModel = hiltViewModel()) {
     val state by viewModel.state.collectAsStateWithLifecycle()

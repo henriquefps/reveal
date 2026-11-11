@@ -21,8 +21,8 @@ import dev.hfps.reveal.pipeline.recipe.Colour
 import dev.hfps.reveal.pipeline.recipe.ColourGrading
 import dev.hfps.reveal.pipeline.recipe.ColourMixer
 import dev.hfps.reveal.pipeline.recipe.CropRect
-import dev.hfps.reveal.pipeline.recipe.Detail
 import dev.hfps.reveal.pipeline.recipe.Curves
+import dev.hfps.reveal.pipeline.recipe.Detail
 import dev.hfps.reveal.pipeline.recipe.Geometry
 import dev.hfps.reveal.pipeline.recipe.GradeWheel
 import dev.hfps.reveal.pipeline.recipe.Light

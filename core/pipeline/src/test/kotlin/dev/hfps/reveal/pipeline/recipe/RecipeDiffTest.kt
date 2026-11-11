@@ -60,6 +60,47 @@ class RecipeDiffTest {
         }
     }
 
+    @Test
+    fun `each new field has a labelled step`() {
+        fun one(after: Recipe) = RecipeDiff.between(base, after).single()
+
+        assertThat(one(base.copy(profile = Profile(BaseLook.CAMERA_MATCH))))
+            .isEqualTo(HistoryStep(HistoryField.BASE_LOOK, "camera_match"))
+        assertThat(one(base.copy(profile = Profile(amountPercent = 150f))))
+            .isEqualTo(HistoryStep(HistoryField.PROFILE_AMOUNT, "150 %"))
+        assertThat(one(base.copy(light = Light(contrast = 12f)))).isEqualTo(HistoryStep(HistoryField.CONTRAST, "+12"))
+        assertThat(one(base.copy(light = Light(highlights = -40f))))
+            .isEqualTo(HistoryStep(HistoryField.HIGHLIGHTS, "−40"))
+        assertThat(one(base.copy(light = Light(shadows = 5f)))).isEqualTo(HistoryStep(HistoryField.SHADOWS, "+5"))
+        assertThat(one(base.copy(light = Light(whites = 1f)))).isEqualTo(HistoryStep(HistoryField.WHITES, "+1"))
+        assertThat(one(base.copy(light = Light(blacks = -1f)))).isEqualTo(HistoryStep(HistoryField.BLACKS, "−1"))
+        assertThat(one(base.withWb(WhiteBalance(mode = WbMode.TUNGSTEN))))
+            .isEqualTo(HistoryStep(HistoryField.WB_MODE, "tungsten"))
+        assertThat(one(base.withWb(WhiteBalance(relTemperature = 20f))))
+            .isEqualTo(HistoryStep(HistoryField.REL_TEMPERATURE, "+20"))
+        assertThat(one(base.withWb(WhiteBalance(relTint = -3f))))
+            .isEqualTo(HistoryStep(HistoryField.REL_TINT, "−3"))
+        assertThat(one(base.copy(colour = Colour(vibrance = 30f))))
+            .isEqualTo(HistoryStep(HistoryField.VIBRANCE, "+30"))
+        assertThat(one(base.copy(colour = Colour(saturation = -30f))))
+            .isEqualTo(HistoryStep(HistoryField.SATURATION, "−30"))
+        assertThat(one(base.copy(geometry = Geometry(crop = CropRect(0f, 0f, 0.5f, 1f)))))
+            .isEqualTo(HistoryStep(HistoryField.CROP, "crop"))
+        assertThat(one(base.copy(geometry = Geometry(angle = 1.5f)))).isEqualTo(HistoryStep(HistoryField.ANGLE, "1.5°"))
+        assertThat(one(base.copy(geometry = Geometry(rotate = 3)))).isEqualTo(HistoryStep(HistoryField.ROTATE, "270°"))
+        assertThat(one(base.copy(geometry = Geometry(flipH = true)))).isEqualTo(HistoryStep(HistoryField.FLIP_H, null))
+        assertThat(one(base.copy(geometry = Geometry(flipV = true)))).isEqualTo(HistoryStep(HistoryField.FLIP_V, null))
+        assertThat(one(base.copy(geometry = Geometry(aspect = Aspect(AspectPreset.R16_9)))))
+            .isEqualTo(HistoryStep(HistoryField.ASPECT, "r16_9"))
+    }
+
+    @Test
+    fun `removing the crop is a step with no value`() {
+        val cropped = base.copy(geometry = Geometry(crop = CropRect(0f, 0f, 0.5f, 1f)))
+
+        assertThat(RecipeDiff.between(cropped, base)).containsExactly(HistoryStep(HistoryField.CROP, null))
+    }
+
     private fun Recipe.withExposure(ev: Float) = copy(light = Light(ev))
 
     private fun Recipe.withWb(wb: WhiteBalance) = copy(colour = Colour(wb))

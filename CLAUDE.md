@@ -14,7 +14,8 @@ Start with `docs/plan/README.md` (the brief), then `docs/plan/` and `docs/adr/`.
 - Private photos: copies only, never committed, never in screenshots, aggregates only.
 - Workers use emulators. Only when the emulator itself keeps crashing may a worker run its debug/test APKs on the
   owner's phone (`RXCX109VTTM`, on the Mac's USB, adb over SSH); if it is not connected, ask the orchestrator.
-  Release installs on the phone are the orchestrator's.
+  Release installs on the phone are the orchestrator's. The owner's tablet (Galaxy Tab S9 Ultra, `RX2X9009BXP`, S Pen,
+  user 0 only) may be connected too: same rules, always `adb -s <serial>`.
   On the phone always install with `adb install --user 0` (it has a Dual App profile, user 95: a plain
   `adb install` adds a second icon there), and uninstall `dev.hfps.reveal.debug` after a test run.
 - Code, identifiers, comments and ADRs in English.

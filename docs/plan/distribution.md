@@ -21,6 +21,17 @@ Reveal (hand-off contract, ADR 0011). Both under the same Play developer account
 In Hoard, "Develop in Reveal" stays visible when Reveal is not installed and opens Reveal's store page (no ads, no
 nagging). Reveal works fully without Hoard.
 
+## Preset packs (idea, needs an audience first)
+
+Packs of presets made by the owner or by photographers/influencers (revenue share), sold as content, not as app
+features: the app stays complete without them. Packs are data, not code, so they can be sold under their own licence
+while the app stays AGPL. Sold outside the app first (a file or link that the app imports); in-app purchase later if it
+is worth it. It only works with people using the app, so it comes after the launch and an audience.
+
+What M3 must make possible now (cheap): a versioned, documented preset file format with pack metadata (name, author,
+cover, licence, link), import from a file or a link, packs as groups, and a "try on my photos" preview before keeping a
+pack.
+
 ## Later, only if the app becomes exceptional
 
 - A hosted sync service run by the owner, by subscription, for people who do not want to run a server.

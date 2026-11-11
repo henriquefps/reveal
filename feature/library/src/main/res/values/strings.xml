@@ -1,0 +1,144 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Library: shell -->
+    <string name="library_title">Library</string>
+    <string name="library_back">Back</string>
+    <string name="library_menu">More options</string>
+    <string name="library_menu_open_photo">Open a photo…</string>
+    <string name="library_menu_gallery">Design system</string>
+    <string name="library_menu_about">About</string>
+
+    <!-- Sources -->
+    <string name="library_section_library">Library</string>
+    <string name="library_section_folders">Folders</string>
+    <string name="library_all_photos">All photos</string>
+    <string name="library_recent">Recent</string>
+    <string name="library_recent_subtitle">Photos you opened in the editor</string>
+    <string name="library_from_apps">Opened from other apps</string>
+    <string name="library_from_apps_subtitle">Photos Hoard and other apps send to Reveal</string>
+    <string name="library_add_folder">Add folder</string>
+    <string name="library_source_unplugged">Unplugged</string>
+    <string name="library_source_permission_lost">Access lost: add the folder again</string>
+    <string name="library_source_rescan">Rescan</string>
+    <string name="library_source_remove">Remove folder</string>
+    <string name="library_source_actions">Actions for %1$s</string>
+    <string name="library_source_indexing">Indexing…</string>
+    <string name="library_source_read_only">Read-only</string>
+    <plurals name="library_photo_count">
+        <item quantity="one">%1$s photo</item>
+        <item quantity="other">%1$s photos</item>
+    </plurals>
+    <string name="library_source_subtitle">%1$s · %2$s</string>
+    <string name="library_remove_folder_title">Remove “%1$s”?</string>
+    <string name="library_remove_folder_body">Reveal forgets this folder, its thumbnails and the edits made here. The files on the device are not touched.</string>
+    <string name="library_remove_folder_confirm">Remove</string>
+    <string name="library_cancel">Cancel</string>
+    <string name="library_add_folder_failed">That folder could not be read.</string>
+    <string name="library_add_folder_exists">That folder is already in the library.</string>
+
+    <!-- Grid -->
+    <string name="library_search">Search</string>
+    <string name="library_search_hint">File name</string>
+    <string name="library_search_close">Close search</string>
+    <string name="library_sort">Sort</string>
+    <string name="library_sort_newest">Newest first</string>
+    <string name="library_sort_oldest">Oldest first</string>
+    <string name="library_sort_name">File name</string>
+    <string name="library_filter_all">All</string>
+    <string name="library_filter_edited">Edited</string>
+    <string name="library_filter_not_edited">Not edited</string>
+    <string name="library_filter_picked">Picked</string>
+    <string name="library_filter_rated">%1$d★ or more</string>
+    <string name="library_filter_rated_short">Rated</string>
+    <string name="library_filter_raw">RAW</string>
+    <string name="library_filter_jpeg">JPEG</string>
+    <string name="library_indexing">Looking for photos… %1$s found</string>
+    <string name="library_indexing_metadata">Reading photo details… %1$s of %2$s</string>
+    <string name="library_unplugged_banner">%1$s is unplugged. Connect it again to open these photos.</string>
+    <string name="library_unplugged_volume">This drive</string>
+    <string name="library_permission_banner">Reveal lost access to this folder. Remove it and add it again.</string>
+
+    <!-- Badges and cell description (TalkBack) -->
+    <string name="library_badge_raw_jpg">RAW+JPG</string>
+    <string name="library_badge_raw">RAW</string>
+    <string name="library_format_raw_pair">RAW and JPEG</string>
+    <string name="library_format_raw">RAW</string>
+    <string name="library_format_jpeg">JPEG</string>
+    <string name="library_format_heif">HEIF</string>
+    <string name="library_format_png">PNG</string>
+    <string name="library_format_webp">WebP</string>
+    <plurals name="library_stars">
+        <item quantity="one">%1$d star</item>
+        <item quantity="other">%1$d stars</item>
+    </plurals>
+    <string name="library_flag_picked">Picked</string>
+    <string name="library_flag_rejected">Rejected</string>
+    <string name="library_edited">Edited</string>
+    <string name="library_cell_select">Select</string>
+
+    <!-- Selection -->
+    <plurals name="library_selected">
+        <item quantity="one">%1$d selected</item>
+        <item quantity="other">%1$d selected</item>
+    </plurals>
+    <string name="library_selection_close">Clear selection</string>
+    <string name="library_selection_all">Select all</string>
+    <string name="library_action_rate">Rate</string>
+    <string name="library_action_pick">Pick</string>
+    <string name="library_action_reject">Reject</string>
+    <string name="library_action_unflag">Clear flag</string>
+    <string name="library_action_remove">Remove from library</string>
+    <string name="library_action_copy_edits">Copy edits</string>
+    <string name="library_action_paste_edits">Paste edits</string>
+    <string name="library_action_preset">Apply preset</string>
+    <string name="library_action_export">Export</string>
+    <string name="library_action_coming">Coming soon</string>
+    <string name="library_rating_none">No stars</string>
+    <string name="library_saved_database_only">Saved in Reveal only: the folder is read-only, so no XMP sidecar was written.</string>
+    <plurals name="library_removed">
+        <item quantity="one">%1$d photo removed from the library. The file stays on the device.</item>
+        <item quantity="other">%1$d photos removed from the library. The files stay on the device.</item>
+    </plurals>
+
+    <!-- Empty states -->
+    <string name="library_empty_title">Add your photos</string>
+    <string name="library_empty_body">Add a folder from this phone, an SD card or a USB drive. Reveal reads the photos where they are and never copies or changes them.</string>
+    <string name="library_empty_open">Open a single photo</string>
+    <string name="library_folder_empty_title">No photos here</string>
+    <string name="library_folder_empty_body">This folder has no JPEG, HEIF or RAW photos.</string>
+    <string name="library_folder_indexing_title">Looking for photos</string>
+    <string name="library_no_match_title">No photos match</string>
+    <string name="library_no_match_body">Try another filter or search.</string>
+    <string name="library_clear_filters">Clear filters</string>
+    <string name="library_recent_empty_title">Nothing opened yet</string>
+    <string name="library_recent_empty_body">Photos you open in the editor show up here.</string>
+    <string name="library_from_apps_empty_title">Nothing received yet</string>
+    <string name="library_from_apps_empty_body">Photos that Hoard or another app sends to Reveal show up here.</string>
+    <string name="library_pick_source">Choose a folder on the left.</string>
+
+    <!-- Viewer -->
+    <string name="viewer_position">%1$d of %2$d</string>
+    <string name="viewer_info">Info</string>
+    <string name="viewer_edit">Edit</string>
+    <string name="viewer_unavailable">This photo’s folder is not available right now.</string>
+    <string name="viewer_load_failed">This photo could not be shown.</string>
+    <string name="viewer_zoom_hint">Double-tap to zoom to 100 %</string>
+    <string name="info_title">Photo info</string>
+    <string name="info_camera">Camera</string>
+    <string name="info_lens">Lens</string>
+    <string name="info_exposure">Exposure</string>
+    <string name="info_shutter">Shutter</string>
+    <string name="info_aperture">Aperture</string>
+    <string name="info_iso">ISO</string>
+    <string name="info_focal_length">Focal length</string>
+    <string name="info_date">Captured</string>
+    <string name="info_dimensions">Dimensions</string>
+    <string name="info_files">Files</string>
+    <string name="info_rating">Rating</string>
+    <string name="info_unknown">Unknown</string>
+    <string name="info_focal_value">%1$s mm</string>
+    <string name="info_focal_value_35">%1$s mm (%2$d mm in 35 mm)</string>
+    <string name="info_shutter_value">%1$s s</string>
+    <string name="info_dimensions_value">%1$d × %2$d · %3$s MP</string>
+    <string name="info_file_value">%1$s · %2$s</string>
+</resources>

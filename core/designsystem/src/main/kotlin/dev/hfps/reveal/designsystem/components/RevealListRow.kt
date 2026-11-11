@@ -14,6 +14,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextOverflow
@@ -22,7 +23,8 @@ import dev.hfps.reveal.designsystem.theme.RevealTheme
 
 /**
  * A settings-like list row inside the card: at least 56dp, [title] (15sp, up to 2 lines) with an optional muted
- * [subtitle] (13sp), an optional leading [icon] and a [trailing] slot (value, switch, caret). Whole row tappable
+ * [subtitle] (13sp), an optional leading [icon] (tinted [iconTint]: `warning` for a source that needs attention)
+ * and a [trailing] slot (value, switch, caret). Whole row tappable
  * when [onClick] is set. Separate rows with [RevealRowDivider].
  */
 @Composable
@@ -31,6 +33,7 @@ fun RevealListRow(
     modifier: Modifier = Modifier,
     subtitle: String? = null,
     icon: ImageVector? = null,
+    iconTint: Color = RevealTheme.colors.mutedForeground,
     onClick: (() -> Unit)? = null,
     trailing: @Composable (() -> Unit)? = null,
 ) {
@@ -48,7 +51,7 @@ fun RevealListRow(
                 imageVector = icon,
                 contentDescription = null,
                 modifier = Modifier.size(22.dp),
-                tint = RevealTheme.colors.mutedForeground,
+                tint = iconTint,
             )
         }
         Column(modifier = Modifier.weight(1f)) {

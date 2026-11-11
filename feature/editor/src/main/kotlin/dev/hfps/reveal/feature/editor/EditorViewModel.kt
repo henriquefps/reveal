@@ -14,6 +14,7 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import dev.hfps.image.proxy.ProxyStep
 import dev.hfps.image.source.CancelToken
 import dev.hfps.image.source.CancelledException
+import dev.hfps.reveal.data.library.LibraryRepository
 import dev.hfps.reveal.feature.editor.open.OpenError
 import dev.hfps.reveal.feature.editor.open.OpenEvent
 import dev.hfps.reveal.feature.editor.open.OpenException
@@ -92,8 +93,9 @@ data class EditorUiState(
 class EditorViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
     @ApplicationContext private val context: Context,
+    private val library: LibraryRepository,
 ) : ViewModel() {
-    private val uri: Uri = savedStateHandle.toRoute<EditorRoute>().uri.toUri()
+    private val route: EditorRoute = savedStateHandle.toRoute<EditorRoute>()
     private val cancel = CancelToken()
     private val opener = PhotoOpener(context.contentResolver)
 
@@ -109,7 +111,8 @@ class EditorViewModel @Inject constructor(
         }
     }
 
-    private val _state = MutableStateFlow(EditorUiState(fileName = opener.displayNameOrEmpty(uri)))
+    private val _state =
+        MutableStateFlow(EditorUiState(fileName = route.uri?.let { opener.displayNameOrEmpty(it.toUri()) }.orEmpty()))
     val state: StateFlow<EditorUiState> = _state.asStateFlow()
 
     init {
@@ -122,6 +125,7 @@ class EditorViewModel @Inject constructor(
         val proxyLongEdge = screenLong.coerceIn(MIN_PROXY_EDGE, MAX_PROXY_EDGE)
         viewModelScope.launch {
             try {
+                val uri = resolveUri()
                 val photo = withContext(Dispatchers.IO) {
                     opener.open(uri, proxyLongEdge, screenLong, cancel, ::onEvent)
                 }
@@ -166,6 +170,18 @@ class EditorViewModel @Inject constructor(
                 _state.update { it.copy(phase = EditorPhase.Failed(PhotoOpener.classify(failure)), preview = null) }
             }
         }
+    }
+
+    /**
+     * The document to open: the route's URI, or for a library version the RAW of its photo (a pair's JPEG is only the
+     * first preview); a version that no longer exists is a lost file.
+     */
+    private suspend fun resolveUri(): Uri {
+        route.uri?.let { return it.toUri() }
+        val versionId = checkNotNull(route.versionId)
+        val target = library.editTarget(versionId) ?: throw OpenException(OpenError.PERMISSION_LOST)
+        _state.update { it.copy(fileName = target.name) }
+        return target.uri
     }
 
     private fun fail(error: OpenError, cause: Throwable) {

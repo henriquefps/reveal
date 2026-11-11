@@ -21,7 +21,7 @@ Java 17 bytecode. minSdk 29, compileSdk and targetSdk 37 (Android 17, stable).
 :feature:editor   ──> :core:image  :core:pipeline  :core:ml  :core:data
 :feature:export   ──> :core:image  :core:pipeline  :core:data
 :feature:settings ──> :core:data
-:core:data        ──> :core:pipeline   (the Recipe model is stored as JSON)
+:core:data        ──> :core:pipeline :core:image   (Recipe JSON, edited thumbnails; pairing and headers, ADR 0006)
 :core:pipeline    ──> :core:image
 :core:ml          ──> :core:image
 :core:image       ──> (nothing)

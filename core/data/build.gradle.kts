@@ -1,12 +1,15 @@
 plugins {
     id("reveal.android.library")
     id("reveal.hilt")
+    id("org.jetbrains.kotlin.plugin.serialization")
 }
 
 android {
     namespace = "dev.hfps.reveal.data"
     testOptions.unitTests.isIncludeAndroidResources = true
+    // The exported schemas are the migration tests' fixtures, on the JVM (Robolectric) and on a device.
     sourceSets.getByName("androidTest").assets.directories.add("$projectDir/schemas")
+    sourceSets.getByName("test").assets.directories.add("$projectDir/schemas")
 }
 
 ksp {
@@ -16,7 +19,9 @@ ksp {
 }
 
 dependencies {
+    implementation(projects.core.image)
     implementation(projects.core.pipeline)
+    implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.room.runtime)
     implementation(libs.androidx.room.ktx)
     ksp(libs.androidx.room.compiler)
@@ -26,4 +31,9 @@ dependencies {
     testImplementation(libs.robolectric)
     testImplementation(libs.androidx.test.ext.junit)
     testImplementation(libs.androidx.room.testing)
+
+    androidTestImplementation(libs.androidx.test.ext.junit)
+    androidTestImplementation(libs.androidx.test.runner)
+    androidTestImplementation(libs.androidx.room.testing)
+    androidTestImplementation(libs.truth)
 }

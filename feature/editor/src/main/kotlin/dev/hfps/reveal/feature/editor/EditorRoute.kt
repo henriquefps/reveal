@@ -3,8 +3,13 @@ package dev.hfps.reveal.feature.editor
 import kotlinx.serialization.Serializable
 
 /**
- * Type-safe navigation route of the editor: the photo to develop as a content (or file) URI string. The full hand-off
- * contract (explicit action, ClipData, RAW+JPEG pairs) is M1; in M0 one URI from the picker or another app.
+ * Type-safe navigation route of the editor. From the library: [versionId] (a photo's version; the editor opens the
+ * RAW of a RAW+JPEG pair and its recipe). From another app or "Open a photo": [uri], a content (or file) URI string,
+ * not in the library. Exactly one of the two is set.
  */
 @Serializable
-data class EditorRoute(val uri: String)
+data class EditorRoute(val uri: String? = null, val versionId: Long? = null) {
+    init {
+        require((uri == null) != (versionId == null)) { "EditorRoute needs a uri or a versionId" }
+    }
+}

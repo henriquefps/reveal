@@ -1,0 +1,265 @@
+package dev.hfps.reveal.data.thumb
+
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.system.Os
+import android.system.OsConstants
+import android.util.Log
+import android.util.LruCache
+import androidx.core.graphics.scale
+import dev.hfps.image.ImageInput
+import dev.hfps.image.cache.CacheKeys
+import dev.hfps.image.cache.FileIdentity
+import dev.hfps.image.cache.Variant
+import dev.hfps.image.decode.BitmapDecoding
+import dev.hfps.image.decode.Sampling
+import dev.hfps.image.source.readRange
+import dev.hfps.reveal.data.db.CacheEntryEntity
+import dev.hfps.reveal.data.db.PhotoFileEntity
+import dev.hfps.reveal.data.db.RevealDatabase
+import dev.hfps.reveal.data.edit.EditRepository
+import dev.hfps.reveal.data.library.DocumentTreeFactory
+import dev.hfps.reveal.data.model.FileRole
+import dev.hfps.reveal.data.model.SourceState
+import dev.hfps.reveal.data.storage.DocumentTree
+import dev.hfps.reveal.pipeline.PIPELINE_VERSION
+import java.io.File
+import java.io.IOException
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicInteger
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.withContext
+
+/**
+ * Grid thumbnails (ADR 0006, "Thumbnails"): the RAW's embedded preview (the fast path: two small reads), else the
+ * camera/phone JPEG subsampled while decoding; for an edited photo, a small render of its recipe through the
+ * develop pipeline ([EditedThumbnails]). Upright, long edge [EDGE] px, kept in a memory LRU and as JPEGs in
+ * `cacheDir/thumbs`, indexed in `cache_entries` with an LRU cap of [maxBytes]. An unplugged source shows what is
+ * cached and nothing else.
+ */
+@OptIn(ExperimentalCoroutinesApi::class)
+class ThumbnailRepository(
+    private val db: RevealDatabase,
+    private val trees: DocumentTreeFactory,
+    private val edits: EditRepository,
+    private val edited: EditedThumbnails?,
+    private val dir: File,
+    private val maxBytes: Long = DEFAULT_MAX_BYTES,
+    private val clock: () -> Long = System::currentTimeMillis,
+) {
+    private val cache = db.cacheDao()
+    private val photos = db.photoDao()
+    private val io = Dispatchers.IO.limitedParallelism(PARALLELISM)
+    private val memory = object : LruCache<String, Bitmap>(memoryBytes()) {
+        override fun sizeOf(key: String, value: Bitmap): Int = value.allocationByteCount
+    }
+    private val touched = ConcurrentHashMap.newKeySet<String>()
+    private val puts = AtomicInteger()
+
+    /** The thumbnail if it is in memory already (lets a recycled grid cell draw in the same frame). */
+    fun inMemory(photoId: Long, editTime: Long?): Bitmap? = memory.get(memoryKey(photoId, editTime))
+
+    /**
+     * The thumbnail of [photoId]; [editTime] is the time its recipe last changed (null = not edited), so a new edit
+     * gets a new thumbnail. Null when nothing can be shown (unplugged and not cached, unreadable file).
+     */
+    suspend fun thumbnail(photoId: Long, versionId: Long, editTime: Long?): Bitmap? {
+        val memoryKey = memoryKey(photoId, editTime)
+        memory.get(memoryKey)?.let { return it }
+        return withContext(io) {
+            memory.get(memoryKey) ?: load(photoId, versionId, editTime)?.also { memory.put(memoryKey, it) }
+        }
+    }
+
+    /** What a thumbnail is made from: the photo's main file (the RAW of a pair) and its camera rendering. */
+    private class Target(
+        val photoId: Long,
+        val sourceId: Long,
+        val main: PhotoFileEntity,
+        val rendered: PhotoFileEntity?,
+        val identity: FileIdentity,
+    )
+
+    private suspend fun target(photoId: Long): Target? {
+        val photo = photos.get(photoId)
+        val files = photos.files(photoId)
+        val main = files.firstOrNull { it.role == FileRole.RAW } ?: files.firstOrNull { it.role == FileRole.RENDERED }
+        if (photo == null || main == null) return null
+        val identity = FileIdentity(photo.sourceId.toString(), main.relativePath, main.size, main.modified)
+        return Target(photoId, photo.sourceId, main, files.firstOrNull { it.role == FileRole.RENDERED }, identity)
+    }
+
+    private suspend fun load(photoId: Long, versionId: Long, editTime: Long?): Bitmap? {
+        val target = target(photoId) ?: return null
+        return editTime?.let { loadEdited(target, versionId, it) } ?: loadPreview(target)
+    }
+
+    private suspend fun loadEdited(target: Target, versionId: Long, editTime: Long): Bitmap? {
+        if (edited == null) return null
+        val key = CacheKeys.key(target.identity, Variant.THUMB, "edit:$versionId:$editTime:$PIPELINE_VERSION:$EDGE")
+        return fromDisk(key)
+            ?: renderEdited(target, versionId, editTime)?.also { save(key, target.photoId, KIND_EDITED, it) }
+    }
+
+    private suspend fun loadPreview(target: Target): Bitmap? {
+        val key = CacheKeys.key(target.identity, Variant.THUMB, EDGE)
+        return fromDisk(key) ?: decodePreview(target)?.also { save(key, target.photoId, KIND_PREVIEW, it) }
+    }
+
+    /** An available source's tree, or null (unplugged, access lost, removed). */
+    private suspend fun availableTree(sourceId: Long): DocumentTree? =
+        db.sourceDao().get(sourceId)?.takeIf { it.state == SourceState.AVAILABLE }?.let(trees::open)
+
+    private suspend fun decodePreview(target: Target): Bitmap? {
+        val tree = availableTree(target.sourceId) ?: return null
+        val main = target.main
+        return try {
+            tree.openInput(main.documentId, main.name).use { input ->
+                val rendered = target.rendered?.takeIf { it !== main }
+                embeddedPreview(input)
+                    ?: rendered?.let { tree.openInput(it.documentId, it.name).use(::decodeStandard) }
+                    ?: decodeStandard(input)
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
+            Log.w(TAG, "No thumbnail for photo ${target.photoId} (${main.name})", e)
+            null
+        } catch (e: OutOfMemoryError) {
+            Log.w(TAG, "No memory for the thumbnail of photo ${target.photoId}", e)
+            null
+        }
+    }
+
+    private suspend fun renderEdited(target: Target, versionId: Long, editTime: Long): Bitmap? {
+        val renderer = edited
+        val tree = availableTree(target.sourceId)
+        if (renderer == null || tree == null) return null
+        return try {
+            val recipe = edits.recipe(versionId)
+            tree.openInput(target.main.documentId, target.main.name).use { renderer.render(it, recipe, EDGE) }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (@Suppress("TooGenericExceptionCaught") e: Throwable) {
+            Log.w(TAG, "Edited thumbnail of version $versionId ($editTime) failed; showing the original", e)
+            null
+        }
+    }
+
+    /** The embedded JPEG of a RAW (or a JPEG's own EXIF thumbnail is too small: never used). */
+    private fun embeddedPreview(input: ImageInput): Bitmap? {
+        val inspection = input.inspection
+        val preview = inspection.takeIf { it.type.isRaw }?.previewFor(EDGE) ?: return null
+        val bytes = input.withSource { it.readRange(preview.offset, preview.length.toInt()) }
+        return BitmapDecoding.decode(bytes, EDGE, inspection.metadata.orientation).bitmap
+    }
+
+    /** A JPEG/HEIF/PNG/WebP decoded subsampled straight from its descriptor (no full-size bitmap, no copy). */
+    private fun decodeStandard(input: ImageInput): Bitmap {
+        val fd = input.descriptor.fileDescriptor
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeFileDescriptor(fd, null, bounds)
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) throw IOException("Not decodable: ${input.name}")
+        Os.lseek(fd, 0, OsConstants.SEEK_SET)
+        val options = BitmapFactory.Options().apply {
+            inSampleSize = Sampling.sampleSize(bounds.outWidth, bounds.outHeight, EDGE)
+        }
+        val decoded =
+            BitmapFactory.decodeFileDescriptor(fd, null, options) ?: throw IOException("Decode failed: ${input.name}")
+        val orientation = runCatching { input.inspection.metadata.orientation }.getOrDefault(1)
+        return BitmapDecoding.orient(scaleDown(decoded), orientation)
+    }
+
+    private fun scaleDown(bitmap: Bitmap): Bitmap {
+        val long = maxOf(bitmap.width, bitmap.height)
+        if (long <= EDGE) return bitmap
+        val scale = EDGE.toFloat() / long
+        val scaled = bitmap.scale(
+            (bitmap.width * scale).toInt().coerceAtLeast(1),
+            (bitmap.height * scale).toInt().coerceAtLeast(1),
+        )
+        if (scaled !== bitmap) bitmap.recycle()
+        return scaled
+    }
+
+    // ------------------------------------------------------------------ disk cache
+
+    private suspend fun fromDisk(key: String): Bitmap? {
+        val entry = cache.get(key) ?: return null
+        val file = File(dir, entry.fileName)
+        val bitmap = if (file.exists()) BitmapFactory.decodeFile(file.path) else null
+        if (bitmap == null) {
+            cache.delete(listOf(key))
+        } else {
+            touched += key
+            if (touched.size >= TOUCH_BATCH) flushTouches()
+        }
+        return bitmap
+    }
+
+    private suspend fun save(key: String, photoId: Long, kind: String, bitmap: Bitmap) {
+        runCatching {
+            dir.mkdirs()
+            val name = "$key.jpg"
+            val file = File(dir, name)
+            val temp = File(dir, "$name.tmp")
+            temp.outputStream().use { bitmap.compress(Bitmap.CompressFormat.JPEG, JPEG_QUALITY, it) }
+            if (!temp.renameTo(file)) throw IOException("rename failed")
+            cache.put(CacheEntryEntity(key, photoId, kind, name, file.length(), clock()))
+        }.onFailure { Log.w(TAG, "Could not cache thumbnail $key", it) }
+        if (puts.incrementAndGet() % TRIM_EVERY == 0) trim()
+    }
+
+    private suspend fun flushTouches() {
+        val keys = touched.toList()
+        touched.removeAll(keys.toSet())
+        keys.chunked(SQL_ARGS).forEach { cache.touch(it, clock()) }
+    }
+
+    /** Deletes the least recently used thumbnails until the cache is under [maxBytes]; drops orphan files. */
+    suspend fun trim() = withContext(io) {
+        flushTouches()
+        var total = cache.totalBytes()
+        while (total > maxBytes) {
+            val oldest = cache.oldest(TRIM_BATCH)
+            if (oldest.isEmpty()) break
+            oldest.forEach { File(dir, it.fileName).delete() }
+            cache.delete(oldest.map { it.key })
+            total -= oldest.sumOf { it.bytes }
+        }
+        val known = cache.fileNames().toHashSet()
+        dir.listFiles()?.filter { it.isFile && it.name !in known }?.forEach { it.delete() }
+    }
+
+    /** Settings' "clear cache". */
+    suspend fun clear() = withContext(io) {
+        memory.evictAll()
+        cache.clear()
+        dir.listFiles()?.forEach { it.delete() }
+    }
+
+    private fun memoryKey(photoId: Long, editTime: Long?) = "$photoId:${editTime ?: 0}"
+
+    companion object {
+        private const val TAG = "RevealThumbs"
+
+        /** Long edge of a thumbnail: a 3-column cell on a 1440 px wide phone is 480 px. */
+        const val EDGE = 512
+        const val DEFAULT_MAX_BYTES = 256L * 1024 * 1024
+        private const val PARALLELISM = 3
+        private const val JPEG_QUALITY = 85
+        private const val TRIM_EVERY = 50
+        private const val TRIM_BATCH = 200
+        private const val TOUCH_BATCH = 64
+        private const val SQL_ARGS = 900
+        private const val KIND_PREVIEW = "thumb"
+        private const val KIND_EDITED = "thumb-edited"
+        private const val MEMORY_SHARE = 8
+        private const val MAX_MEMORY = 96 * 1024 * 1024
+
+        private fun memoryBytes(): Int =
+            (Runtime.getRuntime().maxMemory() / MEMORY_SHARE).coerceAtMost(MAX_MEMORY.toLong()).toInt()
+    }
+}

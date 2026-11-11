@@ -8,10 +8,12 @@ import androidx.navigation.compose.composable
 import dev.hfps.reveal.designsystem.theme.ThemeMode
 import dev.hfps.reveal.feature.editor.editorScreen
 import dev.hfps.reveal.feature.editor.navigateToEditor
+import dev.hfps.reveal.feature.library.LibraryRoute
+import dev.hfps.reveal.feature.library.libraryScreens
 import dev.hfps.reveal.ui.about.AboutScreen
 import dev.hfps.reveal.ui.gallery.DesignSystemGallery
-import dev.hfps.reveal.ui.start.StartScreen
 
+/** The app's navigation: the library is the start (M1); the editor, the gallery and About hang off it. */
 @Composable
 fun RevealNavHost(
     navController: NavHostController,
@@ -20,15 +22,14 @@ fun RevealNavHost(
     onEditorBack: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    NavHost(navController = navController, startDestination = StartRoute, modifier = modifier) {
-        // A temporary start screen ("Open photo") until the library (M1) replaces it.
-        composable<StartRoute> {
-            StartScreen(
-                onOpenPhoto = { navController.navigateToEditor(it.toString()) },
-                onGallery = { navController.navigate(GalleryRoute) },
-                onAbout = { navController.navigate(AboutRoute) },
-            )
-        }
+    NavHost(navController = navController, startDestination = LibraryRoute, modifier = modifier) {
+        libraryScreens(
+            navController = navController,
+            onEdit = { versionId -> navController.navigateToEditor(versionId) },
+            onOpenFile = { uri -> navController.navigateToEditor(uri.toString()) },
+            onGallery = { navController.navigate(GalleryRoute) },
+            onAbout = { navController.navigate(AboutRoute) },
+        )
         composable<GalleryRoute> {
             DesignSystemGallery(
                 themeMode = themeMode,

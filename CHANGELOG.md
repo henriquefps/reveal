@@ -6,6 +6,16 @@ All notable changes to Reveal are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- Library (start screen): add folders from the phone, an SD card or a USB drive (nothing is copied); they are
+  indexed in the background and kept up to date; unplugged drives keep their thumbnails and show a warning.
+- Grid with RAW+JPEG pairs as one photo, date headers, badges (RAW+JPG, edited, stars, pick/reject), filters
+  (edited, not edited, picked, rated, RAW, JPEG), sort, search by file name, multi-select with drag, rate, pick,
+  reject and remove from library. Tablets show folders and photos side by side.
+- Ratings, labels and pick/reject are read from XMP sidecars (Hoard, Lightroom, darktable) and written back to them
+  when the folder allows it.
+- Full-screen viewer: swipe between photos, pinch or double-tap to 100 %, photo info, rate and flag, Edit.
+
 ## [0.1.1] - 2026-11-10
 
 ### Fixed

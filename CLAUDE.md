@@ -92,6 +92,31 @@ adb -s emulator-<port> logcat -d -s REVEAL_PARITY REVEAL_BENCH     # measured er
 Debug canvas: `adb -s emulator-<port> shell am start -n dev.hfps.reveal.debug/dev.hfps.reveal.debug.PipelineDebugActivity`
 (debug build only: `app/src/debug`, hosting `EditorDebugScreen` on a synthetic image).
 
+## Library (`:core:data`, `:feature:library`, M1, ADR 0006)
+
+Room `RevealDatabase` v2 (sources, photos, photo_files, versions, recipes, history, history_cursor, cache_entries);
+schema change = new version + migration (or `AutoMigration`) + exported `core/data/schemas/*.json`, tested by
+`RevealDatabaseMigrationTest`. `LibraryRepository` (sources, SAF grants, volumes, indexing, ratings/flags with XMP
+write-back), `LibraryIndexer` (walk → diff → sidecars → headers), `XmpReader`/`XmpWriter` (merge, never overwrite a
+malformed sidecar; `reveal:` namespace reserved for M5), `ThumbnailRepository` (embedded preview / JPEG, edited thumb
+via `GpuEditedThumbnails`), `PhotoImages` (viewer display + region decoder), `EditRepository` (recipes, undo/redo
+history for the editor). The editor route is `EditorRoute(versionId = …)` from the library or `EditorRoute(uri = …)`
+from other apps. The library is the start destination and reopens the last folder (`meta`).
+
+Instrumented library tests use the debug-only `SyntheticDocumentsProvider` (`app/src/debug`, authority
+`dev.hfps.reveal.debug.synthetic`, files under `files/saf-test`, own process) and `DebugAccess` (Hilt entry point):
+
+```sh
+adb -s emulator-<port> shell am instrument -w -e class dev.hfps.reveal.library.LibraryFlowTest dev.hfps.reveal.debug.test/androidx.test.runner.AndroidJUnitRunner
+adb -s emulator-<port> shell am instrument -w -e class dev.hfps.reveal.library.LibraryMeasurementsTest dev.hfps.reveal.debug.test/androidx.test.runner.AndroidJUnitRunner   # 10,000 files
+adb -s emulator-<port> logcat -d -s REVEAL_LIBRARY RevealLibrary
+```
+
+The full suite excludes both measurement classes:
+`-e notClass dev.hfps.reveal.editor.EditorMeasurementsTest,dev.hfps.reveal.library.LibraryMeasurementsTest`.
+Frame measurements must not use a Compose test rule (it holds frames while it synchronizes): launch with
+`ActivityScenario` and inject touches with `input swipe`.
+
 ## Editor open flow (`:feature:editor`, M0)
 
 `EditorRoute(uri)` → `EditorViewModel`: `PhotoOpener` (preview via `FirstImageLoader`, proxy via `ProxyBuilder`,
@@ -110,7 +135,7 @@ adb -s emulator-<port> install -r -t app/build/outputs/apk/debug/app-debug.apk
 adb -s emulator-<port> install -r -t app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
 adb -s emulator-<port> push core/image/build/samples/sony-zv-e10.arw /data/local/tmp/
 adb -s emulator-<port> shell "chmod a+r /data/local/tmp/sony-zv-e10.arw && run-as dev.hfps.reveal.debug sh -c 'mkdir -p files/samples && cp /data/local/tmp/sony-zv-e10.arw files/samples/' && rm /data/local/tmp/sony-zv-e10.arw"
-adb -s emulator-<port> shell am instrument -w -e notClass dev.hfps.reveal.editor.EditorMeasurementsTest dev.hfps.reveal.debug.test/androidx.test.runner.AndroidJUnitRunner
+adb -s emulator-<port> shell am instrument -w -e notClass dev.hfps.reveal.editor.EditorMeasurementsTest,dev.hfps.reveal.library.LibraryMeasurementsTest dev.hfps.reveal.debug.test/androidx.test.runner.AndroidJUnitRunner
 adb -s emulator-<port> shell am instrument -w -e class dev.hfps.reveal.editor.EditorMeasurementsTest dev.hfps.reveal.debug.test/androidx.test.runner.AndroidJUnitRunner
 adb -s emulator-<port> logcat -d -s REVEAL_MEASURE REVEAL_EDITOR_TEST RevealEditor
 ```

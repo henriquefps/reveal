@@ -1,0 +1,169 @@
+# ADR 0006: Library data model, indexing, XMP and thumbnails
+
+Status: accepted (M1, library). Date: 2026-11-11.
+
+## Context
+
+M1 replaces the M0 start screen with a library (`docs/plan/product.md` "Library", `ux.md` "Library and other
+screens"): folders added through the Storage Access Framework (phone, SD card, USB drive), indexed fast, shown as a
+grid with RAW+JPEG pairs collapsed and ratings/flags read from XMP (Hoard's culling), a full-screen viewer and "Edit".
+The data layer also has to hold recipes and history for the editor's undo/redo, and leave seams for virtual copies
+(M5) and the recipe-in-sidecar (M5).
+
+## Schema (Room, `RevealDatabase` version 2)
+
+Version 1 (M0) had only `meta`. Version 2 adds tables only, so it is an **auto-migration** (`AutoMigration(1, 2)`),
+checked by `RevealDatabaseMigrationTest` (Robolectric + `MigrationTestHelper` over the exported schemas, which are
+test assets of both the JVM and the device tests).
+
+| Table | Row | Key columns |
+| --- | --- | --- |
+| `sources` | an added folder: SAF tree URI (unique), root document id, display name, `volume_id` (`primary`, an SD/USB uuid, or null for other providers), `volume_name`, `state` (`AVAILABLE` / `UNPLUGGED` / `PERMISSION_LOST`), `writable`, `added_at`, `indexed_at` | |
+| `photos` | a **shot**: RAW, rendering, or RAW+JPEG pair (one row) | unique `(source_id, folder, stem_key)`; `sort_time`, `capture_time` (EXIF, camera clock as UTC ms incl. sub-seconds), `capture_offset`, `width`/`height`/`orientation`, `format` (`RAW_PAIR`, `RAW`, `JPEG`, `HEIF`, `PNG`, `WEBP`), `has_raw`, `rating` 0..5, `label`, `flag` (`NONE`/`PICK`/`REJECT`), `has_edit`, `metadata_state`, `xmp_document_id` + `xmp_modified`, `last_opened_at` (Recent), `hidden` ("remove from library") |
+| `photo_files` | one file of a photo; its **identity = source + relative path + size + mtime** | unique `(source_id, relative_path)`; `document_id`, `role` (`RAW`/`RENDERED`/`OTHER`) |
+| `versions` | an independent edit of a photo; M1 creates exactly one per photo (position 0, `name` null) with the photo, M5 adds virtual copies | unique `(photo_id, position)` |
+| `recipes` | the committed recipe of a version: ADR 0003 JSON (`v` inside), `is_default`, `updated_at`. No row = the default recipe | PK `version_id` |
+| `history` | one committed step of a version (see "History") | unique `(version_id, position)` |
+| `history_cursor` | where undo/redo stands per version | PK `version_id` |
+| `cache_entries` | index of disk caches (thumbnails now; proxies/previews later): key, kind, file name, bytes, `last_access` | indexed `last_access` |
+
+Every child cascades on delete (source → photos → files/versions → recipes/history/cursor/cache rows). Enums are
+stored by name. `photos.has_edit` and `sort_time` are denormalised for the grid's filters and order (indexed
+`(source_id, sort_time)`, `sort_time`, `last_opened_at`).
+
+**Why a photo and its files are two tables:** a pair has two files with two sizes and mtimes; the photo is the unit
+the user rates, edits and sees, the file is the unit the walk compares. A photo's key is its folder and lower-case
+stem, the pairing rule of Hoard ADR 0006 (`ShotPairing`, ported in `:core:image`).
+
+**"Remove from library"** sets `hidden`: the row stays (so a rescan does not bring the photo back) and the file is
+never touched. Removing a folder deletes its rows (edits included, after a confirmation) and releases the grant.
+
+## History (for the editor's undo/redo)
+
+`EditRepository` (in `:core:data`) is the persistence API of ADR 0003's committed steps:
+
+- `commit(versionId, recipe, labels)`: one step per commit, appended after the cursor (redo steps above it are
+  dropped), the recipe stored as the version's recipe, the cursor moved to it, `has_edit` updated.
+- `undo` / `redo` / `goTo(position)` move the cursor (-1 = the base, the default recipe) and return the recipe to
+  show; `history(versionId)` returns the steps (labels as `HistoryStep`s) and the cursor. Everything survives restarts.
+- Each row stores the **full recipe after the step** (`encoding = "snapshot"`) plus its `RecipeDiff` labels as JSON
+  (`[{"field":"EXPOSURE","value":"+0.70"}]`; unknown fields from a newer app are skipped). Recipes are a few KB, so
+  snapshots keep undo O(1) and robust against migrations (each snapshot goes through `RecipeCodec`'s migrators).
+  When masks with brush strokes make recipes large, the `encoding` column allows keyframes + diffs without a schema
+  change.
+
+## Indexing (`LibraryIndexer`)
+
+1. **Walk**: breadth-first `DocumentsContract` child queries (one per folder, all rows read in one pass), skipping
+   names that start with `.`; images by extension (`ImageFormats`), `.xmp` sidecars by name. Cancellable between
+   folders. A failing sub-folder is skipped; a failing root fails the run **without deleting anything**.
+2. **Save the difference** in transactions of 500 shots: per folder `ShotPairing.pair`, then for each shot: new →
+   photo + version + files; known → files whose size/mtime changed (or added/removed members) mark the photo
+   `PENDING`. Files no longer listed are deleted, then photos without files. All comparisons are hash lookups over
+   the source's rows loaded once.
+3. **Sidecars** that are new or whose mtime/document changed are read and applied (rating, label, flag).
+4. **Headers** of `PENDING` photos, 4 at a time, written in batches of 64: `ImageInspector` on the RAW (gaps filled
+   from the rendering): capture time with sub-seconds and offset, size, orientation; a JPEG's embedded XMP packet
+   and the TIFF/XMP rating. Embedded values only fill a photo nobody rated (no sidecar, no stars, flag or label).
+
+A source is indexed when added, on every library start (`refresh`, incremental: an unchanged folder costs one
+listing), on "Rescan" and when a volume comes back. Sort time = capture time, else the file mtime converted to the
+same "local wall clock as UTC" convention, so date headers group both the same way (formatted in UTC).
+
+**Volumes:** `StorageVolumes` maps a tree of `com.android.externalstorage.documents` to its volume (`primary`,
+`1234-ABCD`) and reads mount state from `StorageManager`; media broadcasts (mounted, unmounted, eject, removed) make
+the library re-probe. A source is `UNPLUGGED` when its volume is not mounted or its root no longer lists,
+`PERMISSION_LOST` on a `SecurityException`. Unplugged sources keep their index and cached thumbnails; the grid shows
+a `warning` banner, the sources list a warning icon, and the viewer says the folder is not available.
+
+## XMP (`XmpReader`, `XmpWriter`)
+
+The fields Reveal shares with Hoard (its ADR 0009, section 9), Lightroom, darktable and digiKam:
+
+| Field | XMP | Notes |
+| --- | --- | --- |
+| stars 0..5 | `xmp:Rating` | as attribute or element; fractional values truncate, out of range clamps |
+| reject | `xmp:Rating="-1"` | Lightroom, darktable and Hoard (`PhotoMetadata.rating`) agree |
+| pick / reject / none | `digiKam:PickLabel` 3 / 1 / 0 | the only pick flag in common use; always written so a pick (or an explicit "none") survives |
+| pick (read only) | `xmp:CreatorTool` starting with `Hoard` and no `digiKam:PickLabel` | Hoard writes sidecars only for the shots "Copy picks" copies |
+| label | `xmp:Label` | free text; Lightroom shows colour names as colours |
+
+Sidecar names: `<stem>.xmp` (Lightroom, Hoard; one per pair, named after the RAW), else `<file name>.xmp`
+(darktable). Writing **merges** into the existing sidecar through the DOM: only `xmp:Rating`, `xmp:Label`,
+`digiKam:PickLabel` and `xmp:MetadataDate` change; Lightroom's `crs:` settings, darktable's history, `<?xpacket?>`
+and comments stay; an existing prefix for the XMP namespace (`xap:`) is reused. A new sidecar gets the standard
+`x:xmpmeta/rdf:RDF/rdf:Description` shape with `xmp:CreatorTool="Reveal <version>"`. A sidecar that is not
+well-formed is **never overwritten** (the change stays in the database). Parsing refuses DTDs/external entities.
+Serialising uses our own small writer (the platform `Transformer` differs between the JVM and Android), with Hoard's
+attribute escaping (`& < > " '`, tab/newline/CR as references, XML-invalid characters dropped).
+
+Writes happen when the source is available and **writable** (the persisted grant includes write and the root
+accepts new documents); otherwise, or if the provider refuses, the change is kept in the database and the UI says
+"Saved in Reveal only". After writing, the sidecar's new mtime is stored, so the next walk does not read Reveal's own
+write back as a change. A sidecar changed by another app (newer mtime) wins over the database on the next index.
+
+**Seam for M5:** `XmpNs.REVEAL` (`https://reveal.hfps.dev/ns/1.0/`) is reserved for the recipe; the writer leaves
+`reveal:` properties untouched and `XmpWriter.update(..., extensions)` takes `XmpExtension`s that will write them.
+
+## Thumbnails (`ThumbnailRepository`)
+
+Fast path: the RAW's embedded preview (`Inspection.previewFor(512)`, two small reads), else the camera/phone JPEG
+decoded with `inSampleSize` straight from its descriptor; upright, long edge 512 px. Memory LRU (1/8 of the heap,
+at most 96 MB) and JPEG q85 files in `cacheDir/thumbs`, indexed in `cache_entries` with an LRU cap of 256 MB
+(trimmed every 50 writes; orphan files swept). The key is the file identity (source, path, size, mtime), so a
+changed file gets a new thumbnail and stale ones age out. 3 decodes at a time.
+
+**Edited badge:** when a version has a non-default recipe, the cell shows a primary dot and the thumbnail is a
+render of the edit: `GpuEditedThumbnails` decodes a 512 px proxy (`ProxyBuilder`), maps it like the editor
+(`PipelineInputMapper`), uploads it to one shared `GpuDevelopRenderer` and reads back `renderOutput(recipe)` (sRGB
+RGBA8). No new renderer API was needed. Its key adds the recipe time and `PIPELINE_VERSION`. The renderer closes
+after 5 s idle.
+
+## Viewer
+
+Pages are the grid's list at the moment it opened (same scope, filter, order, search), so rating a photo out of a
+filter does not move the page. Display: `FirstImageLoader` at the window's long edge (embedded preview, or the camera
+JPEG); an edited photo shows a develop render of its recipe instead. Pinch and double-tap to 100 % of the full
+size; past the display image's resolution, `RegionSource` (`BitmapRegionDecoder` on the camera rendering's
+descriptor, orientation-aware) decodes the visible region at the right sample size after the gesture settles. A RAW
+without a rendering gets a develop render at 3200 px (half-size LibRaw decode) as its detail: true 100 % of a lone
+RAW needs the tiled renderer (M2). Info sheet: EXIF read from the files on demand.
+
+## UI (`:feature:library`)
+
+hfps shell; sources pane (All photos, Recent, Opened from other apps placeholder, folders with volume, count and
+state, Add folder) and grid, side by side from 840 dp, one at a time below (predictive back from the grid to the
+sources). The library reopens the folder it showed last (`meta`). Grid: 3 columns on a portrait phone, else
+`width / 120 dp`; 2 dp gaps; date headers; badges (`RAW+JPG`/`RAW`, edited dot, stars, pick/reject; rejected cells
+dimmed; badge text capped at 130 % font scale, the cell's TalkBack description carries everything). Filters: all /
+edited / not edited / picked / rated ≥ N / RAW (has a RAW) / JPEG (no RAW); sort newest, oldest, name; search by
+file name (`LIKE` with escaped wildcards). Multi-select: long-press, tap to toggle, drag across rows with auto-scroll;
+rate, pick, reject, clear flag, remove from library, select all; copy/paste edits, preset and export are disabled
+placeholders. "Open a photo…" (single document, M0's flow) stays in the menu; the editor route takes a version id
+from the library (it opens the RAW of a pair) or a URI from other apps.
+
+## Measurements
+
+Emulator `reveal-library` (API 36.1 arm64 on the Mac mini, host GPU, 1080x2400, 60 Hz), debug build,
+`LibraryMeasurementsTest`: one folder of **10,000 files** (3,000 RAW+JPEG pairs of synthetic TIFF "ARW"s with
+embedded previews + 4,000 JPEGs, 640x427 previews, 300 sidecars; 7,000 photos, 50 MB) behind the debug
+`SyntheticDocumentsProvider` running in its own process (every call crosses a binder). Indexing and first frame: four to seven runs; fling: two runs
+(ranges):
+
+| Step | Result |
+| --- | --- |
+| First index, total | 4.2-6.2 s (listing 0.32-0.37 s, saving 1.0-1.3 s, 300 sidecars 0.21-0.52 s, 7,000 headers 2.6-4.1 s) |
+| Unchanged re-index | 0.37-0.45 s (one listing + a diff of 10,000 rows) |
+| First rows / first grid frame after the grid is asked for (7,000 photos) | 50-370 ms / 130-540 ms (the higher values include the activity launch) |
+| Fling through the grid with thumbnails loading (20 flings, ~1,040 frames) | frames past their deadline 1.0-1.1 %; main thread per frame p50 2.3-2.6 ms, p90 4.1-5.0 ms, p99 7.6-9.6 ms; total frame time p50 17-20 ms, p99 27-34 ms (the emulator's GPU/swap dominates) |
+
+The UI never waits for indexing: rows stream in (Room flow, coalesced to 4 updates/s while indexing) and the walk,
+the database writes and the header reads run on IO threads. Numbers on the owner's phone are for the orchestrator to
+add (release build, real SD card).
+
+## Consequences
+
+- One shared database owns the working copy of ratings and edits; sidecars are the portable copy.
+- A file renamed outside Reveal is a new photo (its edits stay with the old, now removed, row): identity is the path.
+- Editing a lone RAW at 100 % in the viewer waits for M2's tiles; pairs and JPEGs already zoom to real pixels.
+- Hoard reads `xmp:Rating` only; to round-trip picks it can read/write `digiKam:PickLabel` (noted for the hand-off).

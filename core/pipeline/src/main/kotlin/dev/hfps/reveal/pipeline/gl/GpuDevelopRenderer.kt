@@ -112,6 +112,8 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
     private var readFbo = 0
     private var input: UploadedImage? = null
     private var stageParams: DevelopParams? = null
+    private var sceneKey: SceneKey? = null
+    private var guideValid = false
     private var originalTex = 0
     private var originalFbo = 0
     private var originalValid = false
@@ -376,15 +378,28 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         }
         uploadUbo(developUbo, developBlock(params))
         uploadUbo(lightUbo, lightBlock(params, image.grid, reconstruct))
-        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, sceneFbo)
-        GLES30.glViewport(0, 0, image.width, image.height)
-        GLES30.glUseProgram(sceneProgram)
-        bindTextures(sourceTex, if (reconstruct) light.chromaTexture else sourceTex)
-        GLES30.glDrawArrays(GLES30.GL_TRIANGLES, 0, 3)
-        GlSupport.checkError("scene stage")
-        profiler.mark("scene pass")
-        if (params.tone.localActive) {
+        // The scene texture and the guide depend only on what reaches scene-linear light (white balance, matrix,
+        // exposure, reconstruction): a drag of a tone slider re-runs only the develop pass.
+        val scene = SceneKey(
+            params.wbMultipliers.toList(),
+            params.cameraToWorking.toList(),
+            params.exposureGain,
+            if (reconstruct) hp else null,
+        )
+        if (scene != sceneKey) {
+            GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, sceneFbo)
+            GLES30.glViewport(0, 0, image.width, image.height)
+            GLES30.glUseProgram(sceneProgram)
+            bindTextures(sourceTex, if (reconstruct) light.chromaTexture else sourceTex)
+            GLES30.glDrawArrays(GLES30.GL_TRIANGLES, 0, 3)
+            GlSupport.checkError("scene stage")
+            profiler.mark("scene pass")
+            sceneKey = scene
+            guideValid = false
+        }
+        if (params.tone.localActive && !guideValid) {
             light.guide(sceneTex)
+            guideValid = true
             profiler.mark("guided filter")
         }
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, stageFbo)
@@ -557,6 +572,8 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         input = UploadedImage(image.width, image.height, image.colourOnly(), grid, reconstruct)
         stageParams = null
         reconKey = null
+        sceneKey = null
+        guideValid = false
         val levels = 32 - Integer.numberOfLeadingZeros(maxOf(image.width, image.height))
         sourceTex = newTexture(1, image.width, image.height, GLES30.GL_NEAREST, GLES30.GL_NEAREST)
         stageTex = newTexture(levels, image.width, image.height, GLES30.GL_LINEAR_MIPMAP_LINEAR, GLES30.GL_LINEAR)
@@ -947,3 +964,11 @@ private class UploadedImage(
 /** The same input without its pixels (one black pixel): enough for [DevelopParams.from]. */
 private fun PipelineInput.colourOnly(): PipelineInput =
     PipelineInput(kind, 1, 1, FloatArray(PipelineInput.CHANNELS), cameraToXyz, asShotMultipliers?.copyOf(), saturation)
+
+/** What the scene pass (and so the guide) depends on: when it is unchanged, both are reused. */
+private data class SceneKey(
+    val wb: List<Float>,
+    val matrix: List<Float>,
+    val exposureGain: Float,
+    val highlights: Any?,
+)

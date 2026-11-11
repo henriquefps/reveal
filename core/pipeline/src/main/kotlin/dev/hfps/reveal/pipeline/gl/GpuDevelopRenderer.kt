@@ -476,6 +476,38 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         }
     }
 
+    /**
+     * [benchmark] as the editor draws: each recipe's stage (when it changed) and the output pass of [view] into a
+     * [width] x [height] RGBA8 target, `glFinish` after each, no readback; wall milliseconds per frame.
+     */
+    suspend fun benchmarkView(recipes: List<Recipe>, view: ViewTransform, width: Int, height: Int): List<Float> = onGl {
+        val image = checkNotNull(input) { "no input" }
+        recipes.map { recipe ->
+            val start = System.nanoTime()
+            val params = image.params(recipe)
+            if (params.withoutPost() != stageParams || stageMask) {
+                runStage1(params)
+                GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, stageTex)
+                GLES30.glGenerateMipmap(GLES30.GL_TEXTURE_2D)
+            }
+            ensureReadTarget(width, height)
+            GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, readFbo)
+            GLES30.glViewport(0, 0, width, height)
+            drawOutput(
+                image,
+                view,
+                width,
+                height,
+                OutputSettings(dither = true),
+                surround,
+                mapping = image.mapping(recipe),
+                post = PostParams.from(recipe.effects),
+            )
+            GLES20.glFinish()
+            (System.nanoTime() - start) / NANOS_PER_MS
+        }
+    }
+
     override fun close() {
         val latch = CountDownLatch(1)
         handler.post {

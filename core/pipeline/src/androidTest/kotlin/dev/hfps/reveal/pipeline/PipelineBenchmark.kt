@@ -246,7 +246,7 @@ class PipelineBenchmark {
 
     /**
      * [drag] as the editor draws it: the output pass into a [VIEW_W] x [VIEW_H] target with the photo fitted (a phone's
-     * photo area), stage 1 re-run only when needed; the readback of each frame is included (an upper bound).
+     * photo area), stage 1 re-run only when needed, `glFinish` after each frame (no readback).
      */
     private suspend fun dragView(name: String, image: PipelineInput, recipeAt: (Float) -> Recipe) {
         val renderer = GpuDevelopRenderer.create()
@@ -254,18 +254,9 @@ class PipelineBenchmark {
             renderer.setInput(image, PROXY_SCALE)
             val scale = minOf(VIEW_W.toFloat() / image.width, VIEW_H.toFloat() / image.height)
             val view = ViewTransform(scale, image.width / 2f, image.height / 2f)
-            val settings = OutputSettings(dither = true)
             val sweep = List(FRAMES) { recipeAt(it.toFloat() / (FRAMES - 1)) }
-            for (r in sweep.take(WARMUP)) {
-                renderer.setRecipe(r)
-                renderer.renderView(view, VIEW_W, VIEW_H, settings)
-            }
-            val times = sweep.map { r ->
-                val start = System.nanoTime()
-                renderer.setRecipe(r)
-                renderer.renderView(view, VIEW_W, VIEW_H, settings)
-                (System.nanoTime() - start) / 1e6f
-            }.sorted()
+            renderer.benchmarkView(sweep.take(WARMUP), view, VIEW_W, VIEW_H)
+            val times = renderer.benchmarkView(sweep, view, VIEW_W, VIEW_H).sorted()
             Log.i(
                 TAG,
                 "$name: ${renderer.info.renderer} ${VIEW_W}x$VIEW_H view of ${image.width}x${image.height}: " +

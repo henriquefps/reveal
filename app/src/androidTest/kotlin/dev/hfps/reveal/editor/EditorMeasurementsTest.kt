@@ -80,6 +80,9 @@ class EditorMeasurementsTest {
                 val opened = EditorMetrics.summary()
                 val before = EditorMetrics.frames.size
                 val renderer = checkNotNull(EditorMetrics.renderer)
+                // `-e histogram false` measures the drag without the live histogram (default: on, as in the app).
+                val histogram = InstrumentationRegistry.getArguments().getString("histogram") != "false"
+                renderer.histogramEnabled = histogram
                 val histogramsBefore = renderer.histogramCount
                 val slider = exposureSliderBounds(scenario)
                 dragInRealTime(
@@ -120,8 +123,9 @@ class EditorMeasurementsTest {
                     TAG,
                     String.format(
                         Locale.ROOT,
-                        "%s histogram on: %d histograms during the drag, last: GL thread %.2f ms, latency %.1f ms",
+                        "%s histogram %s: %d histograms during the drag, last: GL thread %.2f ms, latency %.1f ms",
                         label,
+                        if (histogram) "on" else "off",
                         renderer.histogramCount - histogramsBefore,
                         renderer.histogramMs,
                         renderer.histogramLatencyMs,

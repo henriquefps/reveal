@@ -18,6 +18,7 @@ import dev.hfps.reveal.feature.editor.EditorMetrics
 import dev.hfps.reveal.feature.editor.EditorTags
 import dev.hfps.reveal.feature.editor.tools.ToolId
 import dev.hfps.reveal.pipeline.recipe.Light
+import dev.hfps.reveal.pipeline.recipe.Optics
 import dev.hfps.reveal.pipeline.recipe.Recipe
 import org.junit.Assume.assumeTrue
 import org.junit.Rule
@@ -62,10 +63,13 @@ class EditorAutoTest {
         TestPhotos.launchView(uri, mimeType).use {
             compose.waitUntilAtLeastOneExists(hasTestTag(EditorTags.DEVELOPED), TIMEOUT_MS)
             compose.waitForIdle()
-            assertThat(committed()).isEqualTo(Recipe.DEFAULT)
+            Thread.sleep(SETTLE_MS)
+            // A RAW with a lens profile opens with its corrections on (docs/adr/0015); nothing else is set.
+            val opened = committed()
+            assertThat(opened.copy(optics = Optics())).isEqualTo(Recipe.DEFAULT)
 
             click(EditorTags.tool(ToolId.AUTO))
-            compose.waitUntil(TIMEOUT_MS) { committed() != Recipe.DEFAULT }
+            compose.waitUntil(TIMEOUT_MS) { committed() != opened }
             val auto = committed()
             assertThat(auto.light).isNotEqualTo(Light())
             assertThat(auto.colour.vibrance).isAtLeast(0f)
@@ -78,10 +82,10 @@ class EditorAutoTest {
             compose.waitForIdle()
             assertThat(committed()).isEqualTo(auto)
 
-            // One step: a single undo returns to the original, redo brings Auto back.
+            // One step: a single undo returns to the photo as opened, redo brings Auto back.
             button(EditorTags.UNDO).assertIsEnabled()
             click(EditorTags.UNDO)
-            assertThat(committed()).isEqualTo(Recipe.DEFAULT)
+            assertThat(committed()).isEqualTo(opened)
             click(EditorTags.REDO)
             assertThat(committed()).isEqualTo(auto)
 

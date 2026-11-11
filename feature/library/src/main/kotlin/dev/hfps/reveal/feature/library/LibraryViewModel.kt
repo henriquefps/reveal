@@ -58,6 +58,9 @@ class LibraryViewModel @Inject constructor(
     val thumbnails: ThumbnailRepository,
     private val volumes: StorageVolumes,
 ) : ViewModel() {
+    /** True when the route asked to open on "Opened from other apps" (a hand-off of several photos, ADR 0011). */
+    private val fromApps: Boolean = savedState.get<Boolean>(KEY_FROM_APPS) == true
+
     private val _state = MutableStateFlow(LibraryUiState(selection = restoreSelection(), query = restoreQuery()))
     val state: StateFlow<LibraryUiState> = _state.asStateFlow()
 
@@ -71,7 +74,7 @@ class LibraryViewModel @Inject constructor(
     init {
         viewModelScope.launch {
             // A fresh start reopens the folder the library showed last (the process-death state wins when present).
-            if (savedState.get<String>(KEY_SELECTION) == null) {
+            if (savedState.get<String>(KEY_SELECTION) == null && !fromApps) {
                 library.lastSelection()?.let(::decodeSelection)?.let { restored ->
                     savedState[KEY_SELECTION] = restored.encode()
                     _state.update { it.copy(selection = restored) }
@@ -195,12 +198,14 @@ class LibraryViewModel @Inject constructor(
     fun onGridDraw(count: Int) = LibraryMetrics.firstGridFrame(SystemClock.elapsedRealtime(), count)
 
     private fun restoreSelection(): LibrarySelection? = savedState.get<String>(KEY_SELECTION)?.let(::decodeSelection)
+        ?: LibrarySelection.Special(SpecialSource.FROM_APPS).takeIf { fromApps }
 
     private fun restoreQuery(): PhotoQuery = savedState.get<String>(KEY_QUERY)?.let(::decodeQuery) ?: PhotoQuery()
 
     companion object {
         private const val KEY_SELECTION = "selection"
         private const val KEY_QUERY = "query"
+        private const val KEY_FROM_APPS = "fromApps"
         private const val QUERY_PARTS = 4
         private const val GRID_DEBOUNCE_MS = 250L
         private const val VOLUME_DEBOUNCE_MS = 500L

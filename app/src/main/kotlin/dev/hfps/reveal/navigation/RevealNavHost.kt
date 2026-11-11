@@ -22,7 +22,7 @@ fun RevealNavHost(
     onEditorBack: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    NavHost(navController = navController, startDestination = LibraryRoute, modifier = modifier) {
+    NavHost(navController = navController, startDestination = LibraryRoute(), modifier = modifier) {
         libraryScreens(
             navController = navController,
             onEdit = { versionId -> navController.navigateToEditor(versionId) },

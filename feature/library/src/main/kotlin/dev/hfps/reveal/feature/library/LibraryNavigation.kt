@@ -31,9 +31,12 @@ import dev.hfps.reveal.feature.library.viewer.ViewerScreen
 import kotlinx.coroutines.flow.Flow
 import kotlinx.serialization.Serializable
 
-/** The library: start destination of the app. */
+/**
+ * The library: start destination of the app. [fromApps] opens on "Opened from other apps" (several photos were just
+ * handed over, ADR 0011).
+ */
 @Serializable
-data object LibraryRoute
+data class LibraryRoute(val fromApps: Boolean = false)
 
 /**
  * The full-screen viewer on [photoId], paging through the same photos as the grid it came from: [selection] and

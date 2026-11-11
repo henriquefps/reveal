@@ -27,6 +27,11 @@ sealed interface GridEntry {
         override val key: Any get() = "h$day"
     }
 
+    /** A hand-off batch in "Opened from other apps": when it arrived ([at]) and the sender's title, if any. */
+    data class Group(val at: Long, val title: String?) : GridEntry {
+        override val key: Any get() = "g$at/$title"
+    }
+
     data class Photo(val row: PhotoRow) : GridEntry {
         override val key: Any get() = row.id
     }
@@ -84,14 +89,21 @@ fun LibrarySelection.scope(): LibraryScope? = when (this) {
     is LibrarySelection.Special -> when (which) {
         SpecialSource.ALL -> LibraryScope.All
         SpecialSource.RECENT -> LibraryScope.Recent
-        SpecialSource.FROM_APPS -> null
+        SpecialSource.FROM_APPS -> LibraryScope.FromApps
     }
 }
 
 /** The grid entries of [rows]: date headers (only in capture-time order) between the photos. */
 fun buildGridEntries(rows: List<PhotoRow>, query: PhotoQuery): List<GridEntry> {
     val dated = query.scope != LibraryScope.Recent && query.sort != PhotoSort.NAME
-    if (!dated) return rows.map { GridEntry.Photo(it) }
+    return when {
+        query.scope == LibraryScope.FromApps -> buildGroupEntries(rows)
+        !dated -> rows.map { GridEntry.Photo(it) }
+        else -> buildDateEntries(rows)
+    }
+}
+
+private fun buildDateEntries(rows: List<PhotoRow>): List<GridEntry> {
     val out = ArrayList<GridEntry>(rows.size + rows.size / HEADER_GUESS + 1)
     var lastDay = Long.MIN_VALUE
     for (row in rows) {
@@ -99,6 +111,21 @@ fun buildGridEntries(rows: List<PhotoRow>, query: PhotoQuery): List<GridEntry> {
         if (day != lastDay) {
             out += GridEntry.Header(day, row.sortTime)
             lastDay = day
+        }
+        out += GridEntry.Photo(row)
+    }
+    return out
+}
+
+/** Hand-offs, most recent first: a header per batch (same arrival time and title), then its photos. */
+private fun buildGroupEntries(rows: List<PhotoRow>): List<GridEntry> {
+    val out = ArrayList<GridEntry>(rows.size + 1)
+    var last: Pair<Long, String?>? = null
+    for (row in rows) {
+        val group = (row.handoffAt ?: 0L) to row.handoffTitle
+        if (group != last) {
+            out += GridEntry.Group(group.first, group.second)
+            last = group
         }
         out += GridEntry.Photo(row)
     }

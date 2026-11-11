@@ -2,8 +2,8 @@ package dev.hfps.reveal
 
 import android.content.Intent
 import android.graphics.Color
-import android.net.Uri
 import android.os.Bundle
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
@@ -12,28 +12,37 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.lifecycleScope
+import androidx.navigation.NavController
 import androidx.navigation.NavDestination.Companion.hasRoute
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import dagger.hilt.android.AndroidEntryPoint
+import dev.hfps.reveal.data.handoff.HandoffIntents
+import dev.hfps.reveal.data.handoff.HandoffOutcome
+import dev.hfps.reveal.data.handoff.HandoffRepository
 import dev.hfps.reveal.designsystem.theme.RevealTheme
 import dev.hfps.reveal.designsystem.theme.isDark
 import dev.hfps.reveal.feature.editor.EditorRoute
 import dev.hfps.reveal.feature.editor.navigateToEditor
+import dev.hfps.reveal.feature.library.LibraryRoute
 import dev.hfps.reveal.feature.library.ViewerRoute
-import dev.hfps.reveal.navigation.OpenIntents
 import dev.hfps.reveal.navigation.RevealNavHost
 import dev.hfps.reveal.theme.ThemeModeStore
 import javax.inject.Inject
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.launch
 
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
     @Inject
     lateinit var themeModeStore: ThemeModeStore
 
-    /** A photo another app asked us to open (`ACTION_VIEW` / `ACTION_EDIT` / `ACTION_SEND`), until navigated to. */
-    private val openRequest = MutableStateFlow<Uri?>(null)
+    @Inject
+    lateinit var handoffs: HandoffRepository
+
+    /** What the last hand-off from another app (ADR 0011) resolved to, until navigated to. */
+    private val openRequest = MutableStateFlow<HandoffOutcome?>(null)
 
     /** True while the editor shows a photo another app sent: leaving it returns to that app. */
     private var openedFromIntent = false
@@ -64,10 +73,9 @@ class MainActivity : ComponentActivity() {
             }
             val request by openRequest.collectAsStateWithLifecycle()
             LaunchedEffect(request) {
-                request?.let {
-                    navController.navigateToEditor(it.toString())
-                    openRequest.value = null
-                }
+                val outcome = request ?: return@LaunchedEffect
+                openRequest.value = null
+                show(navController, outcome)
             }
             RevealTheme(darkTheme = dark) {
                 RevealNavHost(
@@ -86,6 +94,28 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    /** Navigates to what a hand-off resolved to (ADR 0011). */
+    private fun show(navController: NavController, outcome: HandoffOutcome) {
+        when (outcome) {
+            is HandoffOutcome.OpenEditor -> {
+                if (outcome.libraryBehind) {
+                    navController.navigate(LibraryRoute(fromApps = true)) {
+                        popUpTo<LibraryRoute> { inclusive = true }
+                    }
+                }
+                navController.navigateToEditor(outcome.versionId)
+            }
+
+            is HandoffOutcome.OpenUri -> navController.navigateToEditor(outcome.uri.toString())
+
+            is HandoffOutcome.OpenLibrary -> navController.navigate(LibraryRoute(fromApps = true)) {
+                popUpTo<LibraryRoute> { inclusive = true }
+            }
+
+            HandoffOutcome.Nothing -> Toast.makeText(this, R.string.handoff_unreadable, Toast.LENGTH_LONG).show()
+        }
+    }
+
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         handleIntent(intent)
@@ -97,9 +127,14 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun handleIntent(intent: Intent?) {
-        val uri = OpenIntents.photoUri(intent) ?: return
-        openedFromIntent = true
-        openRequest.value = uri
+        val request = HandoffIntents.parse(intent) ?: return
+        lifecycleScope.launch {
+            val outcome = handoffs.receive(request)
+            // A single photo opened in the editor: leaving it returns to the calling app.
+            openedFromIntent = outcome is HandoffOutcome.OpenUri ||
+                (outcome is HandoffOutcome.OpenEditor && outcome.closeOnBack)
+            openRequest.value = outcome
+        }
     }
 
     private companion object {

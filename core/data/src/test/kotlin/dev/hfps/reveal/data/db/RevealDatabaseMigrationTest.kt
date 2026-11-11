@@ -40,6 +40,22 @@ class RevealDatabaseMigrationTest {
     }
 
     @Test
+    fun `version 2 gets the hand-off columns and its folders stay folders`() {
+        helper.createDatabase(name, 2).use { db ->
+            db.execSQL(
+                "INSERT INTO sources (tree_uri, root_document_id, display_name, state, writable, added_at) " +
+                    "VALUES ('content://t', 'r', 'Shoot', 'AVAILABLE', 1, 5)",
+            )
+        }
+        helper.runMigrationsAndValidate(name, 3, true).use { db ->
+            db.query("SELECT kind FROM sources").use { c ->
+                assertThat(c.moveToFirst()).isTrue()
+                assertThat(c.getString(0)).isEqualTo("FOLDER")
+            }
+        }
+    }
+
+    @Test
     fun `every exported schema up to the current version exists`() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val folder = "dev.hfps.reveal.data.db.RevealDatabase"

@@ -183,11 +183,13 @@ private fun LazyGridScope.photoItems(
     items(
         items = entries,
         key = { it.key },
-        span = { if (it is GridEntry.Header) GridItemSpan(maxLineSpan) else GridItemSpan(1) },
-        contentType = { if (it is GridEntry.Header) 0 else 1 },
+        span = { if (it is GridEntry.Photo) GridItemSpan(1) else GridItemSpan(maxLineSpan) },
+        contentType = { if (it is GridEntry.Photo) 1 else 0 },
     ) { entry ->
         when (entry) {
             is GridEntry.Header -> DateHeader(entry)
+
+            is GridEntry.Group -> GroupHeader(entry)
 
             is GridEntry.Photo -> PhotoCell(
                 row = entry.row,
@@ -294,6 +296,20 @@ private fun DateHeader(header: GridEntry.Header, modifier: Modifier = Modifier) 
         DateFormat.getDateInstance(DateFormat.FULL).apply {
             timeZone = TimeZone.getTimeZone("UTC")
         }.format(Date(header.time))
+    }
+    Eyebrow(
+        text = text,
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(start = 12.dp, end = 12.dp, top = 16.dp, bottom = 6.dp),
+    )
+}
+
+/** A hand-off batch: the sender's title, else when it arrived (local time). */
+@Composable
+private fun GroupHeader(group: GridEntry.Group, modifier: Modifier = Modifier) {
+    val text = group.title ?: remember(group.at) {
+        DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT).format(Date(group.at))
     }
     Eyebrow(
         text = text,

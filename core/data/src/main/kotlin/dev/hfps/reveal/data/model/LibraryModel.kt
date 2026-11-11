@@ -1,5 +1,8 @@
 package dev.hfps.reveal.data.model
 
+/** What a source is: an added SAF folder, or the one source that collects photos other apps hand to Reveal. */
+enum class SourceKind { FOLDER, HANDOFF }
+
 /** Whether a source (a SAF folder) can be read right now. Stored by name in `sources.state`. */
 enum class SourceState {
     /** The folder answers: browse, index, open. */
@@ -57,6 +60,9 @@ sealed interface LibraryScope {
 
     /** Photos opened in the editor recently, most recent first. */
     data object Recent : LibraryScope
+
+    /** Photos other apps handed to Reveal (ADR 0011), most recent hand-off first. */
+    data object FromApps : LibraryScope
 
     /** One added folder. */
     data class Source(val sourceId: Long) : LibraryScope

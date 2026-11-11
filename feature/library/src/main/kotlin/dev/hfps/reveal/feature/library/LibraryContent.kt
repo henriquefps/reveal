@@ -376,6 +376,24 @@ private fun SelectionOverflow(state: LibraryUiState, actions: LibraryActions) {
 
 // ---------------------------------------------------------------------- grid pane
 
+/** The empty grid of a folder, or of "Opened from other apps" before anything arrived. */
+@Composable
+private fun EmptyGrid(selection: LibrarySelection?) {
+    if (selection == LibrarySelection.Special(SpecialSource.FROM_APPS)) {
+        EmptyState(
+            PhosphorRegular.ArrowSquareIn,
+            stringResource(R.string.library_from_apps_empty_title),
+            stringResource(R.string.library_from_apps_empty_body),
+        )
+    } else {
+        EmptyState(
+            PhosphorRegular.Images,
+            stringResource(R.string.library_folder_empty_title),
+            stringResource(R.string.library_folder_empty_body),
+        )
+    }
+}
+
 @Composable
 private fun GridPane(
     state: LibraryUiState,
@@ -390,12 +408,6 @@ private fun GridPane(
         Box(Modifier.weight(1f).fillMaxWidth()) {
             val selection = state.selection
             when {
-                selection == LibrarySelection.Special(SpecialSource.FROM_APPS) -> EmptyState(
-                    PhosphorRegular.ArrowSquareIn,
-                    stringResource(R.string.library_from_apps_empty_title),
-                    stringResource(R.string.library_from_apps_empty_body),
-                )
-
                 !state.photosLoaded -> Unit
 
                 state.photoCount == 0 && state.filtered -> EmptyState(
@@ -420,11 +432,7 @@ private fun GridPane(
                     stringResource(R.string.library_source_indexing),
                 )
 
-                state.photoCount == 0 -> EmptyState(
-                    PhosphorRegular.Images,
-                    stringResource(R.string.library_folder_empty_title),
-                    stringResource(R.string.library_folder_empty_body),
-                )
+                state.photoCount == 0 -> EmptyGrid(selection)
 
                 else -> PhotoGrid(
                     entries = state.entries,

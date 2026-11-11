@@ -11,9 +11,13 @@ import dagger.hilt.components.SingletonComponent
 import dev.hfps.reveal.data.db.MetaDao
 import dev.hfps.reveal.data.db.RevealDatabase
 import dev.hfps.reveal.data.edit.EditRepository
+import dev.hfps.reveal.data.handoff.HandoffRepository
+import dev.hfps.reveal.data.handoff.HandoffTree
+import dev.hfps.reveal.data.index.LibraryIndexer
 import dev.hfps.reveal.data.library.DocumentTreeFactory
 import dev.hfps.reveal.data.library.LibraryRepository
 import dev.hfps.reveal.data.library.SidecarSync
+import dev.hfps.reveal.data.model.SourceKind
 import dev.hfps.reveal.data.storage.SafDocumentTree
 import dev.hfps.reveal.data.storage.StorageVolumes
 import dev.hfps.reveal.data.thumb.EditedThumbnails
@@ -55,8 +59,17 @@ object DataModule {
     @Provides
     @Singleton
     fun provideTrees(@ApplicationContext context: Context): DocumentTreeFactory = DocumentTreeFactory { source ->
-        SafDocumentTree(context.contentResolver, source.treeUri.toUri(), source.rootDocumentId)
+        if (source.kind == SourceKind.HANDOFF) {
+            HandoffTree(context.contentResolver)
+        } else {
+            SafDocumentTree(context.contentResolver, source.treeUri.toUri(), source.rootDocumentId)
+        }
     }
+
+    @Provides
+    @Singleton
+    fun provideHandoffs(@ApplicationContext context: Context, database: RevealDatabase): HandoffRepository =
+        HandoffRepository(context.contentResolver, database, LibraryIndexer(database))
 
     @Provides
     @Singleton

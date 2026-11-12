@@ -1,7 +1,8 @@
 # ADR 0012: Detail and full-resolution tiles
 
 Status: accepted (M2/Z); amended by M2/C (section "M2/C: Detail at the display rate and the noise model", version 8)
-and M2/P (section "M2/P: every Detail and Effects drag at the display rate", version 10).
+and M2/P (section "M2/P: every Detail and Effects drag at the display rate", version 10) and M2/T (section "Pixel
+alignment at 1:1", no pixel change).
 Date: 2026-11-11. Amends ADR 0002 (slot 11, `PIPELINE_VERSION` 6, "Proxies and tiles"),
 ADR 0009 (the Detail apron of export tiles). Builds on ADR 0007 (Light grids) and ADR 0008 (OkLab).
 
@@ -454,6 +455,35 @@ p95 12-14 ms) nor on screen at p95 for luminance and sharpening radius (17-19 ms
 drags re-run the shrinkage and both blurs, three full-resolution passes. Next levers: the blurs at half resolution at
 the fit view (the final pass then reads them per 2 x 2 block: changes the sharpening of the fit view only, needs a
 display-only parity argument), and a single 2D blur pass for small radii.
+
+## Pixel alignment at 1:1 (M2/T)
+
+`EditorZoomTest` failed on the owner's Galaxy Tab S9 Ultra (Adreno 740) with max 110 levels while it passed on the
+phone (Adreno 750), on `main` before the tablet layout too. The cause is not the tiles. Every stage was checked on the
+device: the decoded source, the upload, the scene pass, the develop pass and the atlas as written by the worker and as
+read by the display context were all right. The cause was the **view**. At exactly one screen pixel per image pixel
+the output pass reads `texelFetch(floor(p))`. The editor's double-tap to 100 % on that screen (k = 4000 / 2960) put
+the screen pixel centres on full-resolution pixel **edges** (fraction 0 instead of 0.5), so `floor` followed the last
+bit of float rounding: whole rows (and columns) took the neighbouring image row, differently on the GPU and in the CPU
+reference, and differently from row to row on the GPU itself. That is a duplicated or skipped pixel row every dozen rows
+on screen, not only a test failure: `ZoomTilesTest#aHundredPercentViewOnPixelEdgesShowsEveryPixelOnce` at the same k
+on the tablet, before the fix, matched the export at no single offset (the best still differed in 9,364 values). With
+a power-of-two k the maths is exact and the problem hid, so the phone and the earlier tests never saw it.
+
+The fix is `zoom/PixelAlignment`. `GpuDevelopRenderer.drawOutput` moves the view centre by less than half an image
+pixel whenever a pane reads by `texelFetch`: the full-resolution tiles at 100 %, or the proxy at scale 1, on an
+axis-aligned mapping. The shift is computed in double from the same mapping the shader uses, so that every screen pixel
+centre lands on an image pixel centre. `floor` then has half a pixel of margin on every GPU, and the CPU agrees.
+`renderShown` returns the view as drawn, so tests and hit testing map pixels the same way. Nothing else changes: the
+photo controller keeps its own view, and a shift of up to half a pixel at 100 % cannot be seen. Fitted and
+magnified views and straightened geometry (Catmull-Rom) are untouched.
+
+Regression checks: `PixelAlignmentTest` (JVM: worst-case views for five crop/turn/flip geometries, proxy and tiles;
+every window pixel centre at fraction 0.5 ± 0.05 with the shader's float maths) and the instrumented
+`ZoomTilesTest#aHundredPercentViewOnPixelEdgesShowsEveryPixelOnce` (k = 1200 / 888, pixel-edge view, bit-identical to
+the export at one offset). On the tablet after the fix, `EditorZoomTest` measures max 4 levels and mean 0.11 (Detail
+on), within the existing tolerance. Export was never affected (`TiledRendererTest`, `ExportFlowTest` and `GpuParityTest`
+pass on the tablet): its output pass is 1:1 on pixel centres by construction.
 
 ## Limits and follow-ups
 

@@ -118,6 +118,55 @@ class ZoomTilesTest {
         assertThat(differ).isEqualTo(0)
     }
 
+    /**
+     * The worst 100 % view (docs/adr/0012 "Pixel alignment at 1:1"): screen pixel centres exactly on full-resolution
+     * pixel edges, where `floor` would follow the GPU's last-bit rounding and duplicate or skip rows (the Tab S9
+     * Ultra's Adreno 740 did after a double-tap). The renderer aligns the view: the pane is the export shifted by one
+     * constant offset, every value identical.
+     */
+    @Test
+    fun aHundredPercentViewOnPixelEdgesShowsEveryPixelOnce() = runBlocking {
+        // The editor's ratio on the Tab S9 Ultra (a 4000 px photo, a 2960 px proxy): not a power of two, so the
+        // shader's float maths round differently from row to row. The proxy only has to have that size.
+        val odd = GpuDevelopRenderer.create()
+        try {
+            val k = FULL_W / ODD_PROXY_W.toFloat()
+            odd.upload(pointSample(full, ODD_PROXY_W, (FULL_H / k).toInt()), k)
+            check(odd.setFullResolution(PipelineInputTileSource(full), k))
+            odd.setRecipe(edit)
+            // Centred on full pixel (512, 400) plus half a pixel: window pixel centres fall on full pixel edges.
+            val edge = 0.5f / k
+            val view = ViewTransform(
+                k,
+                (FULL_W / k) / 2f + (ZoomGrid.TILE - FULL_W / 2f) / k + edge,
+                (FULL_H / k) / 2f + edge,
+            )
+            withTimeout(TIMEOUT_MS) { odd.awaitZoom(view, PANE_W, PANE_H) }
+            val shot = odd.renderView(view, PANE_W, PANE_H, OutputSettings(dither = false))
+            val export = exportFull(edit)
+            // The pane at one constant offset of the export (which of the two pixels a centre on an edge picks is
+            // the alignment's choice; what must not happen is a different choice on some rows or columns).
+            val cx = ZoomGrid.TILE - PANE_W / 2
+            val cy = FULL_H / 2 - PANE_H / 2
+            val differ = (-1..1).flatMap { dx -> (-1..1).map { dy -> dx to dy } }.associateWith { (dx, dy) ->
+                var n = 0
+                for (y in 0 until PANE_H) {
+                    for (x in 0 until PANE_W) {
+                        for (c in 0 until 3) {
+                            val e = export[((y + cy + dy) * FULL_W + x + cx + dx) * 4 + c]
+                            if (shot[(y * PANE_W + x) * 4 + c] != e) n++
+                        }
+                    }
+                }
+                n
+            }
+            Log.i(TAG, "100 % on pixel edges (k $k) vs export by offset: $differ")
+            assertThat(differ.values.min()).isEqualTo(0)
+        } finally {
+            odd.close()
+        }
+    }
+
     @Test
     fun straightenedHundredPercentMatchesTheExport() = runBlocking {
         val geometry = Geometry(crop = CropRect(0.1f, 0.1f, 0.9f, 0.9f), angle = 4.2f)
@@ -243,6 +292,30 @@ class ZoomTilesTest {
         const val MAX_LEVELS = 4
         const val MEAN_LEVELS = 0.15
         const val PROXY_MEAN_LEVELS = 3.0
+        const val ODD_PROXY_W = 888
+
+        /** A [width] x [height] nearest-pixel copy of [image] (a proxy of any size; its content does not matter). */
+        fun pointSample(image: PipelineInput, width: Int, height: Int): PipelineInput {
+            val out = FloatArray(width * height * 3)
+            for (y in 0 until height) {
+                val sy = (y * image.height / height).coerceAtMost(image.height - 1)
+                for (x in 0 until width) {
+                    val sx = (x * image.width / width).coerceAtMost(image.width - 1)
+                    for (c in 0 until 3) {
+                        out[(y * width + x) * 3 + c] = image.linearRgb[(sy * image.width + sx) * 3 + c]
+                    }
+                }
+            }
+            return PipelineInput(
+                image.kind,
+                width,
+                height,
+                out,
+                image.cameraToXyz,
+                image.asShotMultipliers,
+                image.saturation,
+            )
+        }
 
         /** The proxy: 2x2 means of the full-resolution image. */
         @Suppress("NestedBlockDepth")

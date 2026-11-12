@@ -159,6 +159,7 @@ fun EditorScreen(
             onOpenPhoto = { versionId, tool -> onSwitch(viewModel.routeFor(versionId, tool)) },
             onFilmstrip = strip::setFilmstripVisible,
             onPanelWidth = strip::setPanelWidth,
+            onPanelHeight = strip::setPanelHeight,
         )
     }
     val filmstrip = remember(photos, strip) {
@@ -183,6 +184,7 @@ fun EditorScreen(
  * bar) or tablet. The photo surface fills the screen behind the chrome; the chrome leaves a photo slot whose bounds
  * become the photo frame. Public for screenshot tests, which also pick the [initialTool] and [initialSnap].
  */
+@Suppress("LongMethod")
 @Composable
 fun EditorContent(
     state: EditorUiState,
@@ -230,6 +232,13 @@ fun EditorContent(
                 filmstrip = filmstrip,
                 layout = layout,
                 windowWidth = maxWidth,
+            )
+
+            EditorLayoutKind.TABLET_DOCKED -> DockedTabletLayout(
+                TabletChrome(state, actions, photo, chrome, host, select, onToggleChrome),
+                filmstrip = filmstrip,
+                layout = layout,
+                windowHeight = maxHeight,
             )
         }
     }

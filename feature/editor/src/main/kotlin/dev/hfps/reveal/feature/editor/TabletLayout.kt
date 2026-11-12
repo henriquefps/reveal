@@ -184,8 +184,9 @@ internal fun TabletLayout(t: TabletChrome, filmstrip: FilmstripUi?, layout: Edit
                         .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Bottom)),
                 ) {
                     PanelResizeHandle(
-                        width = panelWidth,
+                        size = panelWidth,
                         range = range,
+                        vertical = false,
                         onResize = { chrome.panelWidth = it },
                         onResizeEnd = { t.actions.onPanelWidth(it.value) },
                     )
@@ -237,42 +238,199 @@ internal fun TabletLayout(t: TabletChrome, filmstrip: FilmstripUi?, layout: Edit
 }
 
 /**
- * The panel's left edge: drag it to resize the panel within [range] ([onResize] per frame, [onResizeEnd] once on
- * release, which remembers the width). A pill marks it; TalkBack gets wider/narrower actions; a mouse or a hovering
- * pen shows the resize pointer.
+ * The tablet in portrait and a foldable's almost square inner screen ([EditorLayoutKind.TABLET_DOCKED], docs/adr/0016
+ * "Docked panel"): the full top bar; the photo across the whole width with the filmstrip under it; the panel docked
+ * below at full width (its top edge drags to resize its height, remembered; a sub-panel that needs the room raises it
+ * while open) and the tool strip as the bottom row, as on a phone in portrait. A mode's controls take the dock.
  */
+@Suppress("LongMethod", "CyclomaticComplexMethod")
 @Composable
-private fun PanelResizeHandle(width: Dp, range: ClosedRange<Dp>, onResize: (Dp) -> Unit, onResizeEnd: (Dp) -> Unit) {
+internal fun DockedTabletLayout(t: TabletChrome, filmstrip: FilmstripUi?, layout: EditorLayout, windowHeight: Dp) {
+    val colors = RevealTheme.colors
+    val chrome = t.chrome
+    val state = t.state
+    val chromeVisible = !chrome.immersive
+    val mode = chrome.activeMode?.let { EditorTools[it].behaviour as? ToolBehaviour.Mode }
+    val panel = EditorTools[chrome.activeTool].behaviour as? ToolBehaviour.Panel
+    val failed = state.phase is EditorPhase.Failed
+    val range = EditorLayoutKind.dockRange(windowHeight)
+    val chosen = (chrome.panelHeight ?: layout.panelHeightDp?.dp ?: EditorLayoutKind.DOCK_HEIGHT)
+        .coerceIn(range.start, range.endInclusive)
+    // Curves, mixers and wheels need the room: their sub-panel raises the dock while it is open (not remembered).
+    val tall = (windowHeight * TALL_SHARE).coerceIn(range.start, range.endInclusive)
+    val panelHeight = if (t.host.navigator.top?.expand == true) maxOf(chosen, tall) else chosen
+    val showStrip = filmstrip != null && layout.filmstripVisible
+    val open: (Int) -> Unit = { step ->
+        filmstrip?.neighbour(step)?.let { t.actions.onOpenPhoto(it.versionId, chrome.activeTool) }
+    }
+    Column(Modifier.fillMaxSize()) {
+        AnimatedVisibility(
+            visible = chromeVisible,
+            enter = fadeIn(RevealMotion.standard()) + expandVertically(RevealMotion.standard()),
+            exit = fadeOut(RevealMotion.fast()) + shrinkVertically(RevealMotion.standard()),
+        ) {
+            Box(
+                Modifier
+                    .background(colors.background)
+                    .windowInsetsPadding(
+                        WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal),
+                    ),
+            ) {
+                EditorTopBar(
+                    state,
+                    t.actions,
+                    compact = false,
+                    onHistory = { t.select(EditorTools.history) },
+                    filmstrip = if (filmstrip != null) layout.filmstripVisible else null,
+                )
+            }
+        }
+        PhotoSlot(
+            state = state,
+            actions = t.actions,
+            controller = t.photo,
+            chromeVisible = chromeVisible,
+            onToggleChrome = t.onToggleChrome,
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxWidth()
+                .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal)),
+            modeOverlay = mode?.let { m ->
+                { m.overlay(this, chrome.modeHost(m, state, t.actions, t.photo, vertical = false)) }
+            },
+            onSwipe = if (filmstrip != null && mode == null) open else null,
+        )
+        AnimatedVisibility(
+            visible = chromeVisible && showStrip && !failed && mode == null,
+            enter = fadeIn(RevealMotion.standard()) + expandVertically(RevealMotion.standard()),
+            exit = fadeOut(RevealMotion.fast()) + shrinkVertically(RevealMotion.standard()),
+        ) {
+            if (filmstrip != null) {
+                Filmstrip(
+                    ui = filmstrip,
+                    onOpen = { row ->
+                        if (row.versionId != filmstrip.currentVersionId) {
+                            t.actions.onOpenPhoto(row.versionId, chrome.activeTool)
+                        }
+                    },
+                    modifier = Modifier
+                        .background(colors.background)
+                        .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal)),
+                )
+            }
+        }
+        AnimatedVisibility(
+            visible = chromeVisible && !failed,
+            enter = fadeIn(RevealMotion.standard()) + expandVertically(RevealMotion.standard()),
+            exit = fadeOut(RevealMotion.fast()) + shrinkVertically(RevealMotion.standard()),
+        ) {
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .background(colors.background)
+                    .windowInsetsPadding(
+                        WindowInsets.safeDrawing.only(WindowInsetsSides.Bottom + WindowInsetsSides.Horizontal),
+                    ),
+            ) {
+                if (mode != null) {
+                    ModeControls(mode, chrome.modeHost(mode, state, t.actions, t.photo, vertical = false))
+                } else {
+                    AnimatedVisibility(
+                        visible = panel != null && chrome.sidePanelOpen,
+                        enter = fadeIn(RevealMotion.standard()) + expandVertically(RevealMotion.standard()),
+                        exit = fadeOut(RevealMotion.fast()) + shrinkVertically(RevealMotion.standard()),
+                    ) {
+                        Column(Modifier.fillMaxWidth()) {
+                            PanelResizeHandle(
+                                size = chosen,
+                                range = range,
+                                vertical = true,
+                                onResize = { chrome.panelHeight = it },
+                                onResizeEnd = { t.actions.onPanelHeight(it.value) },
+                            )
+                            if (panel != null) {
+                                PanelSurface(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(panelHeight)
+                                        .padding(horizontal = 8.dp)
+                                        .testTag(EditorTags.PANEL),
+                                ) {
+                                    PanelCardContent(panel = panel, host = t.host)
+                                }
+                            }
+                        }
+                    }
+                    ToolStrip(
+                        tools = EditorTools.all,
+                        active = chrome.activeTool,
+                        onSelect = t.select,
+                        vertical = false,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * The panel's resizing edge: the left edge of the side column ([vertical] false: drag left to widen) or the top edge
+ * of the docked panel ([vertical] true: drag up to raise). Drag it to resize the panel within [range] ([onResize] per
+ * frame, [onResizeEnd] once on release, which remembers the size). A pill marks it; TalkBack gets larger/smaller
+ * actions; a mouse or a hovering pen shows the resize pointer.
+ */
+@Suppress("LongMethod")
+@Composable
+private fun PanelResizeHandle(
+    size: Dp,
+    range: ClosedRange<Dp>,
+    vertical: Boolean,
+    onResize: (Dp) -> Unit,
+    onResizeEnd: (Dp) -> Unit,
+) {
     val colors = RevealTheme.colors
     val density = LocalDensity.current
-    val currentWidth by rememberUpdatedState(width)
+    val currentSize by rememberUpdatedState(size)
     var dragging by remember { mutableStateOf(false) }
-    // The width the drag has reached: the last delta may land after the last recomposition, so release stores this.
-    var reached by remember { mutableStateOf(width) }
+    // The size the drag has reached: the last delta may land after the last recomposition, so release stores this.
+    var reached by remember { mutableStateOf(size) }
     val state = rememberDraggableState { delta ->
-        val from = if (dragging) reached else currentWidth
+        val from = if (dragging) reached else currentSize
         reached = (from - with(density) { delta.toDp() }).coerceIn(range.start, range.endInclusive)
         onResize(reached)
     }
-    val label = stringResource(R.string.editor_panel_resize)
-    val wider = stringResource(R.string.editor_panel_wider)
-    val narrower = stringResource(R.string.editor_panel_narrower)
+    val label = stringResource(if (vertical) R.string.editor_panel_resize_height else R.string.editor_panel_resize)
+    val larger = stringResource(if (vertical) R.string.editor_panel_taller else R.string.editor_panel_wider)
+    val smaller = stringResource(if (vertical) R.string.editor_panel_shorter else R.string.editor_panel_narrower)
     fun step(by: Dp): Boolean {
-        val next = (width + by).coerceIn(range.start, range.endInclusive)
+        val next = (size + by).coerceIn(range.start, range.endInclusive)
         onResize(next)
         onResizeEnd(next)
         return true
     }
-    Box(
-        modifier = Modifier
+    val shape = if (vertical) {
+        Modifier
+            .fillMaxWidth()
+            .height(HANDLE_WIDTH)
+    } else {
+        Modifier
             .fillMaxHeight()
             .width(HANDLE_WIDTH)
-            .pointerHoverIcon(PointerIcon(android.view.PointerIcon.TYPE_HORIZONTAL_DOUBLE_ARROW))
+    }
+    val pointer = if (vertical) {
+        android.view.PointerIcon.TYPE_VERTICAL_DOUBLE_ARROW
+    } else {
+        android.view.PointerIcon.TYPE_HORIZONTAL_DOUBLE_ARROW
+    }
+    Box(
+        modifier = shape
+            .pointerHoverIcon(PointerIcon(pointer))
             .draggable(
                 state = state,
-                orientation = Orientation.Horizontal,
+                orientation = if (vertical) Orientation.Vertical else Orientation.Horizontal,
                 onDragStarted = {
-                    reached = currentWidth
+                    reached = currentSize
                     dragging = true
                 },
                 onDragStopped = {
@@ -283,18 +441,17 @@ private fun PanelResizeHandle(width: Dp, range: ClosedRange<Dp>, onResize: (Dp) 
             .testTag(EditorTags.PANEL_RESIZE)
             .semantics {
                 contentDescription = label
-                stateDescription = "${width.value.roundToInt()} dp"
+                stateDescription = "${size.value.roundToInt()} dp"
                 customActions = listOf(
-                    CustomAccessibilityAction(wider) { step(RESIZE_STEP) },
-                    CustomAccessibilityAction(narrower) { step(-RESIZE_STEP) },
+                    CustomAccessibilityAction(larger) { step(RESIZE_STEP) },
+                    CustomAccessibilityAction(smaller) { step(-RESIZE_STEP) },
                 )
             },
         contentAlignment = Alignment.Center,
     ) {
+        val pill = if (vertical) Modifier.width(PILL_HEIGHT).height(4.dp) else Modifier.width(4.dp).height(PILL_HEIGHT)
         Box(
-            Modifier
-                .width(4.dp)
-                .height(PILL_HEIGHT)
+            pill
                 .clip(CircleShape)
                 .background(if (dragging) colors.primary else colors.hairline),
         )
@@ -357,3 +514,6 @@ private val RAIL_ALLOWANCE = 96.dp
 private val HANDLE_WIDTH = 16.dp
 private val PILL_HEIGHT = 40.dp
 private val RESIZE_STEP = 40.dp
+
+/** A sub-panel that needs the room raises the docked panel to this share of the window (within its range). */
+private const val TALL_SHARE = 0.55f

@@ -254,10 +254,13 @@ The full suite must pass twice in a row without `pm clear` (the phone keeps app 
 ## Tablet, filmstrip, pen and keyboard (`:feature:editor`, `:app`, M2/E, ADR 0016)
 
 Tablet layout: `TabletLayout.kt` (full-width top bar; photo + `layout/Filmstrip.kt` in the left column; panel column
-with a drag-to-resize left edge, `EditorLayoutKind.panelRange`; rail). The phone layouts must not change (their goldens
-stay byte-identical). Panel width and filmstrip visibility: `EditorLayoutPreferences` (`:core:data`). Rotation/fold
-recreate the activity: chrome state (`rememberEditorChrome`: tool, mode, side panel, sub-panel stack via
-`SubPanels.byKey`, panel width) and zoom (`PhotoController.Saver`) are saved state; the ViewModel and renderer survive.
+with a drag-to-resize left edge, `EditorLayoutKind.panelRange`; rail). Portrait tablets and almost square foldables use
+`DockedTabletLayout` (`EditorLayoutKind.TABLET_DOCKED`, chosen by `prefersDock`: whichever shows a 3:2 photo larger;
+panel docked at the bottom with a drag-to-resize top edge, `dockRange`; tool strip as the bottom row; ADR 0016
+"Docked panel"). The phone layouts must not change (their goldens stay byte-identical). Panel width / docked height
+and filmstrip visibility: `EditorLayoutPreferences` (`:core:data`). Rotation/fold recreate the activity: chrome state
+(`rememberEditorChrome`: tool, mode, side panel, sub-panel stack via `SubPanels.byKey`, panel width and height) and
+zoom (`PhotoController.Saver`) are saved state; the ViewModel and renderer survive.
 `RevealBottomSheet` is a centred dialog from `DialogMinWidth` (840 dp); the viewer's info is a side panel there.
 
 Filmstrip: `EditorRoute(versionId, strip, tool)`; `strip` = the grid's `PhotoQuery` (`PhotoListCodec`), passed by the
@@ -319,7 +322,9 @@ Zoom: `EditorViewModel.loadFullResolution` decodes the original after the proxy 
 `GpuDevelopRenderer.setFullResolution(source, k)`. `gl/ZoomTiles.kt` keeps the atlas (8 x 6 slots of 512 px + 8 px
 border, levels 0-1), the index texture and the scheduling (settled edit + 150 ms, centre first, grids prefetched);
 the tiles are developed by a `TiledRenderer` on a shared EGL context (`prepareZoom`, `developTile`); the output pass
-reads them where the index says so (`OUTPUT_FRAG`, `sampleTile`). Pure maths in `zoom/ZoomGrid.kt` (`ZoomView`).
+reads them where the index says so (`OUTPUT_FRAG`, `sampleTile`). 1:1 views (tiles at 100 %, proxy at scale 1) are pixel-aligned by
+`zoom/PixelAlignment` in `drawOutput`: never `floor` a screen pixel centre that may sit on a pixel edge (ADR 0012
+"Pixel alignment at 1:1"; Adreno 740 duplicated rows there). Pure maths in `zoom/ZoomGrid.kt` (`ZoomView`).
 Tests/APIs: `renderer.awaitZoom(...)`, `renderView(view, w, h, settings)`, `renderShown(settings)`, `zoomStats`.
 
 ```sh

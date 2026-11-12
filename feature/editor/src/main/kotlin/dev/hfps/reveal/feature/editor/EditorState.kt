@@ -237,4 +237,6 @@ class EditorActions(
     val onFilmstrip: (Boolean) -> Unit = {},
     /** Tablet: the side panel was resized to a width in dp; remembered. */
     val onPanelWidth: (Float) -> Unit = {},
+    /** Tablet portrait: the docked panel was resized to a height in dp; remembered. */
+    val onPanelHeight: (Float) -> Unit = {},
 )

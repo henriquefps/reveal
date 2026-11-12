@@ -21,6 +21,8 @@ ksp {
 dependencies {
     implementation(projects.core.image)
     implementation(projects.core.pipeline)
+    // The AI masks' service and disk cache (ADR 0021 "M4/C"): provided here, registered with the cache budget.
+    api(projects.core.ml)
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.room.runtime)
     implementation(libs.androidx.room.ktx)

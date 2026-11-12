@@ -90,6 +90,8 @@
     <string name="storage_handoff_previews">Fotos de outros apps</string>
     <string name="storage_handoff_previews_note">Prévias de fotos que outros apps compartilharam com o Reveal</string>
     <string name="storage_handoff_previews_kept">%1$s são a única cópia de fotos e ficam</string>
+    <string name="storage_masks">Máscaras de IA</string>
+    <string name="storage_masks_note">Máscaras de assunto, céu, pessoas e rosto, refeitas quando preciso</string>
     <string name="storage_other">Outros</string>
     <string name="storage_other_note">Exportações em andamento, arquivos compartilhados, prévias sendo enviadas ao servidor</string>
     <string name="storage_library">Biblioteca e edições</string>

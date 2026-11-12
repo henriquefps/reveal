@@ -40,10 +40,12 @@ into release, move the rows above (and into `R.array.about_licences`).
 | Component | Version source | Licence |
 | --- | --- | --- |
 | LiteRT (`com.google.ai.edge.litert:litert`, `litert-gpu`, `litert-api`: `libLiteRt.so`, `libLiteRtClGlAccelerator.so`, `liblitert_jni.so`; third-party notices in the AAR) | `gradle/libs.versions.toml` (`litert`) | Apache-2.0 |
-| MediaPipe Selfie Multiclass 256, Selfie Segmenter, Hair Segmenter, MagicTouch interactive segmenter (model files, fetched at build time) | URL + SHA-256 in `core/ml/models.json` | Apache-2.0 (Google LLC, the MediaPipe authors) |
-| DeepLab-v3 MobileNetV2 ADE20K (TensorFlow model zoo, TFLite export) | `core/ml/models.json` | Apache-2.0 (weights; trained on ADE20K, see docs/adr/0021 "Training-data terms") |
-| LR-ASPP MobileNetV3-Large (torchvision weights, LiteRT export by litert-community) | `core/ml/models.json` | BSD-3-Clause |
-| MODNet (ZHKKKe/MODNet weights, LiteRT export by litert-community) | `core/ml/models.json` | Apache-2.0 |
+| MediaPipe Selfie Multiclass 256, MagicTouch interactive segmenter (model files, fetched at build time; every build) | URL + SHA-256 in `core/ml/models.json` | Apache-2.0 (Google LLC, the MediaPipe authors) |
+| MediaPipe Face Landmarker: its landmark model `face_landmarks_detector.tflite` (478-point face mesh with irises), extracted at build time from the pinned `face_landmarker.task` bundle (`face-landmarker` in `core/ml/models.json`; every build) | URL + SHA-256 of the bundle and of the extracted file in `core/ml/models.json` | Apache-2.0 (Google LLC, the MediaPipe authors; model card "MediaPipe Face Mesh V2") |
+| DeepLab-v3 MobileNetV2 ADE20K, converted for the GPU by `scripts/ml/convert_deeplab_sky.py` at build time (`deeplab-v3-ade20k-sky`; every build): a derived work of the TensorFlow model zoo's TFLite export, same licence | `core/ml/models.json` (input and output SHA-256) | Apache-2.0 (weights; trained on ADE20K, whose terms the owner accepted: docs/adr/0021 "Training-data terms") |
+| MediaPipe Selfie Segmenter, Hair Segmenter; the published DeepLab-v3 MobileNetV2 ADE20K (debug builds only: the mask lab's comparisons) | `core/ml/models.json` (`lab: true`) | Apache-2.0 |
+| LR-ASPP MobileNetV3-Large (torchvision weights, LiteRT export by litert-community; debug builds only) | `core/ml/models.json` | BSD-3-Clause |
+| MODNet (ZHKKKe/MODNet weights, LiteRT export by litert-community; debug builds only) | `core/ml/models.json` | Apache-2.0 |
 
 ## Shipped in the sync server (`sync-server/`, a separate program)
 
@@ -67,6 +69,7 @@ into release, move the rows above (and into `R.array.about_licences`).
 | Robolectric | MIT |
 | Wikimedia Commons public-domain photographs (NASA) as test fixtures (`core/pipeline/src/test/resources/faces`, `core/ml/src/androidTest/assets/fixtures`, not shipped) | Public domain |
 | Spike-only mask models measured but not bundled (IS-Net, DeepLab-v3 Xception-65 ADE20K, DeepLab-v3 VOC, UniSal; `bundled: false` in `core/ml/models.json`) | Apache-2.0 |
+| Host checks of the sky conversion (`scripts/ml/verify_sky.py`, run with `uv`: `ai-edge-litert`, NumPy, Pillow; not shipped) | Apache-2.0, BSD-3-Clause, MIT-CMU (HPND) |
 | Roborazzi | Apache-2.0 |
 | ktlint, ktlint-gradle | MIT |
 | golangci-lint (sync server CI, includes staticcheck and gosec) | GPL-3.0 (tool only, not linked) |

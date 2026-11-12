@@ -61,12 +61,10 @@ internal fun MaskLabControls(host: ModeHost, modifier: Modifier = Modifier) {
         Eyebrow(stringResource(R.string.mask_lab_model), Modifier.padding(horizontal = 16.dp))
         ChipRow {
             for (m in LabModel.all) {
-                val label = if (m is LabModel.AutoSubject) {
-                    stringResource(
-                        R.string.mask_lab_auto_subject,
-                    )
-                } else {
-                    m.spec.id.value
+                val label = when (m) {
+                    LabModel.AutoSubject -> stringResource(R.string.mask_lab_auto_subject)
+                    LabModel.FaceParts -> stringResource(R.string.mask_lab_face_parts)
+                    is LabModel.Plain -> m.spec.key
                 }
                 RevealChip(
                     label,
@@ -76,9 +74,7 @@ internal fun MaskLabControls(host: ModeHost, modifier: Modifier = Modifier) {
                         if (lab.kind !in m.kinds) lab.kind = m.kinds.first()
                         rerun()
                     },
-                    modifier = Modifier.testTag(
-                        "mask-lab-model-${m.spec.id}${if (m is LabModel.AutoSubject) "-auto" else ""}",
-                    ),
+                    modifier = Modifier.testTag("mask-lab-model-${m.tag}"),
                 )
             }
         }
@@ -121,7 +117,7 @@ private fun status(): String {
 
         lab.running -> stringResource(R.string.mask_lab_running)
 
-        lab.model.spec.interactive && lab.model !is LabModel.AutoSubject && lab.prompt == null ->
+        lab.model.needsTap && lab.prompt == null ->
             stringResource(R.string.mask_lab_tap)
 
         r != null -> stringResource(
@@ -147,6 +143,11 @@ private fun kindLabel(kind: MaskKind): Int = when (kind) {
     MaskKind.SKIN -> R.string.mask_lab_kind_skin
     MaskKind.HAIR -> R.string.mask_lab_kind_hair
     MaskKind.CLOTHES -> R.string.mask_lab_kind_clothes
+    MaskKind.EYES -> R.string.mask_lab_kind_eyes
+    MaskKind.IRISES -> R.string.mask_lab_kind_irises
+    MaskKind.LIPS -> R.string.mask_lab_kind_lips
+    MaskKind.TEETH -> R.string.mask_lab_kind_teeth
+    MaskKind.EYEBROWS -> R.string.mask_lab_kind_eyebrows
 }
 
 /**
@@ -191,7 +192,7 @@ internal fun BoxScope.MaskLabOverlay(modifier: Modifier = Modifier) {
                         val y = (p.y - (size.height - photo.height * k) / 2f) / (photo.height * k)
                         if (x in 0f..1f && y in 0f..1f) {
                             lab.prompt = MaskPrompt(x, y)
-                            if (lab.model.spec.interactive && lab.model !is LabModel.AutoSubject) {
+                            if (lab.model.needsTap) {
                                 lab.run(context.assets, tint)
                             }
                         }

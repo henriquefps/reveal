@@ -9,6 +9,10 @@ service and no server of its own: it talks to the network only in the two cases 
   sidecars next to the photos).
 - Every analysis runs on the device, offline: Auto, face and subject detection (an open model run in Reveal's own
   code), lens profiles, previews. Nothing about a photo leaves the device for it.
+- AI masks (subject, background, sky, people and their parts, eyes, lips) are computed on the device by models that
+  ship inside the app (docs/adr/0021): no model is downloaded, no photo or mask is sent anywhere, and it works in
+  airplane mode. The masks found are cached in the app's cache ("AI masks" in Settings -> Storage, cleared with
+  "Clear cache"); their file names are hashes, never a photo's name.
 - A photo another app shares with Reveal is read where it is. While Reveal can read it, it keeps a small local copy
   in its own storage, never backed up and never shared: a display image (1600 px) for every such photo and, when the
   other app's access ends with Reveal's activity (the Samsung Gallery's share does), a smart preview (about

@@ -19,4 +19,10 @@
     <string name="mask_lab_kind_skin">Pele</string>
     <string name="mask_lab_kind_hair">Cabelo</string>
     <string name="mask_lab_kind_clothes">Roupas</string>
+    <string name="mask_lab_face_parts">Partes do rosto</string>
+    <string name="mask_lab_kind_eyes">Olhos</string>
+    <string name="mask_lab_kind_irises">Íris</string>
+    <string name="mask_lab_kind_lips">Lábios</string>
+    <string name="mask_lab_kind_teeth">Dentes</string>
+    <string name="mask_lab_kind_eyebrows">Sobrancelhas</string>
 </resources>

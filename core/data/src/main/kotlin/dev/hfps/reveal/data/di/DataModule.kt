@@ -30,6 +30,7 @@ import dev.hfps.reveal.data.preset.PresetDownloader
 import dev.hfps.reveal.data.preset.PresetRepository
 import dev.hfps.reveal.data.storage.AppStorage
 import dev.hfps.reveal.data.storage.CacheBudget
+import dev.hfps.reveal.data.storage.MaskCacheArea
 import dev.hfps.reveal.data.storage.SafDocumentTree
 import dev.hfps.reveal.data.storage.StorageVolumes
 import dev.hfps.reveal.data.sync.ServerTree
@@ -37,6 +38,9 @@ import dev.hfps.reveal.data.thumb.EditedThumbnails
 import dev.hfps.reveal.data.thumb.GpuEditedThumbnails
 import dev.hfps.reveal.data.thumb.PhotoImages
 import dev.hfps.reveal.data.thumb.ThumbnailRepository
+import dev.hfps.reveal.ml.service.EngineLoader
+import dev.hfps.reveal.ml.service.MaskDiskCache
+import dev.hfps.reveal.ml.service.MaskService
 import dev.hfps.reveal.pipeline.preset.SmartCorrection
 import java.io.File
 import javax.inject.Qualifier
@@ -226,6 +230,19 @@ object DataModule {
     fun provideCacheBudget(@ApplicationContext context: Context, @DataScope scope: CoroutineScope): CacheBudget =
         CacheBudget(context.getSharedPreferences(STORAGE_PREFS, Context.MODE_PRIVATE), scope)
 
+    /** The AI masks' disk cache (docs/adr/0021 "M4/C"), one of the budget's areas. */
+    @Provides
+    @Singleton
+    fun provideMaskCacheArea(@ApplicationContext context: Context, budget: CacheBudget): MaskCacheArea = MaskCacheArea(
+        MaskDiskCache(File(context.cacheDir, MaskCacheArea.DIR), cap = budget::cap, onWrite = budget::requestTrim),
+    ).also(budget::register)
+
+    /** Every AI mask kind (docs/adr/0021 "M4/C"): the bundled models from the APK's assets, cached on disk. */
+    @Provides
+    @Singleton
+    fun provideMaskService(@ApplicationContext context: Context, masks: MaskCacheArea): MaskService =
+        MaskService(EngineLoader.assets(context.assets), masks.cache)
+
     @Provides
     @Singleton
     fun provideAppStorage(
@@ -233,8 +250,9 @@ object DataModule {
         database: RevealDatabase,
         budget: CacheBudget,
         previews: LocalPreviews,
-        // The areas register when they are made: make sure the thumbnails are.
+        // The areas register when they are made: make sure the thumbnails and the masks are.
         @Suppress("UNUSED_PARAMETER") thumbnails: ThumbnailRepository,
+        @Suppress("UNUSED_PARAMETER") masks: MaskCacheArea,
     ): AppStorage = AppStorage(
         db = database,
         budget = budget,

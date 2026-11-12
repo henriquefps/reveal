@@ -588,28 +588,50 @@ REVEAL_PRESET_DUMPS=<dumps and/or JPEGs> REVEAL_PRESET_OUT=<dir> ./gradlew --no-
 
 Env-driven opt-in tests need `--no-configuration-cache` (the cached configuration keeps the old environment).
 
-## On-device mask models (`:core:ml`, M4/S spike, ADR 0021)
+## On-device mask models (`:core:ml`, M4/S spike + M4/C, ADR 0021)
 
-`:core:ml` is a `debugImplementation` of `:app` and `:feature:editor` until M4 ships masks (release builds carry no
-LiteRT, no model). Models: `core/ml/models.json` (URL, SHA-256, bytes, licence, `bundled`) fetched at build time by
-`scripts/ml/fetch_models.py` (stdlib; cache `~/.cache/reveal-ml` by checksum; `--check` re-downloads and verifies;
-`--all --out DIR` every candidate) through the `fetchMlModels` task into `core/ml/build/generated/ml-assets/ml/`
-(never commit a model). A new model = a `models.json` entry + a `ModelSpec` in `MaskModels` (tensor layout,
-normalisation, activation, `KindRule` per `MaskKind`); `MaskModelsTest` keeps both in step. Ids are `<id>@<version>`
-for recipes and caches: never reuse an id for another file. Pure Kotlin, JVM-tested: `tensor/` (`Resample` explicit
-weights, `InputSpec.encode`, `OutputSpec.decode` decodes only the wanted channels), `SegmentationModel`,
-`refine/GuidedRefiner` (fast colour guided filter; `GuidedFilterShader.APPLY_FRAG` is its GPU pass). Runtime:
-`runtime/LiteRtEngine` (CompiledModel; `Backend.GPU` registers the CPU too, so unsupported ops partition instead of
-failing). Debug mask lab: More ⋯ → Mask lab (`feature/editor/src/debug/.../masklab`, `tools/DebugTools` with a
-`src/release` no-op; strings in `src/debug/res`), input = `GpuDevelopRenderer.renderOutputImage(recipe)`.
+`:core:ml` ships in every build (M4/C): the app and the editor use it, `:core:data` provides `MaskService` (Hilt) and
+registers its disk cache with `CacheBudget` (`storage/MaskCacheArea`, `StorageKind.MASKS`, `cache/masks`). Models:
+`core/ml/models.json` (URL or `derive`, SHA-256, bytes, licence; `bundled` = every build, `lab` = debug builds only)
+made at build time by `scripts/ml/fetch_models.py --variant release|debug` (stdlib; cache `~/.cache/reveal-ml` by
+checksum; `--check` re-downloads and re-derives everything; `--all --out DIR` every candidate; `--paths` cached files)
+through `fetchMlModelsRelease/Debug` into `core/ml/build/generated/ml-assets/<set>/ml/` (never commit a model). A
+`derive` entry is made from a pinned one: `convert` runs a script's `convert(bytes)` (`convert_deeplab_sky.py`: the
+SPACE_TO_BATCH/BATCH_TO_SPACE triples -> dilated convolutions, 151 logits -> one sky logit; flatbuffer I/O in
+`tflite_flatbuffer.py`, stdlib, deterministic), `extract` takes a zip member (the Face Landmarker `.task`). A new
+model = a `models.json` entry + a `ModelSpec` / `LandmarkModelSpec` in `MaskModels` (`bundled`, `lab`, `pinned`);
+`MaskModelsTest` keeps both in step. Ids are `<id>@<version>` for recipes and caches: never reuse an id for another
+file. R8: `core/ml/consumer-rules.pro` keeps LiteRT's JNI-reached classes.
+
+Release set: Selfie Multiclass (people + parts), MagicTouch (subject), `deeplab-v3-ade20k-sky` (sky), `face-landmarker`
+(eyes, irises, lips, teeth, brows). `MaskService.mask(MaskRequest(photoKey = fingerprint, image = upright
+recipe-independent render ≤ 1024 px, kind, inputVersion, model?, prompts, autoSeeds, refine, cues?))` ->
+`MaskOutput(mask at the image size, raw model output, model key, fromCache, timings)`: `MaskService.modelFor(kind)` is
+what a new recipe records; background = 1 - subject; subject seeds = `PhotoCues.seeds()` (faces + body, else saliency
+peaks) + taps; face parts = `face/FaceLandmarker` (BlazeFace crop, two passes) + `face/FaceParts` polygons
+(`SoftPolygon`, MediaPipe mesh indices). Cache keys: photo + model + kind + input version/size + seeds (+ refine for
+the refined entry; the raw entry is shared by refinements and by all kinds of one Multiclass run); 8-bit, deflated,
+hashed names (`service/MaskDiskCache`). One segmentation model loaded at a time (+ the landmark model); `release()`
+frees them. Refinement: `refine/RefineDefaults` (per kind, size-independent: coefficient grid ~512 px), CPU
+`GuidedRefiner` (reference; the service refines at ≤ 1024 px on the CPU), GPU `refine/GpuGuidedRefiner` (all passes,
+`GuidedFilterShader`; needs a current GLES 3 context with RGBA32F targets). Pure Kotlin, JVM-tested: `tensor/`,
+`face/`, `service/` (fake engines), `refine/GuidedRefiner`. Runtime: `runtime/LiteRtEngine` (CompiledModel;
+`Backend.GPU` registers the CPU too; CPU fallback with `CPU_THREADS` XNNPACK threads). Debug mask lab: More ⋯ → Mask
+lab (`feature/editor/src/debug/.../masklab`, `tools/DebugTools` with a `src/release` no-op; strings in
+`src/debug/res`; models from both sets + Face parts), input = `GpuDevelopRenderer.renderOutputImage(recipe)`.
 
 ```sh
-python3 scripts/ml/fetch_models.py --check                    # pinned files still match upstream
+python3 scripts/ml/fetch_models.py --check                    # pinned files still match upstream, derived ones re-made
 ./gradlew :core:ml:testDebugUnitTest
+uv run scripts/ml/verify_sky.py $(python3 scripts/ml/fetch_models.py --paths | awk '$1=="deeplab-v3-ade20k"||$1=="deeplab-v3-ade20k-sky"{print $2}') \
+  core/ml/src/androidTest/assets/fixtures/*.jpg core/pipeline/src/test/resources/faces/*.jpg   # host: IoU vs original
 ./gradlew :core:ml:assembleDebugAndroidTest && adb -s <serial> install --user 0 -r -t core/ml/build/outputs/apk/androidTest/debug/ml-debug-androidTest.apk
-adb -s <serial> shell am instrument -w -e class dev.hfps.reveal.ml.MaskModelsDeviceTest,dev.hfps.reveal.ml.GuidedFilterGpuTest dev.hfps.reveal.ml.test/androidx.test.runner.AndroidJUnitRunner
+adb -s <serial> shell am instrument -w -e class dev.hfps.reveal.ml.MaskModelsDeviceTest,dev.hfps.reveal.ml.GuidedFilterGpuTest,dev.hfps.reveal.ml.SkyConversionTest,dev.hfps.reveal.ml.FaceLandmarksDeviceTest,dev.hfps.reveal.ml.MaskServiceDeviceTest dev.hfps.reveal.ml.test/androidx.test.runner.AndroidJUnitRunner
+#   emulators: add -e backend cpu (LiteRT's GPU accelerator does not run there; GPU parity is skipped)
 adb -s <serial> shell am instrument -w -e class dev.hfps.reveal.ml.MaskBenchmark dev.hfps.reveal.ml.test/androidx.test.runner.AndroidJUnitRunner
-adb -s <serial> logcat -d -s REVEAL_ML        # parity, bench (per model and backend), refine
+adb -s <serial> logcat -d -s REVEAL_ML        # parity, bench (per model and backend), refine, sky-conversion, landmarks, service
+# GPU op placement of a model: LiteRT logs the partition when it compiles (look for "delegate" / "partition")
+adb -s <serial> logcat -d | grep -i -E "litert|delegate|partition" | tail -40
 # unbundled candidates: push files into the test app's files/models (run-as dev.hfps.reveal.ml.test) to benchmark them
 adb -s <serial> shell am instrument -w -e class dev.hfps.reveal.editor.MaskLabTest [-e shots true] dev.hfps.reveal.debug.test/androidx.test.runner.AndroidJUnitRunner
 ```

@@ -19,6 +19,15 @@ import dev.hfps.reveal.MainActivity
 import dev.hfps.reveal.data.preset.PresetRepository
 import dev.hfps.reveal.feature.editor.EditorMetrics
 import dev.hfps.reveal.feature.editor.tools.ToolId
+import dev.hfps.reveal.ml.MaskKind
+import dev.hfps.reveal.ml.MaskModels
+import dev.hfps.reveal.ml.MlImage
+import dev.hfps.reveal.ml.refine.RefineDefaults
+import dev.hfps.reveal.ml.runtime.Backend
+import dev.hfps.reveal.ml.runtime.LiteRtEngine
+import dev.hfps.reveal.ml.service.EngineLoader
+import dev.hfps.reveal.ml.service.MaskRequest
+import dev.hfps.reveal.ml.service.MaskService
 import dev.hfps.reveal.pipeline.PipelineInput
 import dev.hfps.reveal.pipeline.auto.PhotoFeatures
 import dev.hfps.reveal.pipeline.auto.SaliencyMap
@@ -55,6 +64,9 @@ import kotlinx.coroutines.withContext
  *   the detector, the subject map and the whole `PhotoFeatures.of`, with the faces found.
  * - `--es mode presets`: 60 presets in one group (first in the panel), the first sample opened in the editor with
  *   the presets panel; logs the grid's bounds for the `input swipe` scrolls (frame times: `dumpsys gfxinfo`).
+ * - `--es mode masks`: every AI mask kind (docs/adr/0021 "M4/C") through the app's `MaskService` (Hilt, release
+ *   models, R8 rules) on every sample's recipe-independent 576 px render, `--es backend cpu` for LiteRT's CPU only
+ *   (emulators); per kind the model, backend, model and refinement ms and coverage. No cache: every run computes.
  * - `--es mode init`: creates the samples folder (adb pushes into it afterwards).
  * - `--es mode cleanup`: removes the bench presets and the photo it put in Downloads.
  */
@@ -62,6 +74,9 @@ import kotlinx.coroutines.withContext
 class BenchActivity : ComponentActivity() {
     @Inject
     lateinit var presets: PresetRepository
+
+    @Inject
+    lateinit var maskService: MaskService
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -81,6 +96,17 @@ class BenchActivity : ComponentActivity() {
             }
 
             "presets" -> scope.launch { presets(app) }
+
+            "masks" -> {
+                window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                setContentView(View(this).apply { setBackgroundColor(Color.BLACK) })
+                val cpu = intent.getStringExtra("backend") == "cpu"
+                scope.launch {
+                    masks(app, cpu)
+                    finish()
+                }
+                return
+            }
 
             "cleanup" -> scope.launch { cleanup(app) }
 
@@ -132,6 +158,46 @@ class BenchActivity : ComponentActivity() {
             }
         }
         log("faces: done")
+    }
+
+    private suspend fun masks(context: Context, cpuOnly: Boolean) = withContext(Dispatchers.Default) {
+        val service = if (cpuOnly) {
+            MaskService(
+                EngineLoader { model ->
+                    LiteRtEngine.load(
+                        LiteRtEngine.Source.Asset(context.assets, MaskModels.assetPath(model)),
+                        listOf(Backend.CPU),
+                    )
+                },
+            )
+        } else {
+            maskService
+        }
+        val files = samples(context)
+        log("masks: ${files.size} files, backend ${if (cpuOnly) "cpu" else "gpu then cpu"}")
+        for ((index, file) in files.withIndex()) {
+            val input = runCatching { proxy(file, BATCH_EDGE) }.getOrElse {
+                log("masks: file#$index unreadable: ${it.javaClass.simpleName}")
+                null
+            } ?: continue
+            val face = FaceInput.from(input)
+            val image = MlImage(face.width, face.height, face.rgb)
+            for (kind in MaskKind.entries) {
+                val r = runCatching {
+                    service.mask(MaskRequest("bench-$index", image, kind, refine = RefineDefaults.of(kind)))
+                }
+                r.onSuccess {
+                    log(
+                        "masks: file#$index ${image.width}x${image.height} $kind ${it.model} ${it.backend} " +
+                            "model ${"%.0f".format(Locale.ROOT, it.modelMs)} ms, refine " +
+                            "${"%.0f".format(Locale.ROOT, it.refineMs)} ms, " +
+                            "coverage ${"%.3f".format(Locale.ROOT, it.mask.mean())}",
+                    )
+                }.onFailure { log("masks: file#$index $kind failed: $it") }
+            }
+        }
+        if (cpuOnly) service.close() else service.release()
+        log("masks: done")
     }
 
     private fun proxy(file: File, edge: Int): PipelineInput = ImageInput.fromFile(file).use { input ->

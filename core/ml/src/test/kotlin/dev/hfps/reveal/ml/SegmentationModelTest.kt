@@ -13,7 +13,7 @@ class SegmentationModelTest {
         var closed = false
         override val backend = Backend.CPU
 
-        override fun run(input: FloatArray): FloatArray = output.also { this.input = input }
+        override fun runAll(input: FloatArray): List<FloatArray> = listOf(output.also { this.input = input })
 
         override fun close() {
             closed = true

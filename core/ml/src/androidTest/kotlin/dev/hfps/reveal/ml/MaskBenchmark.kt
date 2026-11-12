@@ -5,8 +5,10 @@ import android.os.SystemClock
 import android.util.Log
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import dev.hfps.reveal.ml.face.FaceLandmarker
 import dev.hfps.reveal.ml.runtime.Backend
 import dev.hfps.reveal.ml.runtime.LiteRtEngine
+import dev.hfps.reveal.ml.service.PhotoCues
 import java.io.File
 import java.util.Locale
 import org.junit.Test
@@ -77,6 +79,38 @@ class MaskBenchmark {
                     " warmTotal=${"%.1f".format(Locale.ROOT, total)} pssDeltaMiB=${pss / KIB} nativeDeltaMiB=$native" +
                     " input=${spec.input.width}x${spec.input.height}",
             )
+        }
+    }
+
+    /** The face landmark model per backend: load, first run, warm median of one crop (`bench face-landmarker`). */
+    @Test
+    fun faceLandmarker() {
+        val image = Fixtures.face("studio-trio")
+        val crops = PhotoCues.of(image).faces.map { it.crop(image.width, image.height) }
+        check(crops.isNotEmpty()) { "no face in the fixture" }
+        for (backend in listOf(Backend.GPU, Backend.CPU)) {
+            val t0 = SystemClock.elapsedRealtimeNanos()
+            val engine = try {
+                Fixtures.engine(MaskModels.FACE_LANDMARKER, backend)
+            } catch (e: IllegalStateException) {
+                Log.i(TAG, "face-landmarker $backend: does not compile (${e.cause?.message})")
+                continue
+            }
+            FaceLandmarker(engine).use { lm ->
+                val t1 = SystemClock.elapsedRealtimeNanos()
+                lm.landmarks(image, crops[0])
+                val t2 = SystemClock.elapsedRealtimeNanos()
+                val runs = (0 until RUNS).map {
+                    val a = SystemClock.elapsedRealtimeNanos()
+                    lm.landmarks(image, crops[0])
+                    SystemClock.elapsedRealtimeNanos() - a
+                }.sorted()
+                Log.i(
+                    TAG,
+                    "bench face-landmarker $backend load=${ms(t1 - t0)} first=${ms(t2 - t1)} " +
+                        "warmPerCrop=${ms(runs[RUNS / 2])} faces=${crops.size}",
+                )
+            }
         }
     }
 

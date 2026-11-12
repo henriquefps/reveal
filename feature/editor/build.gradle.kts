@@ -10,8 +10,8 @@ dependencies {
     implementation(projects.core.designsystem)
     implementation(projects.core.image)
     implementation(projects.core.pipeline)
-    // The on-device mask models (ADR 0021) only reach debug builds, through the mask lab, until M4 ships masks.
-    debugImplementation(projects.core.ml)
+    // The on-device mask models (ADR 0021): the editor's AI masks (M4); the mask lab (src/debug) stays debug-only.
+    implementation(projects.core.ml)
     implementation(projects.core.data)
     implementation(projects.feature.export)
 

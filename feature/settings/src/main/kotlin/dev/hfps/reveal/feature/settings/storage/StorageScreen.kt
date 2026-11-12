@@ -276,6 +276,7 @@ fun StorageContent(
 private val KINDS = listOf(
     StorageKind.THUMBNAILS,
     StorageKind.SERVER_FILES,
+    StorageKind.MASKS,
     StorageKind.HANDOFF_PREVIEWS,
     StorageKind.OTHER,
     StorageKind.LIBRARY,
@@ -284,6 +285,7 @@ private val KINDS = listOf(
 private fun StorageKind.title(): Int = when (this) {
     StorageKind.THUMBNAILS -> R.string.storage_thumbnails
     StorageKind.SERVER_FILES -> R.string.storage_server_files
+    StorageKind.MASKS -> R.string.storage_masks
     StorageKind.HANDOFF_PREVIEWS -> R.string.storage_handoff_previews
     StorageKind.OTHER -> R.string.storage_other
     StorageKind.LIBRARY -> R.string.storage_library
@@ -292,6 +294,7 @@ private fun StorageKind.title(): Int = when (this) {
 private fun StorageKind.icon() = when (this) {
     StorageKind.THUMBNAILS -> PhosphorRegular.SquaresFour
     StorageKind.SERVER_FILES -> PhosphorRegular.Cloud
+    StorageKind.MASKS -> PhosphorRegular.Sparkle
     StorageKind.HANDOFF_PREVIEWS -> PhosphorRegular.ArrowSquareIn
     StorageKind.OTHER -> PhosphorRegular.Package
     StorageKind.LIBRARY -> PhosphorRegular.Database
@@ -302,6 +305,8 @@ private fun subtitle(kind: StorageKind, usage: StorageUsage?, context: Context):
     StorageKind.THUMBNAILS -> stringResource(R.string.storage_thumbnails_note)
 
     StorageKind.SERVER_FILES -> stringResource(R.string.storage_server_files_note)
+
+    StorageKind.MASKS -> stringResource(R.string.storage_masks_note)
 
     StorageKind.HANDOFF_PREVIEWS -> if (usage != null && usage.keptPreviews > 0) {
         stringResource(R.string.storage_handoff_previews_kept, size(context, usage.keptPreviews))

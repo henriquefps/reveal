@@ -25,6 +25,12 @@ class LiteRtEngine private constructor(private val model: CompiledModel, overrid
         return outputs[0].readFloat()
     }
 
+    override fun runAll(input: FloatArray): List<FloatArray> {
+        inputs[0].writeFloat(input)
+        model.run(inputs, outputs)
+        return outputs.map { it.readFloat() }
+    }
+
     override fun close() {
         inputs.forEach { it.close() }
         outputs.forEach { it.close() }
@@ -41,15 +47,24 @@ class LiteRtEngine private constructor(private val model: CompiledModel, overrid
     companion object {
         private const val TAG = "RevealMl"
 
+        /** XNNPACK threads when a model runs on the CPU (docs/adr/0021 "M4/C", thread budget). */
+        const val CPU_THREADS = 4
+
         /**
          * Loads [source] on the first of [prefer] that compiles it (GPU then CPU by default). A GPU that refuses the
-         * model (no OpenCL/GL) falls back to the CPU; the CPU never fails for a valid model.
+         * model (no OpenCL/GL) falls back to the CPU; the CPU never fails for a valid model. The CPU uses
+         * [cpuThreads] XNNPACK threads.
          */
-        fun load(source: Source, prefer: List<Backend> = listOf(Backend.GPU, Backend.CPU)): LiteRtEngine {
+        fun load(
+            source: Source,
+            prefer: List<Backend> = listOf(Backend.GPU, Backend.CPU),
+            cpuThreads: Int = CPU_THREADS,
+        ): LiteRtEngine {
             var last: LiteRtException? = null
             for (backend in prefer) {
                 try {
                     val options = CompiledModel.Options(backend.accelerators())
+                    options.cpuOptions = CompiledModel.CpuOptions(cpuThreads, null, null)
                     val model = when (source) {
                         is Source.Asset -> CompiledModel.create(source.assets, source.path, options, environment)
                         is Source.File -> CompiledModel.create(source.path, options, environment)

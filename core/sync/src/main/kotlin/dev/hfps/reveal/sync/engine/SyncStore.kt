@@ -316,8 +316,7 @@ class SyncStore(
             // Already applied, or older than what the push left (our state won). A live record whose photo or version
             // is gone from this device (its folder was removed before 0.5.3, a forgotten hand-off) is placed again:
             // it may be openable from the server, or merge when its file shows up (FIX/V).
-            local != null && (local.rev > record.rev || (local.rev == record.rev && !fromInbox)) &&
-                (record.deleted || present(record)) -> {
+            local != null && applied(local, record, fromInbox) -> {
                 stats.skipped++
                 return
             }
@@ -357,6 +356,10 @@ class SyncStore(
         reassert = false
         stats.applied++
     }
+
+    /** [record] is already applied (or older than what our push left) and its photo or version is still here. */
+    private suspend fun applied(local: SyncRecordEntity, record: FeedRecord, fromInbox: Boolean): Boolean =
+        (local.rev > record.rev || (local.rev == record.rev && !fromInbox)) && (record.deleted || present(record))
 
     /** True when the photo or version of [record] is on this device (other kinds always are). */
     private suspend fun present(record: FeedRecord): Boolean = when (record.kind) {
@@ -442,15 +445,19 @@ class SyncStore(
                 ),
             )
         }
-        if (photo.sourceId == serverSource().id) {
-            updateServerFiles(photo, data)
-            // A new state of a photo only the server describes: another device may just have backed up its original
-            // (it pushes the record again then), so this run's lookup asks again (FIX/V).
-            sync.cloud(photo.id)?.takeIf { !it.originalOnServer && it.checkedAt > 0 }?.let {
-                sync.putCloud(it.copy(checkedAt = 0))
-            }
-        }
+        if (photo.sourceId == serverSource().id) refreshServerPhoto(photo, data)
         return true
+    }
+
+    /**
+     * A new state of a photo only the server describes: its files, and another lookup in this run (another device may
+     * just have backed up its original; it pushes the record again then, FIX/V).
+     */
+    private suspend fun refreshServerPhoto(photo: PhotoEntity, data: PhotoData) {
+        updateServerFiles(photo, data)
+        sync.cloud(photo.id)?.takeIf { !it.originalOnServer && it.checkedAt > 0 }?.let {
+            sync.putCloud(it.copy(checkedAt = 0))
+        }
     }
 
     /**

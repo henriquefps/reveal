@@ -100,7 +100,10 @@ class ThumbnailRepository(
         val identity: FileIdentity,
         /** A Server photo: a failed read means the server is out of reach, never that the file is unreadable. */
         val server: Boolean = false,
-    )
+    ) {
+        /** [error] says this device's file cannot be read (access refused or gone); never for a Server photo. */
+        fun refused(error: Throwable): Boolean = !server && isAccessError(error)
+    }
 
     private suspend fun target(photoId: Long): Target? {
         val photo = photos.get(photoId)
@@ -157,7 +160,7 @@ class ThumbnailRepository(
         } catch (e: CancellationException) {
             throw e
         } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
-            if (isAccessError(e) && !target.server) {
+            if (target.refused(e)) {
                 // A hand-off whose grant ended (ADR 0011): remember it, and show its local preview.
                 photos.setUnreadable(main.documentId, clock())
                 localPreview(main)?.let { return it }
@@ -184,7 +187,7 @@ class ThumbnailRepository(
         } catch (e: CancellationException) {
             throw e
         } catch (@Suppress("TooGenericExceptionCaught") e: Throwable) {
-            if (isAccessError(e) && !target.server) {
+            if (target.refused(e)) {
                 photos.setUnreadable(target.main.documentId, clock())
                 return renderFallback(renderer, target, versionId)
             }

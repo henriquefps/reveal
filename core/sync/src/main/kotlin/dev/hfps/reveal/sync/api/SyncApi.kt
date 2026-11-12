@@ -172,8 +172,8 @@ class SyncApi(baseUrl: String, private val apiKey: String?, private val client: 
     }
 
     /**
-     * `DELETE /v1/originals/{fingerprint}` (ADR 0017 "Deleting an original", 0.5.3): the user deleted the photo from the
-     * server. Same answers as [dropPreview]: [DropResult.REFERENCED] while a live record names it, [DropResult.REFUSED]
+     * `DELETE /v1/originals/{fingerprint}` (ADR 0017 "Deleting an original", 0.5.3): the user deleted the photo from
+     * the server. Same answers as [dropPreview]: [DropResult.REFERENCED] while a live record names it, [DropResult.REFUSED]
      * for a NAS file, [DropResult.UNSUPPORTED] from a server before 0.5.3.
      */
     fun deleteOriginal(fingerprint: String): DropResult {

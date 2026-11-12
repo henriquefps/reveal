@@ -6,6 +6,36 @@ All notable changes to Reveal are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+- The "Server" place lists only photos that open: their original (any file of the shot) or their smart preview is on
+  your sync server. Photos the server only describes (ratings and edits of a photo whose file is elsewhere) are kept
+  and join the photo when it shows up, but no longer fill the grid with "Unavailable" squares.
+- New folders back up only the photos you edit. Adding a folder while paired asks once: "Only photos you edit"
+  (preselected) or "Everything". Existing folders keep their setting; Settings → Sync shows each folder's mode.
+- Removing a folder while paired asks "Also delete from the server?" (unchecked when the folder has edited photos).
+  Yes: its photos, edits, backed-up originals and previews leave the server and your other devices. No: the photos
+  backed up there move to this device's "Server" place with their edits and stay editable from the server copy.
+  Either way, unedited photos with nothing on the server stop being listed anywhere.
+- The "Unavailable" filter chip is gone; the placeholder stays for this device's own photos whose file can no longer
+  be read.
+
+### Added
+- "Delete from server" in the "Server" place's selection menu (asks first; the edits go too, on every device).
+- Sync server: `DELETE /v1/originals/{fingerprint}` (any paired device; kept while a live photo record names the file,
+  never for NAS files), and deleting a photo record releases the smart preview it named.
+
+### Fixed
+- A photo with the cloud badge in "Server" that would not open: for a RAW + JPEG shot only the RAW is backed up, but
+  the app trusted the photo's flag for the JPEG too and asked the server for a file it never had (`404`). What the
+  server holds is now known per file, and a shot opens from whichever of its files is there.
+- Adding a folder again (or adding on another device a folder whose photos are backed up) no longer creates a second
+  photo on every device: the folder photo takes the server photo's id, edits and ratings.
+- The device that removed a folder now still sees its backed-up photos under "Server" (they never came back past its
+  sync cursor).
+- One-off clean-up on the first sync after updating: this device's records of photos it lost come back (and show
+  under "Server" when they open), duplicate records of the same file are tombstoned, and records that only described
+  an unedited photo this device no longer has are deleted. Logged with counts only.
+
 ## [0.5.2] - 2026-11-12
 
 ### Added

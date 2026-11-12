@@ -195,19 +195,7 @@ fun LibraryScreen(
     state.forgetPrompt?.let { prompt ->
         ForgetDialog(prompt, onConfirm = actions.onForgetConfirm, onDismiss = actions.onForgetDismiss)
     }
-    if (state.addFolderPrompt != null) {
-        AddFolderBackupSheet(onChoose = actions.onAddFolderBackup, onDismiss = actions.onAddFolderDismiss)
-    }
-    state.removePrompt?.let { prompt ->
-        RemoveFolderDialog(prompt, onConfirm = actions.onRemoveConfirm, onDismiss = actions.onRemoveDismiss)
-    }
-    state.deleteServerPrompt?.let { count ->
-        DeleteFromServerDialog(
-            count,
-            onConfirm = actions.onDeleteFromServerConfirm,
-            onDismiss = actions.onDeleteFromServerDismiss,
-        )
-    }
+    ServerViewDialogs(state, actions)
     if (choosingPreset) {
         ApplyPresetSheet(
             library = presetLibrary,

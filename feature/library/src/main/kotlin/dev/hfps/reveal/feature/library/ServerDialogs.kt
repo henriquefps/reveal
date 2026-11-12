@@ -1,3 +1,5 @@
+@file:Suppress("MatchingDeclarationName")
+
 package dev.hfps.reveal.feature.library
 
 import androidx.compose.foundation.layout.Arrangement
@@ -186,4 +188,22 @@ internal fun DeleteFromServerDialog(count: Int, onConfirm: () -> Unit, onDismiss
         },
         dismissButton = { GhostButton(stringResource(R.string.library_cancel), onDismiss) },
     )
+}
+
+/** The server's view prompts of the library screen (FIX/V): backup choice, folder removal, delete from server. */
+@Composable
+internal fun ServerViewDialogs(state: LibraryUiState, actions: LibraryActions) {
+    if (state.addFolderPrompt != null) {
+        AddFolderBackupSheet(onChoose = actions.onAddFolderBackup, onDismiss = actions.onAddFolderDismiss)
+    }
+    state.removePrompt?.let { prompt ->
+        RemoveFolderDialog(prompt, onConfirm = actions.onRemoveConfirm, onDismiss = actions.onRemoveDismiss)
+    }
+    state.deleteServerPrompt?.let { count ->
+        DeleteFromServerDialog(
+            count,
+            onConfirm = actions.onDeleteFromServerConfirm,
+            onDismiss = actions.onDeleteFromServerDismiss,
+        )
+    }
 }

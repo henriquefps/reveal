@@ -231,7 +231,7 @@ class ServerLibrary(
         return merged
     }
 
-    /** Tombstones an own record placed again as another id of local photo [photoId]; its versions follow the kept id. */
+    /** Tombstones own record [uuid], placed again as another id of local photo [photoId]; its versions follow. */
     private suspend fun dropAlias(uuid: String, photoId: Long): Boolean {
         if (!tombstone(Kinds.PHOTO, uuid)) return false
         for (version in sync.versionsOf(photoId)) {
@@ -270,21 +270,24 @@ class ServerLibrary(
         var dropped = 0
         for (uuid in orphans) {
             val alias = sync.alias(uuid)
-            if (alias != null) {
-                if (dropAlias(uuid, alias)) aliases++
-                continue
+            when {
+                alias != null -> if (dropAlias(uuid, alias)) aliases++
+                dropMetadataOnly(uuid, server) -> dropped++
             }
-            val photo = sync.photoByUuid(uuid) ?: continue
-            if (photo.sourceId != server || photo.hasEdit) continue
-            val cloud = sync.cloud(photo.id)
-            // Not asked yet (the lookup failed): decided by a later clean-up, never guessed.
-            if (cloud == null || cloud.checkedAt == 0L) continue
-            if (cloud.originalOnServer || cloud.previewSha != null) continue
-            tombstone(photo)
-            photos.deletePhotos(listOf(photo.id))
-            dropped++
         }
         return aliases to dropped
+    }
+
+    /** Tombstones and forgets own record [uuid] when its Server photo has no edit and nothing on the server. */
+    private suspend fun dropMetadataOnly(uuid: String, server: Long?): Boolean {
+        val photo = sync.photoByUuid(uuid) ?: return false
+        if (photo.sourceId != server || photo.hasEdit) return false
+        // Not asked yet (the lookup failed): decided by a later clean-up, never guessed.
+        val cloud = sync.cloud(photo.id)?.takeIf { it.checkedAt > 0 } ?: return false
+        if (cloud.originalOnServer || cloud.previewSha != null) return false
+        tombstone(photo)
+        photos.deletePhotos(listOf(photo.id))
+        return true
     }
 
     private suspend fun <T> quietly(block: suspend () -> T): T = db.withTransaction {

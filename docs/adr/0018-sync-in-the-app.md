@@ -259,6 +259,71 @@ Decision (owner, 2026-11-12): keep A, quality first (~45 % of format 1). The 1.5
 preview for every rated, picked or unbacked photo" rule; with edited photos backing up their original, previews are
 rare (unreadable files, or the originals backup off), so their size matters far less than their fidelity.
 
+## Amendment 2026-11-12 (FIX/V, 0.5.3): the server view shows what can be opened
+
+The owner's 0.5.2 run (fresh server and apps): a camera folder of 437 RAW + JPEG shots added on the phone (backup on),
+removed, added again, backup turned off. The server ended with 876 live photo records (two sets) and 45 originals; the
+tablet's Server scope listed all of them, mostly as "Unavailable" squares, and the few with the cloud badge did not
+open (`404` on `GET /v1/originals/{fingerprint}`); the phone showed no Server entry at all.
+
+Causes found:
+
+- **The 404**: `ServerFiles.original` trusted the photo's `photo_cloud.original_on_server` (a lookup of the *main*
+  file) for every file of the shot and skipped asking the server. The backup sends only the main file (the RAW), so
+  the viewer and grid reading the camera JPEG of a pair asked the server for a file it never had. Server photos were
+  also marked unreadable by the thumbnail loader when the server could not serve them, hence the placeholders.
+- **The duplicates**: removing a folder deleted its photos locally while their records stayed on the server; the
+  device's own records are behind its pull cursor (it skips its own revisions), so they never came back, and adding
+  the folder again pushed new ids for the same files.
+
+Decisions (owner):
+
+- **Per-file presence** (database v10): `photo_files.on_server`, set by the lookups (a Server photo's lookup asks about
+  every file of its shot, `SyncDao.serverFilesOf`; the main file still decides `photo_cloud.original_on_server` for
+  this device's photos, "any file" for Server photos) and by the NAS feed. `ServerFiles.original` trusts only that;
+  anything not known is asked first (`HEAD`). The open sites (`LibraryRepository.detail`, `PhotoImages`,
+  `ThumbnailRepository`) use `ServerTree.reachable`: a Server photo opens from the files the server holds (a shot whose
+  JPEG alone is on a NAS opens from the JPEG). A failed read of a Server photo never marks it unreadable.
+- **The Server scope lists only what opens**: `PhotoQuerySql.SERVER_OPENABLE_SQL` (original of any file, or a smart
+  preview), also the Server entry's count. Records that only describe a photo stay in the database (ratings, edits;
+  they merge when the photo shows up) and a pulled record of such a photo asks the lookup again at once; the device
+  whose backup lands (`SyncStore.originalLanded`) pushes the record again so the others ask. The "Unavailable" filter
+  chip is gone; the placeholder stays only for this device's own unreadable photos (`UNAVAILABLE_SQL` excludes Server
+  photos).
+- **Folder backup default "Only edited"**: a folder added while paired asks once (`AddFolderBackupSheet`: "Only photos
+  you edit", preselected, or "Everything"); not paired, it is added with "Only edited". Existing folders keep theirs.
+  `LibraryRepository.addSource(uri, backup)`; Settings → Sync names each folder's mode.
+- **Removing a folder** (`ServerLibrary.removeFolder`, before the library forgets it; the dialog asks "Also delete from
+  the server?", unchecked when the folder has edited photos):
+  - yes: every photo's records (photo, aliases, versions) are tombstoned and every file's fingerprint is queued in
+    `sync_deletes`; after the next push `BlobUploader.deleteOriginals` calls `DELETE /v1/originals/{fingerprint}` (ADR
+    0017; `409` waits and is given up after a few tries, `405` waits for a server update); the preview goes with the
+    tombstone on the server;
+  - no: a photo with an original or preview on the server, or with an edit, moves to the Server source on this device
+    (same uuid, versions, ratings and sync rows; files keyed `ServerTree.documentId`), so it stays visible (when it
+    opens) and editable, and its record stays known here;
+  - both: an unedited photo with nothing on the server has its records tombstoned.
+- **Adding a folder again never duplicates**: after every fingerprint pass `HandoffMerge.mergeServerPhotosInto` merges a
+  Server photo whose file the folder holds into the folder photo, with the hand-off rules (culling `resolve`, versions
+  moved, the server's uuid adopted or tombstone + alias, the record's preview kept named when the id is adopted).
+- **Delete from server** (Server scope selection, `ServerLibrary.deleteFromServer`): the same tombstones and deletes; a
+  device that has the photo in a folder keeps the file, loses the edit (its versions' tombstones) and forgets what the
+  server held (`SyncStore.forgetServerCopies`: no own preview named again, original asked about again).
+- **One-off clean-up** (`SyncEngine`, meta `sync.cleanup` = 1 once done): the first sync after updating remembers the
+  live photo records it holds a row for but no photo (`ServerLibrary.prepareCleanup`), pulls the feed from the start
+  (`SyncStore.applyOne` places again a record whose photo or version is missing even at the same rev), then after the
+  lookups: merges Server photos into folder photos, drops unedited duplicate Server photos of one main file, tombstones
+  a remembered record placed again as another id of a local photo (versions pushed again under the kept id), and
+  tombstones a remembered record whose photo has no edit and nothing on the server. Another device's aliases are never
+  touched (two ids for one file are legitimate across devices). Counts only in the log (`clean-up: CleanupReport(...)`).
+
+Tests: `ServerViewTest` (JVM, two devices, `FakeSyncServer`): metadata-only records unlisted; RAW + JPEG with only the
+RAW backed up (and the provider never asks for the JPEG); JPEG-only on the server; RAW-only, JPEG-only and hand-off
+photos listed once their original lands; folder removal keeping and deleting; a tombstone releasing a preview; adding
+a folder again and on another device; delete from server; a server before 0.5.3; the clean-up and its idempotence. Go:
+`TestDeletingAnOriginal`, `TestDeletingAnOriginalNeverTouchesNasFiles`, `TestATombstoneReleasesItsPreview`.
+Instrumented: `ServerViewFlowTest` against the real server.
+
 ## Consequences
 
 - The grid now has one cell per version (a photo with a conflict copy has two); selection stays per photo.

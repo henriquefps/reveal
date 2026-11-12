@@ -415,7 +415,8 @@ class FakeSyncServer : Dispatcher() {
             records[kind to id] = current
         }
         // A photo tombstone releases the preview its record named, unless another live record names it (ADR 0017).
-        if (kind == "photo" && deleted && before != null && !previewNamed(before) && blobKinds[before] == "preview") {
+        val released = before != null && !previewNamed(before) && blobKinds[before] == "preview"
+        if (kind == "photo" && deleted && released) {
             blobs.remove(before)
             blobKinds.remove(before)
             blobOwners.remove(before)

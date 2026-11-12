@@ -6,6 +6,8 @@ All notable changes to Reveal are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.5.5] - 2026-11-12
+
 ### Changed
 - One library: the start screen shows all your photos in one grid, newest first: this device's folders, photos opened
   from other apps and the photos on your sync server, each once. Photos that are not on this device keep a small cloud

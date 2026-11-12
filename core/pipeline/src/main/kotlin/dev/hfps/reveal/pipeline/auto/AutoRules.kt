@@ -8,6 +8,7 @@ import dev.hfps.reveal.pipeline.cpu.GlobalToneOp
 import dev.hfps.reveal.pipeline.cpu.LocalToneOp
 import dev.hfps.reveal.pipeline.cpu.ToneParams
 import dev.hfps.reveal.pipeline.cpu.WbAnalysis
+import dev.hfps.reveal.pipeline.faces.Face
 import dev.hfps.reveal.pipeline.recipe.Light
 import dev.hfps.reveal.pipeline.recipe.Recipe
 import dev.hfps.reveal.pipeline.recipe.RecipeRanges
@@ -17,6 +18,7 @@ import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
+import kotlin.math.sqrt
 
 /**
  * The adjustable constants of Auto (docs/adr/0010). M3's smart presets expose some of them ("target subject
@@ -24,8 +26,14 @@ import kotlin.math.roundToInt
  * (0..1, before the output encoding); lightness is `cbrt(Y)` (Light's global tone domain, ADR 0007).
  *
  * @property targetGrey display luminance the key lands on. The key is `m * median + (1 - m) * trimmed log-average`
- *   (`m` = [keyMedianWeight], quantiles 2-98 %) of the histogram mixed from the uniform and the centre-weighted one
- *   by [keyCentreWeight].
+ *   (`m` = [keyMedianWeight], quantiles 2-98 %) of the histogram mixed from the uniform and the subject-weighted
+ *   one ([AutoAnalysis.subjectHistogram]: the saliency map, or the centre weight without one) by [keyCentreWeight].
+ * @property faceTarget display luminance the faces' skin key should land on (the "target subject brightness" of a
+ *   smart preset); with [faceTolerance] stops either side it is a band: a face already inside it is left alone,
+ *   so darker and lighter skin keep their own brightness and only badly lit faces are corrected.
+ * @property faceWeight how far (0..1) the exposure moves a face into the band, for faces covering at least
+ *   [faceAreaFull] of the frame (smaller faces count less: `faceWeight * sqrt(area / faceAreaFull)`); the move is
+ *   limited to [maxFaceShift] EV.
  * @property maxExposure largest |exposure| Auto sets, in EV.
  * @property protectHeadroom stops above [highlightCeiling] the brightest content may sit at after exposure; more
  *   lowers the exposure, by at most [maxProtect] EV (then shadows carry the rest).
@@ -65,6 +73,11 @@ data class AutoParams(
     val vibranceTarget: Double = 0.11,
     val vibranceGain: Double = 400.0,
     val maxVibrance: Int = 20,
+    val faceTarget: Double = 0.30,
+    val faceTolerance: Double = 0.35,
+    val faceWeight: Double = 0.8,
+    val faceAreaFull: Double = 0.01,
+    val maxFaceShift: Double = 1.5,
 )
 
 /** Auto's result: plain slider values (exposure in EV snapped to 0.01, the others whole slider units). */
@@ -96,8 +109,10 @@ enum class AutoScope {
  * [LocalToneOp.delta] on the scene stop, the profile's [AutoAnalysis.toneTable], the global tone curve
  * [GlobalToneOp.curve] on lightness), in pipeline order:
  *
- * 1. **Exposure** puts the key on [AutoParams.targetGrey], lowered (by at most [AutoParams.maxProtect] EV) when that
- *    would push the highlight quantile more than [AutoParams.protectHeadroom] stops past the highlight ceiling.
+ * 1. **Exposure** puts the key on [AutoParams.targetGrey], moves the faces' skin into its band around
+ *    [AutoParams.faceTarget] when there are faces, and is lowered (by at most [AutoParams.maxProtect] EV) when that
+ *    would push the highlight quantile more than [AutoParams.protectHeadroom] stops past the highlight ceiling, but
+ *    never so far that the faces drop below their band.
  * 2. **Highlights**: the smallest pull that brings the highlight quantile under the ceiling (never below where the
  *    original had it for display-referred input: its clipped whites cannot be recovered).
  * 3. **Shadows**: the smallest lift that brings the shadow quantile up to the floor.
@@ -142,13 +157,35 @@ object AutoRules {
     /** Rule 1, snapped to the exposure slider's 0.01 EV. */
     fun exposure(a: AutoAnalysis, p: AutoParams): Double {
         val w = p.keyCentreWeight
-        val c = DoubleArray(AutoAnalysis.BINS) { (1 - w) * a.histogram[it] + w * a.centreHistogram[it] }
+        val c = DoubleArray(AutoAnalysis.BINS) { (1 - w) * a.histogram[it] + w * a.subjectHistogram[it] }
         val m = p.keyMedianWeight
         val key = m * a.percentile(Q50, c) + (1 - m) * a.trimmedMean(KEY_LO, KEY_HI, c)
-        val ideal = a.sceneFor(p.targetGrey) - key
+        var ideal = a.sceneFor(p.targetGrey) - key
+        var floor = Double.NEGATIVE_INFINITY
+        val face = a.faceKey
+        if (face != null) {
+            val target = a.sceneFor(p.faceTarget)
+            val low = target - p.faceTolerance
+            val high = target + p.faceTolerance
+            val s = face + ideal
+            val shift = when {
+                s < low -> low - s
+                s > high -> high - s
+                else -> 0.0
+            }
+            ideal += (faceWeight(a, p) * shift).coerceIn(-p.maxFaceShift, p.maxFaceShift)
+            // Highlight protection may not darken the faces below their band (unless the exposure already does).
+            floor = min(ideal, low - face)
+        }
         val protect = a.sceneFor(p.highlightCeiling) + p.protectHeadroom - a.percentile(p.highlightQuantile)
-        val ev = min(ideal, max(protect, ideal - p.maxProtect)).coerceIn(-p.maxExposure, p.maxExposure)
+        val ev = max(min(ideal, max(protect, ideal - p.maxProtect)), floor).coerceIn(-p.maxExposure, p.maxExposure)
         return (ev * EV_STEP).roundToInt() / EV_STEP
+    }
+
+    /** How strongly the faces steer the exposure: [AutoParams.faceWeight], less for small faces (0 without). */
+    fun faceWeight(a: AutoAnalysis, p: AutoParams): Double {
+        if (a.faceHistogram == null || p.faceAreaFull <= 0.0) return 0.0
+        return p.faceWeight * min(1.0, sqrt(a.faceArea / p.faceAreaFull))
     }
 
     /** Rule 2: the highlights slider (0 or negative). */
@@ -200,29 +237,35 @@ object AutoRules {
 
     /**
      * [recipe] with Auto applied for [scope]: the Light sliders (and, for [AutoScope.ALL], vibrance, and the white
-     * balance [autoWb] when the recipe's mode is Auto). Everything else is kept.
+     * balance [autoWb] when the recipe's mode is Auto, with the face rules for [faces]). Everything else is kept.
      */
-    fun applyTo(recipe: Recipe, result: AutoResult, scope: AutoScope, autoWb: WbAnalysis? = null): Recipe {
+    fun applyTo(
+        recipe: Recipe,
+        result: AutoResult,
+        scope: AutoScope,
+        autoWb: WbAnalysis? = null,
+        faces: List<Face> = emptyList(),
+    ): Recipe {
         val lit = recipe.copy(light = result.light)
         if (scope == AutoScope.LIGHT) return lit
-        val balanced = withAutoWb(lit, autoWb)
+        val balanced = withAutoWb(lit, autoWb, faces)
         return balanced.copy(colour = balanced.colour.copy(vibrance = result.vibrance))
     }
 
     /** [recipe] with the Auto white balance of [autoWb] when its mode is Auto (otherwise unchanged). */
-    fun withAutoWb(recipe: Recipe, autoWb: WbAnalysis?): Recipe {
+    fun withAutoWb(recipe: Recipe, autoWb: WbAnalysis?, faces: List<Face> = emptyList()): Recipe {
         val wb = recipe.colour.whiteBalance
         if (wb.mode != WbMode.AUTO || autoWb == null) return recipe
-        return recipe.copy(colour = recipe.colour.copy(whiteBalance = whiteBalance(autoWb)))
+        return recipe.copy(colour = recipe.colour.copy(whiteBalance = whiteBalance(autoWb, faces)))
     }
 
     /**
-     * The Auto white balance ([AutoWhiteBalance], ADR 0008) as plain slider values: kelvin snapped to the
-     * temperature slider's fine step, tint and the relative pair to whole units. The Auto WB chip and the Auto tool
-     * both use this, so they always agree.
+     * The Auto white balance ([AutoWhiteBalance], ADR 0008, with the face rules for [faces]) as plain slider values:
+     * kelvin snapped to the temperature slider's fine step, tint and the relative pair to whole units. The Auto WB
+     * chip and the Auto tool both use this, so they always agree.
      */
-    fun whiteBalance(autoWb: WbAnalysis): WhiteBalance {
-        val wb = AutoWhiteBalance.whiteBalance(autoWb)
+    fun whiteBalance(autoWb: WbAnalysis, faces: List<Face> = emptyList()): WhiteBalance {
+        val wb = AutoWhiteBalance.whiteBalance(autoWb, faces)
         return wb.copy(
             temperatureK = wb.temperatureK?.let {
                 RecipeRanges.temperature.snap(it, RecipeRanges.temperature.fineStep)
@@ -243,10 +286,13 @@ object AutoRules {
         scope: AutoScope,
         autoWb: WbAnalysis? = null,
         params: AutoParams = AutoParams(),
-    ): Recipe {
-        val balanced = if (scope == AutoScope.ALL) withAutoWb(recipe, autoWb) else recipe
-        val result = compute(AutoAnalyser.analyse(sample, balanced), params)
-        return applyTo(balanced, result, scope, autoWb)
+    ): Recipe = run(PhotoFeatures(sample, autoWb), recipe, scope, params)
+
+    /** [run] with the photo's [features] (faces and the subject map steer the exposure, faces the white balance). */
+    fun run(features: PhotoFeatures, recipe: Recipe, scope: AutoScope, params: AutoParams = AutoParams()): Recipe {
+        val balanced = if (scope == AutoScope.ALL) withAutoWb(recipe, features.wb, features.faces) else recipe
+        val analysis = AutoAnalyser.analyse(features.sample, balanced, features.faces, features.saliency)
+        return applyTo(balanced, compute(analysis, params), scope, features.wb, features.faces)
     }
 
     /** The integer in [range] with the smallest |[error]|; ties go to the value nearest 0 (the gentler edit). */

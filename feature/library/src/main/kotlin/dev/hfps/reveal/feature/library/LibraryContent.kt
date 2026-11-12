@@ -41,6 +41,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import dev.hfps.reveal.data.db.PhotoRow
 import dev.hfps.reveal.data.index.IndexPhase
 import dev.hfps.reveal.data.library.SourceItem
 import dev.hfps.reveal.data.model.PhotoFilter
@@ -557,7 +558,7 @@ private fun GridPane(
                     entries = state.entries,
                     selected = state.selected,
                     thumbnails = thumbnails,
-                    onOpen = { row -> if (row.unavailable) actions.onOpenUnavailable(row) else actions.onOpen(row) },
+                    onOpen = { row -> open(row, actions) },
                     onSelectionChange = actions.onSelectionChange,
                     onDraw = onGridDraw,
                 )
@@ -703,4 +704,11 @@ private fun RatedChip(query: PhotoQuery, actions: LibraryActions) {
             }
         }
     }
+}
+
+/** A grid tap: an unavailable photo explains itself, a conflict copy opens the chooser, anything else the viewer. */
+private fun open(row: PhotoRow, actions: LibraryActions) = when {
+    row.unavailable -> actions.onOpenUnavailable(row)
+    row.conflict -> actions.onOpenConflict(row)
+    else -> actions.onOpen(row)
 }

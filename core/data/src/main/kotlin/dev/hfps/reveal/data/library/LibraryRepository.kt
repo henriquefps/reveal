@@ -16,6 +16,7 @@ import dev.hfps.reveal.data.db.PhotoRow
 import dev.hfps.reveal.data.db.RevealDatabase
 import dev.hfps.reveal.data.db.SourceEntity
 import dev.hfps.reveal.data.handoff.Fallback
+import dev.hfps.reveal.data.handoff.HandoffBackup
 import dev.hfps.reveal.data.handoff.HandoffFallbacks
 import dev.hfps.reveal.data.handoff.HandoffMerge
 import dev.hfps.reveal.data.handoff.LocalPreviews
@@ -579,6 +580,13 @@ class LibraryRepository(
     /** The per-folder switch of the originals backup (ADR 0018). */
     suspend fun setBackup(sourceId: Long, backup: Boolean) = withContext(Dispatchers.IO) {
         sourceDao.setBackup(sourceId, backup)
+    }
+
+    /** "Photos opened from other apps" backs up everything (true) or only edited photos (ADR 0018 FIX/W). */
+    fun handoffBackup(): Flow<Boolean> = HandoffBackup.observe(db)
+
+    suspend fun setHandoffBackup(everything: Boolean) = withContext(Dispatchers.IO) {
+        HandoffBackup.set(db, everything)
     }
 
     /** "Remove from library": hidden from every grid; files untouched. */

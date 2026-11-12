@@ -9,3 +9,7 @@ data object SettingsRoute
 /** The Sync screen inside Settings (ADR 0018). */
 @Serializable
 data object SyncSettingsRoute
+
+/** The Storage screen inside Settings (ADR 0018 amendment FIX/W). */
+@Serializable
+data object StorageRoute

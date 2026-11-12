@@ -72,7 +72,8 @@ class SyncEngine(
             copies += stats.copies
             meta.put(MetaEntity(KEY_TRACKING, serverId))
         }
-        val (pushed, conflicts) = push(api, info)
+        val (pushedFirst, conflicts) = push(api, info)
+        var pushed = pushedFirst
         val stats = pull(api, info, deviceName)
         if (cleanup) meta.put(MetaEntity(KEY_CLEANUP_PULLED, CLEANUP_VERSION))
         pulled += stats.applied
@@ -81,6 +82,13 @@ class SyncEngine(
         pulled += retried.applied
         copies += retried.copies
         parked = db.syncDao().inbox().size
+        // 0.5.4 (FIX/W), once and after a pull (so nothing newer is overwritten): this device's rotated photos go up
+        // again with their orientation, which older versions never sent (other devices showed them stretched).
+        if (meta.get(KEY_ORIENTATION) != ORIENTATION_VERSION) {
+            val marked = db.syncDao().markOrientedPhotosDirty(clock())
+            if (marked > 0) pushed += push(api, info).first
+            meta.put(MetaEntity(KEY_ORIENTATION, ORIENTATION_VERSION))
+        }
         val nas = pullNas(api, info)
         val lookups = lookup(api, info)
         var cleaned: CleanupReport? = null
@@ -235,7 +243,16 @@ class SyncEngine(
 
     /** Forgets the cursors (unpair, another server). */
     suspend fun resetCursors() {
-        for (key in listOf(KEY_CURSOR, KEY_NAS_CURSOR, KEY_TRACKING, KEY_LAST_SYNC, KEY_CLEANUP, KEY_CLEANUP_PULLED)) {
+        val keys = listOf(
+            KEY_CURSOR,
+            KEY_NAS_CURSOR,
+            KEY_TRACKING,
+            KEY_LAST_SYNC,
+            KEY_CLEANUP,
+            KEY_CLEANUP_PULLED,
+            KEY_ORIENTATION,
+        )
+        for (key in keys) {
             meta.delete(key)
         }
     }
@@ -251,6 +268,10 @@ class SyncEngine(
         const val KEY_CLEANUP = "sync.cleanup"
         const val KEY_CLEANUP_PULLED = "sync.cleanup.pulled"
         const val CLEANUP_VERSION = "1"
+
+        /** This device's rotated photos were pushed again with their orientation (FIX/W). */
+        const val KEY_ORIENTATION = "sync.orientation"
+        const val ORIENTATION_VERSION = "1"
         private const val DEFAULT_PUSH = 500
         private const val DEFAULT_PULL = 500
         private const val DEFAULT_LOOKUP = 1000

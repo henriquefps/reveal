@@ -1,6 +1,8 @@
 package dev.hfps.reveal.feature.library.viewer
 
 import android.graphics.Bitmap
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -8,6 +10,7 @@ import androidx.navigation.toRoute
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dev.hfps.image.format.PhotoMetadata
 import dev.hfps.reveal.data.db.PhotoEntity
+import dev.hfps.reveal.data.edit.HistoryWriter
 import dev.hfps.reveal.data.library.LibraryRepository
 import dev.hfps.reveal.data.library.OriginalPlace
 import dev.hfps.reveal.data.library.PhotoDetail
@@ -18,12 +21,15 @@ import dev.hfps.reveal.data.thumb.DisplayImage
 import dev.hfps.reveal.data.thumb.PhotoImages
 import dev.hfps.reveal.data.thumb.RegionSource
 import dev.hfps.reveal.data.thumb.ThumbnailRepository
+import dev.hfps.reveal.feature.library.ConflictChoice
 import dev.hfps.reveal.feature.library.ForgetPrompt
 import dev.hfps.reveal.feature.library.LibraryViewModel
 import dev.hfps.reveal.feature.library.UnavailableHelper
 import dev.hfps.reveal.feature.library.UnavailableInfo
 import dev.hfps.reveal.feature.library.ViewerRoute
 import dev.hfps.reveal.feature.library.scope
+import dev.hfps.reveal.sync.SyncRepository
+import dev.hfps.reveal.sync.engine.ConflictSide
 import javax.inject.Inject
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -62,6 +68,10 @@ data class ViewerUiState(
     val forgetPrompt: ForgetPrompt? = null,
     /** Bumped when access was re-checked, so the pages try their image again. */
     val reloads: Int = 0,
+    /** The open conflict chooser (ADR 0018 FIX/W); null = closed. */
+    val conflict: ConflictChoice? = null,
+    /** Bumped when a conflict was resolved, so the page asks again whether it has one. */
+    val conflictsResolved: Int = 0,
 )
 
 /**
@@ -75,6 +85,8 @@ class ViewerViewModel @Inject constructor(
     private val images: PhotoImages,
     val thumbnails: ThumbnailRepository,
     private val unavailableHelper: UnavailableHelper,
+    private val sync: SyncRepository,
+    private val writer: HistoryWriter,
 ) : ViewModel(),
     ViewerPages {
     private val route = savedState.toRoute<ViewerRoute>()
@@ -172,6 +184,32 @@ class ViewerViewModel @Inject constructor(
     fun flag(id: Long, flag: PickFlag) {
         viewModelScope.launch { library.setFlag(listOf(id), flag) }
     }
+
+    /** True when [id] has a sync conflict copy (the "Resolve conflict" button). */
+    suspend fun hasConflict(id: Long): Boolean = sync.conflictOfPhoto(id) != null
+
+    fun openConflict(id: Long, name: String) {
+        viewModelScope.launch {
+            writer.flush()
+            sync.conflictOfPhoto(id)?.let { pair -> _state.update { it.copy(conflict = ConflictChoice(name, pair)) } }
+        }
+    }
+
+    fun keepConflict(keepCopy: Boolean) {
+        val choice = _state.value.conflict ?: return
+        _state.update { it.copy(conflict = null) }
+        viewModelScope.launch {
+            writer.flush()
+            sync.keep(choice.pair, keepCopy)
+            _state.update { it.copy(conflictsResolved = it.conflictsResolved + 1, reloads = it.reloads + 1) }
+        }
+    }
+
+    fun dismissConflict() = _state.update { it.copy(conflict = null) }
+
+    /** A conflict side's thumbnail (its own edit). */
+    suspend fun conflictThumbnail(photoId: Long, side: ConflictSide): ImageBitmap? =
+        thumbnails.thumbnail(photoId, side.versionId, side.editTime)?.asImageBitmap()
 
     /** The version the editor opens for [id] (its first; virtual copies are M5). */
     suspend fun versionOf(id: Long): Long? = library.detail(id)?.versionId

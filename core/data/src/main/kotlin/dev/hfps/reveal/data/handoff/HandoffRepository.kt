@@ -463,6 +463,8 @@ class HandoffRepository(
             writable = true,
             addedAt = clock(),
             kind = SourceKind.HANDOFF,
+            // "Photos opened from other apps" in Settings -> Sync: only edited photos unless "Everything" (FIX/W).
+            backup = HandoffBackup.everything(db),
         ).let { it.copy(id = db.sourceDao().insert(it)) }
     }
 

@@ -71,6 +71,8 @@ data class LibraryUiState(
     val removePrompt: RemovePrompt? = null,
     /** Asking before "Delete from server" deletes this many selected Server photos; null = not asking. */
     val deleteServerPrompt: Int? = null,
+    /** The conflict chooser of a tapped conflict copy (ADR 0018 FIX/W); null = closed. */
+    val conflictChoice: ConflictChoice? = null,
 ) {
     /** The selected photos are Server photos ("Delete from server" applies to them). */
     val serverScope: Boolean get() = selection == LibrarySelection.Special(SpecialSource.SERVER)
@@ -134,6 +136,11 @@ data class LibraryActions(
     val onDeleteConflictCopies: () -> Unit = {},
     /** A tap on an unavailable photo: the explanation sheet. */
     val onOpenUnavailable: (PhotoRow) -> Unit = {},
+
+    /** A tap on a conflict copy: the chooser (FIX/W). */
+    val onOpenConflict: (PhotoRow) -> Unit = {},
+    val onKeepConflict: (keepCopy: Boolean) -> Unit = {},
+    val onConflictDismiss: () -> Unit = {},
     val onUnavailableDismiss: () -> Unit = {},
     val onOpenSender: () -> Unit = {},
     /** Re-checks access to these photos now. */

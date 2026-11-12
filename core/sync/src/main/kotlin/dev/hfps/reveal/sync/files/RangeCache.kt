@@ -11,7 +11,7 @@ import java.io.RandomAccessFile
  * one doubles the read-ahead up to [READ_AHEAD] blocks per request; a header read (thumbnails, capture times) costs one
  * block. [trim] keeps the cache under a cap, dropping the least recently used files whole.
  */
-class RangeCache(private val dir: File, private val maxBytes: Long = DEFAULT_MAX_BYTES) {
+class RangeCache(private val dir: File, private val maxBytes: () -> Long = { DEFAULT_MAX_BYTES }) {
     /** Per file: the block after the last one fetched, and the current read-ahead. */
     private val streams = java.util.concurrent.ConcurrentHashMap<String, Pair<Long, Int>>()
 
@@ -77,8 +77,9 @@ class RangeCache(private val dir: File, private val maxBytes: Long = DEFAULT_MAX
     fun trim() {
         val folders = dir.listFiles()?.filter { it.isDirectory }?.sortedBy { it.lastModified() } ?: return
         var total = folders.sumOf { folder -> folder.listFiles()?.sumOf { it.length() } ?: 0L }
+        val cap = maxBytes()
         for (folder in folders) {
-            if (total <= maxBytes) break
+            if (total <= cap) break
             val size = folder.listFiles()?.sumOf { it.length() } ?: 0L
             folder.deleteRecursively()
             total -= size
@@ -88,6 +89,19 @@ class RangeCache(private val dir: File, private val maxBytes: Long = DEFAULT_MAX
     fun clear() {
         streams.clear()
         dir.deleteRecursively()
+    }
+
+    /** Every cached file: its key, bytes and last read (the app's cache budget, ADR 0018 FIX/W). */
+    fun files(): List<Triple<String, Long, Long>> = dir.listFiles()?.filter { it.isDirectory }?.map { folder ->
+        Triple(folder.name, folder.listFiles()?.sumOf { it.length() } ?: 0L, folder.lastModified())
+    }.orEmpty()
+
+    /** Drops the cached blocks of [keys]. */
+    fun evict(keys: Collection<String>) {
+        for (key in keys) {
+            streams.remove(key)
+            File(dir, key).deleteRecursively()
+        }
     }
 
     companion object {

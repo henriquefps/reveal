@@ -9,6 +9,9 @@ import androidx.room.Update
 import dev.hfps.reveal.data.model.PickFlag
 import kotlinx.coroutines.flow.Flow
 
+/** A file's fingerprint and whether the server holds it (or its photo's original). */
+data class PrintedFile(val fingerprint: String, @ColumnInfo(name = "on_server") val onServer: Boolean)
+
 /** A photo with its main file, for the cloud work (lookups, previews, backups). */
 data class CloudCandidate(
     @ColumnInfo(name = "photo_id") val photoId: Long,
@@ -159,6 +162,32 @@ interface SyncDao {
 
     @Query("UPDATE photos SET rating = :rating, flag = :flag, label = :label, hidden = :hidden WHERE id = :id")
     suspend fun applyPhotoMetadata(id: Long, rating: Int, flag: PickFlag, label: String?, hidden: Boolean)
+
+    /**
+     * Every printed file and whether the sync server holds a copy Reveal can read instead (the file itself, or the
+     * photo's main file): Settings -> Storage keeps a hand-off's local preview unless this is true (FIX/W).
+     */
+    @Query(
+        "SELECT f.fingerprint AS fingerprint, " +
+            "(f.on_server = 1 OR COALESCE(c.original_on_server, 0) = 1) AS on_server FROM photo_files f " +
+            "LEFT JOIN photo_cloud c ON c.photo_id = f.photo_id WHERE f.fingerprint IS NOT NULL",
+    )
+    suspend fun printedFiles(): List<PrintedFile>
+
+    /** A Server photo's stored size and EXIF orientation from its record (FIX/W). */
+    @Query("UPDATE photos SET width = :width, height = :height, orientation = :orientation WHERE id = :id")
+    suspend fun setPhotoSize(id: Long, width: Int, height: Int, orientation: Int)
+
+    /**
+     * This device's photos whose orientation is not 1 and whose record the server already holds (rev > 0, not dirty):
+     * 0.5.3 and older pushed them without an orientation, so they are pushed again once (FIX/W).
+     */
+    @Query(
+        "UPDATE sync_records SET dirty = 1, modified_at = :now WHERE kind = 'photo' AND dirty = 0 AND deleted = 0 " +
+            "AND rev > 0 AND record_id IN (SELECT p.uuid FROM photos p JOIN sources s ON s.id = p.source_id " +
+            "WHERE s.kind != 'SERVER' AND p.orientation != 1 AND p.metadata_state = 'READ')",
+    )
+    suspend fun markOrientedPhotosDirty(now: Long): Int
 
     @Query("DELETE FROM history WHERE version_id = :versionId")
     suspend fun clearHistory(versionId: Long)

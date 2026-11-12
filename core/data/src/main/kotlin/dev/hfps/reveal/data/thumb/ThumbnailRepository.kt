@@ -27,7 +27,10 @@ import dev.hfps.reveal.data.library.DocumentTreeFactory
 import dev.hfps.reveal.data.model.FileRole
 import dev.hfps.reveal.data.model.SourceKind
 import dev.hfps.reveal.data.model.SourceState
+import dev.hfps.reveal.data.storage.CacheArea
+import dev.hfps.reveal.data.storage.CacheItem
 import dev.hfps.reveal.data.storage.DocumentTree
+import dev.hfps.reveal.data.storage.StorageKind
 import dev.hfps.reveal.data.storage.isAccessError
 import dev.hfps.reveal.data.sync.ServerTree
 import dev.hfps.reveal.pipeline.PIPELINE_VERSION
@@ -58,14 +61,17 @@ class ThumbnailRepository(
     private val edits: EditRepository,
     private val edited: EditedThumbnails?,
     private val dir: File,
-    private val maxBytes: Long = DEFAULT_MAX_BYTES,
+    /** The cap of this cache on its own; the app passes Settings' maximum cache size ([CacheBudget]). */
+    private val maxBytes: () -> Long = { DEFAULT_MAX_BYTES },
     private val clock: () -> Long = System::currentTimeMillis,
     /** Hand-offs Reveal can no longer read show their local preview (ADR 0011 "Unreadable hand-offs"). */
     private val previews: LocalPreviews? = null,
     /** Reads the server's copy of an unreadable hand-off (ADR 0011 "Fallbacks"); null without sync (tests). */
     private val resolver: ContentResolver? = null,
     private val serverAuthority: String? = null,
-) {
+    /** After a trim: the app's [CacheBudget] trims all caches together. */
+    private val onTrimmed: () -> Unit = {},
+) : CacheArea {
     private val fallbacks = HandoffFallbacks(db, previews, serverAuthority)
     private val cache = db.cacheDao()
     private val photos = db.photoDao()
@@ -377,7 +383,8 @@ class ThumbnailRepository(
     suspend fun trim() = withContext(io) {
         flushTouches()
         var total = cache.totalBytes()
-        while (total > maxBytes) {
+        val cap = maxBytes()
+        while (total > cap) {
             val oldest = cache.oldest(TRIM_BATCH)
             if (oldest.isEmpty()) break
             oldest.forEach { File(dir, it.fileName).delete() }
@@ -386,10 +393,26 @@ class ThumbnailRepository(
         }
         val known = cache.fileNames().toHashSet()
         dir.listFiles()?.filter { it.isFile && it.name !in known }?.forEach { it.delete() }
+        onTrimmed()
+    }
+
+    override val kind: StorageKind get() = StorageKind.THUMBNAILS
+
+    override suspend fun items(): List<CacheItem> = withContext(io) {
+        flushTouches()
+        cache.all().map { CacheItem(it.key, it.bytes, it.lastAccess) }
+    }
+
+    override suspend fun evict(keys: Collection<String>): Unit = withContext(io) {
+        keys.chunked(SQL_ARGS).forEach { chunk ->
+            cache.entries(chunk).forEach { File(dir, it.fileName).delete() }
+            cache.delete(chunk)
+        }
+        // The memory copies are keyed differently (photo and edit time); they go with their LRU.
     }
 
     /** Settings' "clear cache". */
-    suspend fun clear() = withContext(io) {
+    override suspend fun clear(): Unit = withContext(io) {
         memory.evictAll()
         cache.clear()
         dir.listFiles()?.forEach { it.delete() }

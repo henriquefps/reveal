@@ -271,4 +271,12 @@
         <item quantity="many">%1$d fotos excluídas do servidor</item>
         <item quantity="other">%1$d fotos excluídas do servidor</item>
     </plurals>
+    <string name="conflict_title">Duas versões desta foto</string>
+    <string name="conflict_body">Ela foi editada em dois aparelhos ao mesmo tempo. Mantenha uma: a outra é apagada em todos os aparelhos.</string>
+    <string name="conflict_main">Versão principal</string>
+    <string name="conflict_copy">Cópia de conflito</string>
+    <string name="conflict_this_device">Este aparelho</string>
+    <string name="conflict_device_unknown">Aparelho desconhecido</string>
+    <string name="conflict_keep">Manter esta</string>
+    <string name="viewer_resolve_conflict">Resolver conflito</string>
 </resources>

@@ -40,8 +40,17 @@ data class HistoryState(val steps: List<StoredStep>, val cursor: Int) {
 sealed interface HistoryOp {
     val versionId: Long
 
-    /** A committed step after the cursor (the redo steps above it are dropped). */
-    data class Commit(override val versionId: Long, val recipe: Recipe, val label: StepLabel) : HistoryOp
+    /**
+     * A committed step after the cursor (the redo steps above it are dropped). [onlyIfEmpty]: an automatic default
+     * (the lens profile of a new photo, ADR 0015) that lands only on a version still without history; when sync
+     * applied another device's edit in the meantime it is dropped, never stacked on top of that edit (FIX/W).
+     */
+    data class Commit(
+        override val versionId: Long,
+        val recipe: Recipe,
+        val label: StepLabel,
+        val onlyIfEmpty: Boolean = false,
+    ) : HistoryOp
 
     /** Undo, redo or a jump: the cursor moves to [position] (-1 = the base). */
     data class Move(override val versionId: Long, val position: Int) : HistoryOp
@@ -111,7 +120,9 @@ class EditRepository(private val db: RevealDatabase, private val clock: () -> Lo
         db.withTransaction {
             for (op in ops) {
                 when (op) {
-                    is HistoryOp.Commit -> if (op.label.changes.isNotEmpty()) {
+                    is HistoryOp.Commit -> if (op.label.changes.isNotEmpty() &&
+                        (!op.onlyIfEmpty || edits.history(op.versionId).isEmpty())
+                    ) {
                         commitStep(
                             op.versionId,
                             op.recipe,
@@ -258,7 +269,10 @@ class EditRepository(private val db: RevealDatabase, private val clock: () -> Lo
     }
 
     private suspend fun store(versionId: Long, recipe: Recipe, json: String) {
-        edits.putRecipe(RecipeEntity(versionId, json, isDefault = recipe.isUnedited(), updatedAt = clock()))
+        val now = clock()
+        edits.putRecipe(RecipeEntity(versionId, json, isDefault = recipe.isUnedited(), updatedAt = now))
+        // This device changed it (the conflict chooser names who edited each version, ADR 0018 FIX/W).
+        edits.markEdited(versionId, THIS_DEVICE, now)
         val photoId = photos.photoIdOfVersion(versionId) ?: return
         photos.setHasEdit(photoId, edits.photoHasEdit(photoId))
     }
@@ -325,8 +339,10 @@ class EditRepository(private val db: RevealDatabase, private val clock: () -> Lo
 
     private fun groupsInOrder(groups: Set<RecipeGroup>): List<RecipeGroup> = RecipeGroup.entries.filter { it in groups }
 
-    private companion object {
-        const val KEY_CLIPBOARD = "edits.clipboard"
-        const val KEY_PASTE_GROUPS = "edits.pasteGroups"
+    companion object {
+        /** `versions.edit_device` of an edit made on this device. */
+        const val THIS_DEVICE = ""
+        private const val KEY_CLIPBOARD = "edits.clipboard"
+        private const val KEY_PASTE_GROUPS = "edits.pasteGroups"
     }
 }

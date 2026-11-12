@@ -6,6 +6,22 @@ All notable changes to Reveal are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- Portrait photos from the "Server" place (shot with the camera held upright) no longer show stretched across a
+  landscape screen: their orientation now travels with sync, and photos already synced read it again from the server.
+- Opening a photo on a second device no longer makes a conflict copy or a second version of a photo edited on the
+  first: the automatic lens correction a newly opened photo gets is no longer counted as an edit.
+
+### Added
+- Resolving a conflict: tapping a conflict copy (or "Resolve conflict" in the viewer) shows both versions side by
+  side, with the device and time of each edit; "Keep this one" keeps it on every device (keeping the copy makes it the
+  photo's main version).
+- Settings → Sync: "Photos opened from other apps" backs up only the photos you edit (new default; existing installs
+  switch to it) or everything. Originals already on the server stay.
+- Settings → Storage: how much Reveal uses (thumbnails, server files, previews of photos from other apps, other caches,
+  the library and edits), "Clear cache" (never your edits, never a preview that is a photo's only copy) and a maximum
+  cache size (2 GB by default; the least recently used go first). Reveal never copies or moves your photos.
+
 ## [0.5.3] - 2026-11-12
 
 ### Changed

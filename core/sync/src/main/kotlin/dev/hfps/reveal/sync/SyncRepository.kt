@@ -12,6 +12,7 @@ import dev.hfps.reveal.sync.api.PairRequest
 import dev.hfps.reveal.sync.api.SyncApi
 import dev.hfps.reveal.sync.api.SyncHttpException
 import dev.hfps.reveal.sync.blobs.BlobUploader
+import dev.hfps.reveal.sync.engine.ConflictPair
 import dev.hfps.reveal.sync.engine.ServerChangedException
 import dev.hfps.reveal.sync.engine.ServerLibrary
 import dev.hfps.reveal.sync.engine.SyncEngine
@@ -276,6 +277,18 @@ class SyncRepository(
 
     /** Deletes a version (a conflict copy) here and on the other devices. */
     suspend fun deleteVersion(versionId: Long) = withContext(Dispatchers.IO) { store.deleteVersion(versionId) }
+
+    /** The conflict [versionId] belongs to (a copy, or the version it copies), or null (ADR 0018 FIX/W). */
+    suspend fun conflict(versionId: Long): ConflictPair? = withContext(Dispatchers.IO) { store.conflict(versionId) }
+
+    /** The conflict of [photoId] (its first conflict copy), or null (the viewer's "Resolve conflict"). */
+    suspend fun conflictOfPhoto(photoId: Long): ConflictPair? =
+        withContext(Dispatchers.IO) { store.conflictOfPhoto(photoId) }
+
+    /** "Keep this one": the other side goes here and, through sync, on every device. */
+    suspend fun keep(pair: ConflictPair, keepCopy: Boolean) = withContext(Dispatchers.IO) {
+        store.keep(pair, keepCopy)
+    }
 
     private fun problemOf(e: SyncHttpException): SyncProblem = when {
         e.unauthorized -> SyncProblem.UNAUTHORIZED

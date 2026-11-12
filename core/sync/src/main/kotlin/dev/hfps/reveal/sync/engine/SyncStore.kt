@@ -20,6 +20,7 @@ import dev.hfps.reveal.data.db.SyncRecordEntity
 import dev.hfps.reveal.data.db.SyncTriggers
 import dev.hfps.reveal.data.db.VersionEntity
 import dev.hfps.reveal.data.db.newUuid
+import dev.hfps.reveal.data.edit.EditRepository
 import dev.hfps.reveal.data.model.FileRole
 import dev.hfps.reveal.data.model.MetadataState
 import dev.hfps.reveal.data.model.PhotoFormat
@@ -175,6 +176,7 @@ class SyncStore(
             captureTime = photo.captureTime,
             width = photo.width,
             height = photo.height,
+            orientation = photo.orientation.takeIf { photo.metadataState == MetadataState.READ },
             hidden = photo.hidden,
             preview = cloud?.previewSha?.let { PreviewRef(it, cloud.previewWidth ?: 0, cloud.previewHeight ?: 0) },
         )
@@ -189,10 +191,10 @@ class SyncStore(
         val photo = photos.get(version.photoId) ?: return null
         val recipe = edits.recipe(version.id)
         val steps = edits.history(version.id)
-        // An unedited version nobody has seen needs nothing on the server (the other devices make their own).
-        if (record.rev == 0L && (recipe == null || recipe.isDefault) && steps.isEmpty() && version.copyOf == null) {
-            return null
-        }
+        // A version the user never edited needs nothing on the server: unedited, or only the lens profile default the
+        // editor adds when it opens a new photo (ADR 0015 "New photos"). The other devices make their own; pushing it
+        // made a second version or a conflict copy next to another device's real edit (FIX/W).
+        if (version.copyOf == null && isAutomatic(recipe, steps)) return null
         val cursor = edits.cursor(version.id) ?: (steps.size - 1)
         var history = steps.map { StepData(parse(it.recipeJson), parse(it.labelsJson)) }
         var offset = 0
@@ -455,6 +457,15 @@ class SyncStore(
      */
     private suspend fun refreshServerPhoto(photo: PhotoEntity, data: PhotoData) {
         updateServerFiles(photo, data)
+        val orientation = data.orientation?.coerceIn(1, MAX_ORIENTATION)
+        val width = data.width
+        val height = data.height
+        if (orientation != null && width != null && height != null) {
+            val size = Triple(width, height, orientation)
+            if (size != Triple(photo.width, photo.height, photo.orientation)) {
+                sync.setPhotoSize(photo.id, width, height, orientation)
+            }
+        }
         sync.cloud(photo.id)?.takeIf { !it.originalOnServer && it.checkedAt > 0 }?.let {
             sync.putCloud(it.copy(checkedAt = 0))
         }
@@ -501,8 +512,14 @@ class SyncStore(
             captureTime = data.captureTime,
             width = data.width,
             height = data.height,
-            // Without a capture time from the other device, the header is read by range like a NAS photo's.
-            metadataState = if (data.captureTime == null) MetadataState.PENDING else MetadataState.READ,
+            orientation = data.orientation?.coerceIn(1, MAX_ORIENTATION) ?: 1,
+            // Without a capture time or an orientation from the other device (0.5.3 and older sent none), the header
+            // is read by range like a NAS photo's: a portrait shot would otherwise show stretched (FIX/W).
+            metadataState = if (data.captureTime == null || data.orientation == null) {
+                MetadataState.PENDING
+            } else {
+                MetadataState.READ
+            },
             addedAt = now,
         )
         val id = photos.insertPhoto(entity)
@@ -544,6 +561,9 @@ class SyncStore(
             name = data.name,
             copyOf = record.copyOf ?: target.copyOf,
             copyDevice = copyDevice ?: target.copyDevice,
+            // Who made this state, and when (the conflict chooser, FIX/W).
+            editDevice = deviceName(record.deviceId) ?: record.deviceId.take(DEVICE_SHORT),
+            editedAt = record.modifiedAt.takeIf { it > 0 },
         )
         if (updated != target) sync.updateVersion(updated)
         writeEdit(target.id, data)
@@ -568,14 +588,26 @@ class SyncStore(
         return entity.copy(id = id)
     }
 
-    /** A local version nobody edited and the server never saw: safe to become the incoming one. */
+    /**
+     * A local version nobody edited and the server never saw: safe to become the incoming one. The lens profile default
+     * the editor adds on opening a photo is not an edit (FIX/W): such a version adopts another device's edit too.
+     */
     private suspend fun isUntouched(version: VersionEntity): Boolean {
         if (version.copyOf != null) return false
         val record = sync.record(Kinds.VERSION, version.uuid)
         if (record != null && record.rev > 0) return false
-        val recipe = edits.recipe(version.id)
-        return (recipe == null || recipe.isDefault) && edits.history(version.id).isEmpty()
+        return isAutomatic(edits.recipe(version.id), edits.history(version.id))
     }
+
+    /**
+     * True when neither the committed recipe nor any history step holds a user edit: no steps, or only the automatic
+     * lens profile default ([dev.hfps.reveal.pipeline.recipe.Recipe.isUnedited], whose `is_default` the recipe row
+     * stores). An undo past a real edit keeps that edit's step, so it never reads as automatic.
+     */
+    private fun isAutomatic(recipe: RecipeEntity?, steps: List<HistoryEntity>): Boolean =
+        (recipe == null || recipe.isDefault) && steps.all { step ->
+            runCatching { RecipeCodec.Default.decode(step.recipeJson).isUnedited() }.getOrDefault(false)
+        }
 
     private suspend fun writeEdit(versionId: Long, data: VersionData) {
         val now = clock()
@@ -631,6 +663,79 @@ class SyncStore(
         } else {
             sync.deleteRecord(Kinds.VERSION, version.uuid)
         }
+    }
+
+    // ------------------------------------------------------------------ conflict chooser
+
+    /**
+     * The two sides of a conflict (ADR 0018 amendment FIX/W): [versionId] is a conflict copy or the version it copies
+     * (then its first copy). The main side is the version the copy names (`copy_of`), else the photo's first one.
+     */
+    suspend fun conflict(versionId: Long): ConflictPair? = db.withTransaction {
+        val photoId = photos.photoIdOfVersion(versionId) ?: return@withTransaction null
+        val versions = sync.versionsOf(photoId)
+        val picked = versions.firstOrNull { it.id == versionId } ?: return@withTransaction null
+        val copy = if (picked.copyOf != null) picked else versions.firstOrNull { it.copyOf == picked.uuid }
+        copy ?: return@withTransaction null
+        val main = versions.firstOrNull { it.uuid == copy.copyOf && it.copyOf == null }
+            ?: versions.firstOrNull { it.copyOf == null } ?: return@withTransaction null
+        ConflictPair(photoId, side(main, copy = false), side(copy, copy = true))
+    }
+
+    /** The conflict of [photoId]'s first conflict copy, or null when it has none. */
+    suspend fun conflictOfPhoto(photoId: Long): ConflictPair? {
+        val copy = sync.versionsOf(photoId).firstOrNull { it.copyOf != null } ?: return null
+        return conflict(copy.id)
+    }
+
+    private suspend fun side(version: VersionEntity, copy: Boolean): ConflictSide {
+        val recipe = edits.recipe(version.id)
+        return ConflictSide(
+            versionId = version.id,
+            device = version.editDevice ?: version.copyDevice.takeIf { copy },
+            editedAt = version.editedAt ?: recipe?.updatedAt,
+            editTime = recipe?.takeIf { !it.isDefault }?.updatedAt,
+            copy = copy,
+        )
+    }
+
+    /**
+     * "Keep this one" in the conflict chooser: keeping the main version deletes the copy; keeping the copy makes its
+     * edit (recipe, history, cursor) the main version's, as a change of this device, then deletes the copy. Either way
+     * the copy's tombstone and the main version's new state go to the other devices with the next sync.
+     */
+    suspend fun keep(pair: ConflictPair, keepCopy: Boolean) {
+        db.withTransaction {
+            if (keepCopy) {
+                val from = pair.copy.versionId
+                val into = pair.main.versionId
+                val steps = edits.history(from)
+                sync.clearHistory(into)
+                if (steps.isNotEmpty()) {
+                    sync.insertHistory(steps.map { it.copy(id = 0, versionId = into, createdAt = clock()) })
+                }
+                val cursor = edits.cursor(from) ?: (steps.size - 1)
+                edits.setCursor(HistoryCursorEntity(into, cursor.coerceIn(-1, steps.lastIndex)))
+                val recipe = edits.recipe(from)
+                val now = clock()
+                if (recipe != null) {
+                    edits.putRecipe(recipe.copy(versionId = into, updatedAt = now))
+                } else {
+                    edits.putRecipe(
+                        RecipeEntity(
+                            into,
+                            RecipeCodec.Default.encode(DEFAULT_RECIPE),
+                            isDefault = true,
+                            updatedAt = now,
+                        ),
+                    )
+                }
+                edits.markEdited(into, EditRepository.THIS_DEVICE, now)
+                photos.setHasEdit(pair.photoId, edits.photoHasEdit(pair.photoId))
+            }
+            deleteVersion(pair.copy.versionId)
+        }
+        RemoteEdits.announce(setOf(pair.main.versionId))
     }
 
     // ------------------------------------------------------------------ NAS files and lookups
@@ -814,6 +919,7 @@ class SyncStore(
         /** `sources.tree_uri` of the Server source (unique, never a real URI). */
         const val SERVER_TREE = "reveal-sync:server"
         private const val MAX_RATING = 5
+        private const val MAX_ORIENTATION = 8
         private const val FP_SUFFIX = 12
         private const val DEVICE_SHORT = 8
         private const val DROP_FRACTION = 4

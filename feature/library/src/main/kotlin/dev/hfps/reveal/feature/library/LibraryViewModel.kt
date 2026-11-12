@@ -441,6 +441,28 @@ class LibraryViewModel @Inject constructor(
 
     fun dismissUnavailable() = _state.update { it.copy(unavailableInfo = null) }
 
+    /** A conflict copy was tapped: both versions side by side (ADR 0018 FIX/W). */
+    fun openConflict(row: PhotoRow) {
+        viewModelScope.launch {
+            writer.flush()
+            sync.conflict(row.versionId)?.let { pair ->
+                _state.update { it.copy(conflictChoice = ConflictChoice(row.name, pair)) }
+            }
+        }
+    }
+
+    /** "Keep this one": the other version goes here and, through sync, on every device. */
+    fun keepConflict(keepCopy: Boolean) {
+        val choice = _state.value.conflictChoice ?: return
+        _state.update { it.copy(conflictChoice = null) }
+        viewModelScope.launch {
+            writer.flush()
+            sync.keep(choice.pair, keepCopy)
+        }
+    }
+
+    fun dismissConflict() = _state.update { it.copy(conflictChoice = null) }
+
     fun openSender() {
         _state.value.unavailableInfo?.let(unavailable::openApp)
     }

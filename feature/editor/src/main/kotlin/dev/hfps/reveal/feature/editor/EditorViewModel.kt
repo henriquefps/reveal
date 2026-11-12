@@ -770,7 +770,9 @@ class EditorViewModel @Inject constructor(
         val edit = _state.value.edit
         val optics = Optics.forNewPhoto(hasProfile = true, profileHasCa = lens.hasChromatic, isRaw = input.isRaw)
         if (edit.history.entries.isEmpty() && optics != edit.recipe.optics) {
-            editAndCommit(HistoryAction.LENS_PROFILE) { it.copy(optics = optics) }
+            // Only onto a still empty stored history: another device's edit synced meanwhile wins (FIX/W).
+            edit { it.copy(optics = optics) }
+            commitWith(HistoryAction.LENS_PROFILE, onlyIfEmpty = true)
         }
     }
 
@@ -915,7 +917,11 @@ class EditorViewModel @Inject constructor(
         commitWith(action, groups)
     }
 
-    private fun commitWith(action: HistoryAction?, groups: List<RecipeGroup> = emptyList()) {
+    private fun commitWith(
+        action: HistoryAction?,
+        groups: List<RecipeGroup> = emptyList(),
+        onlyIfEmpty: Boolean = false,
+    ) {
         val edit = _state.value.edit
         val history = edit.history.commit(edit.recipe, action, groups)
         if (history == null) {
@@ -923,7 +929,9 @@ class EditorViewModel @Inject constructor(
             return
         }
         _state.update { it.copy(edit = it.edit.copy(history = history)) }
-        versionId?.let { writer.write(HistoryOp.Commit(it, history.current, history.entries[history.cursor].label)) }
+        versionId?.let {
+            writer.write(HistoryOp.Commit(it, history.current, history.entries[history.cursor].label, onlyIfEmpty))
+        }
     }
 
     /**

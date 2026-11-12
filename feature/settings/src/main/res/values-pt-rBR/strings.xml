@@ -50,8 +50,9 @@
     <string name="sync_previews_subtitle">Uma cópia editável (cerca de 2560 px, poucos MB) das fotos editadas cujo original não chega ao servidor, para os outros aparelhos continuarem a edição. Notas, marcações e rótulos sincronizam sem ela.</string>
     <string name="sync_originals">Backup dos originais</string>
     <string name="sync_originals_subtitle">Fotos que só este aparelho tem são enviadas uma vez: as fotos que você editar, e todas as fotos de uma pasta marcada como “Tudo”. Fotos que o servidor já tem, como as das pastas do NAS, nunca são.</string>
-    <string name="sync_folders_hint">Cada pasta faz backup dos originais das fotos que você editar; ligue uma para fazer backup de todas as fotos dela.</string>
+    <string name="sync_folders_hint">Cada pasta faz backup dos originais das fotos que você editar; ligue uma para fazer backup de todas as fotos dela. Voltar para “Só as fotos que você editar” não apaga os originais que já estão no servidor.</string>
     <string name="sync_wifi_only">Originais só pelo Wi-Fi</string>
+    <string name="sync_handoff_backup">Fotos abertas de outros apps</string>
     <string name="sync_section_folders">O que cada pasta envia</string>
     <string name="sync_folder_everything">Tudo: todas as fotos que o servidor ainda não tem</string>
     <string name="sync_folder_edited">Só as fotos que você editar</string>
@@ -76,4 +77,30 @@
         <item quantity="other">%d fotos só no servidor</item>
     </plurals>
     <string name="sync_cleartext">Este servidor é acessado por HTTP sem criptografia: use esse endereço só na rede de casa ou no Tailscale, e HTTPS (um túnel ou proxy reverso) em qualquer outro lugar.</string>
+    <string name="settings_storage_subtitle">Miniaturas, prévias, edições; limpar o cache</string>
+    <string name="storage_title">Armazenamento</string>
+    <string name="storage_measuring">Medindo…</string>
+    <string name="storage_total">O Reveal usa %1$s neste aparelho</string>
+    <string name="storage_photos_note">O Reveal nunca copia nem move suas fotos: os originais ficam onde estão (cartão da câmera, galeria, pastas, compartilhamentos de rede). O Reveal guarda só miniaturas, prévias e suas edições (receitas), além de partes de originais do servidor enquanto você os vê. As fotos editadas têm backup no seu servidor quando o aparelho está pareado.</string>
+    <string name="storage_section_used">O que o Reveal guarda</string>
+    <string name="storage_thumbnails">Miniaturas</string>
+    <string name="storage_thumbnails_note">Imagens da grade e da tira de fotos, refeitas quando preciso</string>
+    <string name="storage_server_files">Arquivos do servidor</string>
+    <string name="storage_server_files_note">Partes de originais e prévias do seu servidor, guardadas enquanto você as vê</string>
+    <string name="storage_handoff_previews">Fotos de outros apps</string>
+    <string name="storage_handoff_previews_note">Prévias de fotos que outros apps compartilharam com o Reveal</string>
+    <string name="storage_handoff_previews_kept">%1$s são a única cópia de fotos e ficam</string>
+    <string name="storage_other">Outros</string>
+    <string name="storage_other_note">Exportações em andamento, arquivos compartilhados, prévias sendo enviadas ao servidor</string>
+    <string name="storage_library">Biblioteca e edições</string>
+    <string name="storage_library_note">Suas edições, notas e a biblioteca. Nunca são apagadas.</string>
+    <string name="storage_section_max">Tamanho máximo do cache</string>
+    <string name="storage_max_note">Miniaturas e arquivos do servidor ficam juntos abaixo deste tamanho; os usados há mais tempo saem primeiro.</string>
+    <string name="storage_section_clear">Limpar o cache</string>
+    <string name="storage_clear_note">Libera miniaturas, arquivos do servidor e outros arquivos em cache. Nunca suas edições, nunca a biblioteca, nunca uma prévia que seja a única cópia de uma foto.</string>
+    <string name="storage_clear">Limpar o cache</string>
+    <string name="storage_clear_title">Limpar o cache?</string>
+    <string name="storage_clear_body">Miniaturas e prévias são refeitas quando você abre a biblioteca ou uma foto, e os arquivos do servidor são lidos de novo do seu servidor. Suas fotos e edições não são tocadas.</string>
+    <string name="storage_cancel">Cancelar</string>
+    <string name="storage_freed">%1$s liberados</string>
 </resources>

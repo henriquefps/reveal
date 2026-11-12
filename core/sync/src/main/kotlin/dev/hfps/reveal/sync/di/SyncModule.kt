@@ -14,6 +14,7 @@ import dev.hfps.reveal.data.export.Authorship
 import dev.hfps.reveal.data.export.ExportPreferences
 import dev.hfps.reveal.data.handoff.LocalPreviews
 import dev.hfps.reveal.data.library.DocumentTreeFactory
+import dev.hfps.reveal.data.storage.CacheBudget
 import dev.hfps.reveal.pipeline.preview.SmartPreviewMaker
 import dev.hfps.reveal.sync.SyncRepository
 import dev.hfps.reveal.sync.account.KeystoreSecretStore
@@ -89,6 +90,7 @@ object SyncModule {
         @ApplicationContext context: Context,
         database: RevealDatabase,
         accounts: SyncAccountStore,
+        budget: CacheBudget,
     ): ServerFiles = ServerFiles(
         db = database,
         api = {
@@ -97,7 +99,9 @@ object SyncModule {
             if (account == null || key == null) null else SyncApi(account.url, key)
         },
         cacheDir = context.cacheDir,
-    )
+        maxBytes = budget::cap,
+        onTrimmed = budget::requestTrim,
+    ).also { files -> files.areas.forEach(budget::register) }
 
     @Provides
     @Singleton

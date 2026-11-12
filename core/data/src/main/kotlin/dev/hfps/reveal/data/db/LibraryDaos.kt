@@ -440,6 +440,10 @@ data class HandoffTwin(
 
 @Dao
 interface EditDao {
+    /** Who changed the version's edit last and when (ADR 0018 FIX/W); no sync trigger watches these columns. */
+    @Query("UPDATE versions SET edit_device = :device, edited_at = :at WHERE id = :versionId")
+    suspend fun markEdited(versionId: Long, device: String?, at: Long?)
+
     @Query("SELECT * FROM recipes WHERE version_id = :versionId")
     suspend fun recipe(versionId: Long): RecipeEntity?
 
@@ -494,6 +498,12 @@ interface CacheDao {
 
     @Query("SELECT * FROM cache_entries ORDER BY last_access LIMIT :limit")
     suspend fun oldest(limit: Int): List<CacheEntryEntity>
+
+    @Query("SELECT * FROM cache_entries")
+    suspend fun all(): List<CacheEntryEntity>
+
+    @Query("SELECT * FROM cache_entries WHERE `key` IN (:keys)")
+    suspend fun entries(keys: List<String>): List<CacheEntryEntity>
 
     @Query("SELECT file_name FROM cache_entries")
     suspend fun fileNames(): List<String>

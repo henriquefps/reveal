@@ -152,6 +152,9 @@ fun LibraryScreen(
             },
             onApplyPreset = { choosingPreset = true },
             onOpenUnavailable = viewModel::explain,
+            onOpenConflict = viewModel::openConflict,
+            onKeepConflict = viewModel::keepConflict,
+            onConflictDismiss = viewModel::dismissConflict,
             onUnavailableDismiss = viewModel::dismissUnavailable,
             onOpenSender = viewModel::openSender,
             onTryAgain = viewModel::tryAgain,
@@ -194,6 +197,16 @@ fun LibraryScreen(
     }
     state.forgetPrompt?.let { prompt ->
         ForgetDialog(prompt, onConfirm = actions.onForgetConfirm, onDismiss = actions.onForgetDismiss)
+    }
+    state.conflictChoice?.let { choice ->
+        ConflictSheet(
+            choice = choice,
+            thumbnail = { side ->
+                viewModel.thumbnails.thumbnail(choice.pair.photoId, side.versionId, side.editTime)?.asImageBitmap()
+            },
+            onKeep = actions.onKeepConflict,
+            onDismiss = actions.onConflictDismiss,
+        )
     }
     ServerViewDialogs(state, actions)
     if (choosingPreset) {

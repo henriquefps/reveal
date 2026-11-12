@@ -50,8 +50,9 @@
     <string name="sync_previews_subtitle">A developable copy (about 2560 px, a few MB) of edited photos whose original cannot reach the server, so your other devices can keep editing them. Ratings, flags and labels sync without one.</string>
     <string name="sync_originals">Back up originals</string>
     <string name="sync_originals_subtitle">Photos only this device has are uploaded once: the photos you edit, and every photo of a folder set to “Everything”. Photos the server already has, such as its NAS folders, never are.</string>
-    <string name="sync_folders_hint">Each folder backs up the originals of the photos you edit; switch one on to back up all its photos.</string>
+    <string name="sync_folders_hint">Each folder backs up the originals of the photos you edit; switch one on to back up all its photos. Switching to “Only photos you edit” never deletes originals already on the server.</string>
     <string name="sync_wifi_only">Originals over Wi-Fi only</string>
+    <string name="sync_handoff_backup">Photos opened from other apps</string>
     <string name="sync_section_folders">What each folder backs up</string>
     <string name="sync_folder_everything">Everything: every photo the server does not have yet</string>
     <string name="sync_folder_edited">Only photos you edit</string>
@@ -73,4 +74,30 @@
         <item quantity="other">%d photos only on the server</item>
     </plurals>
     <string name="sync_cleartext">This server is reached over plain HTTP: use that address only on your home network or Tailscale, and HTTPS (a tunnel or a reverse proxy) anywhere else.</string>
+    <string name="settings_storage_subtitle">Thumbnails, previews, edits; clear the cache</string>
+    <string name="storage_title">Storage</string>
+    <string name="storage_measuring">Measuring…</string>
+    <string name="storage_total">Reveal uses %1$s on this device</string>
+    <string name="storage_photos_note">Reveal never copies or moves your photos: originals stay where they are (camera card, gallery, folders, network shares). Reveal stores only thumbnails, previews and your edits (recipes), plus parts of server originals while you view them. Edited photos are backed up to your server when you are paired.</string>
+    <string name="storage_section_used">What Reveal stores</string>
+    <string name="storage_thumbnails">Thumbnails</string>
+    <string name="storage_thumbnails_note">Grid and filmstrip pictures, made again when needed</string>
+    <string name="storage_server_files">Server files</string>
+    <string name="storage_server_files_note">Parts of originals and previews from your server, kept while you view them</string>
+    <string name="storage_handoff_previews">Photos from other apps</string>
+    <string name="storage_handoff_previews_note">Previews of photos other apps shared with Reveal</string>
+    <string name="storage_handoff_previews_kept">%1$s of them are a photo\'s only copy and stay</string>
+    <string name="storage_other">Other</string>
+    <string name="storage_other_note">Exports in progress, shared files, previews being sent to your server</string>
+    <string name="storage_library">Library and edits</string>
+    <string name="storage_library_note">Your edits, ratings and the library. Never cleared.</string>
+    <string name="storage_section_max">Maximum cache size</string>
+    <string name="storage_max_note">Thumbnails and server files stay under this size together; the least recently used go first.</string>
+    <string name="storage_section_clear">Clear cache</string>
+    <string name="storage_clear_note">Frees thumbnails, server files and other cached files. Never your edits, never the library, never a preview that is a photo\'s only copy.</string>
+    <string name="storage_clear">Clear cache</string>
+    <string name="storage_clear_title">Clear the cache?</string>
+    <string name="storage_clear_body">Thumbnails and previews are made again when you open the library or a photo, and server files are read again from your server. Your photos and edits are not touched.</string>
+    <string name="storage_cancel">Cancel</string>
+    <string name="storage_freed">Freed %1$s</string>
 </resources>

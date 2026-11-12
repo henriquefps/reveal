@@ -324,6 +324,62 @@ a folder again and on another device; delete from server; a server before 0.5.3;
 `TestDeletingAnOriginal`, `TestDeletingAnOriginalNeverTouchesNasFiles`, `TestATombstoneReleasesItsPreview`.
 Instrumented: `ServerViewFlowTest` against the real server.
 
+## Amendment 2026-11-12 (FIX/W, 0.5.4): orientation, lens default, conflict chooser, hand-off backup, storage
+
+Owner reports on 0.5.3 (phone and tablet paired; live sync works).
+
+- **Stretched Server photos.** `photo.data` carried `width` / `height` (the stored, sensor size) but no orientation, so
+  another device filed a portrait shot with `orientation = 1` and `metadata_state = READ` (a capture time was there):
+  the header was never read and the viewer, which takes the full size from the photo when the camera JPEG is not on
+  the server, stretched the upright image over a landscape size. Now `photo.data.orientation` (the main file's EXIF
+  1..8, sent only once the header is read) is filed with Server photos and updated by later records; a record without
+  it (0.5.3 and older) leaves the photo `PENDING`, so its header is read by range like a NAS photo's. Database v11
+  sets every Server photo `PENDING` once (only `metadata_state`, which no trigger watches), and the first sync after
+  updating pushes this device's rotated photos again after its pull (`SyncEngine.KEY_ORIENTATION`), so the other
+  devices learn it. The viewer also reconciles: `DisplayImage.of` / `UprightSize.match` turns a full size whose
+  orientation disagrees with the decoded upright image when the swap matches it (3 % tolerance).
+- **Conflicts nobody made.** Cause (reproduced in `SyncPolishTest`): opening a photo commits the lens profile default
+  (ADR 0015 "New photos"), a history step; the version then counted as edited, so it was pushed under its own id and an
+  incoming edit of the same photo could no longer adopt it (`isUntouched` wanted no history): a second version on both
+  devices, or, when the step landed on a version both knew, a conflict copy. Decision: **the automatic default never
+  makes a version an edit for sync.** A version whose committed recipe and every history step are unedited
+  (`Recipe.isUnedited`: default or exactly the new-photo lens default) and that is not a copy is never pushed (any rev)
+  and is adopted by an incoming version like an untouched one. The editor commits the default with
+  `HistoryOp.Commit(onlyIfEmpty = true)`: it lands only on a still empty stored history, so an edit sync applied while
+  the editor was opening wins (the open editor reloads it through `RemoteEdits`). An undo past a real edit keeps that
+  step, so it never reads as automatic. Consequence: undoing the lens step alone on a never-edited photo is not synced
+  (each device applies its own default anyway).
+- **Conflict chooser.** Tapping a conflict copy (or "Resolve conflict" in the viewer of a photo that has one) opens
+  `ConflictSheet`: the main version and the copy side by side, each with its own edited thumbnail, the device and time
+  of its last change, and "Keep this one". `versions.edit_device` / `edited_at` (database v11; "" = this device, a
+  device name for an applied record, null = unknown for older rows) record who changed a version last
+  (`EditRepository.store` for local edits, `SyncStore.applyVersion` for pulled ones). `SyncStore.keep`: keeping the
+  main version deletes the copy (its tombstone, as "Delete conflict copies"); keeping the copy copies its recipe,
+  history and cursor onto the main version as this device's change, then deletes the copy, so every device ends with
+  one version holding the kept edit.
+- **Hand-off backup.** "Photos opened from other apps" acted like a folder with "Everything" and was never asked.
+  Settings -> Sync now lists it with the folders: "Only photos you edit" (default) or "Everything"
+  (`HandoffBackup`: `meta` `sync.handoffBackup` plus the hand-off source's `sources.backup`, set when the source is
+  made). Database v11 moves existing installs to "Only photos you edit"; originals already uploaded stay (deleting from
+  the server is manual).
+- **Storage** (Settings -> Storage, `AppStorage`, `CacheBudget` in `:core:data/storage`): usage by kind (thumbnails,
+  server files = range blocks + server previews, photos from other apps = hand-off local previews, other cached files
+  and previews being uploaded, library and edits = the database), "Clear cache" and a maximum cache size (500 MB to
+  10 GB, default 2 GB). Thumbnails and the two server caches are `CacheArea`s: each caps itself at the maximum on its
+  own writes and asks for a global least-recently-used trim across all of them (at most every 30 s). "Clear cache"
+  empties the areas and other cached files older than 10 minutes (an export in progress stays), and deletes a hand-off
+  preview only when its photo is gone or the server holds the original: a preview that is a photo's only readable
+  copy is kept and the screen says how much. Never the database, never an edit. The screen explains that Reveal never
+  copies or moves photos. No "free up space by deleting originals" (owner's decision).
+
+Tests: `SyncPolishTest` (JVM, two devices, `FakeSyncServer`): orientation filed, a record without it read again and
+fixed by a later record, the one-off re-push; edit on one device + open on the other = one version, no copy; both
+only opened = nothing pushed, later edit adopted; the default dropped on a non-empty history; the chooser's sides, keeping
+either side on both devices. `AppStorageTest` (LRU across areas, usage, what clear keeps, `UprightSize`),
+`EditRepositoryTest`, `HandoffRepositoryTest`, `RevealDatabaseMigrationTest` (10 -> 11). Goldens
+`sync/phone_conflict_chooser_*`, `sync/tablet_conflict_chooser_dark`, `sync/*_storage_*`, `sync/phone_paired_*`,
+`export/phone_settings_light`. Instrumented: `dev.hfps.reveal.sync.ConflictChooserTest`.
+
 ## Consequences
 
 - The grid now has one cell per version (a photo with a conflict copy has two); selection stays per photo.

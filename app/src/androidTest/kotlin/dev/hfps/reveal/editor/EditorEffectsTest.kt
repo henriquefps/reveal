@@ -110,9 +110,9 @@ class EditorEffectsTest {
         .fetchSemanticsNode().config.contains(SemanticsProperties.Disabled)
 
     /**
-     * Numeric entry of [text] on [id]'s slider, each step awaited on a condition: no entry dialog open, then exactly one
-     * field, then the dialog gone after Done, then the value label changed (retries once: on a busy phone the first
-     * tap can land before the row settles after scrolling; a second dialog is never opened over the first).
+     * Numeric entry of [text] on [id]'s slider, each step awaited on a condition: no entry dialog open, then exactly
+     * one field, then the dialog gone after Done, then the value label changed (retries once: on a busy phone the
+     * first tap can land before the row settles after scrolling; a second dialog is never opened over the first).
      */
     private fun type(id: ControlId, text: String) {
         val before = value(id)
@@ -206,6 +206,5 @@ class EditorEffectsTest {
         const val TIMEOUT_MS = 30_000L
         const val SETTLE_MS = 600L
         const val RETRY_MS = 3_000L
-        const val POLL_MS = 50L
     }
 }

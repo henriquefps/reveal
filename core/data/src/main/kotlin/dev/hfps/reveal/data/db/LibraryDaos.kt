@@ -47,6 +47,11 @@ data class PhotoRow(
     @ColumnInfo(name = "cloud_preview") val cloudPreview: Boolean = false,
     /** The photo lives only on the sync server (the Server source): no file on this device. */
     val remote: Boolean = false,
+    /**
+     * Reveal can no longer read one of its files (a hand-off whose temporary grant ended, ADR 0011): it shows and edits
+     * its local preview ("preview only").
+     */
+    val unreadable: Boolean = false,
 ) {
     /** The grid's key: the photo for its first version, the version for a copy (two cells of one photo). */
     val gridKey: Any get() = if (versionPosition == 0) id else "v$versionId"
@@ -303,15 +308,96 @@ interface PhotoDao {
     @Query("DELETE FROM photos WHERE id IN (:ids)")
     suspend fun deletePhotos(ids: List<Long>)
 
-    @Query("SELECT document_id FROM photo_files WHERE photo_id IN (:photoIds)")
-    suspend fun documentIdsOf(photoIds: List<Long>): List<String>
+    @Query("SELECT * FROM photo_files WHERE photo_id IN (:photoIds)")
+    suspend fun filesOf(photoIds: List<Long>): List<PhotoFileEntity>
 
     @Query("UPDATE photos SET last_opened_at = :time WHERE id = :id")
     suspend fun setOpened(id: Long, time: Long)
 
     @Query("UPDATE photos SET has_edit = :hasEdit WHERE id = :id")
     suspend fun setHasEdit(id: Long, hasEdit: Boolean)
+
+    // ---- unreadable documents (ADR 0011 "Unreadable hand-offs")
+
+    /** Marks the files of [documentId] that are not marked yet: access was refused or the document is gone. */
+    @Query(
+        "UPDATE photo_files SET unreadable_at = :time WHERE document_id = :documentId AND unreadable_at IS NULL",
+    )
+    suspend fun setUnreadable(documentId: String, time: Long): Int
+
+    /** Clears the mark of [documentId]: it was read again. */
+    @Query("UPDATE photo_files SET unreadable_at = NULL WHERE document_id = :documentId AND unreadable_at IS NOT NULL")
+    suspend fun setReadable(documentId: String): Int
+
+    /** How many of [versionIds] are versions of a photo with an unreadable file. */
+    @Query(
+        "SELECT COUNT(*) FROM versions v WHERE v.id IN (:versionIds) AND EXISTS (SELECT 1 FROM photo_files f " +
+            "WHERE f.photo_id = v.photo_id AND f.unreadable_at IS NOT NULL)",
+    )
+    suspend fun unreadableVersions(versionIds: List<Long>): Int
+
+    /** Every file of the hand-off source (the access check). */
+    @Query("SELECT f.* FROM photo_files f JOIN sources s ON s.id = f.source_id WHERE s.kind = 'HANDOFF'")
+    suspend fun handoffFiles(): List<PhotoFileEntity>
+
+    /** Unreadable hand-off documents (the gallery access offer looks for MediaStore ones). */
+    @Query(
+        "SELECT f.document_id FROM photo_files f JOIN sources s ON s.id = f.source_id JOIN photos p ON " +
+            "p.id = f.photo_id WHERE s.kind = 'HANDOFF' AND f.unreadable_at IS NOT NULL AND p.hidden = 0",
+    )
+    fun observeUnreadableHandoffs(): Flow<List<String>>
+
+    // ---- one photo across sources (ADR 0011 "One photo across sources")
+
+    /**
+     * Pairs of a hand-off file and a file of the available folder [folderSourceId] with the same fingerprint, whose
+     * photo was not removed from the library: the hand-off photos that are a folder photo too.
+     */
+    @Query(
+        "SELECT h.photo_id AS handoff_photo_id, f.photo_id AS folder_photo_id, h.role AS handoff_role, " +
+            "f.role AS folder_role FROM photo_files f JOIN photo_files h ON h.fingerprint = f.fingerprint " +
+            "JOIN sources fs ON fs.id = f.source_id JOIN sources hs ON hs.id = h.source_id " +
+            "JOIN photos fp ON fp.id = f.photo_id WHERE f.source_id = :folderSourceId AND fs.kind = 'FOLDER' " +
+            "AND fs.state = 'AVAILABLE' AND hs.kind = 'HANDOFF' AND fp.hidden = 0 AND f.fingerprint IS NOT NULL " +
+            "ORDER BY h.photo_id, f.id",
+    )
+    suspend fun handoffTwins(folderSourceId: Long): List<HandoffTwin>
+
+    @Query(
+        "UPDATE photos SET handoff_at = :at, handoff_title = :title WHERE id = :id AND " +
+            "(handoff_at IS NULL OR handoff_at < :at)",
+    )
+    suspend fun setHandoffAt(id: Long, at: Long, title: String?)
+
+    /** Folder photos beyond the newest [keep] of "Opened from other apps" leave it (the photos stay). */
+    @Query(
+        "UPDATE photos SET handoff_at = NULL, handoff_title = NULL WHERE id IN (SELECT p.id FROM photos p WHERE " +
+            "p.handoff_at IS NOT NULL ORDER BY p.handoff_at DESC, p.id DESC LIMIT -1 OFFSET :keep) AND " +
+            "source_id IN (SELECT id FROM sources WHERE kind = 'FOLDER')",
+    )
+    suspend fun clearStaleFolderHandoffs(keep: Int)
+
+    @Query("SELECT * FROM versions WHERE photo_id = :photoId ORDER BY position")
+    suspend fun versions(photoId: Long): List<VersionEntity>
+
+    /** Moves a version to another photo (a merge; the version keeps its id, uuid, recipe and history). */
+    @Query("UPDATE versions SET photo_id = :photoId, position = :position WHERE id = :versionId")
+    suspend fun moveVersion(versionId: Long, photoId: Long, position: Int)
+
+    @Query("DELETE FROM versions WHERE id = :versionId")
+    suspend fun deleteVersion(versionId: Long)
+
+    @Query("UPDATE photos SET rating = :rating, label = :label, flag = :flag WHERE id = :id")
+    suspend fun setCulling(id: Long, rating: Int, label: String?, flag: PickFlag)
 }
+
+/** A hand-off file and a folder file with the same content ([PhotoDao.handoffTwins]). */
+data class HandoffTwin(
+    @ColumnInfo(name = "handoff_photo_id") val handoffPhotoId: Long,
+    @ColumnInfo(name = "folder_photo_id") val folderPhotoId: Long,
+    @ColumnInfo(name = "handoff_role") val handoffRole: dev.hfps.reveal.data.model.FileRole,
+    @ColumnInfo(name = "folder_role") val folderRole: dev.hfps.reveal.data.model.FileRole,
+)
 
 @Dao
 interface EditDao {

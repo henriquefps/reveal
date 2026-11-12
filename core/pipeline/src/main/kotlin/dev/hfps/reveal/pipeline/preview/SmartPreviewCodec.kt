@@ -74,17 +74,21 @@ object SmartPreviewCodec {
      * Writes [input] and the display [jpeg] (may be empty). [fullWidth] x [fullHeight] is the original's upright size.
      */
     fun encode(input: PipelineInput, jpeg: ByteArray, fullWidth: Int, fullHeight: Int, out: OutputStream) {
+        val matrix = List(9) { input.cameraToXyz[it / 3, it % 3] }
+        // JSON has no NaN or infinity (kotlinx throws an IllegalArgumentException): a matrix like that cannot be
+        // developed anyway, and a lens profile like that is left out (the photo develops without it).
+        if (matrix.any { !it.isFinite() }) throw IOException("the colour matrix is not finite")
         val header = Header(
             kind = input.kind.name,
             width = input.width,
             height = input.height,
             fullWidth = fullWidth,
             fullHeight = fullHeight,
-            cameraToXyz = List(9) { input.cameraToXyz[it / 3, it % 3] },
+            cameraToXyz = matrix,
             asShot = input.asShotMultipliers?.toList(),
             saturation = input.saturation,
             noise = input.noise?.let { NoiseHeader(it.iso, it.make, it.model) },
-            lens = input.lens?.let(::lensHeader),
+            lens = input.lens?.let(::lensHeader)?.takeIf(::finite),
         )
         val data = DataOutputStream(out)
         data.write(MAGIC)
@@ -153,6 +157,23 @@ object SmartPreviewCodec {
         )
     }
 
+    /** The pixel size (width, height) of a smart preview, from its header. Throws [IOException] when it is not one. */
+    fun size(input: InputStream): Pair<Int, Int> {
+        val data = DataInputStream(input.buffered(BUFFER))
+        val magic = ByteArray(MAGIC.size)
+        data.readFully(magic)
+        if (!isSmartPreview(magic) || data.readUnsignedByte() != VERSION) throw IOException("not a smart preview")
+        val headerSize = data.readInt()
+        if (headerSize !in 1..MAX_HEADER) throw IOException("bad header")
+        val header = runCatching {
+            json.decodeFromString(
+                Header.serializer(),
+                String(ByteArray(headerSize).also(data::readFully), Charsets.UTF_8),
+            )
+        }.getOrElse { throw IOException("bad header", it) }
+        return header.width to header.height
+    }
+
     /** Only the display JPEG of a smart preview (the grid and the viewer of a preview-only photo). */
     fun readJpeg(input: InputStream): ByteArray {
         val data = DataInputStream(input.buffered(BUFFER))
@@ -169,14 +190,17 @@ object SmartPreviewCodec {
 
     // ------------------------------------------------------------------ planes
 
+    /** A sample as a non-negative finite value: NaN (never expected) is 0, so it can never fail an encode. */
+    private fun clean(v: Float): Double = if (v > 0f) minOf(v.toDouble(), Float.MAX_VALUE.toDouble()) else 0.0
+
     private fun lumaCode(v: Float): Int {
-        val l = ln(maxOf(v.toDouble(), 0.0) + FLOOR) / LN2
+        val l = ln(clean(v) + FLOOR) / LN2
         return ((l - Y_LOW) * Y_MAX / Y_STOPS).roundToInt().coerceIn(0, Y_MAX.toInt())
     }
 
     private fun lumaValue(code: Int): Float = (exp((code * Y_STOPS / Y_MAX + Y_LOW) * LN2) - FLOOR).toFloat()
 
-    private fun log2(v: Float): Double = ln(maxOf(v.toDouble(), 0.0) + FLOOR) / LN2
+    private fun log2(v: Float): Double = ln(clean(v) + FLOOR) / LN2
 
     private fun chromaCode(diff: Double): Int =
         ((diff + C_STOPS / 2) * C_MAX / C_STOPS).roundToInt().coerceIn(0, C_MAX.toInt())
@@ -332,6 +356,13 @@ object SmartPreviewCodec {
         val aspectCalibration: Double? = null,
         val cropImage: Double? = null,
     )
+
+    private fun finite(header: LensHeader): Boolean = listOfNotNull(
+        header.distortionTerms,
+        header.tcaTerms,
+        header.vignettingTerms,
+        listOfNotNull(header.cropCalibration, header.aspectCalibration, header.cropImage),
+    ).flatten().all { it.isFinite() }
 
     private fun lensHeader(lens: LensProfile): LensHeader? = when (lens) {
         is SonyLensProfile -> LensHeader(

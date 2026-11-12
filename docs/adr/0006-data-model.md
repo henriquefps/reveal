@@ -64,6 +64,11 @@ the nullable, indexed column (`AutoMigration(3, 4)`; existing rows stay null unt
   cleared and computed again; a write checks size and mtime so it never stores a stale value). Matching library
   photos across folders by fingerprint (a folder moved or renamed keeping its edits, duplicates) is **not done yet**;
   it is the prerequisite for sync (M5+), where the fingerprint is the photo's key on the server.
+- **A hand-off and a folder** holding the same file are one photo, the folder's, whichever came first (0.5.1, ADR 0011
+  "One photo across sources"): after each fingerprint pass, hand-off photos with a file of the folder merge into the
+  folder photo (culling, edits as versions, sync id). Two folders stay two copies.
+- **Unreadable documents** (version 8): `photo_files.unreadable_at` marks a document Reveal was refused (a hand-off
+  whose temporary grant ended, ADR 0011 "Unreadable hand-offs"); a successful read clears it.
 
 ## Stable ids (DB version 5)
 

@@ -205,6 +205,12 @@ private fun OptionsSection(state: ExportUiState, actions: ExportSheetActions) {
         DestinationSection(state, actions)
         NamingSection(state, set)
         EstimateRow(state)
+        if (state.previewOnly > 0) {
+            Note(
+                pluralStringResource(R.plurals.export_preview_only, state.previewOnly, state.previewOnly),
+                warning = true,
+            )
+        }
         PrimaryButton(
             text = stringResource(R.string.export_start),
             onClick = actions.onStart,

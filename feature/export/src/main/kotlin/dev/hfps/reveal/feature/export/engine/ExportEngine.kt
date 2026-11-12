@@ -12,6 +12,9 @@ import dev.hfps.image.format.ImageKind
 import dev.hfps.image.format.PhotoMetadata
 import dev.hfps.image.raw.RawDecoder
 import dev.hfps.image.source.BlockCachedSource
+import dev.hfps.image.source.SourceInputStream
+import dev.hfps.image.source.readRange
+import dev.hfps.image.standard.StandardDecoder
 import dev.hfps.reveal.data.export.Authorship
 import dev.hfps.reveal.feature.export.destination.DestinationUnavailableException
 import dev.hfps.reveal.feature.export.destination.Destinations
@@ -37,9 +40,11 @@ import dev.hfps.reveal.pipeline.gl.TiledRenderer
 import dev.hfps.reveal.pipeline.input.BitmapTileSource
 import dev.hfps.reveal.pipeline.input.LensResolver
 import dev.hfps.reveal.pipeline.input.NativeRawTileSource
+import dev.hfps.reveal.pipeline.input.PipelineInputTileSource
 import dev.hfps.reveal.pipeline.input.TileSource
 import dev.hfps.reveal.pipeline.input.UnsupportedCameraException
 import dev.hfps.reveal.pipeline.input.withLens
+import dev.hfps.reveal.pipeline.preview.SmartPreviewCodec
 import dev.hfps.reveal.pipeline.recipe.Recipe
 import java.io.File
 import java.io.FileNotFoundException
@@ -121,6 +126,7 @@ class ExportEngine(private val context: Context, private val destinations: Desti
         val started = System.nanoTime()
         val (metadata, source) = input.use { image ->
             try {
+                smartPreview(image, item)?.let { return@use it }
                 val meta = readMetadata(image, item)
                 meta to openSource(image, meta.fallback)
             } catch (e: ExportException) {
@@ -229,6 +235,19 @@ class ExportEngine(private val context: Context, private val destinations: Desti
         }
     }
 
+    /**
+     * A smart preview instead of the original (a hand-off Reveal can no longer read, ADR 0011 "Unreadable hand-offs"):
+     * its input at preview size, no EXIF to carry (only the rating). Null when [image] is not one.
+     */
+    @Suppress("ReturnCount")
+    private fun smartPreview(image: ImageInput, item: ExportItem): Pair<SourceMetadata, TileSource>? {
+        val head = runCatching { image.withSource { it.readRange(0, SMART_HEAD) } }.getOrNull() ?: return null
+        if (!SmartPreviewCodec.isSmartPreview(head)) return null
+        val decoded = image.withSource { SmartPreviewCodec.decode(SourceInputStream(it)) }
+        return SourceMetadata(snapshot = null, fallback = null, rating = item.rating) to
+            PipelineInputTileSource(decoded.input)
+    }
+
     /** EXIF of the file (and of its pair's JPEG for gaps) and the photo's rating. */
     private fun readMetadata(image: ImageInput, item: ExportItem): SourceMetadata {
         val snapshot = runCatching { image.withSource { ExifSnapshot.read(BlockCachedSource(it), image.type) } }
@@ -271,7 +290,7 @@ class ExportEngine(private val context: Context, private val destinations: Desti
         val options = BitmapFactory.Options().apply {
             inPreferredConfig = Bitmap.Config.ARGB_8888
             inPremultiplied = false
-            bounds.outColorSpace?.let { inPreferredColorSpace = it }
+            StandardDecoder.decodableSpace(bounds.outColorSpace)?.let { inPreferredColorSpace = it }
         }
         val bitmap = BitmapFactory.decodeFileDescriptor(fd, null, options) ?: throw IOException("decode failed")
         // A standard image's lens profile comes from lensfun by its EXIF (docs/adr/0015).
@@ -288,6 +307,7 @@ class ExportEngine(private val context: Context, private val destinations: Desti
         MARGIN_BYTES
 
     companion object {
+        private const val SMART_HEAD = 8
         private const val TAG = "RevealExport"
         private const val DATE_TIME_ORIGINAL = 0x9003
         private const val NANOS_PER_MS = 1_000_000L

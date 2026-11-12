@@ -16,6 +16,7 @@ import dev.hfps.reveal.data.db.RevealDatabase
 import dev.hfps.reveal.data.db.SourceEntity
 import dev.hfps.reveal.data.db.VersionEntity
 import dev.hfps.reveal.data.index.LibraryIndexer
+import dev.hfps.reveal.data.library.SidecarSync
 import dev.hfps.reveal.data.model.FileRole
 import dev.hfps.reveal.data.model.SourceKind
 import dev.hfps.reveal.data.model.SourceState
@@ -65,6 +66,10 @@ class HandoffRepository(
     private val db: RevealDatabase,
     private val indexer: LibraryIndexer,
     private val tree: DocumentTree = HandoffTree(resolver),
+    /** Writes a folder photo's sidecar when a hand-off's culling values change it (null in tests without one). */
+    private val sidecars: SidecarSync? = null,
+    /** Keeps a local preview of each hand-off while its grant is alive (ADR 0011 "Unreadable hand-offs"). */
+    private val previewer: HandoffPreviewer? = null,
     private val clock: () -> Long = System::currentTimeMillis,
 ) {
     private val photos = db.photoDao()
@@ -82,8 +87,9 @@ class HandoffRepository(
     }
 
     suspend fun receive(request: HandoffRequest): HandoffOutcome = withContext(Dispatchers.IO) {
+        val persisted = HashSet<Uri>()
         val items = request.uris.mapNotNull { uri ->
-            persist(uri, request.persistable)
+            if (persist(uri, request.persistable)) persisted += uri
             val entry = tree.stat(uri.toString())
             // A provider that cannot be queried still gets its last path segment as a name.
             Item(
@@ -124,6 +130,7 @@ class HandoffRepository(
                 }
             }
         }
+        schedulePreviews(stored, initial, persisted)
         val first = initial ?: stored.firstOrNull()
         when {
             first == null -> HandoffOutcome.Nothing
@@ -272,14 +279,24 @@ class HandoffRepository(
      * a counter reset) is two photos, and a file replaced under the same URI (other fingerprint) leaves its old photo
      * and does not inherit its recipe. A match in an added folder opens that photo as it is (its files stay there).
      */
+    @Suppress("LongMethod")
     private suspend fun store(sourceId: Long, shot: Shot, now: Long, title: String?): StoredShot {
         val format = shotFormat(shot)
         val hasRaw = shot.files.any { it.second == FileRole.RAW }
         val sidecarId = shot.sidecar?.uri?.toString()
         val match = findPhoto(sourceId, shot)
         if (match != null && !match.handoff) {
+            // The folder photo is the photo (ADR 0011 "One photo across sources"): its files stay where they are; it
+            // shows in "Opened from other apps" with this batch.
             val photoId = match.file.photoId
-            return StoredShot(photoId, checkNotNull(photos.firstVersion(photoId)), foreign = true)
+            val previous = photos.get(photoId)?.handoffAt
+            photos.setHandoffAt(photoId, now, title)
+            return StoredShot(
+                photoId,
+                checkNotNull(photos.firstVersion(photoId)),
+                foreign = true,
+                previousHandoff = previous,
+            )
         }
         val existing = match?.file?.photoId
         val photoId: Long
@@ -354,7 +371,35 @@ class HandoffRepository(
      * live in Reveal's database, and the sender's files stay as they are.
      */
     private suspend fun applyRatings(stored: List<Pair<Shot, StoredShot>>, culling: Map<Uri, HandoffCulling>) {
-        for ((shot, ids) in stored.filterNot { it.second.foreign }) applyRatings(shot, ids, cullingFor(shot, culling))
+        val folderChanged = ArrayList<Long>()
+        for ((shot, ids) in stored) {
+            val values = cullingFor(shot, culling)
+            if (!ids.foreign) {
+                applyRatings(shot, ids, values)
+            } else if (values != null && applyFolderCulling(ids, values)) {
+                folderChanged += ids.photoId
+            }
+        }
+        // A folder photo's culling lives in its folder's sidecar: written like any rating change made in Reveal.
+        if (folderChanged.isNotEmpty()) sidecars?.write(folderChanged)
+    }
+
+    /**
+     * The sender's culling [values] on a photo of an added folder (ADR 0011 "One photo across sources"): they win,
+     * field by field, unless the folder's sidecar was written after the photo's previous hand-off (someone rated it
+     * there since the sender last said what it holds). True when the photo changed.
+     */
+    @Suppress("ReturnCount")
+    private suspend fun applyFolderCulling(ids: StoredShot, values: HandoffCulling): Boolean {
+        val photo = photos.get(ids.photoId) ?: return false
+        val current = XmpFields(photo.rating.coerceIn(0, XmpFields.MAX_RATING), photo.label, photo.flag)
+        val previous = ids.previousHandoff
+        val sidecarTime = photo.xmpModified.takeIf { photo.xmpDocumentId != null }
+        if (previous != null && sidecarTime != null && sidecarTime > previous) return false
+        val result = merge(values, current)
+        if (result == current) return false
+        photos.setCulling(photo.id, result.rating, result.label, result.flag)
+        return true
     }
 
     private suspend fun applyRatings(shot: Shot, ids: StoredShot, values: HandoffCulling?) {
@@ -421,24 +466,64 @@ class HandoffRepository(
         ).let { it.copy(id = db.sourceDao().insert(it)) }
     }
 
-    /** Keeps the newest [MAX_PHOTOS] unedited hand-offs; older ones are forgotten with their persisted grants. */
+    /**
+     * Keeps the newest [MAX_PHOTOS] unedited hand-offs; older ones are forgotten with their persisted grants and local
+     * previews. Folder photos beyond them only leave "Opened from other apps".
+     */
     private suspend fun prune(sourceId: Long) {
+        photos.clearStaleFolderHandoffs(MAX_PHOTOS)
         val stale = photos.staleHandoffs(sourceId, MAX_PHOTOS)
         if (stale.isEmpty()) return
-        val uris = stale.chunked(SQL_ARGS).flatMap { photos.documentIdsOf(it) }
+        val files = stale.chunked(SQL_ARGS).flatMap { photos.filesOf(it) }
         stale.chunked(SQL_ARGS).forEach { photos.deletePhotos(it) }
-        uris.forEach { release(it.toUri()) }
+        files.forEach { release(it.documentId.toUri()) }
+        previewer?.previews?.delete(files.mapNotNull { it.fingerprint })
     }
 
-    /** Takes a persistable grant (read + write, else read) when the sender offered one; never throws. */
-    private fun persist(uri: Uri, persistable: Boolean) {
-        if (!persistable || uri.scheme != "content") return
+    /**
+     * Takes a persistable grant (read + write, else read) when the sender offered one; never throws. True when Reveal
+     * keeps access after this activity (a persisted grant, or a `file:` URI).
+     */
+    @Suppress("ReturnCount")
+    private fun persist(uri: Uri, persistable: Boolean): Boolean {
+        if (uri.scheme == "file") return true
+        if (!persistable || uri.scheme != "content") return false
         val rw = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
-        val ok = runCatching { resolver.takePersistableUriPermission(uri, rw) }.isSuccess
-        if (!ok) {
-            runCatching { resolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
-                .onFailure { Log.i(TAG, "No persistable grant for $uri: ${it.javaClass.simpleName}") }
+        if (runCatching { resolver.takePersistableUriPermission(uri, rw) }.isSuccess) return true
+        return runCatching { resolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
+            .onFailure { Log.i(TAG, "No persistable grant for a hand-off: ${it.javaClass.simpleName}") }
+            .isSuccess
+    }
+
+    /**
+     * Local previews of the hand-off photos (ADR 0011 "Unreadable hand-offs"), [initial] first: the display image for
+     * each, the smart preview for those whose grant is temporary. Folder photos need none (their folder stays
+     * readable).
+     */
+    private fun schedulePreviews(
+        stored: List<Pair<Shot, StoredShot>>,
+        initial: Pair<Shot, StoredShot>?,
+        persisted: Set<Uri>,
+    ) {
+        val previewer = previewer ?: return
+        // The editor opens after `receive` returns (one photo, or the initial one): its decode comes first.
+        if (initial != null || stored.size == 1) previewer.expectEditor()
+        val first = initial ?: stored.firstOrNull()
+        val ordered = listOfNotNull(first) + stored.filter { it !== first }
+        val shots = ordered.filterNot { it.second.foreign }.mapNotNull { (shot, _) ->
+            val fingerprint = shot.main.fingerprint ?: return@mapNotNull null
+            fun document(role: FileRole) = shot.files.firstOrNull { it.second == role }?.first?.let {
+                HandoffPreviewer.Document(it.uri.toString(), it.name)
+            }
+            HandoffPreviewer.Shot(
+                fingerprint = fingerprint,
+                main = HandoffPreviewer.Document(shot.main.uri.toString(), shot.main.name),
+                raw = document(FileRole.RAW),
+                rendered = document(FileRole.RENDERED),
+                smart = shot.main.uri !in persisted,
+            )
         }
+        previewer.schedule(shots)
     }
 
     private fun release(uri: Uri) {

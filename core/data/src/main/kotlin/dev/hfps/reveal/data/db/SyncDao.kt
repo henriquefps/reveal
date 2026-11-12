@@ -115,6 +115,17 @@ interface SyncDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun putAlias(alias: SyncAliasEntity)
 
+    /** The server ids that name [photoId] besides its own uuid. */
+    @Query("SELECT remote_uuid FROM sync_aliases WHERE photo_id = :photoId ORDER BY remote_uuid")
+    suspend fun aliasesOf(photoId: Long): List<String>
+
+    @Query("DELETE FROM sync_aliases WHERE remote_uuid = :uuid")
+    suspend fun deleteAlias(uuid: String)
+
+    /** A merge (ADR 0011 "One photo across sources"): the aliases of [from] name [to]. */
+    @Query("UPDATE sync_aliases SET photo_id = :to WHERE photo_id = :from")
+    suspend fun moveAliases(from: Long, to: Long)
+
     @Query("UPDATE photos SET uuid = :uuid WHERE id = :id")
     suspend fun setPhotoUuid(id: Long, uuid: String)
 
@@ -206,8 +217,9 @@ interface SyncDao {
 
     /**
      * Device-only photos (looked up, missing on the server) that need a smart preview from this device (ADR 0018
-     * "Smart previews"): edited, rated or picked ones, and every one whose original is not backed up ([noBackup], or
-     * its folder's backup is off). Edited first, then newest. A photo's preview is made again when its file changes.
+     * "Smart previews"): edited, rated or picked ones, and every one whose original is not backed up ([noBackup], its
+     * folder's backup is off, or Reveal cannot read it any more). Edited first, then newest. A photo's preview is made
+     * again when its file changes.
      */
     @Query(
         "SELECT p.id AS photo_id, p.source_id, f.id AS file_id, f.document_id, f.name, f.size, f.fingerprint, " +
@@ -216,21 +228,26 @@ interface SyncDao {
             "AND p.hidden = 0 AND c.original_on_server = 0 AND c.checked_at > 0 AND f.fingerprint IS NOT NULL " +
             "AND (f.role = 'RAW' OR NOT EXISTS (SELECT 1 FROM photo_files o WHERE o.photo_id = p.id AND " +
             "o.role = 'RAW')) AND (c.preview_fingerprint IS NULL OR c.preview_fingerprint != f.fingerprint) " +
-            "AND (p.has_edit = 1 OR p.rating > 0 OR p.flag = 'PICK' OR s.backup = 0 OR :noBackup) " +
+            "AND (p.has_edit = 1 OR p.rating > 0 OR p.flag = 'PICK' OR s.backup = 0 OR :noBackup OR " +
+            "f.unreadable_at IS NOT NULL) " +
             "AND NOT EXISTS (SELECT 1 FROM sync_uploads u WHERE u.photo_id = p.id AND u.kind = 'preview' AND " +
             "u.state = 'pending') ORDER BY p.has_edit DESC, p.sort_time DESC LIMIT :limit",
     )
     suspend fun previewCandidates(noBackup: Boolean, limit: Int): List<CloudCandidate>
 
-    /** Device-only photos (looked up, missing on the server) of folders with the backup on, not queued yet. */
+    /**
+     * Device-only photos (looked up, missing on the server) of folders with the backup on, not queued yet. A file
+     * Reveal cannot read (ADR 0011 "Unreadable hand-offs") waits until it can: its smart preview goes instead.
+     */
     @Query(
         "SELECT p.id AS photo_id, p.source_id, f.id AS file_id, f.document_id, f.name, f.size, f.fingerprint, " +
             "s.backup FROM photos p JOIN sources s ON s.id = p.source_id JOIN photo_files f ON f.photo_id = p.id " +
             "JOIN photo_cloud c ON c.photo_id = p.id WHERE s.kind != 'SERVER' AND s.state = 'AVAILABLE' " +
             "AND s.backup = 1 AND p.hidden = 0 AND c.original_on_server = 0 AND c.checked_at > 0 " +
-            "AND f.fingerprint IS NOT NULL AND (f.role = 'RAW' OR NOT EXISTS (SELECT 1 FROM photo_files o WHERE " +
-            "o.photo_id = p.id AND o.role = 'RAW')) AND NOT EXISTS (SELECT 1 FROM sync_uploads u WHERE " +
-            "u.photo_id = p.id AND u.kind = 'original' AND u.state != 'done') ORDER BY p.sort_time DESC LIMIT :limit",
+            "AND f.fingerprint IS NOT NULL AND f.unreadable_at IS NULL AND (f.role = 'RAW' OR NOT EXISTS " +
+            "(SELECT 1 FROM photo_files o WHERE o.photo_id = p.id AND o.role = 'RAW')) AND NOT EXISTS " +
+            "(SELECT 1 FROM sync_uploads u WHERE u.photo_id = p.id AND u.kind = 'original' AND u.state != 'done') " +
+            "ORDER BY p.sort_time DESC LIMIT :limit",
     )
     suspend fun backupCandidates(limit: Int): List<CloudCandidate>
 

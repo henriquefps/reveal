@@ -119,4 +119,53 @@ class SmartPreviewCodecTest {
             SmartPreviewCodec.decode(ByteArrayInputStream(bytes.copyOf(bytes.size - 20)))
         }
     }
+
+    /**
+     * What made folder photos fail as "No smart preview ...: IllegalArgumentException" on 0.5.0: JSON has no NaN or
+     * infinity, and `roundToInt` refuses NaN. A sample that is not a number encodes as black; a lens profile with a
+     * non-finite term is left out; a non-finite matrix is an `IOException` (a plain "cannot", never a crash).
+     */
+    @Test
+    fun `non-finite samples and lens terms never fail an encode`() {
+        val scene = SyntheticImages.scene(8, 6)
+        val pixels = scene.linearRgb.copyOf().also {
+            it[0] = Float.NaN
+            it[4] = Float.POSITIVE_INFINITY
+            it[8] = Float.NEGATIVE_INFINITY
+        }
+        val lens = LensfunProfile(
+            "Lens", LensfunDistortion.PTLENS, listOf(0.01, Double.NaN, 0.003), LensfunTca.LINEAR, listOf(1.0, 1.0),
+            listOf(-0.3, 0.1, -0.01), 1.5, 1.5, Double.POSITIVE_INFINITY,
+        )
+        val input = PipelineInput(
+            scene.kind,
+            scene.width,
+            scene.height,
+            pixels,
+            scene.cameraToXyz,
+            scene.asShotMultipliers,
+            lens = lens,
+        )
+        val out = roundTrip(input).input
+        assertThat(out.lens).isNull()
+        assertThat(out.linearRgb[1]).isFinite()
+        assertThat(out.linearRgb.all { it.isFinite() && it >= 0f }).isTrue()
+
+        val bad = PipelineInput(
+            scene.kind,
+            scene.width,
+            scene.height,
+            scene.linearRgb,
+            dev.hfps.reveal.pipeline.cpu.Mat3(Double.NaN, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0),
+            scene.asShotMultipliers,
+        )
+        assertThrows(IOException::class.java) { SmartPreviewCodec.encode(bad, ByteArray(0), 8, 6) }
+    }
+
+    @Test
+    fun `the pixel size is read from the header alone`() {
+        val bytes = SmartPreviewCodec.encode(SyntheticImages.grayRamp(9, 7), byteArrayOf(5, 6), 18, 14)
+        assertThat(SmartPreviewCodec.size(ByteArrayInputStream(bytes))).isEqualTo(9 to 7)
+        assertThrows(IOException::class.java) { SmartPreviewCodec.size(ByteArrayInputStream(ByteArray(64))) }
+    }
 }

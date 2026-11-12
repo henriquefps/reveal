@@ -16,7 +16,9 @@ import java.io.FileNotFoundException
  * Debug builds only: a Storage Access Framework provider over `files/saf-test/` of the app, so instrumented tests
  * (and a person on an emulator) can add a library folder full of generated files without touching shared storage.
  * It runs in its own process (`:documents`), so every listing and read crosses a binder like a real provider.
- * Document ids are paths relative to that directory (`""` = the root).
+ * Document ids are paths relative to that directory (`""` = the root). A document listed in `files/saf-test/.refused`
+ * (one id per line) refuses every query and open with a `SecurityException`, as a gallery URI does once the temporary
+ * grant of a share ended (ADR 0011 "Unreadable hand-offs"): tests end a "grant" with [refuse].
  */
 class SyntheticDocumentsProvider : DocumentsProvider() {
     private val base: File get() = File(checkNotNull(context).filesDir, DIRECTORY)
@@ -34,8 +36,10 @@ class SyntheticDocumentsProvider : DocumentsProvider() {
         }
     }
 
-    override fun queryDocument(documentId: String, projection: Array<out String>?): Cursor =
-        MatrixCursor(projection ?: DOCUMENT_COLUMNS).apply { addRow(this, documentId, file(documentId)) }
+    override fun queryDocument(documentId: String, projection: Array<out String>?): Cursor {
+        checkAccess(documentId)
+        return MatrixCursor(projection ?: DOCUMENT_COLUMNS).apply { addRow(this, documentId, file(documentId)) }
+    }
 
     override fun queryChildDocuments(
         parentDocumentId: String,
@@ -47,8 +51,15 @@ class SyntheticDocumentsProvider : DocumentsProvider() {
         return cursor
     }
 
-    override fun openDocument(documentId: String, mode: String, signal: CancellationSignal?): ParcelFileDescriptor =
-        ParcelFileDescriptor.open(file(documentId), ParcelFileDescriptor.parseMode(mode))
+    override fun openDocument(documentId: String, mode: String, signal: CancellationSignal?): ParcelFileDescriptor {
+        checkAccess(documentId)
+        return ParcelFileDescriptor.open(file(documentId), ParcelFileDescriptor.parseMode(mode))
+    }
+
+    private fun checkAccess(documentId: String) {
+        val refused = File(base, REFUSED).takeIf { it.isFile }?.readLines().orEmpty()
+        if (documentId in refused) throw SecurityException("Permission Denial: the grant of $documentId ended")
+    }
 
     override fun createDocument(parentDocumentId: String, mimeType: String, displayName: String): String {
         val parent = file(parentDocumentId)
@@ -97,6 +108,20 @@ class SyntheticDocumentsProvider : DocumentsProvider() {
         const val DIRECTORY = "saf-test"
         const val ROOT_ID = "synthetic"
         const val ROOT_DOCUMENT = ""
+        private const val REFUSED = ".refused"
+
+        /** From now on [documentId] refuses access (tests); [allow] undoes it. */
+        fun refuse(filesDir: File, documentId: String) {
+            val file = File(filesDir, "$DIRECTORY/$REFUSED")
+            file.parentFile?.mkdirs()
+            file.appendText(documentId + "\n")
+        }
+
+        fun allow(filesDir: File, documentId: String) {
+            val file = File(filesDir, "$DIRECTORY/$REFUSED").takeIf { it.isFile } ?: return
+            val kept = file.readLines().filter { it.isNotBlank() && it != documentId }
+            file.writeText(kept.joinToString("") { it + "\n" })
+        }
 
         private val ROOT_COLUMNS = arrayOf(
             Root.COLUMN_ROOT_ID,

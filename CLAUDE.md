@@ -157,7 +157,7 @@ REVEAL_COLOUR_SHEET_DIR=$PWD/build/calibration REVEAL_RENDER_OUT=$PWD/docs/scree
 
 ## Library (`:core:data`, `:feature:library`, M1, ADR 0006)
 
-Room `RevealDatabase` v7 (sources, photos, photo_files, versions, recipes, history, history_cursor, cache_entries; sync tables v6; preset tables v7, ADR 0019);
+Room `RevealDatabase` v8 (sources, photos, photo_files, versions, recipes, history, history_cursor, cache_entries; sync tables v6; preset tables v7, ADR 0019; `photo_files.unreadable_at` v8, ADR 0011);
 schema change = new version + migration (or `AutoMigration`) + exported `core/data/schemas/*.json`, tested by
 `RevealDatabaseMigrationTest`. `LibraryRepository` (sources, SAF grants, volumes, indexing, ratings/flags with XMP
 write-back), `LibraryIndexer` (walk → diff → sidecars → headers), `XmpReader`/`XmpWriter` (merge, never overwrite a
@@ -196,6 +196,29 @@ previous hand-off; never written back). Sidecar names (normal before hidden `.<s
 DB v5: `photos.uuid` / `versions.uuid` (stable sync ids, manual `MIGRATION_4_5`; open the database with
 `addMigrations(*RevealDatabase.MIGRATIONS)`). Instrumented: `dev.hfps.reveal.handoff.HandoffFlowTest` (same command
 shape as the library tests).
+
+One photo across sources (ADR 0011, 0.5.1): a hand-off and a folder file of the same fingerprint are the folder's photo.
+Folder first: `HandoffRepository.store` opens it (`foreign`), sets `handoff_at`, applies the culling values
+(`applyFolderCulling`) and writes the folder sidecar (`SidecarSync`). Hand-off first: `LibraryRepository.mergeHandoffs`
+after every fingerprint pass -> `handoff/HandoffMerge` (culling `resolve`, versions moved, sync uuid adopted or
+tombstone + `sync_aliases`, local previews deleted). "Opened from other apps" = `photos.handoff_at IS NOT NULL` (folder
+photos included). Unreadable hand-offs: `HandoffPreviewer` makes `LocalPreviews` (`noBackupFilesDir/handoff-previews`,
+by fingerprint: `.jpg` display always, `.rvsp` smart preview for non-persistable grants) after `receive`; smart
+previews wait while an editor is open (`editorOpened/Closed`, heap), the editor writes its photo's from its own input
+(`LibraryRepository.keepSmartPreview`, after full resolution);
+`photo_files.unreadable_at` is set by any refused read (`storage/isAccessError`; `ImageInput.fromUri` turns a provider's
+`IllegalArgumentException` into `FileNotFoundException`) and by `LibraryRepository.checkHandoffs` (refresh);
+thumbnails, `PhotoImages`, `editTarget` (file URI of the `.rvsp`) and `exportTarget` (`OriginalReach.PREVIEW`) fall
+back to them; grid `CloudState.LOCAL_PREVIEW`. Gallery access (optional): `handoff/GalleryAccess` (state, asked once),
+`GalleryAccessSheet` in the library route, Settings → Gallery access; permissions in `core/data` manifest. The debug
+provider refuses ids listed by `SyntheticDocumentsProvider.refuse` (an ended grant).
+
+```sh
+./gradlew :core:data:testDebugUnitTest --tests '*HandoffMergeTest*' --tests '*UnreadableHandoffsTest*' --tests '*GalleryAccessTest*'
+./gradlew :core:sync:testDebugUnitTest --tests '*HandoffSyncTest*'       # merged hand-offs on two devices, parked originals
+adb -s <serial> shell am instrument -w -e class dev.hfps.reveal.handoff.UnreadableHandoffTest dev.hfps.reveal.debug.test/androidx.test.runner.AndroidJUnitRunner
+adb -s <serial> shell am instrument -w -e class dev.hfps.reveal.pipeline.SmartPreviewMakerTest dev.hfps.reveal.pipeline.test/androidx.test.runner.AndroidJUnitRunner   # every format; CC0 RAWs in files/samples
+```
 
 ## Editor open flow (`:feature:editor`, M0)
 
@@ -584,7 +607,8 @@ Release: tag `sync-server-v<x.y.z>` (`.github/workflows/sync-server-release.yml`
 `res/xml/network_security_config.xml` for LAN/Tailscale servers), `account/` (`PairingLink`, `SyncAccountStore`, the
 key in `KeystoreSecretStore`), `engine/SyncStore` (push snapshot, pull apply, NAS feed, conflict copies, aliases,
 inbox; `Payloads.kt` = the record JSON), `engine/SyncEngine` (one run: push → pull → inbox → NAS → lookups),
-`blobs/` (`SmartPreviewMaker`, `BlobUploader`: chunked, resumable from `HEAD`), `files/` (`ServerFilesProvider`
+`blobs/BlobUploader` (chunked, resumable from `HEAD`; unreadable originals are parked, not retried; a hand-off's local
+smart preview is adopted; failures logged once with `describe`; `SmartPreviewMaker` lives in `:core:pipeline/preview`), `files/` (`ServerFilesProvider`
 `<applicationId>.sync` + `RangeCache`: Server-source files by range), `work/SyncWork.kt` (`SyncWorker`, `BlobWorker`,
 `SyncScheduler`, `SyncController` started by `RevealApplication`), `SyncRepository` (pair/unpair/status). Database v6:
 `sync_records` (dirty marks by `SyncTriggers`, quiet while `meta` `sync.applying` is set; create databases with

@@ -12,13 +12,14 @@ import dev.hfps.reveal.data.db.RevealDatabase
 import dev.hfps.reveal.data.di.DataScope
 import dev.hfps.reveal.data.export.Authorship
 import dev.hfps.reveal.data.export.ExportPreferences
+import dev.hfps.reveal.data.handoff.LocalPreviews
 import dev.hfps.reveal.data.library.DocumentTreeFactory
+import dev.hfps.reveal.pipeline.preview.SmartPreviewMaker
 import dev.hfps.reveal.sync.SyncRepository
 import dev.hfps.reveal.sync.account.KeystoreSecretStore
 import dev.hfps.reveal.sync.account.SyncAccountStore
 import dev.hfps.reveal.sync.api.SyncApi
 import dev.hfps.reveal.sync.blobs.BlobUploader
-import dev.hfps.reveal.sync.blobs.SmartPreviewMaker
 import dev.hfps.reveal.sync.engine.AuthorshipData
 import dev.hfps.reveal.sync.engine.SyncEngine
 import dev.hfps.reveal.sync.engine.SyncStore
@@ -73,8 +74,14 @@ object SyncModule {
         database: RevealDatabase,
         store: SyncStore,
         trees: DocumentTreeFactory,
-    ): BlobUploader =
-        BlobUploader(database, store, trees, SmartPreviewMaker(File(context.noBackupFilesDir, "sync-previews")))
+        previews: LocalPreviews,
+    ): BlobUploader = BlobUploader(
+        database,
+        store,
+        trees,
+        SmartPreviewMaker(File(context.noBackupFilesDir, "sync-previews")),
+        previews,
+    )
 
     @Provides
     @Singleton

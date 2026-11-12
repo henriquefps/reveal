@@ -175,7 +175,10 @@ class PhotoOpener(private val resolver: ContentResolver) {
             val options = BitmapFactory.Options().apply {
                 inPreferredConfig = Bitmap.Config.ARGB_8888
                 inPremultiplied = false
-                bounds.outColorSpace?.let { inPreferredColorSpace = it }
+                dev.hfps.image.standard.StandardDecoder.decodableSpace(bounds.outColorSpace)?.let {
+                    inPreferredColorSpace =
+                        it
+                }
             }
             cancel.throwIfCancelled()
             val bitmap = BitmapFactory.decodeFileDescriptor(fd, null, options) ?: throw OpenException(OpenError.CORRUPT)

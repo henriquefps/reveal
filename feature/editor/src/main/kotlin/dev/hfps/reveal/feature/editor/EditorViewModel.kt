@@ -19,6 +19,7 @@ import dev.hfps.reveal.data.edit.EditClipboard
 import dev.hfps.reveal.data.edit.EditRepository
 import dev.hfps.reveal.data.edit.HistoryOp
 import dev.hfps.reveal.data.edit.HistoryWriter
+import dev.hfps.reveal.data.handoff.HandoffPreviewer
 import dev.hfps.reveal.data.library.LibraryRepository
 import dev.hfps.reveal.data.preset.PresetEvent
 import dev.hfps.reveal.data.preset.PresetFilesIo
@@ -63,6 +64,7 @@ import dev.hfps.reveal.pipeline.preset.SmartCorrection
 import dev.hfps.reveal.pipeline.preset.SmartCorrector
 import dev.hfps.reveal.pipeline.preset.SmartRules
 import dev.hfps.reveal.pipeline.preset.smartRules
+import dev.hfps.reveal.pipeline.preview.SmartPreviewCodec
 import dev.hfps.reveal.pipeline.recipe.BaseLook
 import dev.hfps.reveal.pipeline.recipe.ColourBand
 import dev.hfps.reveal.pipeline.recipe.ColourToolControls
@@ -118,6 +120,7 @@ class EditorViewModel @Inject constructor(
     private val writer: HistoryWriter,
     private val presets: PresetRepository,
     private val smartCorrection: SmartCorrection,
+    private val handoffPreviews: HandoffPreviewer,
 ) : ViewModel() {
     private val route: EditorRoute = savedStateHandle.toRoute<EditorRoute>()
 
@@ -132,6 +135,10 @@ class EditorViewModel @Inject constructor(
     private val versionId: Long? = route.versionId
     private val cancel = CancelToken()
     private val opener = PhotoOpener(context.contentResolver)
+
+    init {
+        handoffPreviews.editorOpened()
+    }
 
     init {
         EditorMetrics.start()
@@ -241,7 +248,13 @@ class EditorViewModel @Inject constructor(
                 }
                 attach(ready)
                 applyLensDefault(input)
-                if (scale > 1f) loadFullResolution(uri, ready, scale)
+                val full = photo.fullWidth to photo.fullHeight
+                // After the full resolution, so the two never need the heap at once.
+                if (scale > 1f) {
+                    loadFullResolution(uri, ready, scale) { keepSmartPreview(input, full) }
+                } else {
+                    keepSmartPreview(input, full)
+                }
             } catch (e: CancellationException) {
                 cancel.cancel()
                 throw e
@@ -272,24 +285,51 @@ class EditorViewModel @Inject constructor(
      * whose zoom then shows developed full-resolution tiles above 50 % (docs/adr/0012). Best effort: a failure (memory,
      * an unreadable region) leaves the proxy-only zoom of M1.
      */
-    private fun loadFullResolution(uri: Uri, renderer: GpuDevelopRenderer, scale: Float) {
+    private fun loadFullResolution(uri: Uri, renderer: GpuDevelopRenderer, scale: Float, then: () -> Unit) {
         viewModelScope.launch(Dispatchers.IO) {
-            val start = SystemClock.elapsedRealtime()
-            val source = try {
-                opener.openFullResolution(uri, cancel, _state.value.edit.lens)
+            try {
+                fullResolution(uri, renderer, scale)
+            } finally {
+                then()
+            }
+        }
+    }
+
+    /**
+     * A hand-off's smart preview from the input just opened (ADR 0011 "Unreadable hand-offs"), so it can still be
+     * edited once the sender's grant ends, without decoding the original a second time.
+     */
+    private fun keepSmartPreview(input: PipelineInput, full: Pair<Int, Int>) {
+        val version = versionId ?: return
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                library.keepSmartPreview(version) { jpeg, out ->
+                    SmartPreviewCodec.encode(input, jpeg, full.first, full.second, out)
+                }
             } catch (e: CancellationException) {
                 throw e
-            } catch (@Suppress("TooGenericExceptionCaught") e: Throwable) {
-                // Includes OutOfMemoryError: the editor keeps working on the proxy.
-                android.util.Log.w("RevealEditor", "full resolution unavailable: $e")
-                return@launch
+            } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
+                android.util.Log.w("RevealEditor", "no smart preview kept: ${e.javaClass.simpleName}")
             }
-            if (!renderer.setFullResolution(source, scale)) {
-                source.close()
-                return@launch
-            }
-            EditorMetrics.fullResolution(SystemClock.elapsedRealtime() - start, source.width, source.height)
         }
+    }
+
+    private fun fullResolution(uri: Uri, renderer: GpuDevelopRenderer, scale: Float) {
+        val start = SystemClock.elapsedRealtime()
+        val source = try {
+            opener.openFullResolution(uri, cancel, _state.value.edit.lens)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (@Suppress("TooGenericExceptionCaught") e: Throwable) {
+            // Includes OutOfMemoryError: the editor keeps working on the proxy.
+            android.util.Log.w("RevealEditor", "full resolution unavailable: $e")
+            return
+        }
+        if (!renderer.setFullResolution(source, scale)) {
+            source.close()
+            return
+        }
+        EditorMetrics.fullResolution(SystemClock.elapsedRealtime() - start, source.width, source.height)
     }
 
     /**
@@ -857,6 +897,7 @@ class EditorViewModel @Inject constructor(
 
     @OptIn(ExperimentalCoroutinesApi::class)
     override fun onCleared() {
+        handoffPreviews.editorClosed()
         cancel.cancel()
         renderer()?.onHistogram = null
         EditorMetrics.renderer = null

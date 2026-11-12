@@ -10,6 +10,7 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import dev.hfps.reveal.data.edit.EditClipboard
 import dev.hfps.reveal.data.edit.EditRepository
 import dev.hfps.reveal.data.edit.HistoryWriter
+import dev.hfps.reveal.data.handoff.GalleryAccess
 import dev.hfps.reveal.data.library.AddSourceResult
 import dev.hfps.reveal.data.library.LibraryRepository
 import dev.hfps.reveal.data.library.SidecarOutcome
@@ -35,6 +36,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.conflate
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -85,7 +87,31 @@ class LibraryViewModel @Inject constructor(
     private val writer: HistoryWriter,
     private val sync: SyncRepository,
     private val presets: PresetRepository,
+    private val gallery: GalleryAccess,
 ) : ViewModel() {
+    /**
+     * Offer the "Photos and videos" permission now (ADR 0011 "Gallery access"): a photo the gallery shared can no
+     * longer be read, Reveal has no gallery access, and the offer was never answered.
+     */
+    val galleryOffer: StateFlow<Boolean> =
+        combine(library.unreadableHandoffs(), gallery.state, gallery.asked, GalleryAccess::shouldOffer)
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT), false)
+
+    /** "Not now": remembered, never offered again (Settings can turn it on). */
+    fun declineGalleryAccess() = gallery.setAsked()
+
+    /** The system dialog answered: the documents it opened are readable again (thumbnails, export, backup). */
+    fun onGalleryAccessResult() {
+        gallery.setAsked()
+        gallery.refresh()
+        viewModelScope.launch { library.checkHandoffs() }
+    }
+
+    /** The app came back (the permission may have changed in the system settings). */
+    fun onResumed() {
+        if (gallery.refresh()) viewModelScope.launch { library.checkHandoffs() }
+    }
+
     /** The preset library, for "Apply preset" on the selection (docs/adr/0019 "Batch"). */
     val presetLibrary: StateFlow<PresetLibrary> =
         presets.library().stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT), PresetLibrary())

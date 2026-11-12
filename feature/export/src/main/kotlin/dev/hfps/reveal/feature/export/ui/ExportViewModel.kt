@@ -86,6 +86,8 @@ data class ExportUiState(
     val run: ExportRun? = null,
     /** Content URIs to hand to the share sheet once (cleared by [ExportViewModel.onShareLaunched]). */
     val share: List<Uri> = emptyList(),
+    /** Photos of the request Reveal can no longer read: they export from their preview (ADR 0011). */
+    val previewOnly: Int = 0,
 )
 
 /**
@@ -129,8 +131,18 @@ class ExportViewModel @Inject constructor(
     /** Shows the sheet for [request] (a new request resets the estimate; a running job keeps being followed). */
     fun open(request: ExportRequest) {
         if (_state.value.request == request) return
-        _state.update { it.copy(request = request, fullSize = null, outputSize = null, estimateBytes = null) }
+        _state.update {
+            it.copy(request = request, fullSize = null, outputSize = null, estimateBytes = null, previewOnly = 0)
+        }
         estimator = null
+        viewModelScope.launch(Dispatchers.IO) {
+            val versions = when (request) {
+                is ExportRequest.Versions -> request.versionIds
+                is ExportRequest.Current -> listOfNotNull(request.versionId)
+            }
+            val unreadable = runCatching { library.unreadableCount(versions) }.getOrDefault(0)
+            _state.update { if (it.request == request) it.copy(previewOnly = unreadable) else it }
+        }
         viewModelScope.launch(Dispatchers.IO) {
             val prepared = runCatching { prepareEstimator(request) }.getOrNull() ?: return@launch
             estimator = prepared

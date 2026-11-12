@@ -23,11 +23,14 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalResources
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavController
 import androidx.navigation.NavGraphBuilder
 import androidx.navigation.compose.composable
 import dev.hfps.reveal.data.db.PhotoRow
+import dev.hfps.reveal.data.handoff.GalleryAccess
 import dev.hfps.reveal.data.thumb.ThumbnailRepository
 import dev.hfps.reveal.feature.export.ui.ExportRequest
 import dev.hfps.reveal.feature.export.ui.ExportSheetHost
@@ -154,6 +157,17 @@ fun LibraryScreen(
         )
     }
     ExportSheetHost(request = exportRequest, onDismiss = { exportRequest = null })
+    val galleryOffer by viewModel.galleryOffer.collectAsStateWithLifecycle()
+    val galleryPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
+        viewModel.onGalleryAccessResult()
+    }
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { viewModel.onResumed() }
+    if (galleryOffer) {
+        GalleryAccessSheet(
+            onAllow = { galleryPermission.launch(GalleryAccess.permissions()) },
+            onDecline = viewModel::declineGalleryAccess,
+        )
+    }
     if (choosingPreset) {
         ApplyPresetSheet(
             library = presetLibrary,

@@ -26,7 +26,8 @@ object OriginalPolicy {
 
     /** The step for an original at [reach]; [waitingSince] is when the item started waiting (null = it never has). */
     fun step(reach: OriginalReach, waitingSince: Long?, now: Long): OriginalStep = when (reach) {
-        OriginalReach.DEVICE -> OriginalStep.EXPORT
+        // A hand-off Reveal cannot read: the worker exports its local smart preview instead (ADR 0011).
+        OriginalReach.DEVICE, OriginalReach.PREVIEW -> OriginalStep.EXPORT
 
         OriginalReach.SERVER -> OriginalStep.DOWNLOAD_FIRST
 

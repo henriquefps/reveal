@@ -39,9 +39,18 @@ class ImageInput(val name: String, val descriptor: ParcelFileDescriptor) : AutoC
         fun fromFile(file: File): ImageInput =
             ImageInput(file.name, ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY))
 
+        /**
+         * Opens [uri] read-only. A provider that no longer knows the URI (a share whose grant ended, a removed media
+         * item, a picker URI from an earlier session) may refuse it with an `IllegalArgumentException` rather than a
+         * `SecurityException`: that is reported as a missing document ([FileNotFoundException], cause kept), so every
+         * caller treats it as "cannot be read now", never as a bug in the image code.
+         */
         fun fromUri(resolver: ContentResolver, uri: Uri, name: String): ImageInput {
-            val descriptor =
-                resolver.openFileDescriptor(uri, "r") ?: throw FileNotFoundException("No descriptor for $uri")
+            val descriptor = try {
+                resolver.openFileDescriptor(uri, "r")
+            } catch (e: IllegalArgumentException) {
+                throw FileNotFoundException("The provider refused the document").apply { initCause(e) }
+            } ?: throw FileNotFoundException("No descriptor for $uri")
             return ImageInput(name, descriptor)
         }
     }

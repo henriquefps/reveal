@@ -21,7 +21,9 @@ object PhotoQuerySql {
             "p.has_edit, v.id AS version_id, r.updated_at AS edit_time, p.handoff_at, p.handoff_title, " +
             "v.position AS version_position, v.copy_of IS NOT NULL AS conflict, v.copy_device, " +
             "COALESCE(c.original_on_server, 0) AS cloud_original, c.preview_sha IS NOT NULL AS cloud_preview, " +
-            "p.source_id IN (SELECT id FROM sources WHERE kind = 'SERVER') AS remote " +
+            "p.source_id IN (SELECT id FROM sources WHERE kind = 'SERVER') AS remote, " +
+            "EXISTS (SELECT 1 FROM photo_files uf WHERE uf.photo_id = p.id AND uf.unreadable_at IS NOT NULL) " +
+            "AS unreadable " +
             "FROM photos p JOIN versions v ON v.photo_id = p.id " +
             "LEFT JOIN recipes r ON r.version_id = v.id AND r.is_default = 0 " +
             "LEFT JOIN photo_cloud c ON c.photo_id = p.id"
@@ -49,9 +51,17 @@ object PhotoQuerySql {
 
     private fun scopeClause(scope: LibraryScope): Clause? = when (scope) {
         LibraryScope.All -> Clause("p.source_id NOT IN (SELECT id FROM sources WHERE kind = 'SERVER')")
+
         LibraryScope.Server -> Clause("p.source_id IN (SELECT id FROM sources WHERE kind = 'SERVER')")
+
         LibraryScope.Recent -> Clause("p.last_opened_at IS NOT NULL")
-        LibraryScope.FromApps -> Clause("p.source_id IN (SELECT id FROM sources WHERE kind = 'HANDOFF')")
+
+        // Every photo another app handed over: hand-off photos, and folder photos a hand-off opened or merged into
+        // (ADR 0011 "One photo across sources"); the Server source never.
+        LibraryScope.FromApps -> Clause(
+            "p.handoff_at IS NOT NULL AND p.source_id NOT IN (SELECT id FROM sources WHERE kind = 'SERVER')",
+        )
+
         is LibraryScope.Source -> Clause("p.source_id = ?", scope.sourceId)
     }
 

@@ -15,6 +15,8 @@ dependencies {
     androidTestImplementation(libs.androidx.test.ext.junit)
     androidTestImplementation(libs.androidx.test.runner)
     androidTestImplementation(libs.truth)
+    // HEIC test images for the smart preview maker (the app's own HEIF export uses the same writer).
+    androidTestImplementation(libs.androidx.heifwriter)
 }
 
 // Opt-in Camera JPEG match calibration on COPIES of RAW+JPEG pairs (docs/adr/0008): never committed.

@@ -9,6 +9,11 @@
     <string name="settings_section_sync">Sincronização</string>
     <string name="settings_sync">Sincronizar com o seu servidor</string>
     <string name="settings_sync_off">Não pareado</string>
+    <string name="settings_section_photos">Fotos</string>
+    <string name="settings_gallery">Acesso à galeria</string>
+    <string name="settings_gallery_full">Permitido: fotos compartilhadas pela galeria continuam legíveis</string>
+    <string name="settings_gallery_partial">Só as fotos selecionadas</string>
+    <string name="settings_gallery_off">Desligado: fotos compartilhadas pela galeria são legíveis enquanto o Reveal está aberto</string>
     <string name="settings_sync_on">Pareado com %1$s</string>
     <string name="sync_title">Sincronização</string>
     <string name="sync_section_pair">Parear este aparelho</string>

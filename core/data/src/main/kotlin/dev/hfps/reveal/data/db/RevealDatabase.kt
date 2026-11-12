@@ -20,6 +20,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
  * | 6 | Sync (ADR 0018): `sync_records`, `photo_cloud`, `sync_uploads`, `sync_aliases`, `sync_inbox`, |
  * |   | `versions.copy_of` / `copy_device`, `sources.backup` |
  * | 7 | Presets (ADR 0019): `preset_packs`, `preset_groups`, `presets`, `preset_marks` |
+ * | 8 | Unreadable hand-offs (ADR 0011): `photo_files.unreadable_at` |
  *
  * Open it with [configure] (migrations and the sync triggers of [SyncTriggers]).
  */
@@ -49,6 +50,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
     autoMigrations = [
         AutoMigration(from = 1, to = 2), AutoMigration(from = 2, to = 3),
         AutoMigration(from = 3, to = 4), AutoMigration(from = 5, to = 6), AutoMigration(from = 6, to = 7),
+        AutoMigration(from = 7, to = 8),
     ],
 )
 abstract class RevealDatabase : RoomDatabase() {
@@ -68,7 +70,7 @@ abstract class RevealDatabase : RoomDatabase() {
 
     companion object {
         const val NAME = "reveal.db"
-        const val VERSION = 7
+        const val VERSION = 8
 
         /** Every manual migration, for `Room.databaseBuilder(...).addMigrations(*MIGRATIONS)`. */
         val MIGRATIONS: Array<Migration> get() = arrayOf(MIGRATION_4_5)

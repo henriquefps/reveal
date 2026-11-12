@@ -6,9 +6,11 @@ import dagger.hilt.components.SingletonComponent
 import dev.hfps.reveal.data.db.RevealDatabase
 import dev.hfps.reveal.data.edit.EditRepository
 import dev.hfps.reveal.data.editor.EditorLayoutPreferences
+import dev.hfps.reveal.data.handoff.HandoffPreviewer
 import dev.hfps.reveal.data.handoff.HandoffRepository
 import dev.hfps.reveal.data.library.LibraryRepository
 import dev.hfps.reveal.data.preset.PresetRepository
+import dev.hfps.reveal.data.thumb.PhotoImages
 import dev.hfps.reveal.data.thumb.ThumbnailRepository
 import dev.hfps.reveal.sync.SyncRepository
 
@@ -34,4 +36,8 @@ interface DebugAccess {
     fun presets(): PresetRepository
 
     fun thumbnails(): ThumbnailRepository
+
+    fun photoImages(): PhotoImages
+
+    fun handoffPreviewer(): HandoffPreviewer
 }

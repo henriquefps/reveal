@@ -19,7 +19,7 @@ object SyncTriggers {
     /** The `meta` key that silences the triggers while pulled records are applied. */
     const val APPLYING = "sync.applying"
 
-    private const val VERSION = 2
+    private const val VERSION = 3
 
     /** Unix milliseconds in SQL. */
     private const val NOW = "CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)"
@@ -68,7 +68,7 @@ object SyncTriggers {
         Triple("file_print", "AFTER UPDATE OF fingerprint ON photo_files", mark("photo", photoOf("NEW.photo_id"))),
         Triple("file_delete", "AFTER DELETE ON photo_files", mark("photo", photoOf("OLD.photo_id"))),
         Triple("version_insert", "AFTER INSERT ON versions", mark("version", "NEW.uuid")),
-        Triple("version_update", "AFTER UPDATE OF position, name ON versions", mark("version", "NEW.uuid")),
+        Triple("version_update", "AFTER UPDATE OF position, name, photo_id ON versions", mark("version", "NEW.uuid")),
         Triple("recipe_insert", "AFTER INSERT ON recipes", mark("version", versionOf("NEW.version_id"))),
         Triple("recipe_update", "AFTER UPDATE ON recipes", mark("version", versionOf("NEW.version_id"))),
         Triple("cursor_insert", "AFTER INSERT ON history_cursor", mark("version", versionOf("NEW.version_id"))),

@@ -6,7 +6,6 @@ import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.google.common.truth.Truth.assertThat
-import dev.hfps.image.ImageInput
 import dev.hfps.image.source.FileFingerprint
 import dev.hfps.reveal.data.FileDocumentTree
 import dev.hfps.reveal.data.db.PhotoQuerySql
@@ -20,15 +19,12 @@ import dev.hfps.reveal.data.model.PhotoQuery
 import dev.hfps.reveal.data.model.PickFlag
 import dev.hfps.reveal.data.model.SourceKind
 import dev.hfps.reveal.data.model.SourceState
-import dev.hfps.reveal.data.storage.DocumentEntry
-import dev.hfps.reveal.data.storage.DocumentTree
 import dev.hfps.reveal.data.synthetic.SyntheticExif
 import dev.hfps.reveal.data.synthetic.SyntheticShoot
 import dev.hfps.reveal.pipeline.recipe.Light
 import dev.hfps.reveal.pipeline.recipe.Recipe
 import dev.hfps.reveal.pipeline.recipe.RecipeDiff
 import java.io.File
-import java.io.IOException
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Before
@@ -36,35 +32,6 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import org.junit.runner.RunWith
-
-/**
- * A [DocumentTree] whose document ids are `file:` URIs (the JVM has no content provider to hand-off from), plus
- * [aliases]: `content:` URIs standing for a file, as MediaStore's `.../images/media/<id>` (the same parent for every
- * photo, whatever its name).
- */
-private class FileUriTree : DocumentTree {
-    override val rootDocumentId = ""
-    val aliases = HashMap<String, File>()
-
-    private fun file(id: String) = aliases[id] ?: File(Uri.parse(id).path!!)
-
-    override fun children(documentId: String): List<DocumentEntry> = emptyList()
-
-    override fun stat(documentId: String): DocumentEntry? = file(documentId).takeIf { it.isFile }?.let {
-        DocumentEntry(documentId, it.name, "", it.length(), it.lastModified())
-    }
-
-    override fun openInput(documentId: String, name: String): ImageInput = ImageInput.fromFile(file(documentId))
-
-    override fun readBytes(documentId: String, maxBytes: Int): ByteArray = file(documentId).readBytes()
-
-    override fun writeBytes(documentId: String, bytes: ByteArray) = file(documentId).writeBytes(bytes)
-
-    override fun create(parentDocumentId: String, name: String, mimeType: String): DocumentEntry =
-        throw IOException("no folder")
-
-    override fun uri(documentId: String): Uri = Uri.parse(documentId)
-}
 
 @RunWith(AndroidJUnit4::class)
 class HandoffRepositoryTest {
@@ -322,7 +289,9 @@ class HandoffRepositoryTest {
 
         val outcome = repo.receive(HandoffRequest(listOf(media(90, Uri.fromFile(file)))))
         assertThat(versionOf(outcome)).isEqualTo(folderVersion)
-        assertThat(rows()).isEmpty()
+        // One photo: the folder's, listed with the batch in "Opened from other apps" (ADR 0011).
+        assertThat(rows().map { it.id }).containsExactly(folderPhoto.file.photoId)
+        assertThat(rows().single().sourceId).isEqualTo(folderSource)
         assertThat(db.photoDao().files(folderPhoto.file.photoId).single().sourceId).isEqualTo(folderSource)
     }
 

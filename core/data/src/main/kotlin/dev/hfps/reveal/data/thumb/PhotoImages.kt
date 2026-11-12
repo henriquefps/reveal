@@ -16,10 +16,13 @@ import dev.hfps.image.preview.FirstImageLoader
 import dev.hfps.reveal.data.db.PhotoFileEntity
 import dev.hfps.reveal.data.db.RevealDatabase
 import dev.hfps.reveal.data.edit.EditRepository
+import dev.hfps.reveal.data.handoff.LocalPreviews
 import dev.hfps.reveal.data.library.DocumentTreeFactory
 import dev.hfps.reveal.data.model.FileRole
 import dev.hfps.reveal.data.model.SourceState
 import dev.hfps.reveal.data.storage.DocumentTree
+import dev.hfps.reveal.data.storage.isAccessError
+import dev.hfps.reveal.pipeline.preview.SmartPreviewCodec
 import java.io.Closeable
 import java.io.IOException
 import kotlinx.coroutines.Dispatchers
@@ -73,6 +76,9 @@ class PhotoImages(
     private val trees: DocumentTreeFactory,
     private val edits: EditRepository,
     private val edited: EditedThumbnails?,
+    /** A hand-off Reveal can no longer read shows its local preview (ADR 0011 "Unreadable hand-offs"). */
+    private val previews: LocalPreviews? = null,
+    private val clock: () -> Long = System::currentTimeMillis,
 ) {
     private val photos = db.photoDao()
 
@@ -99,19 +105,29 @@ class PhotoImages(
                 return@withContext DisplayImage(it, fullWidth, fullHeight, developed = true)
             }
         }
-        val raw = opened.raw?.let { opened.tree.openInput(it.documentId, it.name) }
-        val rendered = opened.rendered?.let { opened.tree.openInput(it.documentId, it.name) }
         try {
-            val first = FirstImageLoader.load(raw, rendered, longEdge)
-            DisplayImage(
-                first.bitmap,
-                fullWidth.takeIf { it > 0 } ?: first.bitmap.width,
-                fullHeight.takeIf { it > 0 } ?: first.bitmap.height,
-                false,
-            )
-        } finally {
-            raw?.close()
-            rendered?.close()
+            val raw = opened.raw?.let { opened.tree.openInput(it.documentId, it.name) }
+            val rendered = try {
+                opened.rendered?.let { opened.tree.openInput(it.documentId, it.name) }
+            } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
+                raw?.close()
+                throw e
+            }
+            try {
+                val first = FirstImageLoader.load(raw, rendered, longEdge)
+                DisplayImage(
+                    first.bitmap,
+                    fullWidth.takeIf { it > 0 } ?: first.bitmap.width,
+                    fullHeight.takeIf { it > 0 } ?: first.bitmap.height,
+                    false,
+                )
+            } finally {
+                raw?.close()
+                rendered?.close()
+            }
+        } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
+            if (!isAccessError(e)) throw e
+            localDisplay(opened, longEdge, fullWidth, fullHeight) ?: throw e
         }
     }
 
@@ -124,7 +140,34 @@ class PhotoImages(
         val recipe = edits.recipe(version)
         runCatching {
             opened.tree.openInput(main.documentId, main.name).use { renderer.render(it, recipe, longEdge) }
+        }.recoverCatching { e ->
+            if (!isAccessError(e)) throw e
+            // A hand-off whose grant ended: its local smart preview, developed the same way.
+            photos.setUnreadable(main.documentId, clock())
+            val file = previews?.smart(main.fingerprint) ?: throw e
+            val decoded = file.inputStream().use(SmartPreviewCodec::decode)
+            renderer.renderPreview(decoded.input, maxOf(decoded.fullWidth, decoded.fullHeight), recipe, longEdge)
+                ?: throw e
         }.getOrNull()
+    }
+
+    /** The local display image of an unreadable hand-off (ADR 0011), or null without one. */
+    @Suppress("ReturnCount")
+    private suspend fun localDisplay(opened: Opened, longEdge: Int, fullWidth: Int, fullHeight: Int): DisplayImage? {
+        val main = opened.raw ?: opened.rendered ?: return null
+        photos.setUnreadable(main.documentId, clock())
+        val local = previews ?: return null
+        val bytes = local.display(main.fingerprint)?.readBytes()
+            ?: local.smart(main.fingerprint)?.inputStream()?.use(SmartPreviewCodec::readJpeg)
+            ?: return null
+        if (bytes.isEmpty()) return null
+        val bitmap = BitmapDecoding.decode(bytes, longEdge, 1).bitmap
+        return DisplayImage(
+            bitmap,
+            fullWidth.takeIf { it > 0 } ?: bitmap.width,
+            fullHeight.takeIf { it > 0 } ?: bitmap.height,
+            false,
+        )
     }
 
     /** Full-resolution regions of the camera rendering, or null (RAW only, unreadable, unsupported). */

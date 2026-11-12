@@ -41,8 +41,14 @@ data class PhotoData(
     val flag: String = "NONE",
     val label: String? = null,
     val captureTime: Long? = null,
+    /** Stored (sensor) pixel size, before [orientation]. */
     val width: Int? = null,
     val height: Int? = null,
+    /**
+     * EXIF orientation (1..8) of the main file, null when the sender has not read it (0.5.3 and older never sent it):
+     * the upright size swaps width and height for 5..8 (FIX/W).
+     */
+    val orientation: Int? = null,
     val hidden: Boolean = false,
     val preview: PreviewRef? = null,
 )

@@ -615,6 +615,9 @@ class FakeSyncServer : Dispatcher() {
 
     fun copies(): List<Record> = records.values.filter { it.copyOf != null }
 
+    /** Every version record the server holds (live or not). */
+    fun versionRecords(): List<Record> = records.filterKeys { it.first == "version" }.values.toList()
+
     @Suppress("unused")
     private fun JsonElement.asBool() = (this as? JsonPrimitive)?.booleanOrNull
 }

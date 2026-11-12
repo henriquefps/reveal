@@ -211,6 +211,24 @@ class EditRepositoryTest {
         assertThat(reopened.pasteGroups()).containsExactly(RecipeGroup.LIGHT, RecipeGroup.COLOUR)
     }
 
+    @Test
+    fun `an automatic default lands only on an empty history, and a local edit names this device`() = runTest {
+        val lens = Recipe().copy(optics = Recipe().optics.copy(lensCorrections = true))
+        val label = StepLabel(RecipeDiff.between(Recipe(), lens), HistoryAction.LENS_PROFILE)
+        edits.apply(listOf(HistoryOp.Commit(versionId, lens, label, onlyIfEmpty = true)))
+        assertThat(edits.history(versionId).steps).hasSize(1)
+        val version = db.syncDao().versionsOf(photoId).single()
+        assertThat(version.editDevice).isEqualTo(EditRepository.THIS_DEVICE)
+        assertThat(version.editedAt).isEqualTo(1000L)
+
+        // Sync replaced the history meanwhile: a second default (another open) is dropped, a real edit is not.
+        edits.apply(listOf(HistoryOp.Commit(versionId, lens, label, onlyIfEmpty = true)))
+        assertThat(edits.history(versionId).steps).hasSize(1)
+        val edited = exposure(0.4f)
+        edits.apply(listOf(HistoryOp.Commit(versionId, edited, StepLabel(RecipeDiff.between(lens, edited)))))
+        assertThat(edits.history(versionId).steps).hasSize(2)
+    }
+
     private suspend fun newVersion(stem: String): Long {
         val photo = db.photoDao().insertPhoto(
             PhotoEntity(

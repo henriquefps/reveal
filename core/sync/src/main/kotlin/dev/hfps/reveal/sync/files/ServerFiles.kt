@@ -4,6 +4,9 @@ package dev.hfps.reveal.sync.files
 
 import android.os.SystemClock
 import dev.hfps.reveal.data.db.RevealDatabase
+import dev.hfps.reveal.data.storage.CacheArea
+import dev.hfps.reveal.data.storage.CacheItem
+import dev.hfps.reveal.data.storage.StorageKind
 import dev.hfps.reveal.pipeline.preview.SmartPreviewCodec
 import dev.hfps.reveal.sync.api.SyncApi
 import dev.hfps.reveal.sync.api.SyncHttpException
@@ -27,9 +30,43 @@ class RemoteFile internal constructor(
  * library, so cached blocks read offline too), smart previews downloaded whole into the cache, and the display JPEG
  * inside a preview. [api] is the paired server's client, null when not paired.
  */
-class ServerFiles(private val db: RevealDatabase, private val api: () -> SyncApi?, cacheDir: File) {
-    private val ranges = RangeCache(File(cacheDir, "sync-originals"))
+class ServerFiles(
+    private val db: RevealDatabase,
+    private val api: () -> SyncApi?,
+    cacheDir: File,
+    /** The caches' cap on their own; the app passes Settings' maximum cache size (ADR 0018 FIX/W). */
+    private val maxBytes: () -> Long = { RangeCache.DEFAULT_MAX_BYTES },
+    /** After a trim: the app's cache budget trims all caches together. */
+    private val onTrimmed: () -> Unit = {},
+) {
+    private val ranges = RangeCache(File(cacheDir, "sync-originals"), maxBytes)
     private val previews = File(cacheDir, "sync-previews")
+
+    /** The two caches as budget areas (Settings -> Storage: "Server files"). */
+    val areas: List<CacheArea> = listOf(
+        object : CacheArea {
+            override val kind = StorageKind.SERVER_FILES
+
+            override suspend fun items() = ranges.files().map { (key, bytes, used) -> CacheItem(key, bytes, used) }
+
+            override suspend fun evict(keys: Collection<String>) = ranges.evict(keys)
+
+            override suspend fun clear() = ranges.clear()
+        },
+        object : CacheArea {
+            override val kind = StorageKind.SERVER_FILES
+
+            override suspend fun items() = previews.listFiles()?.filter { it.isFile }
+                ?.map { CacheItem(it.name, it.length(), it.lastModified()) }.orEmpty()
+
+            override suspend fun evict(keys: Collection<String>) = keys.forEach { File(previews, it).delete() }
+
+            override suspend fun clear() {
+                previews.deleteRecursively()
+                missing.clear()
+            }
+        },
+    )
 
     /** Fingerprints the server could not serve, with when it said so (asked again after [NEGATIVE_MS]). */
     private val missing = ConcurrentHashMap<String, Long>()
@@ -60,6 +97,7 @@ class ServerFiles(private val db: RevealDatabase, private val api: () -> SyncApi
             }
         }
         ranges.trim()
+        onTrimmed()
         return RemoteFile(size, fingerprint.removePrefix("v1:"), ranges) { offset, length ->
             client.readOriginal(fingerprint, offset, length)
         }
@@ -104,11 +142,13 @@ class ServerFiles(private val db: RevealDatabase, private val api: () -> SyncApi
     private fun trimPreviews() {
         val files = previews.listFiles()?.filter { it.isFile }?.sortedBy { it.lastModified() } ?: return
         var total = files.sumOf { it.length() }
+        val cap = minOf(PREVIEW_CACHE_BYTES, maxBytes())
         for (file in files) {
-            if (total <= PREVIEW_CACHE_BYTES) break
+            if (total <= cap) break
             total -= file.length()
             file.delete()
         }
+        onTrimmed()
     }
 
     /** Forgets every cached server file (unpair, "clear cache"). */

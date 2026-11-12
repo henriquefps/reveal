@@ -93,6 +93,8 @@ data class SyncUiState(
     val status: SyncStatus = SyncStatus(),
     val folders: List<BackupFolder> = emptyList(),
     val pairing: PairingState = PairingState.Idle,
+    /** "Photos opened from other apps": everything (true) or only edited photos (the default, FIX/W). */
+    val handoffBackup: Boolean = false,
 )
 
 /** What the Sync screen can ask for. */
@@ -105,6 +107,7 @@ data class SyncActions(
     val onPaste: (String) -> Unit = {},
     val onOptions: (SyncOptions) -> Unit = {},
     val onFolderBackup: (Long, Boolean) -> Unit = { _, _ -> },
+    val onHandoffBackup: (Boolean) -> Unit = {},
     val onSyncNow: () -> Unit = {},
     val onUnpair: () -> Unit = {},
 )
@@ -126,6 +129,8 @@ object SyncTags {
     const val UNPAIR = "sync_unpair"
     const val UNPAIR_CONFIRM = "sync_unpair_confirm"
 
+    const val HANDOFF_BACKUP = "sync_handoff_backup"
+
     fun folder(id: Long) = "sync_folder_$id"
 }
 
@@ -142,15 +147,16 @@ class SyncSettingsViewModel @Inject constructor(
         sync.account,
         sync.options,
         sync.status,
-        library.sources(),
+        combine(library.sources(), library.handoffBackup(), ::Pair),
         pairing,
-    ) { account, options, status, sources, pairingState ->
+    ) { account, options, status, (sources, handoffBackup), pairingState ->
         SyncUiState(
             account = account,
             options = options,
             status = status,
             folders = sources.map { BackupFolder(it.id, it.name, it.backup) },
             pairing = pairingState,
+            handoffBackup = handoffBackup,
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_MS), SyncUiState())
 
@@ -189,6 +195,13 @@ class SyncSettingsViewModel @Inject constructor(
         }
     }
 
+    fun setHandoffBackup(everything: Boolean) {
+        viewModelScope.launch {
+            lib.setHandoffBackup(everything)
+            SyncScheduler.blobs(context)
+        }
+    }
+
     fun syncNow() {
         SyncScheduler.now(context)
         SyncScheduler.blobs(context)
@@ -220,6 +233,7 @@ fun SyncSettingsScreen(
             onPaste = viewModel::pair,
             onOptions = viewModel::setOptions,
             onFolderBackup = viewModel::setFolderBackup,
+            onHandoffBackup = viewModel::setHandoffBackup,
             onSyncNow = viewModel::syncNow,
             onUnpair = viewModel::unpair,
         ),
@@ -421,7 +435,7 @@ private fun Paired(
             onChange = { actions.onOptions(options.copy(originalsWifiOnly = it)) },
             tag = SyncTags.WIFI_ONLY,
         )
-        if (options.originals && state.folders.isNotEmpty()) {
+        if (options.originals) {
             Eyebrow(
                 stringResource(R.string.sync_section_folders),
                 Modifier.padding(start = 16.dp, end = 16.dp, top = 12.dp),
@@ -444,6 +458,16 @@ private fun Paired(
                     tag = SyncTags.folder(folder.id),
                 )
             }
+            // Hand-offs: the same two modes, "Only photos you edit" by default (FIX/W).
+            SwitchRow(
+                title = stringResource(R.string.sync_handoff_backup),
+                subtitle = stringResource(
+                    if (state.handoffBackup) R.string.sync_folder_everything else R.string.sync_folder_edited,
+                ),
+                checked = state.handoffBackup,
+                onChange = actions.onHandoffBackup,
+                tag = SyncTags.HANDOFF_BACKUP,
+            )
         }
 
         Eyebrow(

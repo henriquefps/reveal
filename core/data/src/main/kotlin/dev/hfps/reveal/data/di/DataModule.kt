@@ -28,6 +28,8 @@ import dev.hfps.reveal.data.preset.AppBuiltInPresets
 import dev.hfps.reveal.data.preset.BuiltInPresetSource
 import dev.hfps.reveal.data.preset.PresetDownloader
 import dev.hfps.reveal.data.preset.PresetRepository
+import dev.hfps.reveal.data.storage.AppStorage
+import dev.hfps.reveal.data.storage.CacheBudget
 import dev.hfps.reveal.data.storage.SafDocumentTree
 import dev.hfps.reveal.data.storage.StorageVolumes
 import dev.hfps.reveal.data.sync.ServerTree
@@ -204,16 +206,48 @@ object DataModule {
         edits: EditRepository,
         edited: EditedThumbnails,
         previews: LocalPreviews,
+        budget: CacheBudget,
     ): ThumbnailRepository = ThumbnailRepository(
         db = database,
         trees = trees,
         edits = edits,
         edited = edited,
         dir = File(context.cacheDir, "thumbs"),
+        maxBytes = budget::cap,
         previews = previews,
         resolver = context.contentResolver,
         serverAuthority = ServerTree.authority(context.packageName),
+        onTrimmed = budget::requestTrim,
+    ).also(budget::register)
+
+    /** Settings -> Storage's maximum cache size and the LRU across caches (ADR 0018 FIX/W). */
+    @Provides
+    @Singleton
+    fun provideCacheBudget(@ApplicationContext context: Context, @DataScope scope: CoroutineScope): CacheBudget =
+        CacheBudget(context.getSharedPreferences(STORAGE_PREFS, Context.MODE_PRIVATE), scope)
+
+    @Provides
+    @Singleton
+    fun provideAppStorage(
+        @ApplicationContext context: Context,
+        database: RevealDatabase,
+        budget: CacheBudget,
+        previews: LocalPreviews,
+        // The areas register when they are made: make sure the thumbnails are.
+        @Suppress("UNUSED_PARAMETER") thumbnails: ThumbnailRepository,
+    ): AppStorage = AppStorage(
+        db = database,
+        budget = budget,
+        previews = previews,
+        cacheDir = context.cacheDir,
+        uploadsDir = File(context.noBackupFilesDir, "sync-previews"),
+        database = {
+            val main = context.getDatabasePath(RevealDatabase.NAME)
+            listOf(main, File(main.path + "-wal"), File(main.path + "-shm"))
+        },
     )
+
+    private const val STORAGE_PREFS = "storage"
 
     @Provides
     @Singleton

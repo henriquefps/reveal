@@ -3,10 +3,12 @@ package dev.hfps.reveal.sync
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsOff
+import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.v2.createEmptyComposeRule
+import androidx.compose.ui.test.onFirst
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -144,7 +146,9 @@ class ServerViewFlowTest {
 
     private fun openServerScope() {
         compose.waitUntilAtLeastOneExists(hasText(context.getString(LibraryR.string.library_server)), TIMEOUT_MS)
-        compose.onNodeWithText(context.getString(LibraryR.string.library_server)).performClick()
+        // The sources entry (a two-pane tablet that reopened Server also shows the name as the grid's title).
+        compose.onAllNodes(hasText(context.getString(LibraryR.string.library_server)) and hasClickAction())
+            .onFirst().performClick()
         compose.waitUntilAtLeastOneExists(hasTestTag(LibraryTags.GRID), TIMEOUT_MS)
     }
 
@@ -179,6 +183,54 @@ class ServerViewFlowTest {
             Espresso.pressBack()
         }
         folder.delete()
+    }
+
+    /**
+     * FIX/W: a portrait JPEG (EXIF 6, stored landscape) recorded by a device older than 0.5.4 (no orientation in the
+     * record, a capture time) reaches this device's Server source: its header is read again by range, and the
+     * viewer's image has an upright (portrait) full size, never the stored landscape one (it was stretched).
+     */
+    @Test
+    fun aPortraitServerPhotoIsShownUpright() {
+        val folder = SyntheticFolder("server-view-portrait")
+        val preview = folder.gradientJpeg(run + 7, 480, 320)
+        val jpeg = SyntheticShoot.jpeg(preview, folder.exif(run + 7).copy(orientation = 6))
+        folder.delete()
+        val stem = "SVO$run"
+        val data = PhotoData(
+            fingerprint = FileFingerprint.of(jpeg),
+            files = listOf(FileData(FileFingerprint.of(jpeg), "RENDERED", "$stem.JPG", jpeg.size.toLong())),
+            name = "$stem.JPG",
+            format = "JPEG",
+            captureTime = System.currentTimeMillis(),
+            width = 480,
+            height = 320,
+        )
+        other.push(
+            listOf(
+                PushChange(
+                    "photo",
+                    UUID.randomUUID().toString(),
+                    0,
+                    System.currentTimeMillis(),
+                    data = SyncApi.json.encodeToJsonElement(PhotoData.serializer(), data),
+                ),
+            ),
+        )
+        upload(jpeg)
+        val dao = access.database().photoDao()
+        compose.waitUntil(EDITOR_TIMEOUT_MS) {
+            runBlocking { sync.syncMetadata() }
+            val photo = runBlocking { library.photoList(PhotoQuery(scope = LibraryScope.Server)) }
+                .firstOrNull { it.name == "$stem.JPG" }
+            photo != null && runBlocking { dao.get(photo.id) }?.orientation == 6
+        }
+        val photo = runBlocking { library.photoList(PhotoQuery(scope = LibraryScope.Server)) }
+            .single { it.name == "$stem.JPG" }
+        val shown = checkNotNull(runBlocking { access.photoImages().display(photo.id, DISPLAY_EDGE) })
+        assertThat(shown.fullWidth).isLessThan(shown.fullHeight)
+        assertThat(shown.bitmap.width).isLessThan(shown.bitmap.height)
+        assertThat(shown.fullWidth to shown.fullHeight).isEqualTo(320 to 480)
     }
 
     @Suppress("LongMethod")
@@ -266,6 +318,7 @@ class ServerViewFlowTest {
 
         private const val SETTLE_MS = 800L
         private const val TIMEOUT_MS = 60_000L
+        private const val DISPLAY_EDGE = 1080
         private const val EDITOR_TIMEOUT_MS = 120_000L
         private const val RUN_SPACE = 100_000L
     }

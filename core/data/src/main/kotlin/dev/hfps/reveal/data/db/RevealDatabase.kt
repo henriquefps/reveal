@@ -23,6 +23,8 @@ import androidx.sqlite.db.SupportSQLiteDatabase
  * | 8 | Unreadable hand-offs (ADR 0011): `photo_files.unreadable_at` |
  * | 9 | Smart preview formats (ADR 0018 FIX/P): `photo_cloud.preview_format` |
  * | 10 | Server view (ADR 0018 FIX/V): `photo_files.on_server`, `sync_deletes` |
+ * | 11 | ADR 0018 FIX/W ([MIGRATION_10_11]): `versions.edit_device` / `edited_at`; Server photos read their header |
+ * |    | again, hand-offs back up only edited photos |
  *
  * Open it with [configure] (migrations and the sync triggers of [SyncTriggers]).
  */
@@ -74,10 +76,10 @@ abstract class RevealDatabase : RoomDatabase() {
 
     companion object {
         const val NAME = "reveal.db"
-        const val VERSION = 10
+        const val VERSION = 11
 
         /** Every manual migration, for `Room.databaseBuilder(...).addMigrations(*MIGRATIONS)`. */
-        val MIGRATIONS: Array<Migration> get() = arrayOf(MIGRATION_4_5)
+        val MIGRATIONS: Array<Migration> get() = arrayOf(MIGRATION_4_5, MIGRATION_10_11)
 
         /** The app's database setup for any builder (the app, tests): migrations and the sync triggers. */
         @Suppress("SpreadOperator") // once per open
@@ -104,6 +106,28 @@ abstract class RevealDatabase : RoomDatabase() {
                     db.execSQL("UPDATE `$table` SET `uuid` = $SQL_UUID")
                     db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_${table}_uuid` ON `$table` (`uuid`)")
                 }
+            }
+        }
+
+        /**
+         * 10 -> 11 (ADR 0018 FIX/W):
+         * - `versions.edit_device` / `edited_at`: who changed a version's edit last, and when (the conflict chooser);
+         *   unknown for existing rows.
+         * - Server photos read their header again (capture time, size, **orientation**): records from 0.5.3 and older
+         *   carried no orientation, so a portrait shot was stored landscape and the viewer stretched it. The update
+         *   touches only `metadata_state`, which no sync trigger watches.
+         * - "Opened from other apps" backs up only edited photos (it was "Everything" without ever asking); the
+         *   originals already uploaded stay on the server.
+         */
+        val MIGRATION_10_11 = object : Migration(10, 11) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `versions` ADD COLUMN `edit_device` TEXT")
+                db.execSQL("ALTER TABLE `versions` ADD COLUMN `edited_at` INTEGER")
+                db.execSQL(
+                    "UPDATE photos SET metadata_state = 'PENDING' WHERE source_id IN " +
+                        "(SELECT id FROM sources WHERE kind = 'SERVER')",
+                )
+                db.execSQL("UPDATE sources SET backup = 0 WHERE kind = 'HANDOFF'")
             }
         }
     }

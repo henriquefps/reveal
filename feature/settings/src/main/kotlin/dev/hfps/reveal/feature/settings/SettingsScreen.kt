@@ -48,6 +48,7 @@ import dev.hfps.reveal.designsystem.components.RevealScaffold
 import dev.hfps.reveal.designsystem.components.RevealTopBar
 import dev.hfps.reveal.designsystem.icons.PhosphorRegular
 import dev.hfps.reveal.designsystem.theme.RevealTheme
+import dev.hfps.reveal.feature.settings.storage.StorageScreen
 import dev.hfps.reveal.feature.settings.sync.SyncSettingsScreen
 import dev.hfps.reveal.sync.SyncRepository
 import javax.inject.Inject
@@ -90,10 +91,11 @@ class SettingsViewModel @Inject constructor(
     fun setAuthorship(value: Authorship) = preferences.setAuthorship(value)
 }
 
-/** Adds the settings destinations (Settings and its Sync screen). */
-fun NavGraphBuilder.settingsScreen(onBack: () -> Unit, onSync: () -> Unit) {
-    composable<SettingsRoute> { SettingsScreen(onBack = onBack, onSync = onSync) }
+/** Adds the settings destinations (Settings, its Sync and Storage screens). */
+fun NavGraphBuilder.settingsScreen(onBack: () -> Unit, onSync: () -> Unit, onStorage: () -> Unit = {}) {
+    composable<SettingsRoute> { SettingsScreen(onBack = onBack, onSync = onSync, onStorage = onStorage) }
     composable<SyncSettingsRoute> { SyncSettingsScreen(onBack = onBack) }
+    composable<StorageRoute> { StorageScreen(onBack = onBack) }
 }
 
 /** Test tags of the settings screen. */
@@ -102,6 +104,7 @@ object SettingsTags {
     const val COPYRIGHT = "settings_copyright"
     const val SYNC = "settings_sync"
     const val GALLERY = "settings_gallery"
+    const val STORAGE = "settings_storage"
 }
 
 @Composable
@@ -109,6 +112,7 @@ fun SettingsScreen(
     onBack: () -> Unit,
     onSync: () -> Unit,
     modifier: Modifier = Modifier,
+    onStorage: () -> Unit = {},
     viewModel: SettingsViewModel = hiltViewModel(),
 ) {
     val server by viewModel.server.collectAsStateWithLifecycle()
@@ -141,6 +145,7 @@ fun SettingsScreen(
         modifier = modifier,
         server = server,
         onSync = onSync,
+        onStorage = onStorage,
         gallery = gallery,
         onGallery = {
             // Turning it off (or widening "selected photos") happens in the system's page for the app.
@@ -171,6 +176,7 @@ fun SettingsContent(
     onSync: () -> Unit = {},
     gallery: GalleryAccessState = GalleryAccessState.NONE,
     onGallery: () -> Unit = {},
+    onStorage: () -> Unit = {},
 ) {
     RevealScaffold(
         modifier = modifier,
@@ -211,6 +217,16 @@ fun SettingsContent(
                 icon = PhosphorRegular.Image,
                 onClick = onGallery,
                 modifier = Modifier.testTag(SettingsTags.GALLERY),
+                trailing = {
+                    Icon(PhosphorRegular.CaretRight, null, tint = RevealTheme.colors.mutedForeground)
+                },
+            )
+            RevealListRow(
+                title = stringResource(R.string.storage_title),
+                subtitle = stringResource(R.string.settings_storage_subtitle),
+                icon = PhosphorRegular.Database,
+                onClick = onStorage,
+                modifier = Modifier.testTag(SettingsTags.STORAGE),
                 trailing = {
                     Icon(PhosphorRegular.CaretRight, null, tint = RevealTheme.colors.mutedForeground)
                 },

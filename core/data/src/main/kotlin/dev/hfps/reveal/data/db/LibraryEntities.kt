@@ -191,6 +191,13 @@ data class VersionEntity(
      */
     @ColumnInfo(name = "copy_of") val copyOf: String? = null,
     @ColumnInfo(name = "copy_device") val copyDevice: String? = null,
+    /**
+     * Who last changed this version's edit (ADR 0018 FIX/W, the conflict chooser): "" = this device, a device name for
+     * an edit sync applied, null = not known (versions from before database v11).
+     */
+    @ColumnInfo(name = "edit_device") val editDevice: String? = null,
+    /** When that change was made (the editing device's clock, Unix ms), null when not known. */
+    @ColumnInfo(name = "edited_at") val editedAt: Long? = null,
 )
 
 /** The committed recipe of a version (ADR 0003 JSON, `v` inside). Absent row = the default recipe. */

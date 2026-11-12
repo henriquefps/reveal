@@ -262,4 +262,12 @@
         <item quantity="one">%1$d photo deleted from the server</item>
         <item quantity="other">%1$d photos deleted from the server</item>
     </plurals>
+    <string name="conflict_title">Two versions of this photo</string>
+    <string name="conflict_body">It was edited on two devices at the same time. Keep one: the other is deleted on every device.</string>
+    <string name="conflict_main">Main version</string>
+    <string name="conflict_copy">Conflict copy</string>
+    <string name="conflict_this_device">This device</string>
+    <string name="conflict_device_unknown">Unknown device</string>
+    <string name="conflict_keep">Keep this one</string>
+    <string name="viewer_resolve_conflict">Resolve conflict</string>
 </resources>

@@ -77,6 +77,11 @@ which cameras correct already, keep it off). Photos edited before have history, 
 they were. The step is undoable, and `Recipe.isUnedited()` treats exactly that change as unedited, so the library's
 "edited" mark does not appear for it (the stored recipe, used by export and thumbnails, does include it).
 
+**Sync (FIX/W, 0.5.4).** The default is not an edit for sync either: a version holding only it is never pushed and
+adopts another device's edit, and the editor writes it only onto a still empty stored history
+(`HistoryOp.Commit(onlyIfEmpty = true)`), so opening a photo on a second device never makes a conflict copy or a second
+version (ADR 0018 amendment FIX/W).
+
 **Amounts** scale the deviation from the identity: `1 + a (distortion - 1)` and `illumination^a`. CA has no amount.
 **CA without profile data** (`CaEstimator`): red and blue modelled as green scaled about the centre; on edges across the
 radius, a global search of the scale (1e-4 steps, +-40e-4, parabola) minimises the mismatch of normalised radial

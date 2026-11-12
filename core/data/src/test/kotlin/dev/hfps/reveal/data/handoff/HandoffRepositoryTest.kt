@@ -25,6 +25,7 @@ import dev.hfps.reveal.pipeline.recipe.Light
 import dev.hfps.reveal.pipeline.recipe.Recipe
 import dev.hfps.reveal.pipeline.recipe.RecipeDiff
 import java.io.File
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Before
@@ -109,6 +110,26 @@ class HandoffRepositoryTest {
         assertThat(db.sourceDao().handoff()!!.kind).isEqualTo(SourceKind.HANDOFF)
         assertThat(db.sourceDao().all()).isEmpty()
         assertThat(db.photoDao().get(pair.id)!!.width).isEqualTo(6000)
+    }
+
+    @Test
+    fun `photos opened from other apps back up only edited ones unless everything is chosen`() = runTest {
+        val dir = temp.newFolder("backup")
+        repo.receive(HandoffRequest(listOf(jpeg(dir, "a.jpg"))))
+        assertThat(db.sourceDao().handoff()!!.backup).isFalse()
+        assertThat(HandoffBackup.everything(db)).isFalse()
+        HandoffBackup.set(db, everything = true)
+        assertThat(db.sourceDao().handoff()!!.backup).isTrue()
+        assertThat(HandoffBackup.observe(db).first()).isTrue()
+        HandoffBackup.set(db, everything = false)
+        assertThat(db.sourceDao().handoff()!!.backup).isFalse()
+    }
+
+    @Test
+    fun `the backup choice made before any hand-off applies to the source when it is made`() = runTest {
+        HandoffBackup.set(db, everything = true)
+        repo.receive(HandoffRequest(listOf(jpeg(temp.newFolder("later"), "b.jpg"))))
+        assertThat(db.sourceDao().handoff()!!.backup).isTrue()
     }
 
     @Test

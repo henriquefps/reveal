@@ -157,7 +157,7 @@ REVEAL_COLOUR_SHEET_DIR=$PWD/build/calibration REVEAL_RENDER_OUT=$PWD/docs/scree
 
 ## Library (`:core:data`, `:feature:library`, M1, ADR 0006)
 
-Room `RevealDatabase` v10 (sources, photos, photo_files, versions, recipes, history, history_cursor, cache_entries; sync tables v6; preset tables v7, ADR 0019; `photo_files.unreadable_at` v8, ADR 0011; `photo_cloud.preview_format` v9; `photo_files.on_server` + `sync_deletes` v10, ADR 0018 FIX/V);
+Room `RevealDatabase` v11 (sources, photos, photo_files, versions, recipes, history, history_cursor, cache_entries; sync tables v6; preset tables v7, ADR 0019; `photo_files.unreadable_at` v8, ADR 0011; `photo_cloud.preview_format` v9; `photo_files.on_server` + `sync_deletes` v10, ADR 0018 FIX/V; `versions.edit_device/edited_at` + data fixes v11, FIX/W);
 schema change = new version + migration (or `AutoMigration`) + exported `core/data/schemas/*.json`, tested by
 `RevealDatabaseMigrationTest`. `LibraryRepository` (sources, SAF grants, volumes, indexing, ratings/flags with XMP
 write-back), `LibraryIndexer` (walk → diff → sidecars → headers), `XmpReader`/`XmpWriter` (merge, never overwrite a
@@ -660,7 +660,17 @@ Deletes of originals queue in `sync_deletes` and go after the push (`BlobUploade
 Server photos into it (`HandoffMerge.mergeServerPhotosInto`, after every fingerprint pass). New folders back up only
 edited photos unless "Everything" is chosen (`addSource(uri, backup)`, `AddFolderBackupSheet`).
 
+FIX/W (0.5.4, ADR 0018 amendment, DB v11): `photo.data.orientation` (Server photos without it read their header;
+`DisplayImage.of`/`UprightSize` in the viewer); the lens profile default is never an edit for sync (`SyncStore
+.isAutomatic`, `HistoryOp.Commit(onlyIfEmpty)`); conflict chooser `feature/library/ConflictSheet.kt` +
+`SyncStore.conflict/keep` (`versions.edit_device/edited_at`); `HandoffBackup` (Settings -> Sync); Settings -> Storage
+(`:core:data/storage` `AppStorage`, `CacheBudget` + `CacheArea`: thumbnails and `ServerFiles.areas`;
+`feature/settings/storage/StorageScreen.kt`). A new disk cache: make it a `CacheArea`, register it with the budget,
+cap it at `budget::cap`, and add its directory to `AppStorage.AREA_DIRS`.
+
 ```sh
+./gradlew :core:sync:testDebugUnitTest --tests '*SyncPolishTest*'
+./gradlew :core:data:testDebugUnitTest --tests '*AppStorageTest*'
 ./gradlew :core:sync:testDebugUnitTest --tests '*ServerViewTest*'   # two devices: listing, 404 cause, removal, re-add, clean-up
 cd sync-server && go test -race ./internal/server/ -run 'Deleting|Tombstone'
 adb -s <serial> shell am instrument -w -e class dev.hfps.reveal.sync.ServerViewFlowTest -e syncLinks "'$L1,$L2'" dev.hfps.reveal.debug.test/androidx.test.runner.AndroidJUnitRunner

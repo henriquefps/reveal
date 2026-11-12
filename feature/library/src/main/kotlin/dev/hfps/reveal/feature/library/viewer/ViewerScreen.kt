@@ -61,11 +61,14 @@ import dev.hfps.reveal.data.thumb.RegionSource
 import dev.hfps.reveal.designsystem.components.PrimaryButton
 import dev.hfps.reveal.designsystem.components.RevealIconButton
 import dev.hfps.reveal.designsystem.components.RevealTopBar
+import dev.hfps.reveal.designsystem.components.SecondaryButton
 import dev.hfps.reveal.designsystem.components.UnavailablePlaceholder
 import dev.hfps.reveal.designsystem.icons.PhosphorFill
 import dev.hfps.reveal.designsystem.icons.PhosphorRegular
 import dev.hfps.reveal.designsystem.theme.EditorTheme
 import dev.hfps.reveal.designsystem.theme.RevealTheme
+import dev.hfps.reveal.feature.library.ConflictSheet
+import dev.hfps.reveal.feature.library.ConflictTags
 import dev.hfps.reveal.feature.library.ForgetDialog
 import dev.hfps.reveal.feature.library.R
 import dev.hfps.reveal.feature.library.TwoPaneMinWidth
@@ -145,11 +148,19 @@ fun ViewerScreen(
                         modifier = Modifier.align(Alignment.BottomCenter),
                     ) {
                         photo?.let { p ->
+                            val conflict by produceState(false, p.id, state.conflictsResolved) {
+                                value = viewModel.hasConflict(p.id)
+                            }
                             ViewerControls(
                                 photo = p,
                                 onRate = { viewModel.rate(p.id, it) },
                                 onFlag = { viewModel.flag(p.id, it) },
                                 onInfo = { info = p.id },
+                                onResolveConflict = if (conflict) {
+                                    { viewModel.openConflict(p.id, p.name) }
+                                } else {
+                                    null
+                                },
                                 onEdit = {
                                     scope.launch { viewModel.versionOf(p.id)?.let { onEdit(it, viewModel.strip) } }
                                 },
@@ -177,6 +188,14 @@ fun ViewerScreen(
                     onTryAgain = { viewModel.tryAgain(unavailable.photoId) },
                     onRemove = { viewModel.forget(unavailable.photoId, onBack) },
                     onDismiss = viewModel::dismissUnavailable,
+                )
+            }
+            state.conflict?.let { choice ->
+                ConflictSheet(
+                    choice = choice,
+                    thumbnail = { side -> viewModel.conflictThumbnail(choice.pair.photoId, side) },
+                    onKeep = viewModel::keepConflict,
+                    onDismiss = viewModel::dismissConflict,
                 )
             }
             state.forgetPrompt?.let { prompt ->
@@ -233,6 +252,7 @@ private const val CHROME_ALPHA = 0.72f
 private const val MIN_DISPLAY_EDGE = 1080
 private const val MAX_STARS = 5
 
+@Suppress("LongMethod")
 @Composable
 private fun ViewerControls(
     photo: PhotoEntity,
@@ -241,6 +261,7 @@ private fun ViewerControls(
     onInfo: () -> Unit,
     onEdit: () -> Unit,
     modifier: Modifier = Modifier,
+    onResolveConflict: (() -> Unit)? = null,
 ) {
     val colors = RevealTheme.colors
     Column(
@@ -288,6 +309,14 @@ private fun ViewerControls(
                 modifier = Modifier.testTag(ViewerTags.INFO),
             )
             Box(Modifier.weight(1f))
+            if (onResolveConflict != null) {
+                SecondaryButton(
+                    text = stringResource(R.string.viewer_resolve_conflict),
+                    onClick = onResolveConflict,
+                    icon = PhosphorRegular.GitBranch,
+                    modifier = Modifier.padding(end = 8.dp).testTag(ConflictTags.VIEWER_RESOLVE),
+                )
+            }
             PrimaryButton(
                 text = stringResource(R.string.viewer_edit),
                 onClick = onEdit,

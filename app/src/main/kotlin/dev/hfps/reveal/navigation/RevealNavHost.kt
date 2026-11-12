@@ -11,6 +11,7 @@ import dev.hfps.reveal.feature.editor.navigateToEditor
 import dev.hfps.reveal.feature.library.LibraryRoute
 import dev.hfps.reveal.feature.library.libraryScreens
 import dev.hfps.reveal.feature.settings.SettingsRoute
+import dev.hfps.reveal.feature.settings.StorageRoute
 import dev.hfps.reveal.feature.settings.SyncSettingsRoute
 import dev.hfps.reveal.feature.settings.settingsScreen
 import dev.hfps.reveal.ui.about.AboutScreen
@@ -45,6 +46,7 @@ fun RevealNavHost(
         settingsScreen(
             onBack = { navController.popBackStack() },
             onSync = { navController.navigate(SyncSettingsRoute) },
+            onStorage = { navController.navigate(StorageRoute) },
         )
         editorScreen(navController = navController, onBack = onEditorBack)
     }

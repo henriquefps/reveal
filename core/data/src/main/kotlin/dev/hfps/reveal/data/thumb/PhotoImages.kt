@@ -35,7 +35,37 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 /** A display image for the viewer and the upright pixel size of the photo it shows (for 100 % zoom). */
-class DisplayImage(val bitmap: Bitmap, val fullWidth: Int, val fullHeight: Int, val developed: Boolean)
+class DisplayImage(val bitmap: Bitmap, val fullWidth: Int, val fullHeight: Int, val developed: Boolean) {
+    companion object {
+        /**
+         * [bitmap] with the photo's upright full size ([fullWidth] x [fullHeight], 0 = unknown: the bitmap's own). A
+         * full size whose orientation disagrees with the decoded, upright image while its swap matches it is turned:
+         * a synced record without its orientation (0.5.3 and older, FIX/W) gave a portrait shot a landscape size and
+         * the viewer stretched it.
+         */
+        fun of(bitmap: Bitmap, fullWidth: Int, fullHeight: Int, developed: Boolean): DisplayImage {
+            val (w, h) = UprightSize.match(fullWidth, fullHeight, bitmap.width, bitmap.height)
+            return DisplayImage(bitmap, w, h, developed)
+        }
+    }
+}
+
+/** Reconciles a stored full size with an upright decoded image (FIX/W). Pure: JVM-tested. */
+object UprightSize {
+    /** Relative aspect difference still read as "the same shape" (a camera JPEG and its RAW differ by a few px). */
+    private const val TOLERANCE = 0.03f
+
+    fun match(fullWidth: Int, fullHeight: Int, imageWidth: Int, imageHeight: Int): Pair<Int, Int> {
+        val full = fullWidth to fullHeight
+        if (fullWidth <= 0 || fullHeight <= 0) return imageWidth to imageHeight
+        val square = fullWidth == fullHeight || imageWidth == imageHeight
+        val known = imageWidth > 0 && imageHeight > 0
+        val disagree = known && !square && (fullWidth > fullHeight) != (imageWidth > imageHeight)
+        val image = if (known) imageWidth.toFloat() / imageHeight else 0f
+        val swapped = fullHeight.toFloat() / fullWidth
+        return if (disagree && kotlin.math.abs(swapped - image) / image <= TOLERANCE) fullHeight to fullWidth else full
+    }
+}
 
 /**
  * Full-resolution regions of a photo's camera rendering (JPEG/HEIF/PNG/WebP) for 100 % zoom: `BitmapRegionDecoder` on
@@ -122,7 +152,7 @@ class PhotoImages(
         val (fullWidth, fullHeight) = fullSize(photo.width, photo.height, photo.orientation, opened)
         if (photo.hasEdit) {
             developed(photoId, longEdge)?.let {
-                return@withContext DisplayImage(it, fullWidth, fullHeight, developed = true)
+                return@withContext DisplayImage.of(it, fullWidth, fullHeight, developed = true)
             }
         }
         try {
@@ -135,12 +165,7 @@ class PhotoImages(
             }
             try {
                 val first = FirstImageLoader.load(raw, rendered, longEdge)
-                DisplayImage(
-                    first.bitmap,
-                    fullWidth.takeIf { it > 0 } ?: first.bitmap.width,
-                    fullHeight.takeIf { it > 0 } ?: first.bitmap.height,
-                    false,
-                )
+                DisplayImage.of(first.bitmap, fullWidth, fullHeight, false)
             } finally {
                 raw?.close()
                 rendered?.close()
@@ -213,12 +238,7 @@ class PhotoImages(
                 }
             }
         }.getOrNull() ?: return null
-        return DisplayImage(
-            first.bitmap,
-            fullWidth.takeIf { it > 0 } ?: first.bitmap.width,
-            fullHeight.takeIf { it > 0 } ?: first.bitmap.height,
-            false,
-        )
+        return DisplayImage.of(first.bitmap, fullWidth, fullHeight, false)
     }
 
     /** The local display image of an unreadable hand-off (ADR 0011), or null without one. */
@@ -228,12 +248,7 @@ class PhotoImages(
         photos.setUnreadable(main.documentId, clock())
         val bytes = fallbacks.localDisplayJpeg(main) ?: return null
         val bitmap = BitmapDecoding.decode(bytes, longEdge, 1).bitmap
-        return DisplayImage(
-            bitmap,
-            fullWidth.takeIf { it > 0 } ?: bitmap.width,
-            fullHeight.takeIf { it > 0 } ?: bitmap.height,
-            false,
-        )
+        return DisplayImage.of(bitmap, fullWidth, fullHeight, false)
     }
 
     /** Full-resolution regions of the camera rendering, or null (RAW only, unreadable, unsupported). */

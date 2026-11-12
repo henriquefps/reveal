@@ -1,9 +1,11 @@
 package dev.hfps.reveal.feature.editor
 
 import androidx.compose.runtime.Immutable
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.ImageBitmap
 import dev.hfps.reveal.feature.editor.edit.AsShot
 import dev.hfps.reveal.feature.editor.open.OpenError
+import dev.hfps.reveal.feature.editor.tools.ToolId
 import dev.hfps.reveal.pipeline.auto.AutoScope
 import dev.hfps.reveal.pipeline.gl.ClippingWarnings
 import dev.hfps.reveal.pipeline.gl.CompareMode
@@ -71,6 +73,8 @@ data class EditState(
     val pasteChooser: Set<RecipeGroup>? = null,
     /** The band the targeted adjustment leads with while a drag on the photo runs (the panel shows it). */
     val targetedBand: ColourBand? = null,
+    /** The band under a hovering pen while the targeted adjustment is on (its tooltip), `null` otherwise. */
+    val hoverBand: ColourBand? = null,
     /** The photo's lens profile (docs/adr/0015), `null` when none is known. */
     val lens: LensProfile? = null,
     /** The last Upright mode that found too few lines (the Transform tab says so), `null` otherwise. */
@@ -225,4 +229,12 @@ class EditorActions(
     /** Crop mode, Guided Upright: a guide was drawn (normalised lens-corrected image coordinates). */
     val onGuide: (GuideLine) -> Unit = {},
     val onClearGuides: () -> Unit = {},
+    /** The pen hovers the photo with the targeted adjustment on: the proxy image point, `null` when it leaves. */
+    val onTargetedHover: (Offset?) -> Unit = {},
+    /** Tablet filmstrip (and arrows, swipes): the editor moves to another photo's version, keeping the open tool. */
+    val onOpenPhoto: (versionId: Long, tool: ToolId) -> Unit = { _, _ -> },
+    /** Tablet: the filmstrip is shown (`true`) or hidden; remembered. */
+    val onFilmstrip: (Boolean) -> Unit = {},
+    /** Tablet: the side panel was resized to a width in dp; remembered. */
+    val onPanelWidth: (Float) -> Unit = {},
 )

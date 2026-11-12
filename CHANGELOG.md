@@ -35,8 +35,22 @@ All notable changes to Reveal are documented here. The format follows
   in the photo, and Guided Upright follows 2 to 4 lines you draw on the photo (with a magnifier). Upright sets the
   sliders, so you can fine-tune them after.
 - Auto straighten: the Auto chip next to the angle dial levels the photo from its own lines.
+- Tablets and unfolded foldables (840 dp and wider) get their own editor: the photo in the middle with a filmstrip of
+  the folder (or library view) underneath, the panel on the right (drag its edge to make it wider or narrower; the
+  width is remembered) and the tool rail. Tap a thumbnail, use the arrow keys or swipe the photo to move to the next
+  or previous photo without leaving the editor; each photo keeps its edit. The filmstrip can be hidden from the top
+  bar.
+- Rotating or folding/unfolding keeps the photo, the zoom, the open panel and sub-panel and every step.
+- S Pen and stylus: the pen is precise (smaller grab areas on curve points and crop handles), and while it hovers it
+  highlights the point or handle under it with its value (curve in/out, crop size, guide angle, the colour under the
+  targeted adjustment). Finger touches are ignored while the pen is down (palm rejection); with a pen, the targeted
+  adjustment follows the pen and the finger pans and zooms.
+- Keyboard shortcuts: Ctrl+Z undo, Ctrl+Shift+Z redo, `\` before/after, ← → previous/next photo, Z zoom to 100 %.
+- Library on tablets: the selection bar shows copy, paste, reset and export directly; the viewer shows the photo info
+  in a side panel next to the photo.
 
 ### Changed
+- On tablets, sheets (export, paste, numeric input) open as centred dialogs.
 - Pipeline version 9: lens corrections, defringe and the Transform (photos without them look exactly as before).
 - Detail sliders respond faster while dragging: sharpening on its own now keeps up with the 120 Hz display, and
   luminance noise reduction drags cost about a quarter less. Colour noise reduction removes slightly more colour noise.

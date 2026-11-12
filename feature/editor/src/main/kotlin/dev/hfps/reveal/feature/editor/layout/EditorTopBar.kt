@@ -71,7 +71,8 @@ import kotlinx.coroutines.withTimeoutOrNull
  * The editor's top bar (56dp): back, file name (13sp mono, ellipsised in the middle so the extension stays), undo,
  * redo, before/after ◐, more ⋯ and the primary Export. [compact] (landscape phone) keeps only the icons: no file
  * name, Export as an icon; [narrow] (phone portrait) shows Export as an icon-sized primary pill so the name gets the
- * width the icons do not need.
+ * width the icons do not need. [filmstrip] (tablet, opened from the library) adds the filmstrip's show/hide toggle:
+ * `true` = shown; `null` = no toggle.
  */
 @Composable
 fun EditorTopBar(
@@ -81,6 +82,7 @@ fun EditorTopBar(
     modifier: Modifier = Modifier,
     narrow: Boolean = false,
     onHistory: () -> Unit = {},
+    filmstrip: Boolean? = null,
 ) {
     RevealTopBar(
         title = if (compact) "" else state.fileName,
@@ -91,6 +93,7 @@ fun EditorTopBar(
         modifier = modifier.testTag(EditorTags.TOP_BAR),
     ) {
         val history = state.edit.history
+        if (filmstrip != null) FilmstripToggle(filmstrip, actions)
         RevealIconButton(
             icon = PhosphorRegular.ArrowUUpLeft,
             contentDescription = stringResource(R.string.editor_undo),
@@ -133,6 +136,20 @@ fun EditorTopBar(
             )
         }
     }
+}
+
+/** Shows or hides the tablet filmstrip ([shown] = it is shown now). */
+@Composable
+private fun FilmstripToggle(shown: Boolean, actions: EditorActions) {
+    RevealIconButton(
+        icon = if (shown) PhosphorFill.FilmStrip else PhosphorRegular.FilmStrip,
+        contentDescription = stringResource(
+            if (shown) R.string.editor_filmstrip_hide else R.string.editor_filmstrip_show,
+        ),
+        onClick = { actions.onFilmstrip(!shown) },
+        active = shown,
+        modifier = Modifier.testTag(EditorTags.FILMSTRIP_TOGGLE),
+    )
 }
 
 /** The compare views offered by a long-press on ◐, in menu order. */

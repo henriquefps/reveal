@@ -118,6 +118,7 @@
 
     <!-- Viewer -->
     <string name="viewer_position">%1$d of %2$d</string>
+    <string name="viewer_info_close">Close info</string>
     <string name="viewer_info">Info</string>
     <string name="viewer_edit">Edit</string>
     <string name="viewer_unavailable">This photo’s folder is not available right now.</string>

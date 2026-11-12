@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
@@ -19,13 +20,21 @@ import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performMouseInput
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import com.github.takahirom.roborazzi.ExperimentalRoborazziApi
 import com.github.takahirom.roborazzi.RoborazziOptions
 import com.github.takahirom.roborazzi.captureRoboImage
+import com.github.takahirom.roborazzi.captureScreenRoboImage
+import dev.hfps.reveal.data.db.PhotoRow
+import dev.hfps.reveal.data.editor.EditorLayout
+import dev.hfps.reveal.data.model.PhotoFormat
+import dev.hfps.reveal.data.model.PickFlag
+import dev.hfps.reveal.designsystem.components.RevealBottomSheet
 import dev.hfps.reveal.designsystem.components.slider.NumericInputContent
 import dev.hfps.reveal.designsystem.theme.EditorTheme
 import dev.hfps.reveal.designsystem.theme.RevealTheme
@@ -38,13 +47,23 @@ import dev.hfps.reveal.feature.editor.EditorUiState
 import dev.hfps.reveal.feature.editor.TargetedTarget
 import dev.hfps.reveal.feature.editor.ViewOptions
 import dev.hfps.reveal.feature.editor.edit.AsShot
+import dev.hfps.reveal.feature.editor.layout.FilmstripThumbs
+import dev.hfps.reveal.feature.editor.layout.FilmstripUi
 import dev.hfps.reveal.feature.editor.layout.PanelSnap
 import dev.hfps.reveal.feature.editor.panels.PasteChooserContent
 import dev.hfps.reveal.feature.editor.panels.toSliderSpec
 import dev.hfps.reveal.feature.editor.tools.ToolId
+import dev.hfps.reveal.feature.export.encode.EncoderSupport
+import dev.hfps.reveal.feature.export.model.ExportColour
+import dev.hfps.reveal.feature.export.model.ExportOptions
+import dev.hfps.reveal.feature.export.ui.ExportRequest
+import dev.hfps.reveal.feature.export.ui.ExportSheetActions
+import dev.hfps.reveal.feature.export.ui.ExportSheetContent
+import dev.hfps.reveal.feature.export.ui.ExportUiState
 import dev.hfps.reveal.pipeline.PipelineInput
 import dev.hfps.reveal.pipeline.cpu.CpuDevelop
 import dev.hfps.reveal.pipeline.cpu.ProfileLooks
+import dev.hfps.reveal.pipeline.export.PixelSize
 import dev.hfps.reveal.pipeline.geometry.CropEditing
 import dev.hfps.reveal.pipeline.gl.ClippingWarnings
 import dev.hfps.reveal.pipeline.gl.CompareMode
@@ -313,15 +332,105 @@ class EditorLandscapeScreenshotTest : EditorScreenshotBase("landscape") {
     @Test fun transform() = transformTab("transform")
 }
 
+/**
+ * The tablet layout (M2/E) on a Galaxy Tab S9 in landscape (2560x1600 at 274 dpi = 1495x934 dp; rendered at mdpi to
+ * keep the goldens small): full top bar, photo with the filmstrip, resizable panel, tool rail.
+ */
 @RunWith(AndroidJUnit4::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
-@Config(sdk = [35], qualifiers = "w1280dp-h800dp-hdpi")
+@Config(sdk = [35], qualifiers = "w1495dp-h934dp-mdpi")
 class EditorTabletScreenshotTest : EditorScreenshotBase("tablet") {
+    override val strip: FilmstripUi? get() = Strip.ui
+
     @Test fun light() = shoot("light") { Editor() }
 
     @Test fun split() = shoot("split") {
         Editor(view = ViewOptions(compare = CompareMode.Split(leftRight = true, position = 0.4f)))
     }
+
+    @Test fun lightFontScale200() = shoot("light_font200") { Scaled(2f) { Editor() } }
+
+    @Test fun colourMixer() = subPanel("colour_mixer", ToolId.COLOUR, EditorTags.MIXER_ROW)
+
+    @Test fun toneCurve() = subPanel("tone_curve", ToolId.LIGHT, EditorTags.TONE_CURVE_ROW)
+
+    @Test fun crop() = shoot("crop") { CropEditor() }
+
+    @Test fun transform() = transformTab("transform")
+
+    @Test fun transformFontScale200() = transformTab("transform_font200", fontScale = 2f)
+
+    @Test fun optics() = shoot("optics") {
+        Editor(tool = ToolId.OPTICS, optics = Photos.optics, lens = Photos.lens)
+    }
+
+    @Test fun effects() = shoot("effects") { Editor(tool = ToolId.EFFECTS, effects = Photos.effects) }
+
+    @Test fun detail() = shoot("detail") { Editor(tool = ToolId.DETAIL, detail = Photos.detail) }
+
+    @Test fun history() = shoot("history") { Editor(tool = ToolId.HISTORY, history = Photos.history) }
+
+    /** The panel dragged to its widest and the filmstrip hidden (both remembered). */
+    @Test fun widePanelNoFilmstrip() = shoot("wide_panel_no_filmstrip") {
+        Editor(layout = EditorLayout(panelWidthDp = 560f, filmstripVisible = false))
+    }
+
+    /** The export sheet opens as a centred dialog on a tablet. */
+    @OptIn(ExperimentalMaterial3Api::class)
+    @Test
+    fun exportSheet() {
+        composeRule.setContent {
+            Editor()
+            EditorTheme {
+                RevealBottomSheet(onDismissRequest = {}) { ExportSheetContent(Strip.export, ExportSheetActions()) }
+            }
+        }
+        composeRule.waitForIdle()
+        captureScreen("export_sheet")
+    }
+
+    /** A pen (here a mouse, the same hover path) over a curve point: ring and value tooltip. */
+    @Test fun toneCurveHover() {
+        composeRule.setContent { ToolsEditor(ToolId.LIGHT) }
+        openRow(EditorTags.TONE_CURVE_ROW)
+        composeRule.onNodeWithTag(EditorTags.CURVE_EDITOR).performMouseInput {
+            moveTo(Offset(width * 0.5f, height * 0.5f))
+        }
+        composeRule.waitForIdle()
+        capture("tone_curve_hover")
+    }
+}
+
+/** Tablet in portrait (Tab S9, 934x1495 dp): still the tablet layout, the photo column narrower. */
+@RunWith(AndroidJUnit4::class)
+@GraphicsMode(GraphicsMode.Mode.NATIVE)
+@Config(sdk = [35], qualifiers = "w934dp-h1495dp-mdpi")
+class EditorTabletPortraitScreenshotTest : EditorScreenshotBase("tablet_portrait") {
+    override val strip: FilmstripUi? get() = Strip.ui
+
+    @Test fun light() = shoot("light") { Editor() }
+
+    @Test fun lightFontScale200() = shoot("light_font200") { Scaled(2f) { Editor() } }
+
+    @Test fun colourMixer() = subPanel("colour_mixer", ToolId.COLOUR, EditorTags.MIXER_ROW)
+
+    @Test fun transform() = transformTab("transform")
+}
+
+/** A foldable's inner screen (Pixel 9 Pro Fold class, 852x883 dp): the tablet layout from 840 dp. */
+@RunWith(AndroidJUnit4::class)
+@GraphicsMode(GraphicsMode.Mode.NATIVE)
+@Config(sdk = [35], qualifiers = "w852dp-h883dp-mdpi")
+class EditorFoldableScreenshotTest : EditorScreenshotBase("foldable") {
+    override val strip: FilmstripUi? get() = Strip.ui
+
+    @Test fun light() = shoot("light") { Editor() }
+
+    @Test fun colourMixer() = subPanel("colour_mixer", ToolId.COLOUR, EditorTags.MIXER_ROW)
+
+    @Test fun transform() = transformTab("transform")
+
+    @Test fun colourFontScale200() = shoot("colour_font200") { Scaled(2f) { Editor(tool = ToolId.COLOUR) } }
 }
 
 abstract class EditorScreenshotBase(private val size: String) {
@@ -337,6 +446,20 @@ abstract class EditorScreenshotBase(private val size: String) {
 
     @get:Rule
     val composeRule = createComposeRule()
+
+    /** The filmstrip the layout shows (tablet classes); none on phones. */
+    protected open val strip: FilmstripUi? get() = null
+
+    /** Captures every window (the editor and a dialog over it). */
+    @OptIn(ExperimentalRoborazziApi::class)
+    protected fun captureScreen(name: String) {
+        captureScreenRoboImage(
+            "src/test/screenshots/editor/${size}_$name.png",
+            roborazziOptions = RoborazziOptions(
+                compareOptions = RoborazziOptions.CompareOptions(changeThreshold = ANTIALIAS_TOLERANCE),
+            ),
+        )
+    }
 
     protected fun shoot(name: String, content: @Composable () -> Unit) {
         composeRule.setContent(content)
@@ -366,6 +489,7 @@ abstract class EditorScreenshotBase(private val size: String) {
         effects: Effects = Effects(),
         optics: Optics = Optics(),
         lens: LensProfile? = null,
+        layout: EditorLayout = EditorLayout(),
     ) {
         val recipe = base.copy(geometry = geometry, detail = detail, effects = effects, optics = optics)
         EditorTheme {
@@ -392,6 +516,8 @@ abstract class EditorScreenshotBase(private val size: String) {
                 initialTool = tool,
                 initialSnap = snap,
                 initialMode = mode,
+                filmstrip = strip,
+                layout = layout,
             )
         }
     }
@@ -561,4 +687,45 @@ private object Photos {
         }
         return Bitmap.createBitmap(pixels, WIDTH, HEIGHT, Bitmap.Config.ARGB_8888).asImageBitmap()
     }
+}
+
+/** A folder of 40 photos for the filmstrip (the current one is the fifth): stars, flags and edits mixed. */
+private object Strip {
+    private val images = listOf(Photos.edited, Photos.original, Photos.toolsEdited, Photos.bwEdited)
+
+    private val rows = List(40) { i ->
+        PhotoRow(
+            id = i + 1L,
+            sourceId = 1,
+            name = "DSC%05d.ARW".format(i + 1),
+            format = PhotoFormat.RAW_PAIR,
+            sortTime = i.toLong(),
+            captureTime = i.toLong(),
+            rating = listOf(0, 3, 5, 0, 4, 0, 1, 0)[i % 8],
+            label = null,
+            flag = listOf(PickFlag.NONE, PickFlag.PICK, PickFlag.NONE, PickFlag.REJECT)[i % 4],
+            hasEdit = i % 3 != 1,
+            versionId = 100L + i,
+            editTime = null,
+        )
+    }
+
+    val ui = FilmstripUi(
+        photos = rows,
+        currentVersionId = 104L,
+        thumbs = object : FilmstripThumbs {
+            override fun cached(row: PhotoRow): ImageBitmap = images[(row.id % images.size).toInt()]
+
+            override suspend fun load(row: PhotoRow): ImageBitmap = cached(row)
+        },
+    )
+
+    val export = ExportUiState(
+        request = ExportRequest.Current(104L, null, "DSC00005.ARW", Recipe()),
+        options = ExportOptions(colour = ExportColour.DISPLAY_P3),
+        support = EncoderSupport(heif = true, heicCodec = false, hevcMain10 = false),
+        fullSize = PixelSize(6024, 4024),
+        outputSize = PixelSize(6024, 4024),
+        estimateBytes = 9_100_000,
+    )
 }

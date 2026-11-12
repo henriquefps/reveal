@@ -27,7 +27,7 @@ fun RevealNavHost(
     NavHost(navController = navController, startDestination = LibraryRoute(), modifier = modifier) {
         libraryScreens(
             navController = navController,
-            onEdit = { versionId -> navController.navigateToEditor(versionId) },
+            onEdit = { versionId, strip -> navController.navigateToEditor(versionId, strip) },
             onOpenFile = { uri -> navController.navigateToEditor(uri.toString()) },
             onGallery = { navController.navigate(GalleryRoute) },
             onAbout = { navController.navigate(AboutRoute) },
@@ -42,6 +42,6 @@ fun RevealNavHost(
         }
         composable<AboutRoute> { AboutScreen(onBack = { navController.popBackStack() }) }
         settingsScreen(onBack = { navController.popBackStack() })
-        editorScreen(onBack = onEditorBack)
+        editorScreen(navController = navController, onBack = onEditorBack)
     }
 }

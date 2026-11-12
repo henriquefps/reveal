@@ -70,6 +70,24 @@ class PanelNavigator {
     fun pop(): Boolean = stack.removeLastOrNull() != null
 
     fun clear() = stack.clear()
+
+    /** The stack's keys, bottom first (saved across configuration changes). */
+    val keys: List<String> get() = stack.map { it.key }
+
+    /** Rebuilds the stack from saved [keys]; unknown keys are dropped. */
+    fun restore(keys: List<String>) {
+        stack.clear()
+        keys.mapNotNullTo(stack) { SubPanels.byKey(it) }
+    }
+}
+
+/** Every sub-panel by key, so the open one survives a rotation or a fold (its content is a composable). */
+object SubPanels {
+    private val all: List<SubPanel> by lazy {
+        listOf(ProfileSubPanel, ToneCurveSubPanel, ColourMixerSubPanel, GreyMixerSubPanel, GradingSubPanel)
+    }
+
+    fun byKey(key: String): SubPanel? = all.firstOrNull { it.key == key }
 }
 
 /** Everything a panel's rows need: the state, the actions, the drag focus and the sub-panel navigator. */

@@ -239,4 +239,28 @@
     <string name="editor_transform_scale">Escala</string>
     <string name="editor_transform_offset_x">Deslocamento X</string>
     <string name="editor_transform_offset_y">Deslocamento Y</string>
+
+    <!-- Tablet layout (M2/E) -->
+    <plurals name="editor_filmstrip">
+        <item quantity="one">Filmstrip, %d foto</item>
+        <item quantity="many">Filmstrip, %d fotos</item>
+        <item quantity="other">Filmstrip, %d fotos</item>
+    </plurals>
+    <plurals name="editor_filmstrip_stars">
+        <item quantity="one">%d estrela</item>
+        <item quantity="many">%d estrelas</item>
+        <item quantity="other">%d estrelas</item>
+    </plurals>
+    <string name="editor_filmstrip_picked">Escolhida</string>
+    <string name="editor_filmstrip_rejected">Rejeitada</string>
+    <string name="editor_filmstrip_edited">Editada</string>
+    <string name="editor_filmstrip_show">Mostrar filmstrip</string>
+    <string name="editor_filmstrip_hide">Ocultar filmstrip</string>
+    <string name="editor_panel_resize">Largura do painel</string>
+    <string name="editor_panel_wider">Painel mais largo</string>
+    <string name="editor_panel_narrower">Painel mais estreito</string>
+    <string name="editor_hover_curve_point">Entrada %1$d · Saída %2$d</string>
+    <string name="editor_hover_crop_size">%1$d × %2$d px</string>
+    <string name="editor_hover_guide">Guia %1$s°</string>
+    <string name="editor_hover_targeted">%1$s · %2$s</string>
 </resources>

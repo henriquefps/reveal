@@ -27,7 +27,9 @@ import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.PointerInputChange
+import androidx.compose.ui.input.pointer.PointerType
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalViewConfiguration
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
@@ -43,6 +45,9 @@ import dev.hfps.reveal.designsystem.theme.HistogramColors
 import dev.hfps.reveal.designsystem.theme.RevealTheme
 import dev.hfps.reveal.feature.editor.EditorTags
 import dev.hfps.reveal.feature.editor.R
+import dev.hfps.reveal.feature.editor.canvas.HoverTooltipLayer
+import dev.hfps.reveal.feature.editor.canvas.penHover
+import dev.hfps.reveal.feature.editor.canvas.rememberPenHover
 import dev.hfps.reveal.feature.editor.edit.CurveEditing
 import dev.hfps.reveal.pipeline.cpu.ParametricCurveShape
 import dev.hfps.reveal.pipeline.gl.Histogram
@@ -100,6 +105,7 @@ fun CurveEditor(
     val currentCallbacks by rememberUpdatedState(callbacks)
     var active by remember { mutableStateOf<Int?>(null) }
     var removing by remember { mutableStateOf(false) }
+    val hover = rememberPenHover()
     val viewConfiguration = LocalViewConfiguration.current
     val channelColour = when ((target as? CurveTarget.Points)?.channel) {
         CurveChannel.RED -> HistogramColors.Red
@@ -122,12 +128,14 @@ fun CurveEditor(
         Modifier.pointerInput(target, side) {
             val w = size.width.toFloat()
             val h = size.height.toFloat()
-            val grab = GRAB.toPx()
             val offMargin = OFF_MARGIN.toPx() / w
             fun toCurve(p: Offset) = Offset(p.x / w, 1f - p.y / h)
             awaitEachGesture {
                 val down = awaitFirstDown()
                 down.consume()
+                // The pen is precise: a smaller grab radius, so it can pick one of two close points.
+                val grab = (if (down.type == PointerType.Stylus) PEN_GRAB else GRAB).toPx()
+                hover.at = null
                 val start = toCurve(down.position)
                 val drag = awaitTouchSlopOrCancellation(down.id) { change, _ -> change.consume() }
                 if (drag == null) {
@@ -225,9 +233,18 @@ fun CurveEditor(
                 }
             },
     ) {
+        val hoverAt = hover.at.takeIf { enabled }
+        val hovered = hoverAt?.let { at ->
+            with(LocalDensity.current) {
+                val px = side.toPx()
+                val r = PEN_GRAB.toPx() / px
+                CurveEditing.nearest(points, at.x / px, 1f - at.y / px, r, r)
+            }
+        }
         Canvas(
             Modifier
                 .size(side)
+                .penHover(hover)
                 .then(gestures),
         ) {
             drawGrid(colors.hairline)
@@ -266,6 +283,14 @@ fun CurveEditor(
                         }
                     }
                     drawCurve(channelColour) { CurveEditing.valueAt(points, it) }
+                    // The pen hovering: a ring on the point it would take, or a ghost where a tap would add one.
+                    if (hoverAt != null) {
+                        val ring = hovered?.let { points[it] }
+                        val gx = ring?.x ?: (hoverAt.x / size.width).coerceIn(0f, 1f)
+                        val gy = ring?.y ?: CurveEditing.valueAt(points, gx).coerceIn(0f, 1f)
+                        val c = Offset(gx * size.width, (1f - gy) * size.height)
+                        drawCircle(colors.primary, HOVER_RADIUS.toPx(), c, style = Stroke(STROKE.toPx()))
+                    }
                     points.forEachIndexed { i, p ->
                         val centre = Offset(p.x * size.width, (1f - p.y) * size.height)
                         val selected = i == active
@@ -283,6 +308,10 @@ fun CurveEditor(
         if (target is CurveTarget.Points) {
             points.forEachIndexed { i, p -> PointNode(i, p, points, side, enabled, callbacks) }
         }
+        if (hoverAt != null) {
+            val tip = hoverReadout(target, curves, points, hovered, hoverAt, side)
+            HoverTooltipLayer(tip, hoverAt, Modifier.matchParentSize())
+        }
         if (readout != null) {
             Text(
                 text = readout,
@@ -298,6 +327,26 @@ fun CurveEditor(
 }
 
 private const val READOUT_ALPHA = 0.85f
+
+/** The hover tooltip: the hovered point's levels, else the curve's value under the pen. */
+@Composable
+private fun hoverReadout(
+    target: CurveTarget,
+    curves: Curves,
+    points: List<CurvePoint>,
+    hovered: Int?,
+    at: Offset,
+    side: Dp,
+): String {
+    val px = with(LocalDensity.current) { side.toPx() }
+    val x = (at.x / px).coerceIn(0f, 1f)
+    val (inX, outY) = when {
+        hovered != null -> points[hovered].x to points[hovered].y
+        target is CurveTarget.Parametric -> x to CurveEditing.parametricAt(curves.parametric, x)
+        else -> x to CurveEditing.valueAt(points, x)
+    }
+    return stringResource(R.string.editor_hover_curve_point, CurveEditing.level(inX), CurveEditing.level(outY))
+}
 
 /** The accessibility node of point [index]: values, nudges, delete; it does not take touches. */
 @Composable
@@ -416,6 +465,10 @@ private const val DASH = 6f
 private val POINT_RADIUS = 6.dp
 private val STROKE = 2.dp
 private val GRAB = 24.dp
+
+/** The pen's grab radius (hover ring and drag): half the finger's. */
+private val PEN_GRAB = 12.dp
+private val HOVER_RADIUS = 10.dp
 private val OFF_MARGIN = 32.dp
 private val NODE = 24.dp
 

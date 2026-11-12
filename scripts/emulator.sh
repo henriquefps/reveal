@@ -4,7 +4,9 @@
 #
 #   scripts/emulator.sh create <name>            AVD: API 36.1 (else 36) google_apis_playstore for the host (arm64-v8a on
 #                                                the Mac, x86_64 on Linux), Pixel-like screen; EMULATOR_LCD=WxH@DPI
-#                                                overrides it (e.g. 1080x2340@450, the owner's Galaxy S24 Ultra)
+#                                                overrides it (e.g. 1080x2340@450, the owner's Galaxy S24 Ultra;
+#                                                2560x1600@274 a Galaxy Tab S9); EMULATOR_DEVICE=pixel_tablet picks a
+#                                                hardware profile (tablet layouts and rotation tests)
 #   scripts/emulator.sh start  <name> <port>     headless on emulator-<port> (5560-5590), waits until booted
 #   scripts/emulator.sh stop   <port>            kill emulator-<port>
 #   scripts/emulator.sh delete <name>            remove the AVD
@@ -29,6 +31,7 @@ IMAGE="system-images/$API/google_apis_playstore/$ABI/"
 LCD="${EMULATOR_LCD:-1080x2400@420}"
 LCD_W="${LCD%%x*}"; LCD_REST="${LCD#*x}"; LCD_H="${LCD_REST%@*}"; LCD_DPI="${LCD##*@}"
 GPU="${EMULATOR_GPU:-swiftshader_indirect}"
+DEVICE="${EMULATOR_DEVICE:-}"
 
 die() { echo "emulator.sh: $*" >&2; exit 1; }
 
@@ -65,6 +68,10 @@ tag.id=google_apis_playstore
 tag.display=Google Play
 showDeviceFrame=no
 INI
+    if [ -n "$DEVICE" ]; then
+      printf 'hw.device.name=%s\nhw.device.manufacturer=Google\nhw.initialOrientation=landscape\n' "$DEVICE" \
+        >> "$AVD_HOME/$name.avd/config.ini"
+    fi
     echo "created $name"
     ;;
   start)

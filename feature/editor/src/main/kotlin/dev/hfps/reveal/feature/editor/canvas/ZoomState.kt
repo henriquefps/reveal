@@ -103,6 +103,21 @@ class ZoomState(
         panBy(dx, dy)
     }
 
+    /** Where the view is, to restore it after a configuration change ([restore]); `null` at fit (the default). */
+    fun memory(): ZoomMemory? = if (isFit) null else ZoomMemory(scale, centerX, centerY)
+
+    /**
+     * Shows the view of [memory] again in the current view size: the same scale (100 % stays 100 %) clamped to the new
+     * fit/max, and the same image point at the centre, clamped to the image.
+     */
+    fun restore(memory: ZoomMemory) {
+        scale = memory.scale.coerceIn(fitScale, maxScale)
+        centerX = memory.centerX
+        centerY = memory.centerY
+        clampCenter()
+        publish()
+    }
+
     /** The scale a double tap goes to: 100 % from fit (or any scale below 100 %), fit otherwise. */
     fun doubleTapTarget(): Float = if (scale < oneToOneScale * ONE_TO_ONE_TOLERANCE) oneToOneScale else fitScale
 
@@ -140,3 +155,6 @@ class ZoomState(
         private const val SAME_SCALE_EPSILON = 1e-3f
     }
 }
+
+/** A zoomed-in view of the canvas ([ZoomState.memory]): scale and the image point at the centre. */
+data class ZoomMemory(val scale: Float, val centerX: Float, val centerY: Float)

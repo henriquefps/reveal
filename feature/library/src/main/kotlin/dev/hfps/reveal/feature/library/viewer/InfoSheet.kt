@@ -1,6 +1,7 @@
 package dev.hfps.reveal.feature.library.viewer
 
 import android.text.format.Formatter
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -10,10 +11,12 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.produceState
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
@@ -26,6 +29,8 @@ import dev.hfps.image.format.PhotoMetadata
 import dev.hfps.reveal.data.library.PhotoDetail
 import dev.hfps.reveal.designsystem.components.Eyebrow
 import dev.hfps.reveal.designsystem.components.RevealBottomSheet
+import dev.hfps.reveal.designsystem.components.RevealIconButton
+import dev.hfps.reveal.designsystem.icons.PhosphorRegular
 import dev.hfps.reveal.designsystem.theme.RevealTheme
 import dev.hfps.reveal.feature.library.R
 import java.text.DateFormat
@@ -44,6 +49,41 @@ fun InfoSheet(photoId: Long, pages: ViewerPages, onDismiss: () -> Unit, modifier
     RevealBottomSheet(onDismissRequest = onDismiss, modifier = modifier.testTag(ViewerTags.INFO_SHEET)) {
         val pair = loaded
         InfoContent(pair?.first, pair?.second)
+    }
+}
+
+/**
+ * The same details as a side panel beside the photo on wide windows (tablets, unfolded foldables): it follows the
+ * page shown, and [onClose] hides it.
+ */
+@Composable
+fun InfoPanel(photoId: Long, pages: ViewerPages, onClose: () -> Unit, modifier: Modifier = Modifier) {
+    val loaded by produceState<Pair<PhotoDetail, PhotoMetadata?>?>(null, photoId) {
+        val detail = pages.detail(photoId)
+        value = detail?.let { it to pages.metadata(it) }
+    }
+    val colors = RevealTheme.colors
+    Surface(
+        modifier = modifier
+            .padding(8.dp)
+            .testTag(ViewerTags.INFO_SHEET),
+        shape = RevealTheme.shapes.card,
+        color = colors.card,
+        contentColor = colors.cardForeground,
+        border = BorderStroke(1.dp, colors.hairline),
+    ) {
+        Column {
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(start = 20.dp)) {
+                Eyebrow(stringResource(R.string.viewer_info), Modifier.weight(1f))
+                RevealIconButton(
+                    icon = PhosphorRegular.X,
+                    contentDescription = stringResource(R.string.viewer_info_close),
+                    onClick = onClose,
+                )
+            }
+            val pair = loaded
+            InfoContent(pair?.first, pair?.second)
+        }
     }
 }
 

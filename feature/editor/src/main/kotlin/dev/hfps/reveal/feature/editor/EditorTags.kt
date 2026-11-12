@@ -28,6 +28,10 @@ object EditorTags {
     const val PANEL = "editor-panel"
     const val PANEL_HEADER = "editor-panel-header"
     const val PANEL_RESET = "editor-panel-reset"
+    const val PANEL_RESIZE = "editor-panel-resize"
+    const val FILMSTRIP = "editor-filmstrip"
+    const val FILMSTRIP_TOGGLE = "editor-filmstrip-toggle"
+    const val HOVER_TOOLTIP = "editor-hover-tooltip"
     const val PANEL_BACK = "editor-panel-back"
     const val PANEL_AUTO = "editor-panel-auto"
     const val PROFILE_ROW = "editor-profile-row"
@@ -126,4 +130,7 @@ object EditorTags {
     fun aspect(preset: AspectPreset): String = "editor-crop-aspect-${preset.name.lowercase()}"
 
     fun upright(mode: dev.hfps.reveal.pipeline.recipe.UprightMode): String = "editor-upright-${mode.name.lowercase()}"
+
+    /** The filmstrip cell of a photo's version. */
+    fun filmstripCell(versionId: Long): String = "editor-filmstrip-$versionId"
 }

@@ -7,13 +7,17 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.systemBarsPadding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
@@ -57,6 +61,7 @@ import dev.hfps.reveal.designsystem.icons.PhosphorRegular
 import dev.hfps.reveal.designsystem.theme.EditorTheme
 import dev.hfps.reveal.designsystem.theme.RevealTheme
 import dev.hfps.reveal.feature.library.R
+import dev.hfps.reveal.feature.library.TwoPaneMinWidth
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
@@ -68,10 +73,11 @@ import kotlinx.coroutines.withContext
  * The full-screen viewer (always dark, zero-chroma surround like the editor): swipe between photos (pairs are one
  * page), pinch or double-tap to 100 %, tap to hide the controls, rate and flag, info sheet, "Edit".
  */
+@Suppress("LongMethod")
 @Composable
 fun ViewerScreen(
     onBack: () -> Unit,
-    onEdit: (versionId: Long) -> Unit,
+    onEdit: (versionId: Long, strip: String?) -> Unit,
     modifier: Modifier = Modifier,
     viewModel: ViewerViewModel = hiltViewModel(),
 ) {
@@ -82,57 +88,79 @@ fun ViewerScreen(
     val scope = rememberCoroutineScope()
     BackHandler(onBack = onBack)
     EditorTheme {
-        Box(modifier.fillMaxSize().background(RevealTheme.colors.background)) {
-            if (!state.loaded) return@Box
-            val pager = rememberPagerState(initialPage = state.start) { state.ids.size }
-            var zoomed by remember { mutableStateOf(false) }
-            HorizontalPager(
-                state = pager,
-                userScrollEnabled = !zoomed,
-                key = { state.ids[it] },
-                beyondViewportPageCount = 1,
-                modifier = Modifier.fillMaxSize().testTag(ViewerTags.PAGER),
-            ) { page ->
-                val id = state.ids[page]
-                ViewerPage(
-                    id = id,
-                    pages = pages,
-                    active = pager.currentPage == page,
-                    onTap = { chrome = !chrome },
-                    onZoomChange = { if (pager.currentPage == page) zoomed = it },
-                )
-            }
-            val currentId = state.ids.getOrNull(pager.currentPage)
-            val photo by remember(currentId) { currentId?.let(viewModel::photo) ?: flowOf(null) }
-                .collectAsStateWithLifecycle(null)
-            ViewerTopChrome(
-                visible = chrome,
-                title = photo?.name.orEmpty(),
-                position = pager.currentPage + 1,
-                total = state.ids.size,
-                onBack = onBack,
-                modifier = Modifier.align(Alignment.TopCenter),
-            )
-            AnimatedVisibility(
-                chrome,
-                enter = fadeIn(),
-                exit = fadeOut(),
-                modifier = Modifier.align(Alignment.BottomCenter),
-            ) {
-                photo?.let { p ->
-                    ViewerControls(
-                        photo = p,
-                        onRate = { viewModel.rate(p.id, it) },
-                        onFlag = { viewModel.flag(p.id, it) },
-                        onInfo = { info = p.id },
-                        onEdit = { scope.launch { viewModel.versionOf(p.id)?.let(onEdit) } },
+        BoxWithConstraints(modifier.fillMaxSize().background(RevealTheme.colors.background)) {
+            val wide = maxWidth >= TwoPaneMinWidth
+            // The info side panel closes on back before the viewer does (the phone's sheet has its own window).
+            BackHandler(enabled = wide && info != null) { info = null }
+            Row(Modifier.fillMaxSize()) {
+                Box(Modifier.weight(1f).fillMaxHeight()) {
+                    if (!state.loaded) return@Box
+                    val pager = rememberPagerState(initialPage = state.start) { state.ids.size }
+                    var zoomed by remember { mutableStateOf(false) }
+                    HorizontalPager(
+                        state = pager,
+                        userScrollEnabled = !zoomed,
+                        key = { state.ids[it] },
+                        beyondViewportPageCount = 1,
+                        modifier = Modifier.fillMaxSize().testTag(ViewerTags.PAGER),
+                    ) { page ->
+                        val id = state.ids[page]
+                        ViewerPage(
+                            id = id,
+                            pages = pages,
+                            active = pager.currentPage == page,
+                            onTap = { chrome = !chrome },
+                            onZoomChange = { if (pager.currentPage == page) zoomed = it },
+                        )
+                    }
+                    val currentId = state.ids.getOrNull(pager.currentPage)
+                    val photo by remember(currentId) { currentId?.let(viewModel::photo) ?: flowOf(null) }
+                        .collectAsStateWithLifecycle(null)
+                    ViewerTopChrome(
+                        visible = chrome,
+                        title = photo?.name.orEmpty(),
+                        position = pager.currentPage + 1,
+                        total = state.ids.size,
+                        onBack = onBack,
+                        modifier = Modifier.align(Alignment.TopCenter),
+                    )
+                    androidx.compose.animation.AnimatedVisibility(
+                        chrome,
+                        enter = fadeIn(),
+                        exit = fadeOut(),
+                        modifier = Modifier.align(Alignment.BottomCenter),
+                    ) {
+                        photo?.let { p ->
+                            ViewerControls(
+                                photo = p,
+                                onRate = { viewModel.rate(p.id, it) },
+                                onFlag = { viewModel.flag(p.id, it) },
+                                onInfo = { info = p.id },
+                                onEdit = {
+                                    scope.launch { viewModel.versionOf(p.id)?.let { onEdit(it, viewModel.strip) } }
+                                },
+                            )
+                        }
+                    }
+                    // The side panel follows the page on wide windows.
+                    LaunchedEffect(currentId, wide) { if (wide && info != null && currentId != null) info = currentId }
+                }
+                val shown = info
+                if (wide && shown != null) {
+                    InfoPanel(
+                        photoId = shown,
+                        pages = pages,
+                        onClose = { info = null },
+                        modifier = Modifier.width(InfoPanelWidth).fillMaxHeight().systemBarsPadding(),
                     )
                 }
             }
+            if (!wide) info?.let { id -> InfoSheet(photoId = id, pages = pages, onDismiss = { info = null }) }
         }
-        info?.let { id -> InfoSheet(photoId = id, pages = pages, onDismiss = { info = null }) }
     }
 }
+
+private val InfoPanelWidth = 360.dp
 
 /** The top bar over the photo: back, file name, position. Hidden with a tap on the photo. */
 @Composable

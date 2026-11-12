@@ -29,9 +29,11 @@ import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.AwaitPointerEventScope
 import androidx.compose.ui.input.pointer.PointerId
+import androidx.compose.ui.input.pointer.PointerType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChanged
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
@@ -43,6 +45,9 @@ import dev.hfps.reveal.designsystem.theme.RevealTheme
 import dev.hfps.reveal.feature.editor.EditorPhase
 import dev.hfps.reveal.feature.editor.EditorTags
 import dev.hfps.reveal.feature.editor.R
+import dev.hfps.reveal.feature.editor.canvas.HoverTooltipLayer
+import dev.hfps.reveal.feature.editor.canvas.penHover
+import dev.hfps.reveal.feature.editor.canvas.rememberPenHover
 import dev.hfps.reveal.feature.editor.tools.ModeHost
 import dev.hfps.reveal.pipeline.geometry.Box
 import dev.hfps.reveal.pipeline.geometry.CropEditing
@@ -51,7 +56,9 @@ import dev.hfps.reveal.pipeline.gl.ViewTransform
 import dev.hfps.reveal.pipeline.recipe.Geometry
 import dev.hfps.reveal.pipeline.recipe.GuideLine
 import dev.hfps.reveal.pipeline.recipe.UprightMode
+import kotlin.math.atan2
 import kotlin.math.hypot
+import kotlin.math.roundToInt
 import kotlinx.coroutines.launch
 
 /**
@@ -100,13 +107,31 @@ fun BoxScope.CropOverlay(host: ModeHost, modifier: Modifier = Modifier) {
     val line = colors.foreground
     val accent = colors.primary
 
+    val hover = rememberPenHover()
+    val penLoupe = Modifier.penHover(session) { at ->
+        hover.at = at
+        // Guided Upright with a pen: the loupe follows the hovering tip, so the guide starts exactly where it lands.
+        if (session.guideTool) {
+            val size = with(density) { LOUPE_SIZE.toPx() }
+            val lift = with(density) { LOUPE_LIFT.toPx() }
+            host.photo.showCropLoupe(
+                at,
+                at?.let { Offset(it.x, (it.y - lift).coerceAtLeast(size / 2f)) } ?: Offset.Zero,
+                size,
+                currentView,
+            )
+        }
+    }
+
     val gestures = Modifier.pointerInput(width, height) {
-        val handleRadius = HANDLE_TOUCH.toPx()
         val minFrame = MIN_FRAME.toPx()
         val minLine = MIN_HORIZON.toPx()
         awaitEachGesture {
             val down = awaitFirstDown()
             down.consume()
+            hover.at = null
+            // The pen is precise: a smaller handle radius, so it can grab an edge next to a corner.
+            val handleRadius = (if (down.type == PointerType.Stylus) PEN_HANDLE_TOUCH else HANDLE_TOUCH).toPx()
             val g0 = currentGeometry
             val view0 = currentView
             val frame0 = CropEditing.frame(g0, width, height)
@@ -201,12 +226,26 @@ fun BoxScope.CropOverlay(host: ModeHost, modifier: Modifier = Modifier) {
             }
         }
     }
+    val hoverAt = hover.at
+    val penHandle = with(density) { PEN_HANDLE_TOUCH.toPx() }
+    val hoveredHandle = hoverAt?.takeIf { !session.horizonTool && !session.guideTool && slot != IntSize.Zero }?.let {
+        hitHandle(frame, shown, it, slot.width.toFloat(), slot.height.toFloat(), penHandle)
+    }
+    val hoveredGuide = hoverAt?.takeIf { session.guideTool && slot != IntSize.Zero }?.let { at ->
+        geometry.transform.guides.firstNotNullOfOrNull { guide ->
+            val size = Size(slot.width.toFloat(), slot.height.toFloat())
+            val a = Guides.toSlot(geometry, shown, guide.x0, guide.y0, size, width, height)
+            val b = Guides.toSlot(geometry, shown, guide.x1, guide.y1, size, width, height)
+            if (a != null && b != null && distanceToSegment(at, a, b) <= penHandle) a to b else null
+        }
+    }
     Canvas(
         modifier = modifier
             .fillMaxSize()
             .onSizeChanged { slot = it }
             .testTag(EditorTags.CROP_OVERLAY)
             .semantics { contentDescription = description }
+            .then(penLoupe)
             .then(gestures),
     ) {
         if (slot == IntSize.Zero) return@Canvas
@@ -214,7 +253,8 @@ fun BoxScope.CropOverlay(host: ModeHost, modifier: Modifier = Modifier) {
         drawScrim(r, scrim)
         drawGrid(r, session.grid, line.copy(alpha = GRID_ALPHA))
         drawRect(line, r.topLeft, r.size, style = Stroke(1.dp.toPx()))
-        drawHandles(r, line)
+        drawHandles(r, line, hoveredHandle, accent)
+        hoveredGuide?.let { (a, b) -> drawLine(accent, a, b, 4.dp.toPx()) }
         session.horizonLine?.let { (a, b) -> drawLine(accent, a, b, 2.dp.toPx()) }
         if (session.guideTool || geometry.transform.upright == UprightMode.GUIDED) {
             for (guide in geometry.transform.guides) {
@@ -227,6 +267,45 @@ fun BoxScope.CropOverlay(host: ModeHost, modifier: Modifier = Modifier) {
         }
         session.guideLine?.let { (a, b) -> drawLine(accent, a, b, 2.dp.toPx()) }
     }
+    val tooltip = when {
+        hoveredHandle != null -> {
+            val scale = ready.hundredPercentScale
+            stringResource(
+                R.string.editor_hover_crop_size,
+                (frame.width * scale).roundToInt(),
+                (frame.height * scale).roundToInt(),
+            )
+        }
+
+        hoveredGuide != null -> {
+            val (a, b) = hoveredGuide
+            stringResource(
+                R.string.editor_hover_guide,
+                "%.1f".format(LocalConfiguration.current.locales[0], axisAngle(a, b)),
+            )
+        }
+
+        else -> null
+    }
+    HoverTooltipLayer(tooltip, hoverAt, Modifier.matchParentSize())
+}
+
+/** Distance from [p] to the segment [a]-[b]. */
+internal fun distanceToSegment(p: Offset, a: Offset, b: Offset): Float {
+    val ab = b - a
+    val len2 = ab.x * ab.x + ab.y * ab.y
+    if (len2 == 0f) return (p - a).getDistance()
+    val t = (((p.x - a.x) * ab.x + (p.y - a.y) * ab.y) / len2).coerceIn(0f, 1f)
+    return (p - (a + ab * t)).getDistance()
+}
+
+/** The tilt of the segment [a]-[b] from the nearest axis (horizontal or vertical), in degrees, signed. */
+internal fun axisAngle(a: Offset, b: Offset): Double {
+    val deg = Math.toDegrees(atan2((b.y - a.y).toDouble(), (b.x - a.x).toDouble()))
+    // Fold to -45..45 around the nearest axis.
+    var t = ((deg % 90.0) + 90.0) % 90.0
+    if (t > 45.0) t -= 90.0
+    return t
 }
 
 /** Follows pointer [id] until it lifts, calling [onMove] with each new position; returns the last position. */
@@ -338,12 +417,13 @@ private fun DrawScope.drawGrid(r: Rect, grid: CropGrid, colour: Color) {
     }
 }
 
-/** L-shaped corner handles and short bars at the middle of each edge. */
+/** L-shaped corner handles and short bars at the middle of each edge; the [hovered] one in [accent]. */
 @Suppress("CyclomaticComplexMethod")
-private fun DrawScope.drawHandles(r: Rect, colour: Color) {
+private fun DrawScope.drawHandles(r: Rect, base: Color, hovered: CropHandle?, accent: Color) {
     val t = HANDLE_THICKNESS.toPx()
     val len = HANDLE_LENGTH.toPx().coerceAtMost(minOf(r.width, r.height) / 3f)
     for (h in CropHandle.entries) {
+        val colour = if (h == hovered) accent else base
         val x = when (h.hx) {
             -1 -> r.left
             1 -> r.right
@@ -374,6 +454,9 @@ private val FRAME_MARGIN = 28.dp
 private val LOUPE_SIZE = 112.dp
 private val LOUPE_LIFT = 96.dp
 private val HANDLE_TOUCH = 32.dp
+
+/** The pen's handle radius (and the hover's): precise enough to tell an edge from the corner beside it. */
+private val PEN_HANDLE_TOUCH = 20.dp
 private val HANDLE_THICKNESS = 3.dp
 private val HANDLE_LENGTH = 20.dp
 private val MIN_FRAME = 48.dp

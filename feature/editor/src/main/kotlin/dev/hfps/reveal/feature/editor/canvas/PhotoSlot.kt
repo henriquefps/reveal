@@ -45,6 +45,9 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.PointerEventType
+import androidx.compose.ui.input.pointer.PointerType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -67,10 +70,14 @@ import dev.hfps.reveal.feature.editor.EditorPhase
 import dev.hfps.reveal.feature.editor.EditorTags
 import dev.hfps.reveal.feature.editor.EditorUiState
 import dev.hfps.reveal.feature.editor.R
+import dev.hfps.reveal.feature.editor.TargetedTarget
+import dev.hfps.reveal.feature.editor.edit.RecipeControls
 import dev.hfps.reveal.feature.editor.open.OpenError
 import dev.hfps.reveal.pipeline.HistoryLabels
 import dev.hfps.reveal.pipeline.geometry.GeometryMapping
 import dev.hfps.reveal.pipeline.gl.CompareMode
+import dev.hfps.reveal.pipeline.recipe.ControlId
+import dev.hfps.reveal.pipeline.recipe.RecipeRanges
 import kotlin.math.roundToInt
 
 /**
@@ -81,6 +88,7 @@ import kotlin.math.roundToInt
  *
  * @param chromeVisible false in immersive mode: the histogram and hints hide with the rest of the chrome.
  * @param modeOverlay the active mode's overlay (Crop frame, mask pins), in frame coordinates.
+ * @param onSwipe the tablet filmstrip's swipe at fit: `1` next photo, `-1` previous; `null` = no swipe.
  */
 @Suppress("LongParameterList", "LongMethod", "CyclomaticComplexMethod")
 @Composable
@@ -92,6 +100,7 @@ fun PhotoSlot(
     onToggleChrome: () -> Unit,
     modifier: Modifier = Modifier,
     modeOverlay: (@Composable BoxScope.() -> Unit)? = null,
+    onSwipe: ((Int) -> Unit)? = null,
 ) {
     val phase = state.phase
     val scope = rememberCoroutineScope()
@@ -108,10 +117,20 @@ fun PhotoSlot(
             state.view.eyedropper && phase is EditorPhase.Ready ->
                 Modifier.eyedropperGestures(controller, phase, state, actions)
 
+            // Once a pen has been used the pen adjusts and the finger pans and zooms (no tool switch). The targeted
+            // gesture is the inner modifier: it sees the Main pass first and consumes what it takes.
             state.view.targeted != null && phase is EditorPhase.Ready ->
-                Modifier.targetedGestures(controller, phase, state, actions)
+                Modifier
+                    .canvasGestures(zoom, scope, onTap = onToggleChrome, onHold = actions.onShowOriginal)
+                    .targetedGestures(controller, phase, state, actions)
 
-            else -> Modifier.canvasGestures(zoom, scope, onTap = onToggleChrome, onHold = actions.onShowOriginal)
+            else -> Modifier.canvasGestures(
+                zoom,
+                scope,
+                onTap = onToggleChrome,
+                onSwipe = onSwipe,
+                onHold = actions.onShowOriginal,
+            )
         }
         val photoDescription = stringResource(R.string.editor_photo_actions)
         Box(
@@ -155,7 +174,10 @@ fun PhotoSlot(
                 HistogramView(state.histogram, state.view.clipping, actions.onClipping)
             }
             if (state.view.eyedropper) EyedropperHint(actions, Modifier.align(Alignment.TopCenter))
-            if (state.view.targeted != null) TargetedHint(state, actions, Modifier.align(Alignment.TopCenter))
+            if (state.view.targeted != null) {
+                TargetedHint(state, actions, Modifier.align(Alignment.TopCenter))
+                TargetedHoverTooltip(state, controller, Modifier.matchParentSize())
+            }
             EyedropperLoupe(controller)
         }
     }
@@ -290,9 +312,13 @@ private fun Modifier.targetedGestures(
 ): Modifier {
     val mapping = GeometryMapping.of(state.edit.recipe, state.edit.lens, ready.width, ready.height)
     val currentActions by rememberUpdatedState(actions)
-    return pointerInput(controller, ready, mapping) {
+    return targetedHover(controller, mapping, actions).pointerInput(controller, ready, mapping) {
         awaitEachGesture {
             val down = awaitFirstDown()
+            val pen = down.type == PointerType.Stylus
+            if (pen) controller.penSeen = true
+            // With a pen in use, fingers fall through to the canvas gestures (pan, zoom).
+            if (!pen && controller.penSeen) return@awaitEachGesture
             down.consume()
             val image = controller.imagePoint(down.position, mapping) ?: return@awaitEachGesture
             currentActions.onTargetedStart(image.x, image.y)
@@ -304,6 +330,50 @@ private fun Modifier.targetedGestures(
             }
             change?.consume()
             currentActions.onTargetedEnd()
+        }
+    }
+}
+
+/** The band and its value under the hovering pen, next to the tip. */
+@Composable
+private fun TargetedHoverTooltip(state: EditorUiState, controller: PhotoController, modifier: Modifier = Modifier) {
+    val band = state.edit.hoverBand
+    val target = state.view.targeted
+    val at = controller.penHover
+    if (band == null || target == null || at == null) return
+    val prefix = when (target) {
+        TargetedTarget.HUE -> "HUE"
+        TargetedTarget.SATURATION -> "SAT"
+        TargetedTarget.LUMINANCE -> "LUM"
+        TargetedTarget.GREY -> "GREY"
+    }
+    val id = ControlId.valueOf("${prefix}_${band.name}")
+    val value = RecipeRanges[id].format(RecipeControls.get(state.edit.recipe, id, state.edit.asShot))
+    val text = stringResource(R.string.editor_hover_targeted, stringResource(HistoryLabels.bandName(band)), value)
+    HoverTooltipLayer(text, at, modifier)
+}
+
+/** A hovering pen over the photo with the targeted adjustment on: where it is, and the band under it (tooltip). */
+@Composable
+private fun Modifier.targetedHover(
+    controller: PhotoController,
+    mapping: GeometryMapping,
+    actions: EditorActions,
+): Modifier {
+    val currentActions by rememberUpdatedState(actions)
+    return pointerInput(controller, mapping) {
+        awaitPointerEventScope {
+            while (true) {
+                val event = awaitPointerEvent(PointerEventPass.Initial)
+                val change = event.changes.firstOrNull()
+                if (change != null && change.type == PointerType.Stylus) {
+                    controller.penSeen = true
+                    val leaving = event.type == PointerEventType.Exit || change.pressed
+                    val at = if (leaving) null else change.position
+                    controller.penHover = at
+                    currentActions.onTargetedHover(at?.let { controller.imagePoint(it, mapping) })
+                }
+            }
         }
     }
 }

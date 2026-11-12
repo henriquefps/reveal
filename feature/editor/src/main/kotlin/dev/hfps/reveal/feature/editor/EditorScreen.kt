@@ -52,6 +52,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import dev.hfps.reveal.data.editor.EditorLayout
 import dev.hfps.reveal.designsystem.components.Eyebrow
 import dev.hfps.reveal.designsystem.components.RevealIconButton
 import dev.hfps.reveal.designsystem.icons.PhosphorRegular
@@ -65,6 +66,8 @@ import dev.hfps.reveal.feature.editor.canvas.rememberPhotoController
 import dev.hfps.reveal.feature.editor.layout.EditorChrome
 import dev.hfps.reveal.feature.editor.layout.EditorLayoutKind
 import dev.hfps.reveal.feature.editor.layout.EditorTopBar
+import dev.hfps.reveal.feature.editor.layout.FilmstripUi
+import dev.hfps.reveal.feature.editor.layout.FilmstripViewModel
 import dev.hfps.reveal.feature.editor.layout.PanelSnap
 import dev.hfps.reveal.feature.editor.layout.SystemBarsHidden
 import dev.hfps.reveal.feature.editor.layout.ToolStrip
@@ -86,12 +89,20 @@ import kotlinx.coroutines.launch
 /** The editor of the photo in its [EditorRoute]: always dark (the darkroom). The actions wire one per editor verb. */
 @Suppress("LongMethod")
 @Composable
-fun EditorScreen(onBack: () -> Unit, modifier: Modifier = Modifier, viewModel: EditorViewModel = hiltViewModel()) {
+fun EditorScreen(
+    onBack: () -> Unit,
+    modifier: Modifier = Modifier,
+    onSwitch: (EditorRoute) -> Unit = {},
+    viewModel: EditorViewModel = hiltViewModel(),
+    strip: FilmstripViewModel = hiltViewModel(),
+) {
     val state by viewModel.state.collectAsStateWithLifecycle()
+    val photos by strip.photos.collectAsStateWithLifecycle()
+    val layout by strip.layout.collectAsStateWithLifecycle()
     val context = LocalContext.current
     BackHandler(onBack = onBack)
     var exportRequest by remember { mutableStateOf<ExportRequest?>(null) }
-    val actions = remember(viewModel, onBack, context) {
+    val actions = remember(viewModel, strip, onBack, onSwitch, context) {
         EditorActions(
             onBack = onBack,
             onDeveloped = viewModel::onDeveloped,
@@ -144,10 +155,24 @@ fun EditorScreen(onBack: () -> Unit, modifier: Modifier = Modifier, viewModel: E
             onAutoStraighten = viewModel::autoStraighten,
             onGuide = viewModel::addGuide,
             onClearGuides = viewModel::clearGuides,
+            onTargetedHover = viewModel::targetedHover,
+            onOpenPhoto = { versionId, tool -> onSwitch(viewModel.routeFor(versionId, tool)) },
+            onFilmstrip = strip::setFilmstripVisible,
+            onPanelWidth = strip::setPanelWidth,
         )
     }
+    val filmstrip = remember(photos, strip) {
+        FilmstripUi(photos, strip.currentVersionId, strip.thumbs).takeIf { photos.size > 1 && it.index >= 0 }
+    }
     EditorTheme {
-        EditorContent(state = state, actions = actions, modifier = modifier)
+        EditorContent(
+            state = state,
+            actions = actions,
+            modifier = modifier,
+            initialTool = viewModel.initialTool,
+            filmstrip = filmstrip,
+            layout = layout,
+        )
         ExportSheetHost(request = exportRequest, onDismiss = { exportRequest = null })
     }
 }
@@ -166,24 +191,26 @@ fun EditorContent(
     initialTool: ToolId = ToolId.LIGHT,
     initialSnap: PanelSnap = PanelSnap.HALF,
     initialMode: ToolId? = null,
+    filmstrip: FilmstripUi? = null,
+    layout: EditorLayout = EditorLayout(),
 ) {
     val colors = RevealTheme.colors
     val photo = rememberPhotoController(state.phase)
     val chrome = rememberEditorChrome(initialTool, initialSnap, initialMode)
     PhotoContentSize(photo, state)
+    val scope = rememberCoroutineScope()
     LaunchedEffect(chrome.activeMode) {
         for (tool in EditorTools.all) {
             (tool.behaviour as? ToolBehaviour.Mode)?.onActive?.invoke(actions, chrome.activeMode == tool.id)
         }
     }
-    val scope = rememberCoroutineScope()
-    val chromeVisible = !chrome.immersive
     SystemBarsHidden(chrome.immersive)
     BoxWithConstraints(
         modifier = modifier
             .fillMaxSize()
             .background(colors.background)
-            .onPlaced(photo::onRootPlaced),
+            .onPlaced(photo::onRootPlaced)
+            .editorKeys(state, actions, photo, chrome, filmstrip, scope),
     ) {
         val kind = EditorLayoutKind.of(maxWidth, maxHeight)
         val host = PanelHost(state, actions, chrome.focus, chrome.navigator)
@@ -192,10 +219,18 @@ fun EditorContent(
             chrome.select(tool, kind, actions) { snap -> scope.launch { chrome.sheet.animateTo(snap) } }
         }
         PhotoSurface(photo.renderer, onFirstFrame = actions.onDeveloped, modifier = Modifier.fillMaxSize())
-        if (kind == EditorLayoutKind.PORTRAIT) {
-            PortraitLayout(state, actions, photo, chrome, host, select, onToggleChrome, maxHeight.value)
-        } else {
-            SideLayout(kind, state, actions, photo, chrome, host, select, onToggleChrome)
+        when (kind) {
+            EditorLayoutKind.PORTRAIT ->
+                PortraitLayout(state, actions, photo, chrome, host, select, onToggleChrome, maxHeight.value)
+
+            EditorLayoutKind.LANDSCAPE -> SideLayout(kind, state, actions, photo, chrome, host, select, onToggleChrome)
+
+            EditorLayoutKind.TABLET -> TabletLayout(
+                TabletChrome(state, actions, photo, chrome, host, select, onToggleChrome),
+                filmstrip = filmstrip,
+                layout = layout,
+                windowWidth = maxWidth,
+            )
         }
     }
     BackHandler(enabled = chrome.immersive) { chrome.immersive = false }
@@ -220,7 +255,7 @@ fun EditorContent(
 }
 
 /** The [ModeHost] of the active [mode]: Done and Cancel run the mode's exits and close it. */
-private fun EditorChrome.modeHost(
+internal fun EditorChrome.modeHost(
     mode: ToolBehaviour.Mode,
     state: EditorUiState,
     actions: EditorActions,
@@ -535,7 +570,7 @@ private fun SideLayout(
 
 /** The panel card: the dark neutral card slightly lighter than the surround, hairline border, 16dp radius. */
 @Composable
-private fun PanelSurface(modifier: Modifier = Modifier, content: @Composable () -> Unit) {
+internal fun PanelSurface(modifier: Modifier = Modifier, content: @Composable () -> Unit) {
     val colors = RevealTheme.colors
     Surface(
         modifier = modifier,
@@ -548,7 +583,7 @@ private fun PanelSurface(modifier: Modifier = Modifier, content: @Composable () 
 
 /** A mode's own controls in place of the tool strip, above a row with Cancel, the mode's title and the Done check. */
 @Composable
-private fun ModeControls(mode: ToolBehaviour.Mode, host: ModeHost, modifier: Modifier = Modifier) {
+internal fun ModeControls(mode: ToolBehaviour.Mode, host: ModeHost, modifier: Modifier = Modifier) {
     Column(modifier.testTag(EditorTags.MODE_CONTROLS)) {
         Box(
             Modifier

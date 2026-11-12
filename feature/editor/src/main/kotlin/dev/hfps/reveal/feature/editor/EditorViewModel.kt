@@ -3,6 +3,7 @@ package dev.hfps.reveal.feature.editor
 import android.content.Context
 import android.net.Uri
 import android.os.SystemClock
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.core.net.toUri
 import androidx.lifecycle.SavedStateHandle
@@ -26,6 +27,7 @@ import dev.hfps.reveal.feature.editor.open.OpenError
 import dev.hfps.reveal.feature.editor.open.OpenEvent
 import dev.hfps.reveal.feature.editor.open.OpenException
 import dev.hfps.reveal.feature.editor.open.PhotoOpener
+import dev.hfps.reveal.feature.editor.tools.ToolId
 import dev.hfps.reveal.feature.export.ui.ExportRequest
 import dev.hfps.reveal.pipeline.PipelineInput
 import dev.hfps.reveal.pipeline.auto.AutoAnalyser
@@ -92,6 +94,13 @@ class EditorViewModel @Inject constructor(
     private val writer: HistoryWriter,
 ) : ViewModel() {
     private val route: EditorRoute = savedStateHandle.toRoute<EditorRoute>()
+
+    /** The tool the editor opens with: the route's (kept along the filmstrip), else Light. */
+    val initialTool: ToolId = route.tool?.let { name -> ToolId.entries.firstOrNull { it.name == name } } ?: ToolId.LIGHT
+
+    /** The route of another photo of the same filmstrip, opening on [tool]. */
+    fun routeFor(versionId: Long, tool: ToolId): EditorRoute =
+        EditorRoute(versionId = versionId, strip = route.strip, tool = tool.name)
 
     /** The library version being edited; null for a photo opened from another app (history in memory only). */
     private val versionId: Long? = route.versionId
@@ -458,6 +467,7 @@ class EditorViewModel @Inject constructor(
     /** Turns the targeted adjustment on for [target] (off for `null`); prepares the colours it reads. */
     fun setTargeted(target: TargetedTarget?) {
         updateView { it.copy(targeted = target, eyedropper = if (target != null) false else it.eyedropper) }
+        if (target == null) targetedHover(null)
         if (target != null) viewModelScope.launch { sourceColours() }
     }
 
@@ -495,6 +505,28 @@ class EditorViewModel @Inject constructor(
         drag.ended = true
         if (drag.weights != null) finishTargeted(drag)
     }
+
+    /**
+     * A pen hovers the photo while the targeted adjustment is on: the band under it ([EditState.hoverBand], for the
+     * tooltip), read like a drag's start; `null` [point] (the pen left) clears it.
+     */
+    fun targetedHover(point: Offset?) {
+        hoverJob?.cancel()
+        val ready = _state.value.phase as? EditorPhase.Ready
+        if (point == null || ready == null || _state.value.view.targeted == null) {
+            if (_state.value.edit.hoverBand != null) _state.update { it.copy(edit = it.edit.copy(hoverBand = null)) }
+            return
+        }
+        hoverJob = viewModelScope.launch {
+            val colours = sourceColours() ?: return@launch
+            val sx = (point.x * colours.width / ready.width).toInt()
+            val sy = (point.y * colours.height / ready.height).toInt()
+            val band = TargetedAdjust.weights(colours.mean(sx, sy, TARGETED_RADIUS))?.let(TargetedAdjust::lead)
+            _state.update { it.copy(edit = it.edit.copy(hoverBand = band)) }
+        }
+    }
+
+    private var hoverJob: Job? = null
 
     private fun applyTargeted(drag: TargetedDrag) {
         val weights = drag.weights ?: return

@@ -57,12 +57,13 @@ data class ViewerRoute(val photoId: Long, val selection: String, val query: Stri
 val OpenPhotoMimeTypes: Array<String> = arrayOf("image/*", "application/octet-stream")
 
 /**
- * Adds the library and viewer destinations. [onEdit] opens the editor on a version; [onOpenFile] on a single
- * document picked with "Open a photo".
+ * Adds the library and viewer destinations. [onEdit] opens the editor on a version, with the grid's photos for the
+ * tablet filmstrip (a `PhotoListCodec` query, `null` = none); [onOpenFile] on a single document picked with "Open a
+ * photo".
  */
 fun NavGraphBuilder.libraryScreens(
     navController: NavController,
-    onEdit: (versionId: Long) -> Unit,
+    onEdit: (versionId: Long, strip: String?) -> Unit,
     onOpenFile: (Uri) -> Unit,
     onGallery: () -> Unit,
     onAbout: () -> Unit,

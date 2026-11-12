@@ -52,7 +52,7 @@ python3 scripts/icons/generate_icons.py                                         
 
 Emulator (own AVD, own port 5560-5590, headless, one per worker, delete when done; never the phone). The script picks
 the host's image (arm64 on the Mac, x86_64 on Linux); `EMULATOR_LCD=1080x2340@450` makes it phone-like (the owner's S24
-Ultra: some layouts only break at that size):
+Ultra: some layouts only break at that size); `EMULATOR_LCD=2560x1600@274 EMULATOR_DEVICE=pixel_tablet` a Galaxy Tab S9:
 
 ```sh
 scripts/emulator.sh create reveal-<workstream>
@@ -175,8 +175,8 @@ adb -s emulator-<port> shell am instrument -w -e class dev.hfps.reveal.library.L
 adb -s emulator-<port> logcat -d -s REVEAL_LIBRARY RevealLibrary
 ```
 
-The full suite excludes both measurement classes:
-`-e notClass dev.hfps.reveal.editor.EditorMeasurementsTest,dev.hfps.reveal.library.LibraryMeasurementsTest`.
+The full suite excludes the measurement classes:
+`-e notClass dev.hfps.reveal.editor.EditorMeasurementsTest,dev.hfps.reveal.library.LibraryMeasurementsTest,dev.hfps.reveal.editor.FilmstripMeasurementsTest`.
 Frame measurements must not use a Compose test rule (it holds frames while it synchronizes): launch with
 `ActivityScenario` and inject touches with `input swipe`.
 
@@ -215,7 +215,7 @@ adb -s emulator-<port> install -r -t app/build/outputs/apk/debug/app-debug.apk
 adb -s emulator-<port> install -r -t app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
 adb -s emulator-<port> push core/image/build/samples/sony-zv-e10.arw /data/local/tmp/
 adb -s emulator-<port> shell "chmod a+r /data/local/tmp/sony-zv-e10.arw && run-as dev.hfps.reveal.debug sh -c 'mkdir -p files/samples && cp /data/local/tmp/sony-zv-e10.arw files/samples/' && rm /data/local/tmp/sony-zv-e10.arw"
-adb -s emulator-<port> shell am instrument -w -e notClass dev.hfps.reveal.editor.EditorMeasurementsTest,dev.hfps.reveal.library.LibraryMeasurementsTest dev.hfps.reveal.debug.test/androidx.test.runner.AndroidJUnitRunner
+adb -s emulator-<port> shell am instrument -w -e notClass dev.hfps.reveal.editor.EditorMeasurementsTest,dev.hfps.reveal.library.LibraryMeasurementsTest,dev.hfps.reveal.editor.FilmstripMeasurementsTest dev.hfps.reveal.debug.test/androidx.test.runner.AndroidJUnitRunner
 adb -s emulator-<port> shell am instrument -w -e class dev.hfps.reveal.editor.EditorMeasurementsTest dev.hfps.reveal.debug.test/androidx.test.runner.AndroidJUnitRunner
 adb -s emulator-<port> logcat -d -s REVEAL_MEASURE REVEAL_EDITOR_TEST RevealEditor
 ```
@@ -230,8 +230,8 @@ open a RAW through it to prove R8 kept the JNI (`core/image/consumer-rules.pro`)
 
 ## Editor layout (`:feature:editor`, M1/E)
 
-`EditorContent` picks `EditorLayoutKind` (portrait / landscape phone / tablet >= 840dp). The GL surface fills the
-screen behind the chrome (`PhotoSurface`); the chrome leaves an empty `PhotoSlot` whose bounds become the renderer's
+`EditorContent` picks `EditorLayoutKind` (portrait / landscape phone / tablet >= 840 x 480 dp, see "Tablet" below).
+The GL surface fills the screen behind the chrome (`PhotoSurface`); the chrome leaves an empty `PhotoSlot` whose bounds become the renderer's
 frame (`PhotoController`), so panel snaps and the slider-drag shrink move the photo without resizing the surface.
 Tools live in `tools/EditorTools.kt` (`EditorTool` + `ToolBehaviour.Panel / Mode / Action / Unavailable`): add or
 enable a tool there, never in the layout. A `Mode` (Crop: `crop/`) gets a `ModeHost` (state, actions, photo controller,
@@ -250,6 +250,39 @@ emulator), `EditorHistoryTest` (undo/redo/jump/branch, reopen restores from Room
 when its content is the same: `TestPhotos.insert` appends a unique trailer to every image (so each run
 is a new photo; pass `unique = false` to reuse content on purpose) and test names stay unique (`TestPhotos.uniqueName`).
 The full suite must pass twice in a row without `pm clear` (the phone keeps app data).
+
+## Tablet, filmstrip, pen and keyboard (`:feature:editor`, `:app`, M2/E, ADR 0016)
+
+Tablet layout: `TabletLayout.kt` (full-width top bar; photo + `layout/Filmstrip.kt` in the left column; panel column
+with a drag-to-resize left edge, `EditorLayoutKind.panelRange`; rail). The phone layouts must not change (their goldens
+stay byte-identical). Panel width and filmstrip visibility: `EditorLayoutPreferences` (`:core:data`). Rotation/fold
+recreate the activity: chrome state (`rememberEditorChrome`: tool, mode, side panel, sub-panel stack via
+`SubPanels.byKey`, panel width) and zoom (`PhotoController.Saver`) are saved state; the ViewModel and renderer survive.
+`RevealBottomSheet` is a centred dialog from `DialogMinWidth` (840 dp); the viewer's info is a side panel there.
+
+Filmstrip: `EditorRoute(versionId, strip, tool)`; `strip` = the grid's `PhotoQuery` (`PhotoListCodec`), passed by the
+viewer (and "Opened from other apps" for a multi-photo hand-off). `FilmstripViewModel` observes the list; moving (tap,
+left/right arrows, a horizontal swipe on the photo at fit) navigates to a new `EditorRoute` with
+`popUpTo<EditorRoute> { inclusive = true }`: a new ViewModel and renderer per photo (never swap the photo inside one).
+
+Pen: palm rejection in `MainActivity.dispatchTouchEvent` (`input/PalmRejection.kt`, pure `PalmRejectionPolicy`);
+hover via `canvas/StylusInput.kt` (`Modifier.penHover`, `HoverTooltipLayer`; stylus and mouse only) in the curve
+editor, crop handles, Guided Upright guides and the targeted adjustment (`EditorViewModel.targetedHover`). Smaller grab
+radii for the pen (`PointerType.Stylus`). Once a pen is seen (`PhotoController.penSeen`) the targeted adjustment
+answers the pen and the finger pans/zooms. Keyboard: `layout/EditorKeys.kt` + `rememberEditorKeys` (root
+`onPreviewKeyEvent`). Goldens: `tablet_*` (Tab S9 1495x934 dp, mdpi), `tablet_portrait_*`, `foldable_*` (852x883 dp)
+in `screenshots/editor` and `screenshots/library`.
+
+```sh
+EMULATOR_LCD=2560x1600@274 EMULATOR_DEVICE=pixel_tablet scripts/emulator.sh create reveal-tablet   # Galaxy Tab S9 screen
+scripts/emulator.sh start reveal-tablet <port>
+adb -s emulator-<port> shell am instrument -w -e class dev.hfps.reveal.editor.TabletEditorTest dev.hfps.reveal.debug.test/androidx.test.runner.AndroidJUnitRunner
+adb -s emulator-<port> shell am instrument -w -e class dev.hfps.reveal.editor.FilmstripMeasurementsTest dev.hfps.reveal.debug.test/androidx.test.runner.AndroidJUnitRunner
+adb -s emulator-<port> logcat -d -s REVEAL_FILMSTRIP   # 1,200 handed-over photos, frame times while flinging the strip
+```
+
+`TabletEditorTest` skips below 840 dp; the full suite also excludes `FilmstripMeasurementsTest` (a measurement). Large
+screens ignore `requestedOrientation`: rotate with `UiAutomation.setRotation` in tests.
 
 ## Export (`:feature:export`, `gl/TiledRenderer`, ADR 0009)
 

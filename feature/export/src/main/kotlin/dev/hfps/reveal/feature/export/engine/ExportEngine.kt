@@ -66,6 +66,9 @@ enum class ExportFailure {
     LOW_STORAGE,
     OUT_OF_MEMORY,
     GPU_UNSUPPORTED,
+
+    /** The original is only on another device and did not reach the sync server in time (ADR 0018). */
+    ORIGINAL_ELSEWHERE,
     FAILED,
 }
 

@@ -9,6 +9,7 @@ import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.aspectRatio
@@ -94,7 +95,12 @@ object LibraryTags {
     const val PASTE_CHOOSER = "library-paste"
     const val RESET_EDITS = "library-reset-edits"
 
+    const val DELETE_CONFLICTS = "library-delete-conflicts"
+
     fun cell(id: Long) = "library-cell-$id"
+
+    /** A photo's later version (a sync conflict copy) in the grid. */
+    fun copy(versionId: Long) = "library-copy-$versionId"
 
     fun source(id: Long) = "library-source-$id"
 }
@@ -335,8 +341,8 @@ private fun PhotoCell(
     modifier: Modifier = Modifier,
 ) {
     val colors = RevealTheme.colors
-    var image by remember(row.id, row.editTime) { mutableStateOf(thumbnails.cached(row)) }
-    LaunchedEffect(row.id, row.editTime) {
+    var image by remember(row.versionId, row.editTime) { mutableStateOf(thumbnails.cached(row)) }
+    LaunchedEffect(row.versionId, row.editTime) {
         if (image == null) image = thumbnails.load(row)
     }
     val description = cellDescription(row)
@@ -345,7 +351,7 @@ private fun PhotoCell(
         modifier = modifier
             .aspectRatio(1f)
             .background(colors.muted)
-            .testTag(LibraryTags.cell(row.id))
+            .testTag(if (row.versionPosition == 0) LibraryTags.cell(row.id) else LibraryTags.copy(row.versionId))
             .clickable(onClick = onClick)
             .semantics(mergeDescendants = true) {
                 contentDescription = description
@@ -411,35 +417,47 @@ private fun SelectionMark(selected: Boolean, modifier: Modifier = Modifier) {
     }
 }
 
-/** Corner badges: format (top-left), edited dot (top-right), stars (bottom-left), pick/reject (bottom-right). */
+/**
+ * Corner badges: format and copy/conflict (top-left), cloud state and edited dot (top-right), stars (bottom-left),
+ * pick/reject (bottom-right).
+ */
+@Suppress("LongMethod")
 @Composable
 private fun Badges(row: PhotoRow, showEdited: Boolean, modifier: Modifier = Modifier) {
     val colors = RevealTheme.colors
     Box(modifier.padding(4.dp)) {
-        formatBadge(row.format)?.let { label ->
-            Text(
-                text = stringResource(label),
-                style = RevealTheme.typography.eyebrow,
-                color = colors.foreground,
-                maxLines = 1,
-                overflow = TextOverflow.Clip,
-                modifier = Modifier
-                    .align(Alignment.TopStart)
-                    .clip(RevealTheme.shapes.control)
-                    .background(colors.background.copy(alpha = BADGE_ALPHA))
-                    .padding(horizontal = 4.dp),
-            )
+        Column(Modifier.align(Alignment.TopStart), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            formatBadge(row.format)?.let { label -> LabelBadge(stringResource(label)) }
+            if (row.versionPosition > 0) {
+                LabelBadge(
+                    stringResource(if (row.conflict) R.string.library_badge_conflict else R.string.library_badge_copy),
+                    highlight = row.conflict,
+                )
+            }
         }
-        if (row.hasEdit && showEdited) {
-            Box(
-                Modifier
-                    .align(Alignment.TopEnd)
-                    .padding(4.dp)
-                    .size(10.dp)
-                    .clip(CircleShape)
-                    .background(colors.primary)
-                    .border(1.dp, colors.background, CircleShape),
-            )
+        Row(
+            modifier = Modifier.align(Alignment.TopEnd),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+            cloudIcon(cloudState(row))?.let { icon ->
+                Box(
+                    Modifier.size(20.dp).clip(CircleShape).background(colors.background.copy(alpha = BADGE_ALPHA)),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(icon, contentDescription = null, tint = colors.foreground, modifier = Modifier.size(14.dp))
+                }
+            }
+            if (row.hasEdit && showEdited) {
+                Box(
+                    Modifier
+                        .padding(4.dp)
+                        .size(10.dp)
+                        .clip(CircleShape)
+                        .background(colors.primary)
+                        .border(1.dp, colors.background, CircleShape),
+                )
+            }
         }
         if (row.rating > 0) {
             Row(
@@ -470,6 +488,51 @@ private fun Badges(row: PhotoRow, showEdited: Boolean, modifier: Modifier = Modi
             PickFlag.NONE -> Unit
         }
     }
+}
+
+@Composable
+private fun LabelBadge(text: String, modifier: Modifier = Modifier, highlight: Boolean = false) {
+    val colors = RevealTheme.colors
+    Text(
+        text = text,
+        style = RevealTheme.typography.eyebrow,
+        color = if (highlight) colors.background else colors.foreground,
+        maxLines = 1,
+        overflow = TextOverflow.Clip,
+        modifier = modifier
+            .clip(RevealTheme.shapes.control)
+            .background(if (highlight) colors.warning else colors.background.copy(alpha = BADGE_ALPHA))
+            .padding(horizontal = 4.dp),
+    )
+}
+
+/** Where a photo's original is, for the cell badge (ADR 0018 "Cloud states"). */
+internal enum class CloudState {
+    /** On this device only (or sync is off): no badge. */
+    LOCAL,
+
+    /** On this device, and the server has the original too (NAS or backup). */
+    BACKED_UP,
+
+    /** Only the server has it; the original opens by range from there. */
+    CLOUD,
+
+    /** Only another device has the original; this one has its smart preview. */
+    PREVIEW,
+}
+
+internal fun cloudState(row: PhotoRow): CloudState = when {
+    row.remote && row.cloudOriginal -> CloudState.CLOUD
+    row.remote -> CloudState.PREVIEW
+    row.cloudOriginal -> CloudState.BACKED_UP
+    else -> CloudState.LOCAL
+}
+
+private fun cloudIcon(state: CloudState) = when (state) {
+    CloudState.LOCAL -> null
+    CloudState.BACKED_UP -> PhosphorRegular.CloudCheck
+    CloudState.CLOUD -> PhosphorRegular.Cloud
+    CloudState.PREVIEW -> PhosphorRegular.Image
 }
 
 @Composable
@@ -510,6 +573,19 @@ internal fun cellDescription(row: PhotoRow): String {
         PickFlag.NONE -> Unit
     }
     if (row.hasEdit) parts += stringResource(R.string.library_edited)
+    if (row.versionPosition > 0) {
+        parts += if (row.conflict) {
+            stringResource(R.string.library_conflict_copy_from, row.copyDevice.orEmpty())
+        } else {
+            stringResource(R.string.library_badge_copy)
+        }
+    }
+    when (cloudState(row)) {
+        CloudState.LOCAL -> Unit
+        CloudState.BACKED_UP -> parts += stringResource(R.string.library_cloud_backed_up)
+        CloudState.CLOUD -> parts += stringResource(R.string.library_cloud_only)
+        CloudState.PREVIEW -> parts += stringResource(R.string.library_cloud_preview)
+    }
     return parts.joinToString(", ")
 }
 

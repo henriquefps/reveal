@@ -20,10 +20,12 @@ import dev.hfps.reveal.data.index.LibraryIndexer
 import dev.hfps.reveal.data.model.FileRole
 import dev.hfps.reveal.data.model.PhotoQuery
 import dev.hfps.reveal.data.model.PickFlag
+import dev.hfps.reveal.data.model.SourceKind
 import dev.hfps.reveal.data.model.SourceState
 import dev.hfps.reveal.data.storage.DocumentTree
 import dev.hfps.reveal.data.storage.SafDocumentTree
 import dev.hfps.reveal.data.storage.StorageVolumes
+import dev.hfps.reveal.data.sync.ServerTree
 import java.io.IOException
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CancellationException
@@ -55,6 +57,8 @@ data class SourceItem(
     val photoCount: Int,
     /** Non-null while the source is being indexed. */
     val indexing: IndexProgress?,
+    /** Sync backs up the originals of this folder's device-only photos (ADR 0018). */
+    val backup: Boolean = true,
 )
 
 /** A photo's files with their content URIs, the source state, and the EXIF read from the header on demand. */
@@ -74,7 +78,27 @@ data class DetailFile(val name: String, val size: Long, val role: FileRole, val 
  * What an export develops for a version: the RAW of a pair (else the rendering), its name, the photo's rating, and the
  * rendering (its EXIF fills gaps of the RAW's).
  */
-data class ExportTarget(val versionId: Long, val uri: Uri, val name: String, val rating: Int, val renderedUri: Uri?)
+data class ExportTarget(
+    val versionId: Long,
+    val uri: Uri,
+    val name: String,
+    val rating: Int,
+    val renderedUri: Uri?,
+    /** Where [uri] reads the original from (ADR 0018 "Export"). */
+    val reach: OriginalReach = OriginalReach.DEVICE,
+)
+
+/** Where a photo's original can be read now. */
+enum class OriginalReach {
+    /** A file on this device (a folder, a hand-off). */
+    DEVICE,
+
+    /** The sync server serves it ([ExportTarget.uri] reads it by range): download it before decoding. */
+    SERVER,
+
+    /** Only another device has it (this one has its smart preview): wait until its backup reaches the server. */
+    ELSEWHERE,
+}
 
 /** What the editor opens for a version: the RAW of a pair (else the rendering), and the rendering for the preview. */
 data class EditTarget(val photoId: Long, val versionId: Long, val uri: Uri, val name: String, val renderedUri: Uri?)
@@ -101,6 +125,8 @@ class LibraryRepository(
     private val sidecars: SidecarSync,
     private val scope: CoroutineScope,
     private val clock: () -> Long = System::currentTimeMillis,
+    /** The sync provider's authority (`ServerTree.authority`), for smart preview URIs; null without sync. */
+    private val serverAuthority: String? = null,
 ) {
     private val sourceDao = db.sourceDao()
     private val photoDao = db.photoDao()
@@ -127,9 +153,13 @@ class LibraryRepository(
                 writable = source.writable,
                 photoCount = count,
                 indexing = running[source.id],
+                backup = source.backup,
             )
         }
     }
+
+    /** How many photos only the sync server has (the library's Server entry, ADR 0018). */
+    fun serverPhotoCount(): Flow<Int> = db.syncDao().observeServerPhotoCount()
 
     fun photos(query: PhotoQuery): Flow<List<PhotoRow>> = photoDao.observeRows(PhotoQuerySql.toQuery(query))
 
@@ -300,6 +330,11 @@ class LibraryRepository(
         sidecars.write(photoIds)
     }
 
+    /** The per-folder switch of the originals backup (ADR 0018). */
+    suspend fun setBackup(sourceId: Long, backup: Boolean) = withContext(Dispatchers.IO) {
+        sourceDao.setBackup(sourceId, backup)
+    }
+
     /** "Remove from library": hidden from every grid; files untouched. */
     suspend fun removeFromLibrary(photoIds: List<Long>) = withContext(Dispatchers.IO) {
         photoIds.chunked(SQL_ARGS).forEach { photoDao.setHidden(it, true) }
@@ -330,13 +365,40 @@ class LibraryRepository(
         }.reduceOrNull { acc, next -> acc.orElse(next) }
     }
 
-    /** What the editor opens for [versionId]; also marks the photo as recently opened. */
+    /**
+     * What the editor opens for [versionId]; also marks the photo as recently opened. When the original is out of reach
+     * (a server photo the server cannot serve, an unplugged folder) and the photo has a smart preview, the editor opens
+     * that instead (ADR 0018 "Smart previews").
+     */
     suspend fun editTarget(versionId: Long): EditTarget? = withContext(Dispatchers.IO) {
         val photoId = photoDao.photoIdOfVersion(versionId) ?: return@withContext null
         val detail = detail(photoId) ?: return@withContext null
         val main = detail.raw ?: detail.rendered ?: return@withContext null
         photoDao.setOpened(photoId, clock())
+        smartPreviewUri(detail)?.let { smart ->
+            return@withContext EditTarget(photoId, versionId, smart, main.name, null)
+        }
         EditTarget(photoId, versionId, main.uri, main.name, detail.rendered?.uri?.takeIf { detail.raw != null })
+    }
+
+    /** The smart preview of a photo whose original cannot be read now, or null. */
+    @Suppress("ReturnCount")
+    private suspend fun smartPreviewUri(detail: PhotoDetail): Uri? {
+        val authority = serverAuthority ?: return null
+        val cloud = db.syncDao().cloud(detail.photo.id) ?: return null
+        if (cloud.previewSha == null) return null
+        val source = sourceDao.get(detail.photo.sourceId) ?: return null
+        val reachable = when (source.kind) {
+            SourceKind.SERVER -> cloud.originalOnServer
+            SourceKind.FOLDER -> source.state == SourceState.AVAILABLE
+            SourceKind.HANDOFF -> true
+        }
+        if (reachable) return null
+        val main = photoDao.files(detail.photo.id).let { files ->
+            files.firstOrNull { it.role == FileRole.RAW } ?: files.firstOrNull { it.role == FileRole.RENDERED }
+        } ?: return null
+        val fingerprint = main.fingerprint ?: return null
+        return ServerTree.smartUri(authority, fingerprint, main.name)
     }
 
     /** What an export of [versionId] reads (no side effect, unlike [editTarget]); null when the version is gone. */
@@ -345,7 +407,31 @@ class LibraryRepository(
         val detail = detail(photoId) ?: return@withContext null
         val main = detail.raw ?: detail.rendered ?: return@withContext null
         val pair = detail.rendered?.uri?.takeIf { detail.raw != null }
-        ExportTarget(versionId, main.uri, main.name, detail.photo.rating, pair)
+        val target = ExportTarget(versionId, main.uri, main.name, detail.photo.rating, pair)
+        val source = sourceDao.get(detail.photo.sourceId) ?: return@withContext target
+        val onServer = db.syncDao().cloud(photoId)?.originalOnServer == true
+        when {
+            source.kind == SourceKind.SERVER ->
+                target.copy(renderedUri = null, reach = if (onServer) OriginalReach.SERVER else OriginalReach.ELSEWHERE)
+
+            source.kind == SourceKind.FOLDER && source.state != SourceState.AVAILABLE && onServer -> {
+                // An unplugged folder whose original the server holds (a backup): export from the server copy.
+                val fingerprint = photoDao.files(photoId).firstOrNull { it.name == main.name }?.fingerprint
+                val authority = serverAuthority
+                if (fingerprint == null || authority == null) {
+                    target
+                } else {
+                    val uri = ServerTree.uri(
+                        authority,
+                        ServerTree.ORIGINAL,
+                        ServerTree.documentId(fingerprint, main.name),
+                    )
+                    target.copy(uri = uri, renderedUri = null, reach = OriginalReach.SERVER)
+                }
+            }
+
+            else -> target
+        }
     }
 
     private fun PhotoFileEntity.detail(tree: DocumentTree) =

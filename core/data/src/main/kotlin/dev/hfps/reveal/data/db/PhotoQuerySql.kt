@@ -12,11 +12,19 @@ object PhotoQuerySql {
     /** How many photos "Recent" shows. */
     const val RECENT_LIMIT = 500
 
+    /**
+     * One row per version: the first version of every photo, then its other versions (sync conflict copies and
+     * versions another device added, ADR 0018) right after it. `remote` = the photo lives only on the sync server.
+     */
     private const val SELECT =
         "SELECT p.id, p.source_id, p.name, p.format, p.sort_time, p.capture_time, p.rating, p.label, p.flag, " +
-            "p.has_edit, v.id AS version_id, r.updated_at AS edit_time, p.handoff_at, p.handoff_title " +
-            "FROM photos p JOIN versions v ON v.photo_id = p.id AND v.position = 0 " +
-            "LEFT JOIN recipes r ON r.version_id = v.id AND r.is_default = 0"
+            "p.has_edit, v.id AS version_id, r.updated_at AS edit_time, p.handoff_at, p.handoff_title, " +
+            "v.position AS version_position, v.copy_of IS NOT NULL AS conflict, v.copy_device, " +
+            "COALESCE(c.original_on_server, 0) AS cloud_original, c.preview_sha IS NOT NULL AS cloud_preview, " +
+            "p.source_id IN (SELECT id FROM sources WHERE kind = 'SERVER') AS remote " +
+            "FROM photos p JOIN versions v ON v.photo_id = p.id " +
+            "LEFT JOIN recipes r ON r.version_id = v.id AND r.is_default = 0 " +
+            "LEFT JOIN photo_cloud c ON c.photo_id = p.id"
 
     /** The statement text and its arguments, in order (exposed for tests). */
     fun build(query: PhotoQuery): Pair<String, List<Any>> {
@@ -40,7 +48,8 @@ object PhotoQuerySql {
     private class Clause(val sql: String, val arg: Any? = null)
 
     private fun scopeClause(scope: LibraryScope): Clause? = when (scope) {
-        LibraryScope.All -> null
+        LibraryScope.All -> Clause("p.source_id NOT IN (SELECT id FROM sources WHERE kind = 'SERVER')")
+        LibraryScope.Server -> Clause("p.source_id IN (SELECT id FROM sources WHERE kind = 'SERVER')")
         LibraryScope.Recent -> Clause("p.last_opened_at IS NOT NULL")
         LibraryScope.FromApps -> Clause("p.source_id IN (SELECT id FROM sources WHERE kind = 'HANDOFF')")
         is LibraryScope.Source -> Clause("p.source_id = ?", scope.sourceId)
@@ -62,7 +71,7 @@ object PhotoQuerySql {
         query.sort == PhotoSort.CAPTURE_NEWEST -> "p.sort_time DESC, p.name DESC, p.id DESC"
         query.sort == PhotoSort.CAPTURE_OLDEST -> "p.sort_time ASC, p.name ASC, p.id ASC"
         else -> "p.name COLLATE NOCASE ASC, p.id ASC"
-    }
+    } + ", v.position ASC"
 
     fun toQuery(query: PhotoQuery): SupportSQLiteQuery {
         val (sql, args) = build(query)

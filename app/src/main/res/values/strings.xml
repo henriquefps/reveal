@@ -110,6 +110,9 @@
         <item>Guava ListenableFuture|Apache-2.0</item>
         <item>JSR-305 annotations|BSD-3-Clause</item>
         <item>JetBrains annotations, JSpecify|Apache-2.0</item>
+        <item>OkHttp and Okio (Square)|Apache-2.0</item>
+        <item>AndroidX CameraX (camera2, lifecycle, view)|Apache-2.0</item>
+        <item>ZXing core (QR codes)|Apache-2.0</item>
     </string-array>
     <string name="handoff_unreadable">Reveal could not open those photos. Check that the other app shared images Reveal can read.</string>
 </resources>

@@ -30,8 +30,9 @@ data class ExportJob(
     val createdAt: Long = 0,
 )
 
+/** [WAITING]: the original is only on another device; the job runs again later (ADR 0018 "Export"). */
 @Serializable
-enum class ItemStatus { PENDING, DONE, FAILED }
+enum class ItemStatus { PENDING, DONE, FAILED, WAITING }
 
 /**
  * Progress of one item, persisted after every change so a run killed half-way resumes where it stopped (done items
@@ -46,6 +47,8 @@ data class ItemState(
     val failure: String? = null,
     /** The destination document being written; set before the first byte, cleared when done. */
     val partialUri: String? = null,
+    /** When the item started waiting for its original (Unix ms), kept across attempts. */
+    val waitingSince: Long? = null,
 )
 
 /**

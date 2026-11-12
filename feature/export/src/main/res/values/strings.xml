@@ -75,4 +75,14 @@
     </plurals>
     <string name="export_notification_failed">Some photos could not be exported: %1$d/%2$d</string>
     <string name="export_notification_cancelled">Export cancelled</string>
+    <string name="export_failure_elsewhere">the original is only on another device and never reached your sync server</string>
+    <string name="export_notification_downloading">Downloading the original from your sync server</string>
+    <plurals name="export_notification_waiting">
+        <item quantity="one">%d photo waits for its original</item>
+        <item quantity="other">%d photos wait for their originals</item>
+    </plurals>
+    <plurals name="export_result_waiting">
+        <item quantity="one">%d photo waits for its original: it is only on another device. The export finishes by itself once that device backs it up to your sync server.</item>
+        <item quantity="other">%d photos wait for their originals: they are only on another device. The export finishes by itself once that device backs them up to your sync server.</item>
+    </plurals>
 </resources>

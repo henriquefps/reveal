@@ -86,6 +86,7 @@ fun LibraryContent(
                         state.selection,
                         actions,
                         Modifier.width(SourcesPaneWidth).fillMaxHeight(),
+                        serverPhotos = state.serverPhotos,
                     )
                     VerticalDivider(color = RevealTheme.colors.hairline)
                     Box(Modifier.weight(1f).fillMaxHeight()) {
@@ -103,7 +104,7 @@ fun LibraryContent(
                     }
                 }
             } else if (state.selection == null) {
-                if (state.sourcesLoaded) SourcesPane(state.sources, null, actions)
+                if (state.sourcesLoaded) SourcesPane(state.sources, null, actions, serverPhotos = state.serverPhotos)
             } else {
                 GridPane(state, actions, thumbnails, onGridDraw)
             }
@@ -165,6 +166,7 @@ private fun specialName(which: SpecialSource) = when (which) {
     SpecialSource.ALL -> R.string.library_all_photos
     SpecialSource.RECENT -> R.string.library_recent
     SpecialSource.FROM_APPS -> R.string.library_from_apps
+    SpecialSource.SERVER -> R.string.library_server
 }
 
 @Composable
@@ -393,6 +395,16 @@ private fun SelectionOverflow(state: LibraryUiState, actions: LibraryActions, wi
             MenuItem(PhosphorRegular.Trash, stringResource(R.string.library_action_remove)) {
                 open = false
                 actions.onRemovePhotos()
+            }
+            if (state.selectedConflictCopies.isNotEmpty()) {
+                TaggedMenuItem(
+                    PhosphorRegular.GitBranch,
+                    stringResource(R.string.library_action_delete_conflicts),
+                    LibraryTags.DELETE_CONFLICTS,
+                ) {
+                    open = false
+                    actions.onDeleteConflictCopies()
+                }
             }
             if (!wide) {
                 TaggedMenuItem(

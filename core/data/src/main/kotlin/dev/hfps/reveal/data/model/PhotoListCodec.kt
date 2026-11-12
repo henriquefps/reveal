@@ -36,6 +36,7 @@ object PhotoListCodec {
         LibraryScope.All -> "all"
         LibraryScope.Recent -> "recent"
         LibraryScope.FromApps -> "apps"
+        LibraryScope.Server -> "server"
         is LibraryScope.Source -> "$SOURCE${scope.sourceId}"
     }
 
@@ -43,6 +44,7 @@ object PhotoListCodec {
         text == "all" -> LibraryScope.All
         text == "recent" -> LibraryScope.Recent
         text == "apps" -> LibraryScope.FromApps
+        text == "server" -> LibraryScope.Server
         text.startsWith(SOURCE) -> LibraryScope.Source(text.removePrefix(SOURCE).toLong())
         else -> null
     }

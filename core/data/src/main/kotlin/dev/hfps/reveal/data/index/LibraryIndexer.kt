@@ -11,9 +11,11 @@ import dev.hfps.image.source.readRange
 import dev.hfps.image.tiff.JpegMarkers
 import dev.hfps.reveal.data.db.IndexedFile
 import dev.hfps.reveal.data.db.IndexedPhoto
+import dev.hfps.reveal.data.db.MetaEntity
 import dev.hfps.reveal.data.db.PhotoEntity
 import dev.hfps.reveal.data.db.PhotoFileEntity
 import dev.hfps.reveal.data.db.RevealDatabase
+import dev.hfps.reveal.data.db.SyncTriggers
 import dev.hfps.reveal.data.db.VersionEntity
 import dev.hfps.reveal.data.model.FileRole
 import dev.hfps.reveal.data.model.MetadataState
@@ -84,7 +86,7 @@ class LibraryIndexer(private val db: RevealDatabase, private val clock: () -> Lo
         val sidecarMs = msSince(t)
 
         t = System.nanoTime()
-        val headers = readHeaders(sourceId, tree, onProgress)
+        val headers = readHeaders(sourceId, tree, onProgress = onProgress)
         val metadataMs = msSince(t)
         onProgress(IndexProgress(IndexPhase.DONE, 0, 0))
         return IndexReport(
@@ -104,6 +106,17 @@ class LibraryIndexer(private val db: RevealDatabase, private val clock: () -> Lo
 
     /** Reads the headers of the photos of [sourceId] still `PENDING` (the hand-off source has no walk, ADR 0011). */
     suspend fun readMetadata(sourceId: Long, tree: DocumentTree): Int = readHeaders(sourceId, tree) {}
+
+    /**
+     * The Server source's headers (ADR 0018 "Server photos"), read by range: at most [limit] photos per call, and
+     * written without marking the photos for sync (the capture time is the file's, not a user's change).
+     */
+    suspend fun readServerMetadata(sourceId: Long, tree: DocumentTree, limit: Int): Int {
+        // Only photos whose original the server serves: another device's preview-only photo has no header to read.
+        val readable = db.syncDao().serverHeaderCandidates(sourceId, limit).toSet()
+        if (readable.isEmpty()) return 0
+        return readHeaders(sourceId, tree, only = readable, untracked = true) {}
+    }
 
     /**
      * Computes the content fingerprint (ADR 0006 "Identity") of every file of [sourceId] that has none yet: new or
@@ -367,8 +380,15 @@ class LibraryIndexer(private val db: RevealDatabase, private val clock: () -> Lo
     /** One photo's header read result. */
     private class Header(val photoId: Long, val metadata: PhotoMetadata?, val embedded: XmpFields?)
 
-    private suspend fun readHeaders(sourceId: Long, tree: DocumentTree, onProgress: (IndexProgress) -> Unit): Int {
-        val pending = photos.pendingMetadataFiles(sourceId).groupBy { it.photoId }
+    private suspend fun readHeaders(
+        sourceId: Long,
+        tree: DocumentTree,
+        only: Set<Long>? = null,
+        untracked: Boolean = false,
+        onProgress: (IndexProgress) -> Unit,
+    ): Int {
+        val pending = photos.pendingMetadataFiles(sourceId).filter { only == null || it.photoId in only }
+            .groupBy { it.photoId }
         val total = pending.size
         var done = 0
         val gate = Semaphore(HEADER_PARALLELISM)
@@ -380,6 +400,7 @@ class LibraryIndexer(private val db: RevealDatabase, private val clock: () -> Lo
                 }.awaitAll()
             }
             db.withTransaction {
+                if (untracked) db.metaDao().put(MetaEntity(SyncTriggers.APPLYING, "1"))
                 for (header in headers) {
                     val m = header.metadata
                     if (m == null) {
@@ -397,6 +418,7 @@ class LibraryIndexer(private val db: RevealDatabase, private val clock: () -> Lo
                     )
                     applyEmbedded(header)
                 }
+                if (untracked) db.metaDao().delete(SyncTriggers.APPLYING)
             }
             done += batch.size
             onProgress(IndexProgress(IndexPhase.METADATA, done, total))

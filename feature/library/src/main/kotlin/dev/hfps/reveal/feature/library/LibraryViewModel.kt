@@ -20,6 +20,7 @@ import dev.hfps.reveal.data.thumb.ThumbnailRepository
 import dev.hfps.reveal.pipeline.recipe.HistoryAction
 import dev.hfps.reveal.pipeline.recipe.Recipe
 import dev.hfps.reveal.pipeline.recipe.RecipeGroup
+import dev.hfps.reveal.sync.SyncRepository
 import javax.inject.Inject
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -34,6 +35,7 @@ import kotlinx.coroutines.flow.conflate
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.receiveAsFlow
@@ -73,6 +75,7 @@ class LibraryViewModel @Inject constructor(
     private val volumes: StorageVolumes,
     private val edits: EditRepository,
     private val writer: HistoryWriter,
+    private val sync: SyncRepository,
 ) : ViewModel() {
     /** True when the route asked to open on "Opened from other apps" (a hand-off of several photos, ADR 0011). */
     private val fromApps: Boolean = savedState.get<Boolean>(KEY_FROM_APPS) == true
@@ -91,7 +94,11 @@ class LibraryViewModel @Inject constructor(
         viewModelScope.launch {
             // A fresh start reopens the folder the library showed last (the process-death state wins when present).
             if (savedState.get<String>(KEY_SELECTION) == null && !fromApps) {
-                library.lastSelection()?.let(::decodeSelection)?.let { restored ->
+                library.lastSelection()?.let(::decodeSelection)?.takeUnless { restored ->
+                    // The Server entry only exists while the server has photos here (ADR 0018).
+                    restored == LibrarySelection.Special(SpecialSource.SERVER) &&
+                        library.serverPhotoCount().first() == 0
+                }?.let { restored ->
                     savedState[KEY_SELECTION] = restored.encode()
                     _state.update { it.copy(selection = restored) }
                 }
@@ -103,6 +110,15 @@ class LibraryViewModel @Inject constructor(
                         sel is LibrarySelection.Folder && sources.none { it.id == sel.sourceId }
                     }
                     s.copy(sources = sources, sourcesLoaded = true, selection = selection)
+                }
+            }
+        }
+        viewModelScope.launch {
+            library.serverPhotoCount().collect { count ->
+                _state.update { s ->
+                    // Unpaired (or the server emptied): the Server entry is gone, back to the sources list.
+                    val gone = count == 0 && s.selection == LibrarySelection.Special(SpecialSource.SERVER)
+                    s.copy(serverPhotos = count, selection = if (gone) null else s.selection)
                 }
             }
         }
@@ -159,6 +175,16 @@ class LibraryViewModel @Inject constructor(
             val versionId = edits.versionsOf(listOf(photoId)).firstOrNull() ?: return@launch
             edits.copy(edits.recipe(versionId))
             messages.send(LibraryMessage.Copied)
+        }
+    }
+
+    /** Deletes the conflict copies among the selected photos (ADR 0018), here and, through sync, everywhere. */
+    fun deleteConflictCopies() {
+        val versions = _state.value.selectedConflictCopies
+        if (versions.isEmpty()) return
+        viewModelScope.launch {
+            writer.flush()
+            versions.forEach { sync.deleteVersion(it) }
         }
     }
 

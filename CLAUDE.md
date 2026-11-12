@@ -176,7 +176,7 @@ adb -s emulator-<port> logcat -d -s REVEAL_LIBRARY RevealLibrary
 ```
 
 The full suite excludes the measurement classes:
-`-e notClass dev.hfps.reveal.editor.EditorMeasurementsTest,dev.hfps.reveal.library.LibraryMeasurementsTest,dev.hfps.reveal.editor.FilmstripMeasurementsTest`.
+`-e notClass dev.hfps.reveal.editor.EditorMeasurementsTest,dev.hfps.reveal.library.LibraryMeasurementsTest,dev.hfps.reveal.editor.FilmstripMeasurementsTest,dev.hfps.reveal.sync.SyncPullMeasurementsTest`.
 Frame measurements must not use a Compose test rule (it holds frames while it synchronizes): launch with
 `ActivityScenario` and inject touches with `input swipe`.
 
@@ -480,3 +480,45 @@ docker compose -p reveal-test down -v && docker rmi reveal-sync:test
 
 Release: tag `sync-server-v<x.y.z>` (`.github/workflows/sync-server-release.yml`: linux amd64/arm64 archives +
 `ghcr.io/henriquefps/reveal-sync`). App tags stay `v*`.
+
+## Sync (app) (`:core:sync`, MS/2, ADR 0018)
+
+`:core:sync`: `api/SyncApi` (OkHttp client of ADR 0017; no host compiled in, cleartext allowed by
+`res/xml/network_security_config.xml` for LAN/Tailscale servers), `account/` (`PairingLink`, `SyncAccountStore`, the
+key in `KeystoreSecretStore`), `engine/SyncStore` (push snapshot, pull apply, NAS feed, conflict copies, aliases,
+inbox; `Payloads.kt` = the record JSON), `engine/SyncEngine` (one run: push → pull → inbox → NAS → lookups),
+`blobs/` (`SmartPreviewMaker`, `BlobUploader`: chunked, resumable from `HEAD`), `files/` (`ServerFilesProvider`
+`<applicationId>.sync` + `RangeCache`: Server-source files by range), `work/SyncWork.kt` (`SyncWorker`, `BlobWorker`,
+`SyncScheduler`, `SyncController` started by `RevealApplication`), `SyncRepository` (pair/unpair/status). Database v6:
+`sync_records` (dirty marks by `SyncTriggers`, quiet while `meta` `sync.applying` is set; create databases with
+`RevealDatabase.configure`), `photo_cloud`, `sync_uploads`, `sync_aliases`, `sync_inbox`, `versions.copy_of`,
+`sources.backup`. Server photos: `sources.kind = SERVER`, document id `<fingerprint>/<name>`, `data/sync/ServerTree`.
+Smart previews: `:core:pipeline` `preview/SmartPreviewCodec` (`PhotoOpener` opens them). Live editor reload:
+`data/sync/RemoteEdits`. UI: `feature/settings/sync/` (Sync screen, `PairingScanner` CameraX + ZXing), library
+`SpecialSource.SERVER`, `CloudState` badges, conflict cells (`LibraryTags.copy`). A new synced field: add it to the
+payload, `photoData`/`versionChange` and the apply path, and (if it lives in a new column) to the triggers.
+
+```sh
+./gradlew :core:sync:testDebugUnitTest            # FakeSyncServer: two devices, conflicts, NAS, uploads, 1,000 photos
+# against the real server (loopback only; the emulator through adb reverse; stop it afterwards):
+scripts/sync/local-server.sh start <work dir> 3471 [NAS files: CC0 samples or synthetic]
+adb -s emulator-<port> reverse tcp:3471 tcp:3471
+L1=$(scripts/sync/local-server.sh pair <work dir>); L2=$(scripts/sync/local-server.sh pair <work dir>)
+./gradlew :core:sync:assembleDebugAndroidTest && adb -s emulator-<port> install -r -t core/sync/build/outputs/apk/androidTest/debug/sync-debug-androidTest.apk
+adb -s emulator-<port> shell am instrument -w -e syncLinks "'$L1,$L2'" [-e nasSeed <seed> -e nasSize <bytes>] dev.hfps.reveal.sync.test/androidx.test.runner.AndroidJUnitRunner
+adb -s emulator-<port> shell am instrument -w -e class dev.hfps.reveal.sync.SyncFlowTest -e syncLink "'$(scripts/sync/local-server.sh pair <work dir>)'" -e nasName DSC00002.ARW dev.hfps.reveal.debug.test/androidx.test.runner.AndroidJUnitRunner
+adb -s emulator-<port> logcat -d -s REVEAL_SYNC RevealSync RevealSyncFiles
+scripts/sync/local-server.sh stop <work dir>
+```
+
+Measurement (skipped without links; exclude it from the full suite like the other measurement classes):
+`-e class dev.hfps.reveal.sync.SyncPullMeasurementsTest -e syncLinks "'$L1,$L2'"` logs `REVEAL_SYNC` library open and
+scroll frames before and during a 10,000-record first pull. Pulls apply 50 records per transaction (`SyncStore.APPLY_CHUNK`);
+keep it small. Exports of Server photos download the original first; preview-only ones wait (`OriginalPolicy`).
+Emulator: the x86_64 host GL stack segfaults on the editor's GPU tests (SwiftShader and `-gpu host`); run GPU-heavy
+suites on the phone.
+
+The `nasSeed`/`nasSize` file is the fingerprint-vector generator's bytes (`((i * 2654435761 + seed * 97) >> 13) & 0xff`).
+Both instrumented classes skip without their arguments, so the full suite stays green without a server. For the
+phone (on the Mac), keep the server on cachyos-fps loopback and forward it: `ssh -R 3471:127.0.0.1:3471` to the Mac,
+then `adb -s RXCX109VTTM reverse tcp:3471 tcp:3471` there.

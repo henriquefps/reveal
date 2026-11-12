@@ -584,6 +584,9 @@ private fun RunSection(run: ExportRun, actions: ExportSheetActions) {
         for ((name, failure) in run.failures) {
             Note("$name — ${stringResource(failure.label())}", warning = true)
         }
+        if (run.waiting > 0) {
+            Note(pluralStringResource(R.plurals.export_result_waiting, run.waiting, run.waiting), warning = true)
+        }
         if (run.results.isNotEmpty()) {
             SecondaryButton(
                 text = stringResource(R.string.export_share_results),
@@ -607,6 +610,7 @@ fun ExportFailure.label(): Int = when (this) {
     ExportFailure.LOW_STORAGE -> R.string.export_failure_storage
     ExportFailure.OUT_OF_MEMORY -> R.string.export_failure_memory
     ExportFailure.GPU_UNSUPPORTED -> R.string.export_failure_gpu
+    ExportFailure.ORIGINAL_ELSEWHERE -> R.string.export_failure_elsewhere
     ExportFailure.FAILED -> R.string.export_failure_other
 }
 

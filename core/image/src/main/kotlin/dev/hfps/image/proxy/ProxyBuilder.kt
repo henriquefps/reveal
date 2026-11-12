@@ -24,6 +24,9 @@ enum class ProxySource {
 
     /** JPEG/HEIF/PNG/WebP via the platform decoder with power-of-two subsampling, then area-averaged down. */
     STANDARD,
+
+    /** A sync smart preview (Reveal ADR 0018): the proxy itself, stored; nothing is decoded. */
+    SMART_PREVIEW,
 }
 
 /** Steps of a proxy build, in order, for a progress indicator. RAW files go through every step. */

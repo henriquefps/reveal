@@ -6,6 +6,23 @@ All notable changes to Reveal are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- Sync with your own `reveal-sync` server (Settings → Sync): pair by scanning the server's QR code or pasting its
+  link (the device key stays in the Android Keystore). Edits with their history, virtual copies, ratings, flags,
+  labels and the export author follow you to every paired device, in the background and within seconds while the app
+  is open; edits made elsewhere show up in the open editor. When two devices change the same photo, the other edit is
+  kept as a "Conflict" copy next to it in the library (Delete conflict copies in the selection menu).
+- The library's Server entry shows the photos only your server has (its NAS folders and other devices' photos);
+  they open in the viewer and the editor straight from the server, read in pieces and cached. Cells show where an
+  original is: also on the server, only on the server, or only as a smart preview.
+- Smart previews: a developable copy (about 2560 px) of photos only this device has, so other devices can edit them;
+  the editor opens it when the original is out of reach. Originals backup: photos only this device has are uploaded
+  once (Wi-Fi only by default, per folder), resuming where they stopped; photos the server already has never are.
+- Exporting a photo whose original is on your sync server downloads it first (with progress and Cancel); a photo
+  whose original is only on another device waits instead of failing, and its export finishes by itself once that
+  device backs it up. The server's NAS photos sort by capture time like your own.
+- `reveal-sync`: `GET /v1/devices` names the paired devices (for "Conflict copy from <device>").
+
 ## [0.3.0] - 2026-11-12
 
 M2: the full global toolset (tone curve, colour mixer, grading, B&W, effects, Detail at 100 %, optics,

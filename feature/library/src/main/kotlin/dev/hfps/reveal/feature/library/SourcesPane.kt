@@ -54,15 +54,17 @@ fun SourcesPane(
     selection: LibrarySelection?,
     actions: LibraryActions,
     modifier: Modifier = Modifier,
+    serverPhotos: Int = 0,
 ) {
-    if (sources.isEmpty()) {
+    if (sources.isEmpty() && serverPhotos == 0) {
         EmptyLibrary(actions, modifier)
         return
     }
     var confirmRemove by remember { mutableStateOf<SourceItem?>(null) }
     LazyColumn(modifier.fillMaxSize().testTag(LibraryTags.SOURCES), contentPadding = PaddingValues(bottom = 16.dp)) {
         item { SectionLabel(stringResource(R.string.library_section_library)) }
-        items(SpecialSource.entries, key = { it.name }) { which -> SpecialRow(which, selection, actions) }
+        val specials = SpecialSource.entries.filter { it != SpecialSource.SERVER || serverPhotos > 0 }
+        items(specials, key = { it.name }) { which -> SpecialRow(which, selection, actions) }
         item { SectionLabel(stringResource(R.string.library_section_folders)) }
         items(sources, key = { it.id }) { source ->
             SourceRow(
@@ -121,6 +123,12 @@ private fun SpecialRow(
             PhosphorRegular.ArrowSquareIn,
             R.string.library_from_apps,
             R.string.library_from_apps_subtitle,
+        )
+
+        SpecialSource.SERVER -> Triple(
+            PhosphorRegular.HardDrives,
+            R.string.library_server,
+            R.string.library_server_subtitle,
         )
     }
     RevealListRow(

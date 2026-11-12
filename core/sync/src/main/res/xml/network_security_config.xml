@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The sync server is the owner's own (ADR 0017, 0018): it speaks plain HTTP on the home network or Tailscale and
+     HTTPS through a reverse proxy. Its address is only known at pairing, so plain HTTP is allowed for any host; the
+     Sync screen warns when a server is paired over http://. Only system certificates are trusted. -->
+<network-security-config xmlns:tools="http://schemas.android.com/tools">
+    <!-- InsecureBaseConfiguration: deliberate, see above (ADR 0018 "Decisions"). -->
+    <base-config cleartextTrafficPermitted="true" tools:ignore="InsecureBaseConfiguration">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

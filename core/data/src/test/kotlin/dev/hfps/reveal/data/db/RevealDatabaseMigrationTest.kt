@@ -142,6 +142,49 @@ class RevealDatabaseMigrationTest {
     }
 
     @Test
+    fun `version 5 gets the sync tables and columns, and its photos are tracked from then on`() {
+        helper.createDatabase(name, 5).use { db ->
+            db.execSQL(
+                "INSERT INTO sources (id, tree_uri, root_document_id, display_name, state, writable, added_at, kind) " +
+                    "VALUES (1, 'content://t', 'r', 'Shoot', 'AVAILABLE', 1, 5, 'FOLDER')",
+            )
+            db.execSQL(
+                "INSERT INTO photos (id, uuid, source_id, folder, folder_document_id, stem_key, name, format, " +
+                    "has_raw, sort_time, added_at, rating, flag, has_edit, metadata_state, orientation, hidden) " +
+                    "VALUES (1, 'u1', 1, 'f', 'f', 'dsc1', 'DSC1.ARW', 'RAW', 1, 0, 0, 0, 'NONE', 0, 'PENDING', 1, 0)",
+            )
+            db.execSQL("INSERT INTO versions (id, uuid, photo_id, position, created_at) VALUES (1, 'v1', 1, 0, 0)")
+        }
+        helper.runMigrationsAndValidate(name, 6, true).use { db ->
+            db.query("SELECT backup FROM sources").use { c ->
+                assertThat(c.moveToFirst()).isTrue()
+                assertThat(c.getInt(0)).isEqualTo(1)
+            }
+            db.query("SELECT copy_of FROM versions").use { c ->
+                assertThat(c.moveToFirst()).isTrue()
+                assertThat(c.isNull(0)).isTrue()
+            }
+            db.query("SELECT COUNT(*) FROM sync_records").use { c ->
+                assertThat(c.moveToFirst()).isTrue()
+                assertThat(c.getInt(0)).isEqualTo(0)
+            }
+        }
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val database = RevealDatabase.configure(Room.databaseBuilder(context, RevealDatabase::class.java, name))
+            .allowMainThreadQueries().build()
+        try {
+            runBlocking {
+                database.photoDao().setRating(listOf(1L), 3)
+                val record = database.syncDao().record("photo", "u1")
+                assertThat(record).isNotNull()
+                assertThat(record!!.dirty).isTrue()
+            }
+        } finally {
+            database.close()
+        }
+    }
+
+    @Test
     fun `every exported schema up to the current version exists`() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val folder = "dev.hfps.reveal.data.db.RevealDatabase"

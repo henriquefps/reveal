@@ -10,7 +10,7 @@ import dev.hfps.reveal.pipeline.recipe.Recipe
 import dev.hfps.reveal.pipeline.recipe.RecipeGroup
 
 /** The pseudo-sources of the sources list besides the added folders. */
-enum class SpecialSource { ALL, RECENT, FROM_APPS }
+enum class SpecialSource { ALL, RECENT, FROM_APPS, SERVER }
 
 /** What the grid shows: an added folder, or one of the special entries. */
 sealed interface LibrarySelection {
@@ -34,8 +34,9 @@ sealed interface GridEntry {
         override val key: Any get() = "g$at/$title"
     }
 
+    /** A photo's version: its first version is keyed by the photo id, a copy by its version (ADR 0018). */
     data class Photo(val row: PhotoRow) : GridEntry {
-        override val key: Any get() = row.id
+        override val key: Any get() = row.gridKey
     }
 }
 
@@ -56,6 +57,8 @@ data class LibraryUiState(
     val clipboard: Recipe? = null,
     /** The paste chooser is open with these groups ticked; null = closed. */
     val pasteChooser: Set<RecipeGroup>? = null,
+    /** Photos only the sync server has (ADR 0018); the Server entry shows when there are any. */
+    val serverPhotos: Int = 0,
 ) {
     val selecting: Boolean get() = selected.isNotEmpty()
 
@@ -66,7 +69,16 @@ data class LibraryUiState(
     val filtered: Boolean
         get() = query.filter != dev.hfps.reveal.data.model.PhotoFilter.ALL || query.search.isNotBlank()
 
-    val photoIds: List<Long> get() = entries.mapNotNull { (it as? GridEntry.Photo)?.row?.id }
+    val photoIds: List<Long> get() = entries.mapNotNull { (it as? GridEntry.Photo)?.row?.id }.distinct()
+
+    /** Sync conflict copies among the selected photos (ADR 0018): what "Delete conflict copies" removes. */
+    val selectedConflictCopies: List<Long>
+        get() = entries.mapNotNull { entry ->
+            (entry as? GridEntry.Photo)?.row?.takeIf {
+                it.conflict &&
+                    it.id in selected
+            }?.versionId
+        }
 }
 
 /** Everything the library screen can ask for (stateless content for screenshots and tests). */
@@ -95,6 +107,8 @@ data class LibraryActions(
     val onResetEdits: () -> Unit = {},
     /** Opens the export sheet for the selected photos. */
     val onExport: () -> Unit = {},
+    /** Deletes the sync conflict copies of the selected photos, here and on the other devices. */
+    val onDeleteConflictCopies: () -> Unit = {},
     val onSettings: () -> Unit = {},
     val onGallery: () -> Unit = {},
     val onAbout: () -> Unit = {},
@@ -108,6 +122,7 @@ fun LibrarySelection.scope(): LibraryScope? = when (this) {
         SpecialSource.ALL -> LibraryScope.All
         SpecialSource.RECENT -> LibraryScope.Recent
         SpecialSource.FROM_APPS -> LibraryScope.FromApps
+        SpecialSource.SERVER -> LibraryScope.Server
     }
 }
 

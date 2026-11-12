@@ -164,7 +164,8 @@ write-back), `LibraryIndexer` (walk → diff → sidecars → headers), `XmpRead
 malformed sidecar; `reveal:` namespace reserved for M5), `ThumbnailRepository` (embedded preview / JPEG, edited thumb
 via `GpuEditedThumbnails`), `PhotoImages` (viewer display + region decoder), `EditRepository` (recipes, undo/redo
 history for the editor). The editor route is `EditorRoute(versionId = …)` from the library or `EditorRoute(uri = …)`
-from other apps. The library is the start destination and reopens the last folder (`meta`).
+from other apps. The library is the start destination and reopens the last folder (`meta`); with no folder but hand-offs it starts on
+"Opened from other apps" (`LibraryViewModel.startSelection`).
 
 Instrumented library tests use the debug-only `SyntheticDocumentsProvider` (`app/src/debug`, authority
 `dev.hfps.reveal.debug.synthetic`, files under `files/saf-test`, own process) and `DebugAccess` (Hilt entry point):
@@ -211,12 +212,24 @@ previews wait while an editor is open (`editorOpened/Closed`, heap), the editor 
 thumbnails, `PhotoImages`, `editTarget` (file URI of the `.rvsp`) and `exportTarget` (`OriginalReach.PREVIEW`) fall
 back to them; grid `CloudState.LOCAL_PREVIEW`. Gallery access (optional): `handoff/GalleryAccess` (state, asked once),
 `GalleryAccessSheet` in the library route, Settings → Gallery access; permissions in `core/data` manifest. The debug
-provider refuses ids listed by `SyntheticDocumentsProvider.refuse` (an ended grant).
+provider refuses ids listed by `SyntheticDocumentsProvider.refuse` (an ended grant), `forget` (a provider's
+`IllegalArgumentException`) and `refuseAfterOpen` (a grant good for one read).
+
+Fallbacks (ADR 0011 "Fallbacks", 0.5.2): `handoff/HandoffFallbacks` is the one place that says what an unreadable
+hand-off is read from: the server's original (`photo_cloud.original_on_server`, `ServerTree.ORIGINAL` by range), else a
+smart preview (local, else `ServerTree.SMART`), else nothing (`EditTarget.unreadable`: the editor's error names the
+sender, `HandoffApps.sender`, launcher `<queries>` in the `core/data` manifest). `EditTarget.fallback` = the preview the
+editor opens when the server copy fails; `ExportTarget.previewUri` the same for the export worker. Editor state:
+`EditorUiState.previewOnly` (note `EditorTags.PREVIEW_ONLY`), `EditorPhase.Failed.handoff`. Viewer info:
+`LibraryRepository.originalPlace`. "Unreadable" = `storage/isAccessError` everywhere (opener, thumbnails, viewer, sync,
+export). Goldens `phone_preview_only`, `phone_error_handoff*`.
 
 ```sh
-./gradlew :core:data:testDebugUnitTest --tests '*HandoffMergeTest*' --tests '*UnreadableHandoffsTest*' --tests '*GalleryAccessTest*'
+./gradlew :core:data:testDebugUnitTest --tests '*HandoffMergeTest*' --tests '*UnreadableHandoffsTest*' --tests '*GalleryAccessTest*' --tests '*AccessErrorsTest*'
 ./gradlew :core:sync:testDebugUnitTest --tests '*HandoffSyncTest*'       # merged hand-offs on two devices, parked originals
 adb -s <serial> shell am instrument -w -e class dev.hfps.reveal.handoff.UnreadableHandoffTest dev.hfps.reveal.debug.test/androidx.test.runner.AndroidJUnitRunner
+# fallbacks; the backed-up case needs a local reveal-sync (scripts/sync/local-server.sh, adb reverse), skipped without:
+adb -s <serial> shell am instrument -w -e class dev.hfps.reveal.handoff.HandoffFallbackTest -e syncLink "'$(scripts/sync/local-server.sh pair <work dir>)'" dev.hfps.reveal.debug.test/androidx.test.runner.AndroidJUnitRunner
 adb -s <serial> shell am instrument -w -e class dev.hfps.reveal.pipeline.SmartPreviewMakerTest dev.hfps.reveal.pipeline.test/androidx.test.runner.AndroidJUnitRunner   # every format; CC0 RAWs in files/samples
 ```
 

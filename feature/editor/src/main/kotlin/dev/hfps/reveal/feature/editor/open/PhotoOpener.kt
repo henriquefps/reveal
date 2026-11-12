@@ -17,6 +17,7 @@ import dev.hfps.image.source.CancelToken
 import dev.hfps.image.source.CancelledException
 import dev.hfps.image.source.SourceInputStream
 import dev.hfps.image.source.readRange
+import dev.hfps.reveal.data.storage.isAccessError
 import dev.hfps.reveal.pipeline.PipelineInput
 import dev.hfps.reveal.pipeline.gl.GlesRequirementException
 import dev.hfps.reveal.pipeline.input.BitmapTileSource
@@ -28,7 +29,6 @@ import dev.hfps.reveal.pipeline.input.UnsupportedCameraException
 import dev.hfps.reveal.pipeline.input.withLens
 import dev.hfps.reveal.pipeline.optics.LensProfile
 import dev.hfps.reveal.pipeline.preview.SmartPreviewCodec
-import java.io.FileNotFoundException
 import java.io.IOException
 
 /** Why a photo could not be opened; each one is a friendly state with its own strings, never a crash. */
@@ -124,15 +124,17 @@ class PhotoOpener(private val resolver: ContentResolver) {
         }
     }
 
-    /** The document's descriptor; any failure here means the grant or the file is gone. */
+    /** The document's descriptor; any failure here means the grant or the file is gone (`isAccessError` shapes). */
+    @Suppress("TooGenericExceptionCaught")
     private fun openInput(uri: Uri, name: String): ImageInput = try {
         ImageInput.fromUri(resolver, uri, name)
-    } catch (e: SecurityException) {
-        throw OpenException(OpenError.PERMISSION_LOST, e)
-    } catch (e: FileNotFoundException) {
-        throw OpenException(OpenError.PERMISSION_LOST, e)
     } catch (e: IllegalArgumentException) {
+        // Thrown by the provider while opening: it no longer serves the URI.
         throw OpenException(OpenError.PERMISSION_LOST, e)
+    } catch (e: RuntimeException) {
+        if (isAccessError(e)) throw OpenException(OpenError.PERMISSION_LOST, e) else throw e
+    } catch (e: IOException) {
+        if (isAccessError(e)) throw OpenException(OpenError.PERMISSION_LOST, e) else throw e
     }
 
     /**
@@ -269,8 +271,7 @@ class PhotoOpener(private val resolver: ContentResolver) {
             is OutOfMemoryError -> OpenError.OUT_OF_MEMORY
             is UnsupportedCameraException -> OpenError.UNSUPPORTED_CAMERA
             is GlesRequirementException -> OpenError.GPU_UNSUPPORTED
-            is SecurityException, is FileNotFoundException -> OpenError.PERMISSION_LOST
-            else -> OpenError.CORRUPT
+            else -> if (isAccessError(error)) OpenError.PERMISSION_LOST else OpenError.CORRUPT
         }
     }
 }

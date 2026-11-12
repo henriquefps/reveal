@@ -53,12 +53,27 @@ class SyntheticDocumentsProvider : DocumentsProvider() {
 
     override fun openDocument(documentId: String, mode: String, signal: CancellationSignal?): ParcelFileDescriptor {
         checkAccess(documentId)
-        return ParcelFileDescriptor.open(file(documentId), ParcelFileDescriptor.parseMode(mode))
+        val opened = ParcelFileDescriptor.open(file(documentId), ParcelFileDescriptor.parseMode(mode))
+        // A grant that lasts for one read only: every later query or open is refused.
+        val once = File(base, ONCE)
+        if (once.isFile && documentId in once.readLines()) {
+            synchronized(LOCK) {
+                once.writeText(
+                    once.readLines().filter {
+                        it.isNotBlank() && it != documentId
+                    }.joinToString("") { "$it\n" },
+                )
+                File(base, REFUSED).appendText(documentId + "\n")
+            }
+        }
+        return opened
     }
 
     private fun checkAccess(documentId: String) {
         val refused = File(base, REFUSED).takeIf { it.isFile }?.readLines().orEmpty()
         if (documentId in refused) throw SecurityException("Permission Denial: the grant of $documentId ended")
+        // A provider that no longer serves the URI: Android rethrows its IllegalArgumentException in the caller.
+        if ("$UNKNOWN$documentId" in refused) throw IllegalArgumentException("Unknown document $documentId")
     }
 
     override fun createDocument(parentDocumentId: String, mimeType: String, displayName: String): String {
@@ -109,6 +124,9 @@ class SyntheticDocumentsProvider : DocumentsProvider() {
         const val ROOT_ID = "synthetic"
         const val ROOT_DOCUMENT = ""
         private const val REFUSED = ".refused"
+        private const val ONCE = ".refuse-after-open"
+        private const val UNKNOWN = "unknown:"
+        private val LOCK = Any()
 
         /** From now on [documentId] refuses access (tests); [allow] undoes it. */
         fun refuse(filesDir: File, documentId: String) {
@@ -117,10 +135,22 @@ class SyntheticDocumentsProvider : DocumentsProvider() {
             file.appendText(documentId + "\n")
         }
 
+        /** From now on [documentId] is unknown to the provider: `IllegalArgumentException` (ADR 0011 "Fallbacks"). */
+        fun forget(filesDir: File, documentId: String) = refuse(filesDir, UNKNOWN + documentId)
+
+        /** [documentId] can be opened once more, then it refuses access (a grant that ended after the first read). */
+        fun refuseAfterOpen(filesDir: File, documentId: String) {
+            val file = File(filesDir, "$DIRECTORY/$ONCE")
+            file.parentFile?.mkdirs()
+            file.appendText(documentId + "\n")
+        }
+
         fun allow(filesDir: File, documentId: String) {
-            val file = File(filesDir, "$DIRECTORY/$REFUSED").takeIf { it.isFile } ?: return
-            val kept = file.readLines().filter { it.isNotBlank() && it != documentId }
-            file.writeText(kept.joinToString("") { it + "\n" })
+            for (name in listOf(REFUSED, ONCE)) {
+                val file = File(filesDir, "$DIRECTORY/$name").takeIf { it.isFile } ?: continue
+                val kept = file.readLines().filter { it.isNotBlank() && it != documentId && it != UNKNOWN + documentId }
+                file.writeText(kept.joinToString("") { it + "\n" })
+            }
         }
 
         private val ROOT_COLUMNS = arrayOf(

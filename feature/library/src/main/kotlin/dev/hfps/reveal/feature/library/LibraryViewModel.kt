@@ -149,9 +149,15 @@ class LibraryViewModel @Inject constructor(
                     // The Server entry only exists while the server has photos here (ADR 0018).
                     restored == LibrarySelection.Special(SpecialSource.SERVER) &&
                         library.serverPhotoCount().first() == 0
-                }?.let { restored ->
-                    savedState[KEY_SELECTION] = restored.encode()
-                    _state.update { it.copy(selection = restored) }
+                }.let { restored ->
+                    // Nothing to reopen and no folder, but photos other apps handed over: start there.
+                    val start = startSelection(
+                        restored,
+                        folders = library.sources().first().size,
+                        fromApps = library.fromAppsCount().first(),
+                    ) ?: return@let
+                    savedState[KEY_SELECTION] = start.encode()
+                    _state.update { it.copy(selection = start) }
                 }
             }
             library.sources().collect { sources ->
@@ -163,6 +169,9 @@ class LibraryViewModel @Inject constructor(
                     s.copy(sources = sources, sourcesLoaded = true, selection = selection)
                 }
             }
+        }
+        viewModelScope.launch {
+            library.fromAppsCount().collect { count -> _state.update { it.copy(fromAppsPhotos = count) } }
         }
         viewModelScope.launch {
             library.serverPhotoCount().collect { count ->
@@ -373,6 +382,13 @@ class LibraryViewModel @Inject constructor(
         private const val VOLUME_DEBOUNCE_MS = 500L
         private const val TAG = "RevealLibrary"
         private const val STOP_TIMEOUT = 5_000L
+
+        /**
+         * Where a fresh start opens: the [restored] last selection, else "Opened from other apps" when the library has
+         * no folder but photos other apps handed over (ADR 0011), else the sources list (null).
+         */
+        fun startSelection(restored: LibrarySelection?, folders: Int, fromApps: Int): LibrarySelection? = restored
+            ?: LibrarySelection.Special(SpecialSource.FROM_APPS).takeIf { folders == 0 && fromApps > 0 }
 
         fun LibrarySelection.encode(): String = when (this) {
             is LibrarySelection.Folder -> "f:$sourceId"

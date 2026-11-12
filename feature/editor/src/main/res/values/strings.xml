@@ -29,6 +29,15 @@
     <string name="editor_error_gpu_body">Reveal develops photos on the GPU and needs OpenGL ES 3 with floating-point render targets.</string>
     <string name="editor_error_memory_title">Not enough memory</string>
     <string name="editor_error_memory_body">This photo needs more memory than is free right now. Close other apps and try again.</string>
+    <string name="editor_error_handoff_body_app">%1$s only let Reveal read this photo for a while, and there is no copy on your sync server or preview to open instead. Share it to Reveal again from %1$s.</string>
+    <string name="editor_error_handoff_body">The app that shared this photo only let Reveal read it for a while, and there is no copy on your sync server or preview to open instead. Share it to Reveal again from that app.</string>
+    <string name="editor_error_handoff_body_gallery">The gallery only let Reveal read this photo for a while, and there is no copy on your sync server or preview to open instead. Share it to Reveal again from the gallery, or allow access to your photos so photos shared from the gallery stay readable.</string>
+    <string name="editor_error_handoff_open_app">Open %1$s</string>
+    <string name="editor_error_handoff_gallery">Allow access to photos</string>
+    <string name="editor_preview_only_handoff_short">Preview only · exports at 2560 px</string>
+    <string name="editor_preview_only_elsewhere_short">Preview only · original out of reach</string>
+    <string name="editor_preview_only_handoff">Preview only: Reveal can no longer read the original. Edits work; exports are at preview size (2560 px). Share it again for the full photo.</string>
+    <string name="editor_preview_only_elsewhere">Preview only: the original is not on this device right now (another device has it, or its storage is not connected). Edits work and apply to the original too.</string>
     <string name="editor_undo">Undo</string>
     <string name="editor_redo">Redo</string>
     <string name="editor_compare">Before and after</string>

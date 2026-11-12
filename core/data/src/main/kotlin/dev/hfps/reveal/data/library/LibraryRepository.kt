@@ -6,6 +6,7 @@ import android.net.Uri
 import android.provider.DocumentsContract
 import android.util.Log
 import androidx.core.net.toUri
+import dev.hfps.image.ImageInput
 import dev.hfps.image.format.PhotoMetadata
 import dev.hfps.reveal.data.db.MetaEntity
 import dev.hfps.reveal.data.db.PhotoEntity
@@ -14,6 +15,8 @@ import dev.hfps.reveal.data.db.PhotoQuerySql
 import dev.hfps.reveal.data.db.PhotoRow
 import dev.hfps.reveal.data.db.RevealDatabase
 import dev.hfps.reveal.data.db.SourceEntity
+import dev.hfps.reveal.data.handoff.Fallback
+import dev.hfps.reveal.data.handoff.HandoffFallbacks
 import dev.hfps.reveal.data.handoff.HandoffMerge
 import dev.hfps.reveal.data.handoff.LocalPreviews
 import dev.hfps.reveal.data.handoff.MergeReport
@@ -90,7 +93,10 @@ data class ExportTarget(
     val renderedUri: Uri?,
     /** Where [uri] reads the original from (ADR 0018 "Export"). */
     val reach: OriginalReach = OriginalReach.DEVICE,
-    /** [OriginalReach.PREVIEW] only: the local smart preview to export from while [uri] cannot be read. */
+    /**
+     * The smart preview to export from (at its size, saying so) when [uri] cannot be read: [OriginalReach.PREVIEW],
+     * or a hand-off's [OriginalReach.SERVER] copy while the server cannot be reached (ADR 0011 "Fallbacks").
+     */
     val previewUri: Uri? = null,
 )
 
@@ -106,14 +112,57 @@ enum class OriginalReach {
     ELSEWHERE,
 
     /**
-     * A hand-off Reveal can no longer read (ADR 0011 "Unreadable hand-offs"): [ExportTarget.uri] is tried again, else
-     * the export reads the local smart preview ([ExportTarget.previewUri]) at its size and says so.
+     * A hand-off Reveal can no longer read and the server lacks (ADR 0011 "Fallbacks"): [ExportTarget.uri] is tried
+     * again, else the export reads the smart preview ([ExportTarget.previewUri], local or the server's) at its size and
+     * says so.
      */
     PREVIEW,
 }
 
 /** What the editor opens for a version: the RAW of a pair (else the rendering), and the rendering for the preview. */
-data class EditTarget(val photoId: Long, val versionId: Long, val uri: Uri, val name: String, val renderedUri: Uri?)
+data class EditTarget(
+    val photoId: Long,
+    val versionId: Long,
+    val uri: Uri,
+    val name: String,
+    val renderedUri: Uri?,
+    /**
+     * Opened when [uri] fails (ADR 0011 "Fallbacks"): the smart preview of a hand-off read from the server's original
+     * while the server cannot be reached.
+     */
+    val fallback: Uri? = null,
+    /**
+     * A hand-off document Reveal cannot read, with nothing in its place (no server copy, no preview): the editor's
+     * error names the app to share it from again.
+     */
+    val unreadable: Uri? = null,
+    /** The photo is a hand-off Reveal can no longer read: [uri] is a fallback, or [unreadable] says there is none. */
+    val unreadableHandoff: Boolean = false,
+)
+
+/** Where a photo's original is, for the viewer's info (ADR 0011 "Fallbacks", ADR 0018). */
+enum class OriginalPlace {
+    /** On this device only. */
+    DEVICE,
+
+    /** On this device, and the sync server has it too (NAS or backup). */
+    DEVICE_AND_SERVER,
+
+    /** Only the sync server has it; it opens by range from there. */
+    SERVER,
+
+    /** Only another device has it; this one has its smart preview. */
+    ELSEWHERE,
+
+    /** A hand-off Reveal can no longer read whose original the server has: it opens from the server, full quality. */
+    HANDOFF_SERVER,
+
+    /** A hand-off Reveal can no longer read, with a preview: it shows, edits and exports the preview. */
+    HANDOFF_PREVIEW,
+
+    /** A hand-off Reveal can no longer read, with nothing in its place: share it to Reveal again. */
+    HANDOFF_UNREADABLE,
+}
 
 /** The result of adding a folder. */
 sealed interface AddSourceResult {
@@ -146,6 +195,7 @@ class LibraryRepository(
     private val photoDao = db.photoDao()
     private val indexer = LibraryIndexer(db, clock)
     private val merge = HandoffMerge(db, clock)
+    private val fallbacks = HandoffFallbacks(db, previews, serverAuthority)
     private val jobs = ConcurrentHashMap<Long, Job>()
     private val fingerprintJobs = ConcurrentHashMap<Long, Job>()
     private val progress = MutableStateFlow<Map<Long, IndexProgress>>(emptyMap())
@@ -178,6 +228,9 @@ class LibraryRepository(
 
     /** How many photos only the sync server has (the library's Server entry, ADR 0018). */
     fun serverPhotoCount(): Flow<Int> = db.syncDao().observeServerPhotoCount()
+
+    /** How many photos "Opened from other apps" lists (ADR 0011). */
+    fun fromAppsCount(): Flow<Int> = photoDao.observeFromAppsCount()
 
     fun photos(query: PhotoQuery): Flow<List<PhotoRow>> = photoDao.observeRows(PhotoQuerySql.toQuery(query))
 
@@ -424,21 +477,38 @@ class LibraryRepository(
         val files = listOfNotNull(detail.raw, detail.rendered)
         files.mapNotNull { file ->
             runCatching { tree.openInput(file.documentId, file.name).use { it.inspection.metadata } }.getOrNull()
-        }.reduceOrNull { acc, next -> acc.orElse(next) }
+        }.reduceOrNull { acc, next -> acc.orElse(next) } ?: serverMetadata(detail)
+    }
+
+    /** The header of an unreadable hand-off's original read from the server (ADR 0011 "Fallbacks"), or null. */
+    @Suppress("ReturnCount")
+    private suspend fun serverMetadata(detail: PhotoDetail): PhotoMetadata? {
+        val main = detail.raw ?: detail.rendered ?: return null
+        val file = photoDao.files(detail.photo.id).firstOrNull { it.documentId == main.documentId } ?: return null
+        val server = fallbacks.original(file) ?: return null
+        return runCatching {
+            ImageInput.fromUri(resolver, server, main.name).use { it.inspection.metadata }
+        }.getOrNull()
     }
 
     /**
      * What the editor opens for [versionId]; also marks the photo as recently opened. When the original is out of reach
      * (a server photo the server cannot serve, an unplugged folder) and the photo has a smart preview, the editor opens
-     * that instead (ADR 0018 "Smart previews").
+     * that instead (ADR 0018 "Smart previews"). A hand-off Reveal can no longer read opens the server's original, else
+     * a smart preview, else reports what it was (ADR 0011 "Fallbacks").
      */
     suspend fun editTarget(versionId: Long): EditTarget? = withContext(Dispatchers.IO) {
         val photoId = photoDao.photoIdOfVersion(versionId) ?: return@withContext null
         val detail = detail(photoId) ?: return@withContext null
         val main = detail.raw ?: detail.rendered ?: return@withContext null
         photoDao.setOpened(photoId, clock())
-        localPreview(detail, main)?.let { local ->
-            return@withContext EditTarget(photoId, versionId, local, main.name, null)
+        unreadableHandoff(detail, main)?.let { fallback ->
+            val target = EditTarget(photoId, versionId, main.uri, main.name, null, unreadableHandoff = true)
+            return@withContext when {
+                fallback.original != null -> target.copy(uri = fallback.original, fallback = fallback.preview)
+                fallback.preview != null -> target.copy(uri = fallback.preview)
+                else -> target.copy(unreadable = main.uri)
+            }
         }
         smartPreviewUri(detail)?.let { smart ->
             return@withContext EditTarget(photoId, versionId, smart, main.name, null)
@@ -447,16 +517,41 @@ class LibraryRepository(
     }
 
     /**
-     * The local smart preview of a hand-off Reveal cannot read now (ADR 0011 "Unreadable hand-offs"), or null (it can,
-     * or there is none: the editor then reports the original's error).
+     * The fallbacks of a hand-off Reveal cannot read now (ADR 0011 "Fallbacks"), or null when it can (or the photo is
+     * not a hand-off).
      */
     @Suppress("ReturnCount")
-    private suspend fun localPreview(detail: PhotoDetail, main: DetailFile): Uri? {
-        val local = previews ?: return null
+    private suspend fun unreadableHandoff(detail: PhotoDetail, main: DetailFile): Fallback? {
         val source = sourceDao.get(detail.photo.sourceId) ?: return null
         if (source.kind != SourceKind.HANDOFF || readable(source, main)) return null
-        val fingerprint = photoDao.files(detail.photo.id).firstOrNull { it.documentId == main.documentId }?.fingerprint
-        return local.smart(fingerprint)?.let(Uri::fromFile)
+        val file = photoDao.files(detail.photo.id).firstOrNull { it.documentId == main.documentId } ?: return null
+        return fallbacks.of(file)
+    }
+
+    /** Where [photoId]'s original is now, for the viewer's info; null when the photo is gone. */
+    @Suppress("ReturnCount")
+    suspend fun originalPlace(photoId: Long): OriginalPlace? = withContext(Dispatchers.IO) {
+        val photo = photoDao.get(photoId) ?: return@withContext null
+        val source = sourceDao.get(photo.sourceId) ?: return@withContext null
+        val files = photoDao.files(photoId)
+        val main = files.firstOrNull { it.role == FileRole.RAW } ?: files.firstOrNull { it.role == FileRole.RENDERED }
+        val onServer = db.syncDao().cloud(photoId)?.originalOnServer == true
+        when {
+            source.kind == SourceKind.SERVER -> if (onServer) OriginalPlace.SERVER else OriginalPlace.ELSEWHERE
+
+            main != null && main.unreadableAt != null -> when {
+                fallbacks.original(main) != null -> OriginalPlace.HANDOFF_SERVER
+
+                fallbacks.preview(main) != null || fallbacks.localDisplayJpeg(main) != null ->
+                    OriginalPlace.HANDOFF_PREVIEW
+
+                else -> OriginalPlace.HANDOFF_UNREADABLE
+            }
+
+            onServer -> OriginalPlace.DEVICE_AND_SERVER
+
+            else -> OriginalPlace.DEVICE
+        }
     }
 
     /** Opens [file] once; false (and marked) when access is refused or it is gone. */
@@ -529,8 +624,19 @@ class LibraryRepository(
         val target = ExportTarget(versionId, main.uri, main.name, detail.photo.rating, pair)
         val source = sourceDao.get(detail.photo.sourceId) ?: return@withContext target
         val onServer = db.syncDao().cloud(photoId)?.originalOnServer == true
-        localPreview(detail, main)?.let { local ->
-            return@withContext target.copy(renderedUri = null, reach = OriginalReach.PREVIEW, previewUri = local)
+        unreadableHandoff(detail, main)?.let { fallback ->
+            fallback.original?.let { server ->
+                // The server's original, full size; its smart preview if the server cannot be reached then.
+                return@withContext target.copy(
+                    uri = server,
+                    renderedUri = null,
+                    reach = OriginalReach.SERVER,
+                    previewUri = fallback.preview,
+                )
+            }
+            fallback.preview?.let { preview ->
+                return@withContext target.copy(renderedUri = null, reach = OriginalReach.PREVIEW, previewUri = preview)
+            }
         }
         when {
             source.kind == SourceKind.SERVER ->

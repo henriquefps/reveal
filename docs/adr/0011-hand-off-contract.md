@@ -280,6 +280,45 @@ database, but the picture would be gone. So, **always**, while the grant is aliv
   again) and its smart preview is uploaded instead (the local one as it is). Re-sharing the photo refreshes its URI
   (new file rows, readable) and keeps the previews.
 
+### Fallbacks (amended 2026-11-12, 0.5.2)
+
+0.5.1 opened an unreadable hand-off only from a local smart preview (made for temporary grants, or by the editor) and
+never looked at the sync server: hand-offs from Hoard's SMB stream provider (`Permission Denial: opening provider ...`
+once the grant ended) failed in the editor whether the grid showed them as backed up (CloudCheck) or as preview only
+(Image, with a display image but no smart preview).
+Now one resolver, `HandoffFallbacks` (`:core:data/handoff`), says what an unreadable hand-off is read from, in order,
+and the editor, the viewer, the grid, the info and the export all ask it:
+
+1. **The server's original** (`photo_cloud.original_on_server`: a backup or a NAS file of the same fingerprint), read by
+   range through `ServerFilesProvider` (`ServerTree.ORIGINAL`), like a Server photo: full quality, full-resolution
+   zoom, no prompt. Export: `OriginalReach.SERVER` (downloaded first), and `ExportTarget.previewUri` for when the server
+   cannot be reached. The grid shows the photo as `CloudState.CLOUD` (the original is only on the server now).
+2. **A smart preview**: the local one (`LocalPreviews`), else the server's (`photo_cloud.preview_sha`,
+   `ServerTree.SMART`). Preview only: editing works, the editor shows a one-line "preview only" note (also for Server
+   photos whose original is on another device, `PreviewOnly.ELSEWHERE`), export is `OriginalReach.PREVIEW` (at
+   2560 px, the sheet and the notification say so). The editor opens it also when (1) fails while opening (the
+   server is offline: `EditTarget.fallback`); the export worker likewise when the download fails.
+3. **Nothing**: `EditTarget.unreadable` = the document; the editor's error says that the sending app only lent the
+   photo, names it when its provider belongs to an app with a launcher entry (`HandoffApps.sender`: the URI's
+   authority -> `resolveContentProvider`, visible through the manifest's `<queries>` for launcher apps) and offers to
+   open it ("Share it to Reveal again from Hoard"); for a MediaStore URI without full gallery access it offers gallery
+   access (then opens the photo again).
+
+Thumbnails: the local display image, else the server's `ServerTree.DISPLAY` (the original's embedded preview by range,
+or the server's smart preview JPEG); edited thumbnails render the smart preview first (local, server), the original
+last. The viewer's info has an "Original" line (`LibraryRepository.originalPlace`: on this device, backed up, only on
+the server, on another device, or one of the three cases above, each with what it means), and the grid's badge has a
+content description (`cloudDescription`). The export sheet's preview-size count leaves out photos the server has.
+
+A library with no folder but with hand-offs starts on "Opened from other apps" (`LibraryViewModel.startSelection`; the
+last selection still wins) and its sources list is not the empty state (`LibraryUiState.fromAppsPhotos`).
+
+"Unreadable" is one helper, `isAccessError` (`:core:data/storage/AccessErrors.kt`), used by the opener, thumbnails,
+the viewer, sync and export: `SecurityException`, `FileNotFoundException`, an `IllegalArgumentException` /
+`IllegalStateException` / `UnsupportedOperationException` thrown by a provider (rethrown across Binder by
+`DatabaseUtils.readExceptionFromParcel`, or raised in `ContentResolver`), and any message saying `Permission Denial`
+or `no access to`, also when wrapped.
+
 ### Gallery access (amended 2026-11-12)
 
 Optional, offered in context, never as a system dialog out of the blue: when a hand-off whose document is a MediaStore

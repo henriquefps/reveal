@@ -50,12 +50,15 @@ import dev.hfps.reveal.feature.editor.EditorContent
 import dev.hfps.reveal.feature.editor.EditorPhase
 import dev.hfps.reveal.feature.editor.EditorTags
 import dev.hfps.reveal.feature.editor.EditorUiState
+import dev.hfps.reveal.feature.editor.PreviewOnly
 import dev.hfps.reveal.feature.editor.TargetedTarget
+import dev.hfps.reveal.feature.editor.UnreadableHandoff
 import dev.hfps.reveal.feature.editor.ViewOptions
 import dev.hfps.reveal.feature.editor.edit.AsShot
 import dev.hfps.reveal.feature.editor.layout.FilmstripThumbs
 import dev.hfps.reveal.feature.editor.layout.FilmstripUi
 import dev.hfps.reveal.feature.editor.layout.PanelSnap
+import dev.hfps.reveal.feature.editor.open.OpenError
 import dev.hfps.reveal.feature.editor.panels.PasteChooserContent
 import dev.hfps.reveal.feature.editor.panels.toSliderSpec
 import dev.hfps.reveal.feature.editor.presets.CreatePresetDraft
@@ -167,6 +170,19 @@ class EditorPhoneScreenshotTest : EditorScreenshotBase("phone") {
     @Test fun lightFontScale200() = shoot("light_font200") { Scaled(2f) { Editor() } }
 
     @Test fun cropMode() = shoot("crop") { CropEditor() }
+
+    /** A hand-off opened from its smart preview (ADR 0011 "Fallbacks"). */
+    @Test fun previewOnly() = shoot("preview_only") { Editor(previewOnly = PreviewOnly.HANDOFF) }
+
+    /** A hand-off with nothing in its place: the sending app is named and can be opened. */
+    @Test fun unreadableHandoff() = shoot("error_handoff") {
+        Editor(phase = EditorPhase.Failed(OpenError.PERMISSION_LOST, UnreadableHandoff(app = "Hoard")))
+    }
+
+    /** A gallery hand-off with nothing in its place: gallery access is offered. */
+    @Test fun unreadableGalleryHandoff() = shoot("error_handoff_gallery") {
+        Editor(phase = EditorPhase.Failed(OpenError.PERMISSION_LOST, UnreadableHandoff(gallery = true)))
+    }
 
     @Test fun cropModeStraightenedTurned() = shoot("crop_turned") {
         CropEditor(Photos.straightened.copy(rotate = 1, aspect = Aspect(AspectPreset.R5_4, locked = true)))
@@ -556,6 +572,8 @@ abstract class EditorScreenshotBase(private val size: String) {
         lens: LensProfile? = null,
         layout: EditorLayout = EditorLayout(),
         presets: PresetsState = PresetsState(),
+        previewOnly: PreviewOnly? = null,
+        phase: EditorPhase = EditorPhase.Ready(null, Photos.WIDTH, Photos.HEIGHT, 1f),
     ) {
         val recipe = base.copy(geometry = geometry, detail = detail, effects = effects, optics = optics)
         EditorTheme {
@@ -564,8 +582,9 @@ abstract class EditorScreenshotBase(private val size: String) {
                     fileName = "DSC01234.ARW",
                     preview = preview,
                     stillOriginal = Photos.original,
-                    phase = EditorPhase.Ready(null, Photos.WIDTH, Photos.HEIGHT, 1f),
+                    phase = phase,
                     developed = true,
+                    previewOnly = previewOnly,
                     edit = EditState(
                         recipe = recipe,
                         history = history,

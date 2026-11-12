@@ -1,5 +1,6 @@
 package dev.hfps.reveal.data.thumb
 
+import android.content.ContentResolver
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.BitmapRegionDecoder
@@ -16,6 +17,7 @@ import dev.hfps.image.preview.FirstImageLoader
 import dev.hfps.reveal.data.db.PhotoFileEntity
 import dev.hfps.reveal.data.db.RevealDatabase
 import dev.hfps.reveal.data.edit.EditRepository
+import dev.hfps.reveal.data.handoff.HandoffFallbacks
 import dev.hfps.reveal.data.handoff.LocalPreviews
 import dev.hfps.reveal.data.library.DocumentTreeFactory
 import dev.hfps.reveal.data.model.FileRole
@@ -23,7 +25,9 @@ import dev.hfps.reveal.data.model.SourceState
 import dev.hfps.reveal.data.storage.DocumentTree
 import dev.hfps.reveal.data.storage.isAccessError
 import dev.hfps.reveal.pipeline.preview.SmartPreviewCodec
+import dev.hfps.reveal.pipeline.recipe.Recipe
 import java.io.Closeable
+import java.io.File
 import java.io.IOException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -79,8 +83,12 @@ class PhotoImages(
     /** A hand-off Reveal can no longer read shows its local preview (ADR 0011 "Unreadable hand-offs"). */
     private val previews: LocalPreviews? = null,
     private val clock: () -> Long = System::currentTimeMillis,
+    /** Reads the server's copy of an unreadable hand-off (ADR 0011 "Fallbacks"); null without sync (tests). */
+    private val resolver: ContentResolver? = null,
+    private val serverAuthority: String? = null,
 ) {
     private val photos = db.photoDao()
+    private val fallbacks = HandoffFallbacks(db, previews, serverAuthority)
 
     private class Opened(val tree: DocumentTree, val raw: PhotoFileEntity?, val rendered: PhotoFileEntity?)
 
@@ -127,7 +135,9 @@ class PhotoImages(
             }
         } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
             if (!isAccessError(e)) throw e
-            localDisplay(opened, longEdge, fullWidth, fullHeight) ?: throw e
+            localDisplay(opened, longEdge, fullWidth, fullHeight)
+                ?: serverDisplay(opened, longEdge, fullWidth, fullHeight)
+                ?: throw e
         }
     }
 
@@ -142,13 +152,61 @@ class PhotoImages(
             opened.tree.openInput(main.documentId, main.name).use { renderer.render(it, recipe, longEdge) }
         }.recoverCatching { e ->
             if (!isAccessError(e)) throw e
-            // A hand-off whose grant ended: its local smart preview, developed the same way.
+            // A hand-off whose grant ended (ADR 0011 "Fallbacks"): the server's original, else a smart preview.
             photos.setUnreadable(main.documentId, clock())
-            val file = previews?.smart(main.fingerprint) ?: throw e
-            val decoded = file.inputStream().use(SmartPreviewCodec::decode)
-            renderer.renderPreview(decoded.input, maxOf(decoded.fullWidth, decoded.fullHeight), recipe, longEdge)
-                ?: throw e
+            developedFallback(main, recipe, longEdge) ?: throw e
         }.getOrNull()
+    }
+
+    /** A smart preview (local, else the server's) is about the viewer's size: it goes first, then the original. */
+    @Suppress("ReturnCount")
+    private suspend fun developedFallback(main: PhotoFileEntity, recipe: Recipe, longEdge: Int): Bitmap? {
+        val renderer = edited ?: return null
+        fallbacks.preview(main)?.let { preview ->
+            val stream = if (preview.scheme == "file") {
+                preview.path?.let(::File)?.inputStream()
+            } else {
+                resolver?.openInputStream(preview)
+            }
+            val decoded = runCatching { stream?.use(SmartPreviewCodec::decode) }.getOrNull()
+            if (decoded != null) {
+                val full = maxOf(decoded.fullWidth, decoded.fullHeight)
+                renderer.renderPreview(decoded.input, full, recipe, longEdge)?.let { return it }
+            }
+        }
+        val resolver = resolver ?: return null
+        val original = fallbacks.original(main) ?: return null
+        return ImageInput.fromUri(resolver, original, main.name).use { renderer.render(it, recipe, longEdge) }
+    }
+
+    /**
+     * The display image of an unreadable hand-off from the sync server (ADR 0011 "Fallbacks"): the original's embedded
+     * preview (or the image itself) read by range, else the server's smart preview JPEG; null without either.
+     */
+    @Suppress("ReturnCount")
+    private suspend fun serverDisplay(opened: Opened, longEdge: Int, fullWidth: Int, fullHeight: Int): DisplayImage? {
+        val main = opened.raw ?: opened.rendered ?: return null
+        val resolver = resolver ?: return null
+        val uri = fallbacks.serverDisplay(main) ?: return null
+        val first = runCatching {
+            ImageInput.fromUri(resolver, uri, main.name).use { input ->
+                if (input.type.isRaw) {
+                    FirstImageLoader.load(
+                        input,
+                        null,
+                        longEdge,
+                    )
+                } else {
+                    FirstImageLoader.load(null, input, longEdge)
+                }
+            }
+        }.getOrNull() ?: return null
+        return DisplayImage(
+            first.bitmap,
+            fullWidth.takeIf { it > 0 } ?: first.bitmap.width,
+            fullHeight.takeIf { it > 0 } ?: first.bitmap.height,
+            false,
+        )
     }
 
     /** The local display image of an unreadable hand-off (ADR 0011), or null without one. */
@@ -156,11 +214,7 @@ class PhotoImages(
     private suspend fun localDisplay(opened: Opened, longEdge: Int, fullWidth: Int, fullHeight: Int): DisplayImage? {
         val main = opened.raw ?: opened.rendered ?: return null
         photos.setUnreadable(main.documentId, clock())
-        val local = previews ?: return null
-        val bytes = local.display(main.fingerprint)?.readBytes()
-            ?: local.smart(main.fingerprint)?.inputStream()?.use(SmartPreviewCodec::readJpeg)
-            ?: return null
-        if (bytes.isEmpty()) return null
+        val bytes = fallbacks.localDisplayJpeg(main) ?: return null
         val bitmap = BitmapDecoding.decode(bytes, longEdge, 1).bitmap
         return DisplayImage(
             bitmap,

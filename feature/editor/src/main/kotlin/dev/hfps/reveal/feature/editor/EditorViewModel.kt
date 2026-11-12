@@ -1,10 +1,14 @@
 package dev.hfps.reveal.feature.editor
 
 import android.content.Context
+import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Build
 import android.os.SystemClock
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.core.content.ContextCompat
 import androidx.core.net.toUri
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
@@ -12,6 +16,7 @@ import androidx.lifecycle.viewModelScope
 import androidx.navigation.toRoute
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
+import dev.hfps.image.proxy.ProxySource
 import dev.hfps.image.proxy.ProxyStep
 import dev.hfps.image.source.CancelToken
 import dev.hfps.image.source.CancelledException
@@ -19,7 +24,11 @@ import dev.hfps.reveal.data.edit.EditClipboard
 import dev.hfps.reveal.data.edit.EditRepository
 import dev.hfps.reveal.data.edit.HistoryOp
 import dev.hfps.reveal.data.edit.HistoryWriter
+import dev.hfps.reveal.data.handoff.GalleryAccess
+import dev.hfps.reveal.data.handoff.GalleryAccessState
+import dev.hfps.reveal.data.handoff.HandoffApps
 import dev.hfps.reveal.data.handoff.HandoffPreviewer
+import dev.hfps.reveal.data.handoff.SenderApp
 import dev.hfps.reveal.data.library.LibraryRepository
 import dev.hfps.reveal.data.preset.PresetEvent
 import dev.hfps.reveal.data.preset.PresetFilesIo
@@ -31,6 +40,7 @@ import dev.hfps.reveal.feature.editor.edit.RecipeControls
 import dev.hfps.reveal.feature.editor.open.OpenError
 import dev.hfps.reveal.feature.editor.open.OpenEvent
 import dev.hfps.reveal.feature.editor.open.OpenException
+import dev.hfps.reveal.feature.editor.open.OpenedPhoto
 import dev.hfps.reveal.feature.editor.open.PhotoOpener
 import dev.hfps.reveal.feature.editor.presets.CreatePresetDraft
 import dev.hfps.reveal.feature.editor.presets.PresetSession
@@ -202,12 +212,12 @@ class EditorViewModel @Inject constructor(
         val screenLong = maxOf(metrics.widthPixels, metrics.heightPixels)
         val proxyLongEdge = screenLong.coerceIn(MIN_PROXY_EDGE, MAX_PROXY_EDGE)
         viewModelScope.launch {
+            var opening: Opening? = null
             try {
-                val uri = resolveUri()
-                val photo = withContext(Dispatchers.IO) {
-                    opener.open(uri, proxyLongEdge, screenLong, cancel, ::onEvent)
-                }
+                opening = resolveTarget()
+                val (photo, uri) = withContext(Dispatchers.IO) { openWithFallback(opening, proxyLongEdge, screenLong) }
                 EditorMetrics.proxy()
+                val previewOnly = previewOnly(photo, opening)
                 val input = photo.input
                 val asShot = WhiteBalanceModel.asShot(input).let {
                     AsShot(it.temperatureK.roundToInt().toFloat(), it.tint.roundToInt().toFloat())
@@ -236,6 +246,7 @@ class EditorViewModel @Inject constructor(
                 _state.update {
                     it.copy(
                         fileName = photo.name,
+                        previewOnly = previewOnly,
                         phase = EditorPhase.Ready(ready, input.width, input.height, scale),
                         edit = it.edit.copy(
                             isRaw = input.isRaw,
@@ -262,7 +273,7 @@ class EditorViewModel @Inject constructor(
                 // Leaving the screen: nothing to show.
                 EditorMetrics.failed("cancelled: ${e.message}")
             } catch (e: OpenException) {
-                fail(e.error, e.cause ?: e)
+                fail(e.error, e.cause ?: e, opening?.unreadable?.takeIf { e.error == OpenError.PERMISSION_LOST })
             } catch (e: OutOfMemoryError) {
                 fail(OpenError.OUT_OF_MEMORY, e)
             } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
@@ -333,20 +344,75 @@ class EditorViewModel @Inject constructor(
     }
 
     /**
+     * What to open: [uri], else [fallback] when [uri] fails (a hand-off's server original while the server cannot be
+     * reached: its smart preview); [handoff] when the photo is a hand-off Reveal can no longer read; [unreadable] the
+     * hand-off document when there is nothing in its place (ADR 0011 "Fallbacks").
+     */
+    private class Opening(val uri: Uri, val fallback: Uri?, val handoff: Boolean, val unreadable: Uri?)
+
+    /**
      * The document to open: the route's URI, or for a library version the RAW of its photo (a pair's JPEG is only the
      * first preview); a version that no longer exists is a lost file.
      */
-    private suspend fun resolveUri(): Uri {
-        route.uri?.let { return it.toUri() }
+    private suspend fun resolveTarget(): Opening {
+        route.uri?.let { return Opening(it.toUri(), null, false, null) }
         val versionId = checkNotNull(route.versionId)
         val target = library.editTarget(versionId) ?: throw OpenException(OpenError.PERMISSION_LOST)
         _state.update { it.copy(fileName = target.name) }
-        return target.uri
+        return Opening(target.uri, target.fallback, target.unreadableHandoff, target.unreadable)
     }
 
-    private fun fail(error: OpenError, cause: Throwable) {
+    /**
+     * Opens [opening]'s document, or its fallback when that fails (a hand-off's server original the server cannot serve
+     * now: its smart preview, ADR 0011 "Fallbacks"). Returns the photo and the URI it came from.
+     */
+    private fun openWithFallback(opening: Opening, proxyLongEdge: Int, screenLong: Int): Pair<OpenedPhoto, Uri> = try {
+        opener.open(opening.uri, proxyLongEdge, screenLong, cancel, ::onEvent) to opening.uri
+    } catch (e: CancelledException) {
+        throw e
+    } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
+        val fallback = opening.fallback ?: throw e
+        android.util.Log.i("RevealEditor", "original unavailable, opening the preview: $e")
+        opener.open(fallback, proxyLongEdge, screenLong, cancel, ::onEvent) to fallback
+    }
+
+    /** Whether the photo opened from a smart preview, and why (the editor's note). */
+    private fun previewOnly(photo: OpenedPhoto, opening: Opening): PreviewOnly? = when {
+        photo.stats.source != ProxySource.SMART_PREVIEW -> null
+        opening.handoff -> PreviewOnly.HANDOFF
+        else -> PreviewOnly.ELSEWHERE
+    }
+
+    private fun fail(error: OpenError, cause: Throwable, unreadable: Uri? = null) {
         EditorMetrics.failed("$error: $cause")
-        _state.update { it.copy(phase = EditorPhase.Failed(error), preview = null) }
+        val handoff = unreadable?.let(::unreadableHandoff)
+        _state.update { it.copy(phase = EditorPhase.Failed(error, handoff), preview = null) }
+    }
+
+    /** What the error of an unreadable hand-off offers: the sending app, gallery access for a MediaStore URI. */
+    private fun unreadableHandoff(uri: Uri): UnreadableHandoff {
+        sender = HandoffApps.sender(context.packageManager, uri, context.packageName)
+        val gallery = GalleryAccess.isMediaStore(uri.toString()) &&
+            GalleryAccess.stateOf(Build.VERSION.SDK_INT) {
+                ContextCompat.checkSelfPermission(context, it) == PackageManager.PERMISSION_GRANTED
+            } != GalleryAccessState.FULL
+        return UnreadableHandoff(app = sender?.label, gallery = gallery)
+    }
+
+    /** The app that shared the photo shown in the error, if known. */
+    private var sender: SenderApp? = null
+
+    /** Opens the app that shared an unreadable hand-off (the error's action), so the owner can share it again. */
+    fun openSender() {
+        val app = sender ?: return
+        runCatching { context.startActivity(Intent(app.launch).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+    }
+
+    /** After gallery access was granted: opens the photo again (its MediaStore URI may be readable now). */
+    fun retryOpen() {
+        if (_state.value.phase !is EditorPhase.Failed) return
+        _state.update { it.copy(phase = EditorPhase.Loading(0f)) }
+        open()
     }
 
     private fun onEvent(event: OpenEvent) {

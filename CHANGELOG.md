@@ -6,6 +6,25 @@ All notable changes to Reveal are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- Photos another app handed over (Hoard's picks from a network share, a gallery share) open again after that app's
+  access ended. When your sync server has the original (the CloudCheck badge), the editor, the viewer, the grid and
+  the export read it from the server, full quality, without asking. Otherwise the photo opens from its preview
+  (local, or the one on your server): editing works, the editor says "Preview only", and the export is at preview
+  size (2560 px) with the warning. If the server cannot be reached, the preview opens instead of the server's copy.
+- When there is nothing to open, the error says why and names the app that shared the photo, with a button to open it
+  and share the photo again (or, for a gallery photo, to allow access to your photos).
+- A library without folders but with photos other apps handed over now opens on "Opened from other apps" instead of
+  looking empty (it still reopens the place you left otherwise).
+- Every way an app can refuse a photo (an ended grant, a document it no longer serves) now counts as "can't read it",
+  in the editor, thumbnails, sync and export alike.
+
+### Changed
+- The grid's cloud badges say what they mean to TalkBack, and the viewer's info has an "Original" line: on this
+  device, backed up, only on the server, on another device, or read from the server / preview only / unreadable for a
+  shared photo, with what that means for editing and export. A shared photo Reveal can no longer read whose original
+  is on your server now shows the server badge, not "preview only".
+
 ## [0.5.1] - 2026-11-12
 
 ### Fixed

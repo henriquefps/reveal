@@ -49,7 +49,24 @@ sealed interface EditorPhase {
         val hundredPercentScale: Float,
     ) : EditorPhase
 
-    data class Failed(val error: OpenError) : EditorPhase
+    /** [handoff]: the photo is a hand-off Reveal can no longer read, with nothing in its place (ADR 0011). */
+    data class Failed(val error: OpenError, val handoff: UnreadableHandoff? = null) : EditorPhase
+}
+
+/**
+ * A hand-off that cannot be opened (ADR 0011 "Fallbacks"): [app] is the sending app when it is known (its provider has
+ * a launcher entry; the editor can open it), [gallery] that gallery access would make it readable (a MediaStore URI
+ * and no full access yet).
+ */
+data class UnreadableHandoff(val app: String? = null, val gallery: Boolean = false)
+
+/** The editor shows a smart preview instead of the original (ADR 0011 "Fallbacks", ADR 0018 "Smart previews"). */
+enum class PreviewOnly {
+    /** A hand-off Reveal can no longer read: share it again for the full photo. */
+    HANDOFF,
+
+    /** The original is out of reach (a Server photo whose original is on another device, an unplugged folder). */
+    ELSEWHERE,
 }
 
 /**
@@ -152,6 +169,8 @@ data class EditorUiState(
     val histogram: Histogram? = null,
     /** The preset library and the applied preset (docs/adr/0019). */
     val presets: PresetsState = PresetsState(),
+    /** Non-null when the photo opened from its smart preview: the editor says so (exports are at preview size). */
+    val previewOnly: PreviewOnly? = null,
 ) {
     val ready: Boolean get() = phase is EditorPhase.Ready
 }
@@ -160,6 +179,10 @@ data class EditorUiState(
 @Suppress("LongParameterList")
 class EditorActions(
     val onBack: () -> Unit,
+    /** Opens the app that shared an unreadable hand-off, to share it again (ADR 0011 "Fallbacks"). */
+    val onOpenSender: () -> Unit = {},
+    /** Asks for gallery access, then opens the photo again (ADR 0011 "Gallery access"). */
+    val onGalleryAccess: () -> Unit = {},
     val onDeveloped: () -> Unit = {},
     val onPreviewHidden: () -> Unit = {},
     /** Per drag frame: the working recipe changes, nothing is committed. */

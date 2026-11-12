@@ -26,6 +26,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import dev.hfps.image.format.ExifTime
 import dev.hfps.image.format.PhotoMetadata
+import dev.hfps.reveal.data.library.OriginalPlace
 import dev.hfps.reveal.data.library.PhotoDetail
 import dev.hfps.reveal.designsystem.components.Eyebrow
 import dev.hfps.reveal.designsystem.components.RevealBottomSheet
@@ -42,13 +43,13 @@ import java.util.TimeZone
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun InfoSheet(photoId: Long, pages: ViewerPages, onDismiss: () -> Unit, modifier: Modifier = Modifier) {
-    val loaded by produceState<Pair<PhotoDetail, PhotoMetadata?>?>(null, photoId) {
+    val loaded by produceState<LoadedInfo?>(null, photoId) {
         val detail = pages.detail(photoId)
-        value = detail?.let { it to pages.metadata(it) }
+        value = detail?.let { LoadedInfo(it, pages.metadata(it), pages.originalPlace(photoId)) }
     }
     RevealBottomSheet(onDismissRequest = onDismiss, modifier = modifier.testTag(ViewerTags.INFO_SHEET)) {
-        val pair = loaded
-        InfoContent(pair?.first, pair?.second)
+        val info = loaded
+        InfoContent(info?.detail, info?.metadata, place = info?.place)
     }
 }
 
@@ -58,9 +59,9 @@ fun InfoSheet(photoId: Long, pages: ViewerPages, onDismiss: () -> Unit, modifier
  */
 @Composable
 fun InfoPanel(photoId: Long, pages: ViewerPages, onClose: () -> Unit, modifier: Modifier = Modifier) {
-    val loaded by produceState<Pair<PhotoDetail, PhotoMetadata?>?>(null, photoId) {
+    val loaded by produceState<LoadedInfo?>(null, photoId) {
         val detail = pages.detail(photoId)
-        value = detail?.let { it to pages.metadata(it) }
+        value = detail?.let { LoadedInfo(it, pages.metadata(it), pages.originalPlace(photoId)) }
     }
     val colors = RevealTheme.colors
     Surface(
@@ -81,15 +82,22 @@ fun InfoPanel(photoId: Long, pages: ViewerPages, onClose: () -> Unit, modifier: 
                     onClick = onClose,
                 )
             }
-            val pair = loaded
-            InfoContent(pair?.first, pair?.second)
+            val info = loaded
+            InfoContent(info?.detail, info?.metadata, place = info?.place)
         }
     }
 }
 
-/** Stateless info rows (screenshots). */
+private class LoadedInfo(val detail: PhotoDetail, val metadata: PhotoMetadata?, val place: OriginalPlace?)
+
+/** Stateless info rows (screenshots). [place]: where the original is (the "Original" line, ADR 0011 "Fallbacks"). */
 @Composable
-fun InfoContent(detail: PhotoDetail?, metadata: PhotoMetadata?, modifier: Modifier = Modifier) {
+fun InfoContent(
+    detail: PhotoDetail?,
+    metadata: PhotoMetadata?,
+    modifier: Modifier = Modifier,
+    place: OriginalPlace? = null,
+) {
     val unknown = stringResource(R.string.info_unknown)
     val context = LocalContext.current
     Column(
@@ -121,6 +129,9 @@ fun InfoContent(detail: PhotoDetail?, metadata: PhotoMetadata?, modifier: Modifi
         InfoRow(stringResource(R.string.info_dimensions), dimensions(m) ?: unknown)
         detail?.photo?.rating?.takeIf { it > 0 }?.let { stars ->
             InfoRow(stringResource(R.string.info_rating), pluralStringResource(R.plurals.library_stars, stars, stars))
+        }
+        place?.let {
+            InfoRow(stringResource(R.string.info_original), stringResource(it.meaning()), ViewerTags.INFO_ORIGINAL)
         }
         detail?.files?.forEachIndexed { index, file ->
             InfoRow(
@@ -168,9 +179,20 @@ private fun dimensions(m: PhotoMetadata?): String? {
 private const val MILLIS_DIGITS = 3
 private const val PIXELS_PER_MEGAPIXEL = 1_000_000.0
 
+/** What each place means for the owner: where the original is, and what opens and exports. */
+private fun OriginalPlace.meaning(): Int = when (this) {
+    OriginalPlace.DEVICE -> R.string.info_original_device
+    OriginalPlace.DEVICE_AND_SERVER -> R.string.info_original_backed_up
+    OriginalPlace.SERVER -> R.string.info_original_server
+    OriginalPlace.ELSEWHERE -> R.string.info_original_elsewhere
+    OriginalPlace.HANDOFF_SERVER -> R.string.info_original_handoff_server
+    OriginalPlace.HANDOFF_PREVIEW -> R.string.info_original_handoff_preview
+    OriginalPlace.HANDOFF_UNREADABLE -> R.string.info_original_handoff_unreadable
+}
+
 @Composable
-private fun InfoRow(label: String, value: String) {
-    Row(Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
+private fun InfoRow(label: String, value: String, tag: String? = null) {
+    Row(Modifier.fillMaxWidth().padding(vertical = 6.dp).then(if (tag != null) Modifier.testTag(tag) else Modifier)) {
         Text(
             label,
             style = RevealTheme.typography.ui,

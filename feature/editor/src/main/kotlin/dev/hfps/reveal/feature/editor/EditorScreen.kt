@@ -2,6 +2,8 @@ package dev.hfps.reveal.feature.editor
 
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandHorizontally
 import androidx.compose.animation.expandVertically
@@ -55,6 +57,7 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.hfps.reveal.data.editor.EditorLayout
+import dev.hfps.reveal.data.handoff.GalleryAccess
 import dev.hfps.reveal.designsystem.components.Eyebrow
 import dev.hfps.reveal.designsystem.components.RevealIconButton
 import dev.hfps.reveal.designsystem.icons.PhosphorRegular
@@ -110,9 +113,14 @@ fun EditorScreen(
     val context = LocalContext.current
     BackHandler(onBack = onBack)
     var exportRequest by remember { mutableStateOf<ExportRequest?>(null) }
+    val galleryPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
+        viewModel.retryOpen()
+    }
     val actions = remember(viewModel, strip, onBack, onSwitch, context) {
         EditorActions(
             onBack = onBack,
+            onOpenSender = viewModel::openSender,
+            onGalleryAccess = { galleryPermission.launch(GalleryAccess.permissions()) },
             onDeveloped = viewModel::onDeveloped,
             onPreviewHidden = viewModel::onPreviewHidden,
             onControl = viewModel::setControl,

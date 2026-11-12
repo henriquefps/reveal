@@ -29,6 +29,15 @@
     <string name="editor_error_gpu_body">O Reveal revela as fotos na GPU e precisa de OpenGL ES 3 com alvos de renderização em ponto flutuante.</string>
     <string name="editor_error_memory_title">Memória insuficiente</string>
     <string name="editor_error_memory_body">Esta foto precisa de mais memória do que há livre agora. Feche outros apps e tente de novo.</string>
+    <string name="editor_error_handoff_body_app">%1$s só deixou o Reveal ler esta foto por um tempo, e não há cópia no seu servidor de sincronização nem prévia para abrir no lugar. Compartilhe a foto com o Reveal de novo pelo app %1$s.</string>
+    <string name="editor_error_handoff_body">O app que compartilhou esta foto só deixou o Reveal lê-la por um tempo, e não há cópia no seu servidor de sincronização nem prévia para abrir no lugar. Compartilhe a foto com o Reveal de novo por esse app.</string>
+    <string name="editor_error_handoff_body_gallery">A galeria só deixou o Reveal ler esta foto por um tempo, e não há cópia no seu servidor de sincronização nem prévia para abrir no lugar. Compartilhe a foto com o Reveal de novo pela galeria, ou permita o acesso às suas fotos para que as fotos compartilhadas pela galeria continuem legíveis.</string>
+    <string name="editor_error_handoff_open_app">Abrir %1$s</string>
+    <string name="editor_error_handoff_gallery">Permitir acesso às fotos</string>
+    <string name="editor_preview_only_handoff_short">Só a prévia · exporta em 2560 px</string>
+    <string name="editor_preview_only_elsewhere_short">Só a prévia · original fora de alcance</string>
+    <string name="editor_preview_only_handoff">Só a prévia: o Reveal não consegue mais ler o original. A edição funciona; as exportações saem no tamanho da prévia (2560 px). Compartilhe de novo para a foto completa.</string>
+    <string name="editor_preview_only_elsewhere">Só a prévia: o original não está neste aparelho agora (outro aparelho o tem, ou o armazenamento dele não está conectado). A edição funciona e vale também para o original.</string>
     <string name="editor_undo">Desfazer</string>
     <string name="editor_redo">Refazer</string>
     <string name="editor_compare">Antes e depois</string>

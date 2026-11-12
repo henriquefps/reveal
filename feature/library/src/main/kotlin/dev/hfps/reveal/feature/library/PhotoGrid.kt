@@ -105,6 +105,9 @@ object LibraryTags {
 
     fun cell(id: Long) = "library-cell-$id"
 
+    /** The cloud badge of cell [id], by `CloudState` name. */
+    fun cloudBadge(id: Long, state: String) = "library-cloud-$id-$state"
+
     /** A photo's later version (a sync conflict copy) in the grid. */
     fun copy(versionId: Long) = "library-copy-$versionId"
 
@@ -446,12 +449,23 @@ private fun Badges(row: PhotoRow, showEdited: Boolean, modifier: Modifier = Modi
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(2.dp),
         ) {
-            cloudIcon(cloudState(row))?.let { icon ->
+            val cloud = cloudState(row)
+            cloudIcon(cloud)?.let { icon ->
                 Box(
-                    Modifier.size(20.dp).clip(CircleShape).background(colors.background.copy(alpha = BADGE_ALPHA)),
+                    Modifier
+                        .size(20.dp)
+                        .clip(CircleShape)
+                        .background(colors.background.copy(alpha = BADGE_ALPHA))
+                        .testTag(LibraryTags.cloudBadge(row.id, cloud.name)),
                     contentAlignment = Alignment.Center,
                 ) {
-                    Icon(icon, contentDescription = null, tint = colors.foreground, modifier = Modifier.size(14.dp))
+                    // The badge says what it means (TalkBack reads it as part of the cell, ADR 0011 "Fallbacks").
+                    Icon(
+                        icon,
+                        contentDescription = cloudDescription(cloud)?.let { stringResource(it) },
+                        tint = colors.foreground,
+                        modifier = Modifier.size(14.dp),
+                    )
                 }
             }
             if (row.hasEdit && showEdited) {
@@ -534,10 +548,17 @@ internal enum class CloudState {
 }
 
 internal fun cloudState(row: PhotoRow): CloudState = when {
+    // A hand-off Reveal can no longer read whose original the server has opens from there (ADR 0011 "Fallbacks").
+    row.unreadable && row.cloudOriginal -> CloudState.CLOUD
+
     row.unreadable -> CloudState.LOCAL_PREVIEW
+
     row.remote && row.cloudOriginal -> CloudState.CLOUD
+
     row.remote -> CloudState.PREVIEW
+
     row.cloudOriginal -> CloudState.BACKED_UP
+
     else -> CloudState.LOCAL
 }
 
@@ -593,14 +614,17 @@ internal fun cellDescription(row: PhotoRow): String {
             stringResource(R.string.library_badge_copy)
         }
     }
-    when (cloudState(row)) {
-        CloudState.LOCAL -> Unit
-        CloudState.BACKED_UP -> parts += stringResource(R.string.library_cloud_backed_up)
-        CloudState.CLOUD -> parts += stringResource(R.string.library_cloud_only)
-        CloudState.PREVIEW -> parts += stringResource(R.string.library_cloud_preview)
-        CloudState.LOCAL_PREVIEW -> parts += stringResource(R.string.library_local_preview)
-    }
+    // The cloud state is read from the badge's own description (merged into the cell).
     return parts.joinToString(", ")
+}
+
+/** What the grid's cloud badge means, read by TalkBack (null without a badge). */
+internal fun cloudDescription(state: CloudState): Int? = when (state) {
+    CloudState.LOCAL -> null
+    CloudState.BACKED_UP -> R.string.library_cloud_backed_up
+    CloudState.CLOUD -> R.string.library_cloud_only
+    CloudState.PREVIEW -> R.string.library_cloud_preview
+    CloudState.LOCAL_PREVIEW -> R.string.library_local_preview
 }
 
 internal fun formatName(format: PhotoFormat): Int = when (format) {

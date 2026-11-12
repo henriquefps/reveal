@@ -122,10 +122,8 @@ class ExportWorker(context: Context, params: WorkerParameters) : CoroutineWorker
         val resolved = resolve(run.graph, run.job.items[index], run.job.firstSequence + index, target)
         try {
             if (resolved == null) throw ExportException(ExportFailure.SOURCE_MISSING)
-            val item = previewIfUnreadable(run, index, resolved, target)
-            if (target != null && !original(run, index, target.reach, item.uri, state.waitingSince)) {
-                return !isStopped
-            }
+            val item = readyItem(run, index, previewIfUnreadable(run, index, resolved, target), target, state)
+                ?: return !isStopped
             val result = runInterruptible(Dispatchers.IO) {
                 run.engine.export(
                     item,
@@ -195,6 +193,30 @@ class ExportWorker(context: Context, params: WorkerParameters) : CoroutineWorker
         if (target?.reach != OriginalReach.PREVIEW || preview == null || readable(item.uri)) return item
         jobs.update(run.jobId, index) { it.copy(previewSize = true) }
         Log.i(TAG, "item ${index + 1}/${run.total}: the original cannot be read, exporting its preview")
+        return item.copy(uri = preview, renderedUri = null)
+    }
+
+    /**
+     * [item] once its original can be read ([original]), null when it does not export in this run; a hand-off's server
+     * original the server cannot serve now exports its smart preview instead (ADR 0011 "Fallbacks").
+     */
+    private suspend fun readyItem(
+        run: Run,
+        index: Int,
+        item: ExportItem,
+        target: ExportTarget?,
+        state: ItemState,
+    ): ExportItem? = try {
+        item.takeIf { target == null || original(run, index, target.reach, item.uri, state.waitingSince) }
+    } catch (e: CancellationException) {
+        throw e
+    } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
+        previewInstead(run, index, item, target?.previewUri ?: throw e, e)
+    }
+
+    private fun previewInstead(run: Run, index: Int, item: ExportItem, preview: Uri, cause: Exception): ExportItem {
+        jobs.update(run.jobId, index) { it.copy(previewSize = true) }
+        Log.i(TAG, "item ${index + 1}/${run.total}: the server original is unavailable, exporting its preview", cause)
         return item.copy(uri = preview, renderedUri = null)
     }
 

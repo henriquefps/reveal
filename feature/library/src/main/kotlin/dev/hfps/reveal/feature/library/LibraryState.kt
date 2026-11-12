@@ -61,13 +61,20 @@ data class LibraryUiState(
     val serverPhotos: Int = 0,
     /** Photos in "Opened from other apps": with them, a library without folders is not empty (ADR 0011). */
     val fromAppsPhotos: Int = 0,
-    /** Unavailable photos in the current scope (FIX/U): the "Unavailable" filter shows while this is above zero. */
-    val unavailableCount: Int = 0,
     /** The explanation of a tapped unavailable photo; null = closed. */
     val unavailableInfo: UnavailableInfo? = null,
     /** Asking before "Remove from Reveal" forgets photos that have edits; null = not asking. */
     val forgetPrompt: ForgetPrompt? = null,
+    /** A folder picked while paired waits for its backup choice (its tree URI); null = not asking. */
+    val addFolderPrompt: String? = null,
+    /** Asking before a folder is removed (and, while paired, about its photos on the server); null = not asking. */
+    val removePrompt: RemovePrompt? = null,
+    /** Asking before "Delete from server" deletes this many selected Server photos; null = not asking. */
+    val deleteServerPrompt: Int? = null,
 ) {
+    /** The selected photos are Server photos ("Delete from server" applies to them). */
+    val serverScope: Boolean get() = selection == LibrarySelection.Special(SpecialSource.SERVER)
+
     val selecting: Boolean get() = selected.isNotEmpty()
 
     val currentSource: SourceItem?
@@ -135,10 +142,26 @@ data class LibraryActions(
     val onForget: (List<Long>) -> Unit = {},
     val onForgetConfirm: () -> Unit = {},
     val onForgetDismiss: () -> Unit = {},
+    /** The backup choice of a folder being added: everything, or only photos you edit. */
+    val onAddFolderBackup: (everything: Boolean) -> Unit = {},
+    val onAddFolderDismiss: () -> Unit = {},
+    val onRemoveConfirm: (deleteFromServer: Boolean) -> Unit = {},
+    val onRemoveDismiss: () -> Unit = {},
+    /** "Delete from server" for the selected Server photos (asks first). */
+    val onDeleteFromServer: () -> Unit = {},
+    val onDeleteFromServerConfirm: () -> Unit = {},
+    val onDeleteFromServerDismiss: () -> Unit = {},
     val onSettings: () -> Unit = {},
     val onGallery: () -> Unit = {},
     val onAbout: () -> Unit = {},
 )
+
+/**
+ * Removing folder [sourceId] ([name]). [server]: paired with a sync server, so the dialog asks whether its photos leave
+ * the server too; [edited] of them have edits (then "Also delete from the server" starts unchecked).
+ */
+@Immutable
+data class RemovePrompt(val sourceId: Long, val name: String, val server: Boolean, val edited: Int)
 
 /** Maps a selection to the query scope. */
 fun LibrarySelection.scope(): LibraryScope? = when (this) {

@@ -105,9 +105,9 @@ class TestDevice(
 
     private fun file(photoId: Long, name: String, bytes: ByteArray, role: FileRole, source: Long = folder) =
         PhotoFileEntity(
-        photoId = photoId, sourceId = source, relativePath = name, documentId = name, name = name,
-        size = bytes.size.toLong(), modified = 1, role = role, fingerprint = FileFingerprint.of(bytes),
-    )
+            photoId = photoId, sourceId = source, relativePath = name, documentId = name, name = name,
+            size = bytes.size.toLong(), modified = 1, role = role, fingerprint = FileFingerprint.of(bytes),
+        )
 
     /** A photo another app handed over (ADR 0011): the JPEG under the "Opened from other apps" source. */
     fun addHandoffPhoto(stem: String, jpeg: ByteArray): Long = runBlocking {

@@ -35,6 +35,7 @@ import dev.hfps.reveal.data.model.PhotoQuery
 import dev.hfps.reveal.data.model.PickFlag
 import dev.hfps.reveal.data.model.SourceState
 import dev.hfps.reveal.designsystem.theme.RevealTheme
+import dev.hfps.reveal.feature.library.AddFolderBackupContent
 import dev.hfps.reveal.feature.library.GalleryAccessContent
 import dev.hfps.reveal.feature.library.LibraryActions
 import dev.hfps.reveal.feature.library.LibraryContent
@@ -157,14 +158,13 @@ internal object LibrarySamples {
     }
 
     /**
-     * The grid where four photos cannot be shown at all (FIX/U): the placeholder keeps their marks, the "Unavailable"
-     * chip shows. [only] = the Unavailable filter, [selected] = some of them selected for "Try again" / "Remove".
+     * The grid where four photos cannot be shown at all (FIX/U): the placeholder keeps their marks in place (no filter
+     * chip since FIX/V). [selected] = some of them selected for "Try again" / "Remove".
      */
-    fun unavailable(only: Boolean = false, selected: Set<Long> = emptySet()): LibraryUiState {
+    fun unavailable(selected: Set<Long> = emptySet()): LibraryUiState {
         val gone = setOf(2L, 3L, 6L, 9L)
-        val all = rows.map { if (it.id in gone) it.copy(unreadable = true, unavailable = true) else it }
-        val query = PhotoQuery(filter = if (only) PhotoFilter.UNAVAILABLE else PhotoFilter.ALL)
-        val shown = if (only) all.filter { it.unavailable } else all
+        val shown = rows.map { if (it.id in gone) it.copy(unreadable = true, unavailable = true) else it }
+        val query = PhotoQuery()
         return LibraryUiState(
             sources = sources,
             sourcesLoaded = true,
@@ -174,7 +174,6 @@ internal object LibrarySamples {
             photoCount = shown.size,
             photosLoaded = true,
             selected = selected,
-            unavailableCount = gone.size,
         )
     }
 
@@ -332,6 +331,20 @@ class PhoneLibraryScreenshotTest : LibraryScreenshotBase("phone") {
         composeRule.onRoot().captureRoboImage("src/test/screenshots/library/phone_gallery_access_dark.png")
     }
 
+    /** Adding a folder while paired: what it backs up (FIX/V). */
+    @Test fun addFolderBackup() {
+        composeRule.setContent {
+            RevealTheme(darkTheme = true) {
+                Box(Modifier.fillMaxSize().background(RevealTheme.colors.background), Alignment.BottomCenter) {
+                    Surface(color = RevealTheme.colors.card, shape = RevealTheme.shapes.sheet) {
+                        AddFolderBackupContent(onChoose = {}, onDismiss = {}, modifier = Modifier.padding(top = 24.dp))
+                    }
+                }
+            }
+        }
+        composeRule.onRoot().captureRoboImage("src/test/screenshots/library/phone_add_folder_backup_dark.png")
+    }
+
     @Test fun unavailableGrid() = shoot("unavailable_light", dark = false, state = LibrarySamples.unavailable())
 
     @Test fun unavailableGridDark() = shoot("unavailable_dark", dark = true, state = LibrarySamples.unavailable())
@@ -339,7 +352,7 @@ class PhoneLibraryScreenshotTest : LibraryScreenshotBase("phone") {
     @Test fun unavailableFilteredSelecting() = shoot(
         "unavailable_selecting_light",
         dark = false,
-        state = LibrarySamples.unavailable(only = true, selected = setOf(2L, 3L)),
+        state = LibrarySamples.unavailable(selected = setOf(2L, 3L)),
     )
 
     /** What a tap on an unavailable photo opens: why, and what to do. */
@@ -383,7 +396,7 @@ class TabletLibraryScreenshotTest : LibraryScreenshotBase("tablet") {
     @Test fun unavailableTwoPaneSelecting() = shoot(
         "unavailable_selecting_dark",
         dark = true,
-        state = LibrarySamples.unavailable(only = true, selected = setOf(2L, 3L)),
+        state = LibrarySamples.unavailable(selected = setOf(2L, 3L)),
     )
 
     @Test fun twoPaneRecentEmpty() = shoot(

@@ -361,9 +361,11 @@ class LibraryRepository(
 
     /**
      * Adds the folder of an `ACTION_OPEN_DOCUMENT_TREE` result: persists the grant (read + write when offered, so
-     * sidecars can be written), records the volume, then indexes it in the background. Nothing is copied.
+     * sidecars can be written), records the volume, then indexes it in the background. Nothing is copied. [backup]: the
+     * originals backup of every photo the server lacks ("Everything"); the default backs up only edited photos (FIX/V,
+     * ADR 0018 "Originals backup").
      */
-    suspend fun addSource(treeUri: Uri): AddSourceResult = withContext(Dispatchers.IO) {
+    suspend fun addSource(treeUri: Uri, backup: Boolean = false): AddSourceResult = withContext(Dispatchers.IO) {
         sourceDao.byTree(treeUri.toString())?.let { return@withContext AddSourceResult.AlreadyAdded(it.id) }
         val writeGranted = persist(treeUri)
         val rootId = runCatching { DocumentsContract.getTreeDocumentId(treeUri) }.getOrNull()
@@ -382,6 +384,7 @@ class LibraryRepository(
                 state = SourceState.AVAILABLE,
                 writable = writeGranted && (root.flags and DocumentsContract.Document.FLAG_DIR_SUPPORTS_CREATE) != 0,
                 addedAt = clock(),
+                backup = backup,
             ),
         )
         index(id)

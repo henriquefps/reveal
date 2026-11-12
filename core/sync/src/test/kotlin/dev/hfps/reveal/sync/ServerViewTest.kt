@@ -117,11 +117,13 @@ class ServerViewTest {
         }
         val previewSha = "ab".repeat(32)
         record.data = JsonObject(
-            (record.data as JsonObject) + ("preview" to kotlinx.serialization.json.buildJsonObject {
-                put("sha256", kotlinx.serialization.json.JsonPrimitive(previewSha))
-                put("width", kotlinx.serialization.json.JsonPrimitive(2560))
-                put("height", kotlinx.serialization.json.JsonPrimitive(1707))
-            }),
+            (record.data as JsonObject) + (
+                "preview" to kotlinx.serialization.json.buildJsonObject {
+                    put("sha256", kotlinx.serialization.json.JsonPrimitive(previewSha))
+                    put("width", kotlinx.serialization.json.JsonPrimitive(2560))
+                    put("height", kotlinx.serialization.json.JsonPrimitive(1707))
+                }
+                ),
         )
         server.bump("photo", record.id)
         tablet.sync()
@@ -499,7 +501,9 @@ class ServerViewTest {
         // What 0.5.2 did: removing the folder forgot its photos here (records stay on the server, past the cursor),
         // then adding it again made new ids for the same files.
         runBlocking {
-            phone.db.metaDao().put(dev.hfps.reveal.data.db.MetaEntity(SyncEngine.KEY_CLEANUP, SyncEngine.CLEANUP_VERSION))
+            phone.db.metaDao().put(
+                dev.hfps.reveal.data.db.MetaEntity(SyncEngine.KEY_CLEANUP, SyncEngine.CLEANUP_VERSION),
+            )
         }
         forgetFolder(phone, phone.folder)
         phone.now += 1_000

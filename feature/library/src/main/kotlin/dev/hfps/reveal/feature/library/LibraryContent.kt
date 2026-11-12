@@ -423,6 +423,16 @@ private fun SelectionOverflow(state: LibraryUiState, actions: LibraryActions, wi
                     actions.onForget(state.selectedUnavailable)
                 }
             }
+            if (state.serverScope) {
+                TaggedMenuItem(
+                    PhosphorRegular.CloudSlash,
+                    stringResource(R.string.library_action_delete_server),
+                    ServerViewTags.DELETE_FROM_SERVER,
+                ) {
+                    open = false
+                    actions.onDeleteFromServer()
+                }
+            }
             if (state.selectedConflictCopies.isNotEmpty()) {
                 TaggedMenuItem(
                     PhosphorRegular.GitBranch,
@@ -513,7 +523,7 @@ private fun GridPane(
     val source = state.currentSource
     Column(Modifier.fillMaxSize()) {
         source?.let { SourceBanner(it) }
-        if (state.photoCount > 0 || state.filtered) FilterRow(state.query, state.unavailableCount, actions)
+        if (state.photoCount > 0 || state.filtered) FilterRow(state.query, actions)
         Box(Modifier.weight(1f).fillMaxWidth()) {
             val selection = state.selection
             when {
@@ -624,7 +634,7 @@ private fun BannerText(text: String, tint: Color) {
 }
 
 @Composable
-private fun FilterRow(query: PhotoQuery, unavailable: Int, actions: LibraryActions) {
+private fun FilterRow(query: PhotoQuery, actions: LibraryActions) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -637,16 +647,6 @@ private fun FilterRow(query: PhotoQuery, unavailable: Int, actions: LibraryActio
         RevealChip(stringResource(R.string.library_filter_all), query.filter == PhotoFilter.ALL, {
             set(PhotoFilter.ALL)
         })
-        // Only where the scope has photos Reveal cannot show; right after "All" so it is not missed.
-        if (unavailable > 0 || query.filter == PhotoFilter.UNAVAILABLE) {
-            RevealChip(
-                stringResource(R.string.library_filter_unavailable),
-                query.filter == PhotoFilter.UNAVAILABLE,
-                { set(PhotoFilter.UNAVAILABLE) },
-                icon = PhosphorRegular.ImageBroken,
-                modifier = Modifier.testTag(UnavailableTags.CHIP),
-            )
-        }
         RevealChip(stringResource(R.string.library_filter_edited), query.filter == PhotoFilter.EDITED, {
             set(PhotoFilter.EDITED)
         })

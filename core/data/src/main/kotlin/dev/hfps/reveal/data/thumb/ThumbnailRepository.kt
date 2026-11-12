@@ -27,9 +27,9 @@ import dev.hfps.reveal.data.library.DocumentTreeFactory
 import dev.hfps.reveal.data.model.FileRole
 import dev.hfps.reveal.data.model.SourceKind
 import dev.hfps.reveal.data.model.SourceState
-import dev.hfps.reveal.data.sync.ServerTree
 import dev.hfps.reveal.data.storage.DocumentTree
 import dev.hfps.reveal.data.storage.isAccessError
+import dev.hfps.reveal.data.sync.ServerTree
 import dev.hfps.reveal.pipeline.PIPELINE_VERSION
 import dev.hfps.reveal.pipeline.PipelineInput
 import dev.hfps.reveal.pipeline.input.PipelineInputMapper
@@ -110,7 +110,16 @@ class ThumbnailRepository(
         val main = files.firstOrNull { it.role == FileRole.RAW } ?: files.firstOrNull { it.role == FileRole.RENDERED }
         if (photo == null || main == null) return null
         val identity = FileIdentity(photo.sourceId.toString(), main.relativePath, main.size, main.modified)
-        return Target(photoId, photo.sourceId, main, files.firstOrNull { it.role == FileRole.RENDERED }, identity, server)
+        return Target(
+            photoId,
+            photo.sourceId,
+            main,
+            files.firstOrNull {
+                it.role == FileRole.RENDERED
+            },
+            identity,
+            server,
+        )
     }
 
     private suspend fun load(photoId: Long, versionId: Long, editTime: Long?): Bitmap? {

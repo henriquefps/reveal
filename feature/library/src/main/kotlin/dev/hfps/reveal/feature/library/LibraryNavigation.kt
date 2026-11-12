@@ -158,6 +158,13 @@ fun LibraryScreen(
             onForget = viewModel::forget,
             onForgetConfirm = viewModel::confirmForget,
             onForgetDismiss = viewModel::dismissForget,
+            onAddFolderBackup = viewModel::chooseFolderBackup,
+            onAddFolderDismiss = viewModel::dismissAddFolder,
+            onRemoveConfirm = viewModel::confirmRemove,
+            onRemoveDismiss = viewModel::dismissRemove,
+            onDeleteFromServer = viewModel::deleteFromServer,
+            onDeleteFromServerConfirm = viewModel::confirmDeleteFromServer,
+            onDeleteFromServerDismiss = viewModel::dismissDeleteFromServer,
             onSettings = onSettings,
             onGallery = onGallery,
             onAbout = onAbout,
@@ -187,6 +194,19 @@ fun LibraryScreen(
     }
     state.forgetPrompt?.let { prompt ->
         ForgetDialog(prompt, onConfirm = actions.onForgetConfirm, onDismiss = actions.onForgetDismiss)
+    }
+    if (state.addFolderPrompt != null) {
+        AddFolderBackupSheet(onChoose = actions.onAddFolderBackup, onDismiss = actions.onAddFolderDismiss)
+    }
+    state.removePrompt?.let { prompt ->
+        RemoveFolderDialog(prompt, onConfirm = actions.onRemoveConfirm, onDismiss = actions.onRemoveDismiss)
+    }
+    state.deleteServerPrompt?.let { count ->
+        DeleteFromServerDialog(
+            count,
+            onConfirm = actions.onDeleteFromServerConfirm,
+            onDismiss = actions.onDeleteFromServerDismiss,
+        )
     }
     if (choosingPreset) {
         ApplyPresetSheet(
@@ -277,6 +297,12 @@ private fun LibraryMessages(events: Flow<LibraryMessage>, snackbar: SnackbarHost
 
                 is LibraryMessage.Forgotten -> resources.getQuantityString(
                     R.plurals.library_forgotten,
+                    message.count,
+                    message.count,
+                )
+
+                is LibraryMessage.DeletedFromServer -> resources.getQuantityString(
+                    R.plurals.library_deleted_server,
                     message.count,
                     message.count,
                 )

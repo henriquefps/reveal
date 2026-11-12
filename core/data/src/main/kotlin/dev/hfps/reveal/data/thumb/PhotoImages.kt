@@ -23,9 +23,9 @@ import dev.hfps.reveal.data.library.DocumentTreeFactory
 import dev.hfps.reveal.data.model.FileRole
 import dev.hfps.reveal.data.model.SourceKind
 import dev.hfps.reveal.data.model.SourceState
-import dev.hfps.reveal.data.sync.ServerTree
 import dev.hfps.reveal.data.storage.DocumentTree
 import dev.hfps.reveal.data.storage.isAccessError
+import dev.hfps.reveal.data.sync.ServerTree
 import dev.hfps.reveal.pipeline.preview.SmartPreviewCodec
 import dev.hfps.reveal.pipeline.recipe.Recipe
 import java.io.Closeable

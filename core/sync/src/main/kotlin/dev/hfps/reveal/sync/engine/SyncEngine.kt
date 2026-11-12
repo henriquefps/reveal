@@ -219,7 +219,9 @@ class SyncEngine(
             val serverPhotos = others.groupBy { it.photoId }
             for (candidate in candidates) {
                 val source = found[candidate.fingerprint]
-                    ?: serverPhotos[candidate.photoId]?.firstNotNullOfOrNull { file -> file.fingerprint?.let(found::get) }
+                    ?: serverPhotos[candidate.photoId]?.firstNotNullOfOrNull { file ->
+                        file.fingerprint?.let(found::get)
+                    }
                 store.lookedUp(candidate.photoId, source)
             }
             count += candidates.size

@@ -29,19 +29,14 @@ data class FolderRemoval(
 )
 
 /** What the one-off clean-up of 0.5.3 did; counts only (it is logged). */
-data class CleanupReport(
-    val aliases: Int = 0,
-    val duplicates: Int = 0,
-    val metadataOnly: Int = 0,
-    val merged: Int = 0,
-)
+data class CleanupReport(val aliases: Int = 0, val duplicates: Int = 0, val metadataOnly: Int = 0, val merged: Int = 0)
 
 /**
  * The library side of the server's view (ADR 0018 "Deleting from the server", FIX/V): what happens to a folder's photos
  * on the server when the folder is removed, "Delete from server" in the Server scope, and the one-off clean-up of the
  * records 0.5.2 left behind. Everything is local: tombstones go up with the next push, originals are deleted by
- * `BlobUploader.deleteOriginals` after it. Writes run with the change triggers quiet ([SyncTriggers.APPLYING]): every sync row they need
- * is written explicitly.
+ * `BlobUploader.deleteOriginals` after it. Writes run with the change triggers quiet ([SyncTriggers.APPLYING]): every
+ * sync row they need is written explicitly.
  */
 class ServerLibrary(
     private val db: RevealDatabase,

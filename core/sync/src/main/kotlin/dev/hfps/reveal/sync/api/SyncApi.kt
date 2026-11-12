@@ -172,10 +172,6 @@ class SyncApi(baseUrl: String, private val apiKey: String?, private val client: 
     }
 
     /**
-     * Drops a smart preview this device uploaded (`DELETE /v1/blobs/{sha256}`, ADR 0017 "Dropping a smart preview").
-     * Servers before 0.5.2 do not have the route (`405`): [DropResult.UNSUPPORTED], the drop waits for an update.
-     */
-    /**
      * `DELETE /v1/originals/{fingerprint}` (ADR 0017 "Deleting an original", 0.5.3): the user deleted the photo from the
      * server. Same answers as [dropPreview]: [DropResult.REFERENCED] while a live record names it, [DropResult.REFUSED]
      * for a NAS file, [DropResult.UNSUPPORTED] from a server before 0.5.3.
@@ -185,6 +181,10 @@ class SyncApi(baseUrl: String, private val apiKey: String?, private val client: 
         return delete(url)
     }
 
+    /**
+     * Drops a smart preview this device uploaded (`DELETE /v1/blobs/{sha256}`, ADR 0017 "Dropping a smart preview").
+     * Servers before 0.5.2 do not have the route (`405`): [DropResult.UNSUPPORTED], the drop waits for an update.
+     */
     fun dropPreview(sha256: String): DropResult {
         val url = url("v1/blobs").newBuilder().addPathSegment(sha256).build()
         return delete(url)

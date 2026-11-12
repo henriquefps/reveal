@@ -3,6 +3,7 @@ package dev.hfps.reveal.feature.library
 import android.net.Uri
 import android.os.SystemClock
 import android.util.Log
+import androidx.core.net.toUri
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -77,6 +78,9 @@ sealed interface LibraryMessage {
 
     /** A preset is being applied to [count] photos in the background. */
     data class PresetQueued(val name: String, val count: Int) : LibraryMessage
+
+    /** [count] photos deleted from the sync server ("Delete from server"). */
+    data class DeletedFromServer(val count: Int) : LibraryMessage
 }
 
 /**
@@ -218,26 +222,12 @@ class LibraryViewModel @Inject constructor(
                     }
             }
         }
-        // The "Unavailable" filter exists only where the scope has such photos; opening a scope also re-checks the
-        // files marked unreadable (batch, in the background, rate-limited by the repository).
+        // Opening a scope re-checks the files marked unreadable (batch, in the background, rate-limited by the
+        // repository). There is no "Unavailable" filter any more (FIX/V): the placeholder marks this device's own
+        // unreadable photos in place, and the Server scope lists only photos that open.
         viewModelScope.launch {
             _state.map { it.selection?.scope() }.distinctUntilChanged().collectLatest { scope ->
-                if (scope == null) {
-                    _state.update { it.copy(unavailableCount = 0) }
-                    return@collectLatest
-                }
-                launch { library.recheckAccess() }
-                library.unavailableCount(scope).collect { count ->
-                    _state.update { s ->
-                        // Nothing left to filter: fall back to every photo instead of an empty "no match" grid.
-                        val query = if (count == 0 && s.query.filter == PhotoFilter.UNAVAILABLE) {
-                            s.query.copy(filter = PhotoFilter.ALL)
-                        } else {
-                            s.query
-                        }
-                        s.copy(unavailableCount = count, query = query)
-                    }
-                }
+                if (scope != null) library.recheckAccess()
             }
         }
         // Volumes coming and going (SD card, USB drive) re-check the sources and index what came back.
@@ -346,9 +336,31 @@ class LibraryViewModel @Inject constructor(
 
     fun setSelected(ids: Set<Long>) = _state.update { it.copy(selected = ids) }
 
+    /**
+     * A folder picked in the system's picker. While paired with a sync server it first asks what the folder backs up
+     * ([chooseFolderBackup]); otherwise it is added with the default, only edited photos (FIX/V).
+     */
     fun addFolder(treeUri: Uri) {
+        if (sync.paired) {
+            _state.update { it.copy(addFolderPrompt = treeUri.toString()) }
+        } else {
+            add(treeUri, everything = false)
+        }
+    }
+
+    /** The backup choice of the folder being added. */
+    fun chooseFolderBackup(everything: Boolean) {
+        val uri = _state.value.addFolderPrompt ?: return
+        _state.update { it.copy(addFolderPrompt = null) }
+        add(uri.toUri(), everything)
+    }
+
+    /** The backup sheet was dismissed: nothing is added. */
+    fun dismissAddFolder() = _state.update { it.copy(addFolderPrompt = null) }
+
+    private fun add(treeUri: Uri, everything: Boolean) {
         viewModelScope.launch {
-            when (val result = library.addSource(treeUri)) {
+            when (val result = library.addSource(treeUri, backup = everything)) {
                 is AddSourceResult.Added -> select(LibrarySelection.Folder(result.sourceId))
 
                 is AddSourceResult.AlreadyAdded -> {
@@ -368,8 +380,47 @@ class LibraryViewModel @Inject constructor(
         }
     }
 
+    /** Asks before removing a folder (and, while paired, whether its photos leave the server too). */
     fun removeSource(sourceId: Long) {
-        viewModelScope.launch { library.removeSource(sourceId) }
+        val source = _state.value.sources.firstOrNull { it.id == sourceId } ?: return
+        viewModelScope.launch {
+            val paired = sync.paired
+            val edited = if (paired) sync.editedInFolder(sourceId) else 0
+            _state.update { it.copy(removePrompt = RemovePrompt(sourceId, source.name, paired, edited)) }
+        }
+    }
+
+    fun dismissRemove() = _state.update { it.copy(removePrompt = null) }
+
+    /** Removes the prompted folder; its photos stay on the server unless [deleteFromServer] (ADR 0018, FIX/V). */
+    fun confirmRemove(deleteFromServer: Boolean) {
+        val prompt = _state.value.removePrompt ?: return
+        _state.update { it.copy(removePrompt = null) }
+        viewModelScope.launch {
+            writer.flush()
+            if (prompt.server) sync.removeFolder(prompt.sourceId, deleteFromServer)
+            library.removeSource(prompt.sourceId)
+        }
+    }
+
+    /** "Delete from server" for the selected Server photos: asks first. */
+    fun deleteFromServer() {
+        val count = _state.value.selected.size
+        if (count > 0 && _state.value.serverScope) _state.update { it.copy(deleteServerPrompt = count) }
+    }
+
+    fun dismissDeleteFromServer() = _state.update { it.copy(deleteServerPrompt = null) }
+
+    fun confirmDeleteFromServer() {
+        val ids = _state.value.selected.toList()
+        _state.update { it.copy(deleteServerPrompt = null) }
+        if (ids.isEmpty()) return
+        viewModelScope.launch {
+            writer.flush()
+            val count = sync.deleteFromServer(ids)
+            _state.update { s -> s.copy(selected = s.selected - ids.toSet()) }
+            messages.send(LibraryMessage.DeletedFromServer(count))
+        }
     }
 
     fun rate(rating: Int) = act { ids -> library.setRating(ids, rating) }

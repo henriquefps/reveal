@@ -6,6 +6,8 @@ All notable changes to Reveal are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.5.3] - 2026-11-12
+
 ### Changed
 - The "Server" place lists only photos that open: their original (any file of the shot) or their smart preview is on
   your sync server. Photos the server only describes (ratings and edits of a photo whose file is elsewhere) are kept

@@ -6,6 +6,8 @@ All notable changes to Reveal are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.5.4] - 2026-11-12
+
 ### Fixed
 - Portrait photos from the "Server" place (shot with the camera held upright) no longer show stretched across a
   landscape screen: their orientation now travels with sync, and photos already synced read it again from the server.

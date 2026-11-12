@@ -6,6 +6,12 @@ All notable changes to Reveal are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-12
+
+M3: presets. Built-in presets designed on real photos, live previews of each preset on your photo, strength,
+your own presets and packs (file or link), batch apply, smart presets that correct each photo first, and a
+face-aware Auto.
+
 ### Added
 - Import presets from a link: paste an `https://` link in the presets panel (⋯ → Import from a link…) or share a
   link to Reveal. Reveal names the site and downloads only after you confirm, with progress and Cancel, at most

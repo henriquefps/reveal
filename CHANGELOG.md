@@ -6,6 +6,8 @@ All notable changes to Reveal are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.5.2] - 2026-11-12
+
 ### Added
 - Photos Reveal cannot show at all (their file is unreadable and there is no server original, no preview anywhere:
   for example an old hand-off whose temporary access ended) are no longer empty squares. The grid, the filmstrip and

@@ -87,6 +87,8 @@ abstract class PolishScreenshotBase(private val device: String) {
     val composeRule = createComposeRule()
 
     protected fun shoot(name: String, content: @Composable () -> Unit) {
+        // The chooser shows edit times: the same pixels on every machine (CI runs in UTC).
+        java.util.TimeZone.setDefault(java.util.TimeZone.getTimeZone("UTC"))
         composeRule.setContent(content)
         composeRule.onRoot().captureRoboImage("src/test/screenshots/sync/${device}_$name.png")
     }

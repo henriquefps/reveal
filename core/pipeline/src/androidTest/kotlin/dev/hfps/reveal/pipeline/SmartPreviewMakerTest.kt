@@ -140,8 +140,16 @@ class SmartPreviewMakerTest {
         for (file in samples.sortedBy { it.name }) {
             val made = ImageInput.fromFile(file).use { maker.make(it) }
             val decoded = made.file.inputStream().use(SmartPreviewCodec::decode)
-            Log.i(TAG, "${file.name}: ${decoded.input.width}x${decoded.input.height} lens ${decoded.input.lens?.name}")
+            Log.i(
+                TAG,
+                "${file.name}: ${decoded.input.width}x${decoded.input.height} lens ${decoded.input.lens?.name}, " +
+                    "${made.size / 1000} KB (display JPEG ${decoded.jpeg.size / 1000} KB), format " +
+                    made.file.inputStream().use(SmartPreviewCodec::version),
+            )
             assertThat(maxOf(decoded.input.width, decoded.input.height)).isAtMost(SmartPreviewCodec.LONG_EDGE)
+            // Format 2 (ADR 0018 amendment FIX/P): well under the ~9 MB of format 1 for these 12-24 MP RAWs.
+            assertThat(made.file.inputStream().use(SmartPreviewCodec::version)).isEqualTo(SmartPreviewCodec.VERSION)
+            assertThat(made.size).isLessThan(MAX_PREVIEW_BYTES)
         }
     }
 
@@ -154,6 +162,7 @@ class SmartPreviewMakerTest {
     }
 
     private companion object {
+        const val MAX_PREVIEW_BYTES = 6_000_000L
         const val TAG = "REVEAL_PREVIEWS"
         const val TIMEOUT_MS = 30_000L
     }

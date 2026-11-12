@@ -246,6 +246,10 @@ The display JPEG adds 104-411 KB at 1280 px (155-579 KB at 1600 px). Default A: 
 about 3.6-5.1 MB with the JPEG; developed p99 0.6-1.07, the worst 4 x 4 block 0.6-1.6, single noisy pixels up to ~2.9 where
 the photo's own grain is several units (the differences there are grain-like, not banding or shifts).
 
+On a device (x86_64 emulator, the real `SmartPreviewMaker`: ProxyBuilder decode, LibRaw; `SmartPreviewMakerTest
+#publicSampleRaws`, log `REVEAL_PREVIEWS`), whole files with the display JPEG: ZV-E10 3.8 MB, A7C ISO 2000 3.8 MB,
+A7C ISO 12800 4.3 MB, Canon R6 3.6 MB, Nikon D5600 5.1 MB, Pixel 4a DNG (2560 x 1920) 5.7 MB; JPEGs 86-307 KB.
+
 Where the bytes go: in format 1 a 24 MP RAW at 2560 x 1710 is ~6.6 MB of green and ~2.4 MB of chroma; predictors
 (MED, averages, gradient) change the entropy by under 5 % and a context-adaptive coder would gain about 5 % over
 deflate: the residual is the noise. A plain bit cut (11-bit green, 8-bit chroma) still leaves ~3.5 MB. Only a step

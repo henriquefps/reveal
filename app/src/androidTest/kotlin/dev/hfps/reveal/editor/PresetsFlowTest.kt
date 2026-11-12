@@ -114,11 +114,13 @@ class PresetsFlowTest {
                 assertThat(history.entries).hasSize(1)
                 compose.onNodeWithTag(EditorTags.PRESET_STRENGTH).performTouchInput { swipeLeft() }
                 compose.waitForIdle()
-                // Strength 0 removes the step (back to the photo as it was).
-                compose.waitUntil(TIMEOUT_MS) { history.entries.isEmpty() }
+                // Strength 0 undoes the step (back to the photo as it was; redo would bring it back).
+                compose.waitUntil(TIMEOUT_MS) { history.cursor == -1 }
                 assertThat(history.current.light.contrast).isEqualTo(0f)
+                // Dragging up again makes it the one step again.
                 compose.onNodeWithTag(EditorTags.PRESET_STRENGTH).performTouchInput { swipeRight() }
-                compose.waitUntil(TIMEOUT_MS) { history.entries.size == 1 }
+                compose.waitUntil(TIMEOUT_MS) { history.cursor == 0 && history.current.light.contrast > 0f }
+                assertThat(history.entries).hasSize(1)
             }
             // Reopened from Room: the one named step is there.
             open(uri) {

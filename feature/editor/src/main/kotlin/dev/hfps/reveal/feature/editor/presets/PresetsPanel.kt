@@ -46,12 +46,17 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.onClick
+import androidx.compose.ui.semantics.onLongClick
+import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.selected
-import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -70,6 +75,7 @@ import dev.hfps.reveal.designsystem.icons.PhosphorFill
 import dev.hfps.reveal.designsystem.icons.PhosphorRegular
 import dev.hfps.reveal.designsystem.theme.RevealMotion
 import dev.hfps.reveal.designsystem.theme.RevealTheme
+import dev.hfps.reveal.feature.editor.EditorMetrics
 import dev.hfps.reveal.feature.editor.EditorTags
 import dev.hfps.reveal.feature.editor.R
 import dev.hfps.reveal.feature.editor.panels.PanelHost
@@ -117,6 +123,7 @@ fun PresetsPanel(host: PanelHost, modifier: Modifier = Modifier) {
         uri?.let(actions.onImportPresets)
     }
     val base = remember(session, state.edit.committed) { session?.before ?: state.edit.committed }
+    val baseHash = remember(base) { base.hashCode() }
 
     Column(modifier.fillMaxSize()) {
         AnimatedVisibility(
@@ -186,6 +193,17 @@ fun PresetsPanel(host: PanelHost, modifier: Modifier = Modifier) {
             })
         }
         val items = library.presetsOf(shown)
+        val selectedId = session?.preset?.id
+        // Cell models made once per list (identity-stable): scrolling composes cells without comparing presets.
+        val cells = remember(items, baseHash, selectedId) {
+            items.map { p ->
+                PresetCellModel(
+                    preset = p,
+                    key = PresetThumbnails.key("", baseHash, p.uuid, p.preset.version, p.preset.patch.hashCode()),
+                    selected = p.uuid == selectedId,
+                )
+            }
+        }
         Box(Modifier.weight(1f, fill = false)) {
             androidx.compose.animation.AnimatedVisibility(
                 visible = !draggingStrength,
@@ -209,18 +227,26 @@ fun PresetsPanel(host: PanelHost, modifier: Modifier = Modifier) {
                         modifier = Modifier
                             .fillMaxWidth()
                             .heightIn(max = GRID_MAX)
+                            .onGloballyPositioned { c ->
+                                val r = c.boundsInWindow()
+                                EditorMetrics.presetGrid =
+                                    intArrayOf(r.left.toInt(), r.top.toInt(), r.right.toInt(), r.bottom.toInt())
+                            }
                             .testTag(EditorTags.PRESET_GRID),
                     ) {
-                        items(items, key = { it.uuid }) { preset ->
+                        val ready = state.ready
+                        val thumbnails = actions.presetThumbnails
+                        val preview = actions.presetPreview
+                        val onApply = actions.onApplyPreset
+                        items(cells, key = { it.preset.uuid }) { cell ->
                             PresetCell(
-                                preset = preset,
+                                cell = cell,
                                 base = base,
-                                ready = state.ready,
-                                selected = session?.preset?.id == preset.uuid,
-                                thumbnails = actions.presetThumbnails,
-                                preview = actions.presetPreview,
-                                onClick = { actions.onApplyPreset(preset.uuid) },
-                                onLongClick = { options = preset },
+                                ready = ready,
+                                thumbnails = thumbnails,
+                                preview = preview,
+                                onClick = { onApply(cell.preset.uuid) },
+                                onLongClick = { options = cell.preset },
                             )
                         }
                     }
@@ -291,23 +317,18 @@ internal fun groupName(group: LibraryGroup): String = if (group.kind == GroupKin
 @Suppress("LongParameterList", "LongMethod")
 @Composable
 private fun PresetCell(
-    preset: LibraryPreset,
+    cell: PresetCellModel,
     base: Recipe,
     ready: Boolean,
-    selected: Boolean,
     thumbnails: PresetThumbnailSource?,
     preview: (dev.hfps.reveal.pipeline.preset.Preset, Recipe) -> Recipe,
     onClick: () -> Unit,
     onLongClick: () -> Unit,
 ) {
     val c = RevealTheme.colors
-    val key = PresetThumbnails.key(
-        "",
-        base,
-        preset.uuid,
-        preset.preset.version,
-        preset.preset.patch.hashCode(),
-    )
+    val preset = cell.preset
+    val key = cell.key
+    val selected = cell.selected
     val currentPreview by rememberUpdatedState(preview)
     val image by produceState(thumbnails?.cached(key), key, ready, thumbnails) {
         if (value != null || !ready || thumbnails == null) return@produceState
@@ -321,13 +342,18 @@ private fun PresetCell(
         modifier = Modifier
             .clip(shape)
             .combinedClickable(onClick = onClick, onLongClick = onLongClick, role = Role.Button)
-            .semantics(mergeDescendants = true) {
+            // One semantics node per cell (name, state, tap and long-press): a lighter tree to diff every scroll
+            // frame while an accessibility service is on.
+            .clearAndSetSemantics {
                 contentDescription = preset.name
+                role = Role.Button
                 this.selected = selected
                 stateDescription = listOfNotNull(
                     appliedLabel.takeIf { selected },
                     favouriteLabel.takeIf { preset.favourite },
                 ).joinToString(", ")
+                onClick { onClick().let { true } }
+                onLongClick { onLongClick().let { true } }
             }
             .testTag(EditorTags.preset(preset.uuid)),
     ) {
@@ -418,3 +444,7 @@ private val CELL_MIN = 92.dp
 private val GRID_MAX = 2000.dp
 private const val PERCENT = 100f
 private val STRENGTH_SPEC = SliderSpec(min = 0f, max = 200f, neutral = 100f, step = 1f, fineStep = 1f, bipolar = false)
+
+/** One cell of the grid, made once per list: the preset, its thumbnail key and whether it is the applied one. */
+@androidx.compose.runtime.Immutable
+internal class PresetCellModel(val preset: LibraryPreset, val key: String, val selected: Boolean)

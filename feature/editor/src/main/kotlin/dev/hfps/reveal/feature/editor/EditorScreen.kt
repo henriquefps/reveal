@@ -33,11 +33,13 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -254,6 +256,11 @@ fun EditorContent(
         val onToggleChrome = { chrome.immersive = !chrome.immersive }
         val select: (EditorTool) -> Unit = { tool ->
             chrome.select(tool, kind, actions) { snap -> scope.launch { chrome.sheet.animateTo(snap) } }
+        }
+        val currentSelect by rememberUpdatedState(select)
+        DisposableEffect(Unit) {
+            EditorMetrics.selectTool = { id -> scope.launch { currentSelect(EditorTools[id]) } }
+            onDispose { EditorMetrics.selectTool = null }
         }
         PhotoSurface(photo.renderer, onFirstFrame = actions.onDeveloped, modifier = Modifier.fillMaxSize())
         when (kind) {

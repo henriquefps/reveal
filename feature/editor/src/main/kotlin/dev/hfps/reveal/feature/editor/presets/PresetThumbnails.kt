@@ -140,11 +140,11 @@ class PresetThumbnails(private val input: PipelineInput, private val pixelScale:
         /** The cache key of [presetId] (at [presetVersion]) applied on [base] of the photo [photoKey]. */
         fun key(
             photoKey: String,
-            base: Recipe,
+            baseHash: Int,
             presetId: String,
             presetVersion: Int,
             patchHash: Int,
             strength: Float = 1f,
-        ): String = "$photoKey|${base.hashCode()}|$presetId|$presetVersion|$patchHash|$strength"
+        ): String = "$photoKey|$baseHash|$presetId|$presetVersion|$patchHash|$strength"
     }
 }

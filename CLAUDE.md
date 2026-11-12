@@ -157,7 +157,7 @@ REVEAL_COLOUR_SHEET_DIR=$PWD/build/calibration REVEAL_RENDER_OUT=$PWD/docs/scree
 
 ## Library (`:core:data`, `:feature:library`, M1, ADR 0006)
 
-Room `RevealDatabase` v5 (sources, photos, photo_files, versions, recipes, history, history_cursor, cache_entries);
+Room `RevealDatabase` v7 (sources, photos, photo_files, versions, recipes, history, history_cursor, cache_entries; sync tables v6; preset tables v7, ADR 0019);
 schema change = new version + migration (or `AutoMigration`) + exported `core/data/schemas/*.json`, tested by
 `RevealDatabaseMigrationTest`. `LibraryRepository` (sources, SAF grants, volumes, indexing, ratings/flags with XMP
 write-back), `LibraryIndexer` (walk → diff → sidecars → headers), `XmpReader`/`XmpWriter` (merge, never overwrite a
@@ -176,7 +176,7 @@ adb -s emulator-<port> logcat -d -s REVEAL_LIBRARY RevealLibrary
 ```
 
 The full suite excludes the measurement classes:
-`-e notClass dev.hfps.reveal.editor.EditorMeasurementsTest,dev.hfps.reveal.library.LibraryMeasurementsTest,dev.hfps.reveal.editor.FilmstripMeasurementsTest,dev.hfps.reveal.sync.SyncPullMeasurementsTest`.
+`-e notClass dev.hfps.reveal.editor.EditorMeasurementsTest,dev.hfps.reveal.library.LibraryMeasurementsTest,dev.hfps.reveal.editor.FilmstripMeasurementsTest,dev.hfps.reveal.sync.SyncPullMeasurementsTest,dev.hfps.reveal.editor.PresetsMeasurementsTest`.
 Frame measurements must not use a Compose test rule (it holds frames while it synchronizes): launch with
 `ActivityScenario` and inject touches with `input swipe`.
 
@@ -215,7 +215,7 @@ adb -s emulator-<port> install -r -t app/build/outputs/apk/debug/app-debug.apk
 adb -s emulator-<port> install -r -t app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
 adb -s emulator-<port> push core/image/build/samples/sony-zv-e10.arw /data/local/tmp/
 adb -s emulator-<port> shell "chmod a+r /data/local/tmp/sony-zv-e10.arw && run-as dev.hfps.reveal.debug sh -c 'mkdir -p files/samples && cp /data/local/tmp/sony-zv-e10.arw files/samples/' && rm /data/local/tmp/sony-zv-e10.arw"
-adb -s emulator-<port> shell am instrument -w -e notClass dev.hfps.reveal.editor.EditorMeasurementsTest,dev.hfps.reveal.library.LibraryMeasurementsTest,dev.hfps.reveal.editor.FilmstripMeasurementsTest dev.hfps.reveal.debug.test/androidx.test.runner.AndroidJUnitRunner
+adb -s emulator-<port> shell am instrument -w -e notClass dev.hfps.reveal.editor.EditorMeasurementsTest,dev.hfps.reveal.library.LibraryMeasurementsTest,dev.hfps.reveal.editor.FilmstripMeasurementsTest,dev.hfps.reveal.editor.PresetsMeasurementsTest dev.hfps.reveal.debug.test/androidx.test.runner.AndroidJUnitRunner
 adb -s emulator-<port> shell am instrument -w -e class dev.hfps.reveal.editor.EditorMeasurementsTest dev.hfps.reveal.debug.test/androidx.test.runner.AndroidJUnitRunner
 adb -s emulator-<port> logcat -d -s REVEAL_MEASURE REVEAL_EDITOR_TEST RevealEditor
 ```
@@ -415,6 +415,49 @@ adb -s emulator-<port> shell am instrument -w -e class dev.hfps.reveal.editor.Tr
 # CC0 before/after sheets (docs/screenshots/optics): rdumps of the public samples, then
 REVEAL_OPTICS_OUT=$PWD/docs/screenshots/optics ./gradlew :core:pipeline:testDebugUnitTest --tests '*OpticsRenderSheetTest*' --rerun
 ```
+
+## Presets (`:core:pipeline/preset`, `:core:data/preset`, `:feature:editor/presets`, M3/A, ADR 0019)
+
+Model (pure Kotlin, `:core:pipeline/preset`): `Preset` (uuid, name, `PresetPatch`, group, author, version, created,
+`SmartPart?`), `PresetPatch` = partial recipe as field path → recipe-JSON value (`fromSections`, `fromJson`,
+`toJson`, `apply(before, strength 0..2, ApplyContext)`), `PresetFields` (registry derived from the default recipe's
+JSON; `EXCLUDED` paths; `FieldKind` per path), `PresetSection` (chooser sections, `changedIn`, `suggestedFor`),
+`PresetStrength` (per-kind scaling; exact at 0 and 1). A new recipe field is presettable automatically: give it a
+`FieldKind` in `PresetFields.kinds` and a control range in `controls` if it is not linear. Files: `PresetFiles`
+(`.revealpreset`), `PresetPacks` (`.revealpack` zip, limits in `PresetLimits`, errors `PresetError`). Smart presets
+(M3/B): `SmartPart` is carried verbatim, `SmartCorrection` resolves it before the style.
+
+Library (`:core:data/preset`, DB v7): `PresetRepository` (`library()` flow of `PresetLibrary` = built-in groups from
+`BuiltInPresetSource` (bound in `DataModule`, `NONE` until M3/B) + user/pack groups; create, rename, move, reorder,
+duplicate, delete, groups, favourites/recents in `preset_marks` by uuid, `importPreset`, `importPack` (on trial),
+`keepPack`/`removePack`, `export`, `exportGroup`), `PresetFilesIo` (SAF read/write, zip sniffing), `PresetIntents`
+(`MainActivity`: VIEW/SEND of `.revealpreset`/`.revealpack`). Batch history: `EditRepository.applyEach`. Sync:
+`:core:sync` `engine/PresetSync.kt` (`PresetData` payload; trial packs skipped; triggers `preset_*` in
+`SyncTriggers` v2).
+
+Editor: the Presets tool (`ToolBehaviour.Panel(ownsScroll = true)`): `presets/PresetsPanel.kt` (chips, `LazyVerticalGrid`
+of `PresetCellModel`, strength slider), `PresetSheets.kt` (create, options, ⋯ menu, pack banner/about),
+`PresetSession.kt` (`PresetSession.isCurrent`, `PresetSteps.commit`, `PreviewInput` 360 px box downscale),
+`PresetThumbnails.kt` (own offscreen `GpuDevelopRenderer`, newest request first, LRU 40 MB). ViewModel:
+`applyPreset` (replaces the session's step while current), `setPresetStrength` (per frame) /
+`commitPresetStrength` (replaces the step; 0 undoes it). Library: selection menu → `presets/ApplyPresetSheet.kt` →
+`PresetBatchWorker` (WorkManager, job file `files/preset-jobs`, 25 photos per transaction, notification + Cancel;
+`PresetBatchWorker.smart` for M3/B). Goldens: `phone_presets*`, `landscape_presets`, `tablet_presets`,
+`tablet_portrait_presets` (placeholder presets in `EditorScreenshotTest.TestPresets`, tests only).
+
+```sh
+./gradlew :core:pipeline:testDebugUnitTest --tests '*preset*'          # patch, strength per kind, files, hostile packs
+./gradlew :core:data:testDebugUnitTest --tests '*PresetRepositoryTest*' --tests '*RevealDatabaseMigrationTest*'
+./gradlew :core:sync:testDebugUnitTest --tests '*SyncEngineTest*'      # presets between two devices, trial packs
+adb -s <serial> shell am instrument -w -e class dev.hfps.reveal.editor.PresetsFlowTest dev.hfps.reveal.debug.test/androidx.test.runner.AndroidJUnitRunner
+# preview grid frame times (60 presets; files/samples/sony-zv-e10.arw if present); -e baseline true scrolls Light
+adb -s <serial> shell am instrument -w -e class dev.hfps.reveal.editor.PresetsMeasurementsTest dev.hfps.reveal.debug.test/androidx.test.runner.AndroidJUnitRunner
+adb -s <serial> logcat -d -s REVEAL_PRESETS RevealPresets
+```
+
+Frame measurements: use `getUiAutomation(UiAutomation.FLAG_DONT_USE_ACCESSIBILITY)` for `input` commands (a
+connected UiAutomation makes Compose diff its semantics tree every frame). With an accessibility service on (the
+owner's phone has one), a lazy grid's scroll still pays that diff every frame.
 
 ## Auto (`:core:pipeline/auto`, ADR 0010)
 

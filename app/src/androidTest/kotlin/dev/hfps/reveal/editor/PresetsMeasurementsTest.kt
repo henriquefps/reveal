@@ -1,22 +1,18 @@
 package dev.hfps.reveal.editor
 
+import android.app.UiAutomation
+import android.graphics.Rect
 import android.os.Handler
 import android.os.HandlerThread
 import android.os.ParcelFileDescriptor
 import android.util.Log
 import android.view.FrameMetrics
 import android.view.Window
-import androidx.compose.ui.test.ExperimentalTestApi
-import androidx.compose.ui.test.hasTestTag
-import androidx.compose.ui.test.junit4.v2.createEmptyComposeRule
-import androidx.compose.ui.test.onNodeWithTag
-import androidx.compose.ui.test.performClick
-import androidx.compose.ui.test.performScrollTo
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import dagger.hilt.android.EntryPointAccessors
 import dev.hfps.reveal.debug.DebugAccess
-import dev.hfps.reveal.feature.editor.EditorTags
+import dev.hfps.reveal.feature.editor.EditorMetrics
 import dev.hfps.reveal.feature.editor.tools.ToolId
 import dev.hfps.reveal.pipeline.preset.PresetPatch
 import dev.hfps.reveal.pipeline.preset.PresetSection
@@ -40,12 +36,8 @@ import org.junit.runner.RunWith
  * times (FrameMetrics); the thumbnail render times are logged per thumbnail under the same tag. Run on its own:
  * `-e class dev.hfps.reveal.editor.PresetsMeasurementsTest` (excluded from the full suite like the other measurements).
  */
-@OptIn(ExperimentalTestApi::class)
 @RunWith(AndroidJUnit4::class)
 class PresetsMeasurementsTest {
-    @get:org.junit.Rule
-    val compose = createEmptyComposeRule()
-
     private val instrumentation = InstrumentationRegistry.getInstrumentation()
     private val context get() = instrumentation.targetContext
     private val access = EntryPointAccessors.fromApplication(context, DebugAccess::class.java)
@@ -66,7 +58,11 @@ class PresetsMeasurementsTest {
                 presets.create("Look $i", PresetPatch.fromSections(recipe, PresetSection.entries), groupId)
             }
         }
-        val group = runBlocking { presets.library().first() }.groups.first { it.rowId == groupId }
+        // First in the panel (it opens on the first group with presets).
+        runBlocking {
+            val others = presets.library().first().groups.mapNotNull { it.rowId }.filter { it != groupId }
+            presets.reorderGroups(listOf(groupId) + others)
+        }
         val sample = TestPhotos.sample("sony-zv-e10.arw")
         val uri = if (sample != null) {
             TestPhotos.insert("reveal-measure-${System.nanoTime()}.arw", "image/x-sony-arw", sample)
@@ -75,31 +71,33 @@ class PresetsMeasurementsTest {
         }
         try {
             TestPhotos.launchView(uri, if (sample != null) "image/x-sony-arw" else "image/jpeg").use { scenario ->
-                compose.waitUntilAtLeastOneExists(hasTestTag(EditorTags.DEVELOPED), TIMEOUT_MS)
-                click(EditorTags.tool(ToolId.PRESETS))
-                click(EditorTags.presetChip(group.uuid))
-                compose.waitUntilAtLeastOneExists(hasTestTag(EditorTags.PRESET_GRID), TIMEOUT_MS)
-                // Expand the portrait panel (drag its header up) so the grid has room to scroll.
-                val header = compose.onNodeWithTag(EditorTags.PANEL_HEADER).fetchSemanticsNode().boundsInWindow
-                val hx = header.center.x.toInt()
-                val hy = header.center.y.toInt()
-                val drag = instrumentation.uiAutomation.executeShellCommand(
-                    "input touchscreen swipe $hx $hy $hx ${(hy * HEADER_TARGET).toInt()} $SWIPE_MS",
-                )
-                ParcelFileDescriptor.AutoCloseInputStream(drag).use { it.readBytes() }
+                waitFor(TIMEOUT_MS) { EditorMetrics.renderer != null }
                 Thread.sleep(SETTLE_MS)
-                compose.waitForIdle()
-                val bounds = compose.onNodeWithTag(EditorTags.PRESET_GRID).fetchSemanticsNode().boundsInWindow
-                val x = bounds.center.x.toInt()
-                val top = (bounds.top + bounds.height * EDGE).toInt()
-                val bottom = (bounds.bottom - bounds.height * EDGE).toInt()
-                log("grid ${bounds.width.toInt()}x${bounds.height.toInt()} at y ${bounds.top.toInt()}, $PRESETS presets")
+                // No Compose test rule (it holds frames while it synchronizes): the editor's measurement seams.
+                checkNotNull(EditorMetrics.selectTool).invoke(ToolId.PRESETS)
+                waitFor(TIMEOUT_MS) { EditorMetrics.presetGrid != null }
+                Thread.sleep(SETTLE_MS)
+                val g = checkNotNull(EditorMetrics.presetGrid)
+                val bounds = Rect(g[0], g[1], g[2], g[3])
+                val x = bounds.centerX()
+                val top = (bounds.top + bounds.height() * EDGE).toInt()
+                val bottom = (bounds.bottom - bounds.height() * EDGE).toInt()
+                log("grid ${bounds.width()}x${bounds.height()} at y ${bounds.top}, $PRESETS presets")
+                // `-e baseline true`: the same swipes on the Light panel (a plain scrolling column), for comparison.
+                val baseline = InstrumentationRegistry.getArguments().getString("baseline") == "true"
+                if (baseline) {
+                    checkNotNull(EditorMetrics.selectTool).invoke(ToolId.LIGHT)
+                    Thread.sleep(SETTLE_MS)
+                    log("baseline: scrolling the Light panel instead")
+                }
 
                 val frames = Collections.synchronizedList(mutableListOf<Long>())
+                val parts = Collections.synchronizedList(mutableListOf<LongArray>())
                 val missed = AtomicInteger()
                 val thread = HandlerThread("frame-metrics").apply { start() }
                 val listener = Window.OnFrameMetricsAvailableListener { _, metrics, _ ->
                     frames += metrics.getMetric(FrameMetrics.TOTAL_DURATION)
+                    parts += PARTS.map { metrics.getMetric(it) }.toLongArray()
                     if (metrics.getMetric(FrameMetrics.TOTAL_DURATION) > metrics.getMetric(FrameMetrics.DEADLINE)) {
                         missed.incrementAndGet()
                     }
@@ -109,7 +107,9 @@ class PresetsMeasurementsTest {
                     refreshHz = it.display.refreshRate
                     it.window.addOnFrameMetricsAvailableListener(listener, Handler(thread.looper))
                 }
-                val automation = instrumentation.uiAutomation
+                // Without the accessibility connection: a connected UiAutomation makes Compose compute and send its
+                // whole semantics tree every frame (as with TalkBack on), which is not what the owner's phone does.
+                val automation = instrumentation.getUiAutomation(UiAutomation.FLAG_DONT_USE_ACCESSIBILITY)
                 repeat(SWIPES) { i ->
                     val (from, to) = if (i < SWIPES / 2) bottom to top else top to bottom
                     val command = automation.executeShellCommand("input touchscreen swipe $x $from $x $to $SWIPE_MS")
@@ -120,6 +120,14 @@ class PresetsMeasurementsTest {
                 scenario.onActivity { it.window.removeOnFrameMetricsAvailableListener(listener) }
                 thread.quitSafely()
                 report(frames.map { it / NS_PER_MS }.sorted(), refreshHz, missed.get())
+                // Where the slow frames spend their time (p90 of each stage over all frames).
+                val names = listOf("input", "animation", "layout", "draw", "sync", "commands", "swap", "gpu")
+                log(
+                    "stages p90 ms: " + names.indices.joinToString { i ->
+                        val v = parts.map { it[i] / NS_PER_MS }.sorted()
+                        "${names[i]} ${"%.1f".format(v[((v.size - 1) * P90).toInt()])}"
+                    },
+                )
             }
         } finally {
             TestPhotos.delete(uri)
@@ -127,10 +135,12 @@ class PresetsMeasurementsTest {
         }
     }
 
-    private fun click(tag: String) {
-        compose.waitUntilAtLeastOneExists(hasTestTag(tag), TIMEOUT_MS)
-        compose.onNodeWithTag(tag).apply { runCatching { performScrollTo() } }.performClick()
-        compose.waitForIdle()
+    private fun waitFor(timeoutMs: Long, condition: () -> Boolean) {
+        val end = System.currentTimeMillis() + timeoutMs
+        while (!condition()) {
+            check(System.currentTimeMillis() < end) { "timed out" }
+            Thread.sleep(POLL_MS)
+        }
     }
 
     private fun report(frames: List<Double>, refreshHz: Float, missed: Int) {
@@ -152,6 +162,16 @@ class PresetsMeasurementsTest {
     private fun log(message: String) = Log.i(TAG, message)
 
     private companion object {
+        val PARTS = intArrayOf(
+            FrameMetrics.INPUT_HANDLING_DURATION,
+            FrameMetrics.ANIMATION_DURATION,
+            FrameMetrics.LAYOUT_MEASURE_DURATION,
+            FrameMetrics.DRAW_DURATION,
+            FrameMetrics.SYNC_DURATION,
+            FrameMetrics.COMMAND_ISSUE_DURATION,
+            FrameMetrics.SWAP_BUFFERS_DURATION,
+            FrameMetrics.GPU_DURATION,
+        ).toList()
         const val TAG = "REVEAL_PRESETS"
         const val PRESETS = 60
         const val SWIPES = 20
@@ -160,7 +180,7 @@ class PresetsMeasurementsTest {
         const val SETTLE_MS = 1_500L
         const val TIMEOUT_MS = 60_000L
         const val EDGE = 0.15f
-        const val HEADER_TARGET = 0.3f
+        const val POLL_MS = 100L
         const val NS_PER_MS = 1_000_000.0
         const val MS_PER_S = 1000.0
         const val PCT = 100.0

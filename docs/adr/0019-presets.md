@@ -72,7 +72,7 @@ The editor applies a preset as **one history step** (`HistoryAction.PRESET`, `St
 session: the recipe before it, the preset and the strength. Moving the strength slider renders
 `preset.apply(before, s)` per frame (nothing is written) and **on release replaces the session's step**: the history
 cursor moves back one and the new recipe is committed as the same named step (`HistoryOp.Move` + `HistoryOp.Commit`,
-which drops the replaced step; no new persistence op). Strength 0 removes the step. The session ends when the
+which drops the replaced step; no new persistence op). Strength 0 undoes the step (the cursor goes back to the base; redo or dragging the strength up again brings it back). The session ends when the
 history moves away from its step (another edit, undo, another preset). Tapping a second preset applies it on top of
 the current edit (presets stack, as in other editors); the session's "before" is then the recipe with the first one.
 
@@ -199,6 +199,25 @@ CLAUDE.md): one small offscreen renderer on its own thread, sharing nothing with
 256 px copy of the editor's proxy once per photo, renders `preset.apply(committed, 1)` per thumbnail in visibility
 order (the newest request first), caches bitmaps by (photo, committed recipe, preset id, version) in memory, and
 drops stale requests when the user scrolls. The editor's frame loop is never blocked by it.
+
+## Measurements (owner's phone, debug build)
+
+Galaxy S24 Ultra (`RXCX109VTTM`), debug APK, the CC0 ZV-E10 sample open, 60 presets in one group, the panel at its
+half position, 20 `input swipe` scrolls of the grid (`PresetsMeasurementsTest`; the phone reported 60 Hz during the
+runs and has an accessibility service enabled, so Compose builds and diffs its semantics tree every frame):
+
+| | Frames | p50 | p90 | p99 | Past deadline | Compose (animation stage) p90 |
+| --- | --- | --- | --- | --- | --- | --- |
+| Presets grid, live previews | ~710 | 13.9-14.6 ms | 20-22 ms | 33-39 ms | 5-7 % | 9.7-10.4 ms |
+| Presets grid, previews off | 708 | 13.8 ms | 20.3 ms | 28.8 ms | 6.4 % | 11.6 ms |
+| Light panel, same swipes (baseline) | ~690 | 10.1 ms | 15.4 ms | 31.5 ms | 2.9 % | 2.8 ms |
+
+Thumbnails: 54 rendered per run on the preview renderer's own thread, p50 6 ms, p90 7-11 ms each (360 px, every tool
+the preset sets). Turning the previews off does not change the frame times: the extra cost against the Light panel is
+Compose's accessibility pass (`getAllUncoveredSemanticsNodes`, about 4 ms per frame in this debug build, called every
+frame because a lazy grid re-places its items while it scrolls; Perfetto trace). Each cell is therefore one semantics
+node (`clearAndSetSemantics`). A release build (R8, no debug Compose) is expected to be well under these numbers; the
+orchestrator measures it with the release install.
 
 ## Consequences
 

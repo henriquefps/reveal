@@ -7,6 +7,17 @@ All notable changes to Reveal are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- Presets (the first tool in the editor): a grid of live previews of every preset on the photo you are editing,
+  groups, Favourites and Recent. Tap to apply (one undoable step; tapping another replaces it while you browse), then
+  set its strength from 0 to 200 %: every setting the preset touches scales from your photo's value. "Create preset"
+  saves the current edit with the settings you choose into a group; long-press a preset to favourite, rename,
+  duplicate, move, reorder, export or delete it.
+- Preset files: export a preset (`.revealpreset`) or a group as a pack (`.revealpack`), import either from the panel,
+  by opening the file or by sharing it to Reveal. A pack shows its author, licence and link and stays on trial, so you
+  can try it on your own photos before keeping it. The format is documented (ADR 0019) and strictly checked.
+- Apply a preset to the library selection (strength included): runs in the background with progress and Cancel,
+  one undoable step on each photo.
+- Presets sync between your devices with your sync server (with their groups, packs and favourites).
 - Sync with your own `reveal-sync` server (Settings → Sync): pair by scanning the server's QR code or pasting its
   link (the device key stays in the Android Keystore). Edits with their history, virtual copies, ratings, flags,
   labels and the export author follow you to every paired device, in the background and within seconds while the app

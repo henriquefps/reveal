@@ -76,6 +76,14 @@ object EditorMetrics {
     @Volatile var history: (() -> dev.hfps.reveal.pipeline.recipe.EditHistory)? = null
         internal set
 
+    /** For measurements only: selects a tool of the strip, as a tap would (frame tests run without a Compose rule). */
+    @Volatile var selectTool: ((dev.hfps.reveal.feature.editor.tools.ToolId) -> Unit)? = null
+        internal set
+
+    /** For measurements only: the presets grid's bounds in the window (left, top, right, bottom), when shown. */
+    @Volatile var presetGrid: IntArray? = null
+        internal set
+
     /** Last error, if the open failed. */
     @Volatile var error: String? = null
         private set

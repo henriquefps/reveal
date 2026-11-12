@@ -57,7 +57,9 @@ class PresetPatch private constructor(val values: Map<String, JsonElement>) {
 
     override fun equals(other: Any?): Boolean = other is PresetPatch && other.values == values
 
-    override fun hashCode(): Int = values.hashCode()
+    private val hash: Int by lazy { values.hashCode() }
+
+    override fun hashCode(): Int = hash
 
     override fun toString(): String = "PresetPatch(${toJson()})"
 

@@ -264,7 +264,7 @@
         <item quantity="many">Excluir %1$d fotos do servidor?</item>
         <item quantity="other">Excluir %1$d fotos do servidor?</item>
     </plurals>
-    <string name="library_delete_server_body">As edições, estrelas e originais com backup são excluídos do servidor e dos seus outros aparelhos, edições inclusive. Os arquivos nas pastas dos seus aparelhos e nas pastas do NAS do servidor não são tocados.</string>
+    <string name="library_delete_server_body">As edições, estrelas e originais com backup são excluídos do servidor e dos seus outros aparelhos. Os arquivos nas pastas dos seus aparelhos e nas pastas do NAS do servidor não são tocados.</string>
     <string name="library_delete_server_confirm">Excluir</string>
     <plurals name="library_deleted_server">
         <item quantity="one">%1$d foto excluída do servidor</item>

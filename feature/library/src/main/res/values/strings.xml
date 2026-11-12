@@ -256,7 +256,7 @@
         <item quantity="one">Delete %1$d photo from the server?</item>
         <item quantity="other">Delete %1$d photos from the server?</item>
     </plurals>
-    <string name="library_delete_server_body">Their edits, ratings and backed-up originals are deleted from the server and from your other devices, edits included. Files in folders on your devices and in the server’s NAS folders are not touched.</string>
+    <string name="library_delete_server_body">Their edits, ratings and backed-up originals are deleted from the server and from your other devices. Files in folders on your devices and in the server’s NAS folders are not touched.</string>
     <string name="library_delete_server_confirm">Delete</string>
     <plurals name="library_deleted_server">
         <item quantity="one">%1$d photo deleted from the server</item>

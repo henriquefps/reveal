@@ -594,8 +594,14 @@ class LibraryRepository(
             photo = photo,
             versionId = version,
             sourceState = source.state,
-            files = photoDao.files(photoId).map { it.detail(tree) },
+            files = filesOf(photoId, source).map { it.detail(tree) },
         )
+    }
+
+    /** A photo's files; for a Server photo only those that open when any does (`ServerTree.reachable`, FIX/V). */
+    private suspend fun filesOf(photoId: Long, source: SourceEntity): List<PhotoFileEntity> {
+        val files = photoDao.files(photoId)
+        return if (source.kind == SourceKind.SERVER) ServerTree.reachable(files) { it.onServer } else files
     }
 
     /** EXIF of a photo (RAW header first, gaps from its rendering), read now from the files. */

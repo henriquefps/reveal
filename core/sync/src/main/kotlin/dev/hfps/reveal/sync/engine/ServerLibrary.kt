@@ -24,7 +24,7 @@ data class FolderRemoval(
     val keptOnServer: Int = 0,
     /** Photo records tombstoned (deleted from the server, or metadata only and unedited). */
     val tombstoned: Int = 0,
-    /** Uploaded originals queued for `DELETE /v1/originals`. */
+    /** Files queued for `DELETE /v1/originals` (every file of every photo deleted from the server). */
     val originalsQueued: Int = 0,
 )
 
@@ -62,7 +62,8 @@ class ServerLibrary(
      *   preview goes with the tombstone, ADR 0017);
      * - otherwise a photo whose original (any file of the shot) or smart preview is on the server moves to this
      *   device's Server source with its id, edits and ratings (so it stays visible and editable here); one with an edit
-     *   but nothing on the server keeps its records (they merge when the photo shows up again);
+     *   but nothing on the server moves there too, unlisted (`PhotoQuerySql.SERVER_OPENABLE_SQL`), so its records
+     *   stay known here and merge when the folder is added again or the original reaches the server;
      * - in both cases a photo with no edit and nothing on the server has its records tombstoned: they only described a
      *   file that was here.
      */
@@ -77,12 +78,12 @@ class ServerLibrary(
             when {
                 deleteFromServer -> {
                     if (tombstone(photo)) tombstoned++
-                    deletes += serverFiles(files, cloud)
+                    deletes += files.mapNotNull { it.fingerprint }
                 }
 
-                onServer -> {
+                onServer || photo.hasEdit -> {
                     relink(photo, files, cloud)
-                    kept++
+                    if (onServer) kept++
                 }
 
                 !photo.hasEdit -> if (tombstone(photo)) tombstoned++
@@ -105,7 +106,7 @@ class ServerLibrary(
             if (photo.sourceId != server) continue
             val files = photos.files(photo.id)
             tombstone(photo)
-            deletes += serverFiles(files, sync.cloud(photo.id))
+            deletes += files.mapNotNull { it.fingerprint }
             gone += photo.id
         }
         queue(deletes)
@@ -115,7 +116,9 @@ class ServerLibrary(
 
     /**
      * The fingerprints of [files] whose original the server can serve as far as this device knows: a file a lookup or
-     * the NAS feed marked, and the main file when the photo's lookup found it.
+     * the NAS feed marked, and the main file when the photo's lookup found it. (Deleting asks about every file of the
+     * shot instead: another device or app may have uploaded one this device never asked about; the server answers
+     * `404` for none, keeps one a live record names and never deletes a NAS file.)
      */
     private suspend fun serverFiles(files: List<PhotoFileEntity>, cloud: PhotoCloudEntity?): List<String> {
         val main = SyncStore.mainFile(files)

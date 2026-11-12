@@ -60,11 +60,28 @@ class TestDevice(
 
     fun sync(): SyncReport = runBlocking { engine.sync(api, serverId) }
 
+    /** Another added folder (a folder added again after being removed, ADR 0018 FIX/V). */
+    fun addFolder(name: String, backup: Boolean = true): Long = runBlocking {
+        db.sourceDao().insert(
+            SourceEntity(
+                treeUri = "content://${this@TestDevice.name}/$name/${System.nanoTime()}",
+                rootDocumentId = "root",
+                displayName = name,
+                volumeId = null,
+                volumeName = null,
+                state = SourceState.AVAILABLE,
+                writable = false,
+                addedAt = 0,
+                backup = backup,
+            ),
+        )
+    }
+
     /** A photo as the indexer adds it: a RAW (and optionally its JPEG) with fingerprints, and its first version. */
-    fun addPhoto(stem: String, raw: ByteArray, jpeg: ByteArray? = null): Long = runBlocking {
+    fun addPhoto(stem: String, raw: ByteArray, jpeg: ByteArray? = null, source: Long = folder): Long = runBlocking {
         val photoId = db.photoDao().insertPhoto(
             PhotoEntity(
-                sourceId = folder, folder = "", folderDocumentId = "root", stemKey = stem.lowercase(),
+                sourceId = source, folder = "", folderDocumentId = "root", stemKey = stem.lowercase(),
                 name = "$stem.ARW",
                 format = if (jpeg ==
                     null
@@ -78,16 +95,17 @@ class TestDevice(
             ),
         )
         val files = buildList {
-            add(file(photoId, "$stem.ARW", raw, FileRole.RAW))
-            if (jpeg != null) add(file(photoId, "$stem.JPG", jpeg, FileRole.RENDERED))
+            add(file(photoId, "$stem.ARW", raw, FileRole.RAW, source))
+            if (jpeg != null) add(file(photoId, "$stem.JPG", jpeg, FileRole.RENDERED, source))
         }
         db.photoDao().insertFiles(files)
         db.photoDao().insertVersion(VersionEntity(photoId = photoId, createdAt = now))
         photoId
     }
 
-    private fun file(photoId: Long, name: String, bytes: ByteArray, role: FileRole) = PhotoFileEntity(
-        photoId = photoId, sourceId = folder, relativePath = name, documentId = name, name = name,
+    private fun file(photoId: Long, name: String, bytes: ByteArray, role: FileRole, source: Long = folder) =
+        PhotoFileEntity(
+        photoId = photoId, sourceId = source, relativePath = name, documentId = name, name = name,
         size = bytes.size.toLong(), modified = 1, role = role, fingerprint = FileFingerprint.of(bytes),
     )
 
@@ -121,14 +139,14 @@ class TestDevice(
     }
 
     /** The same JPEG in this device's folder (as the indexer files a JPEG-only shot). */
-    fun addFolderJpeg(stem: String, jpeg: ByteArray): Long = runBlocking {
+    fun addFolderJpeg(stem: String, jpeg: ByteArray, source: Long = folder): Long = runBlocking {
         val photoId = db.photoDao().insertPhoto(
             PhotoEntity(
-                sourceId = folder, folder = "", folderDocumentId = "root", stemKey = stem.lowercase(),
+                sourceId = source, folder = "", folderDocumentId = "root", stemKey = stem.lowercase(),
                 name = "$stem.JPG", format = PhotoFormat.JPEG, hasRaw = false, sortTime = now, addedAt = now,
             ),
         )
-        db.photoDao().insertFiles(listOf(file(photoId, "$stem.JPG", jpeg, FileRole.RENDERED)))
+        db.photoDao().insertFiles(listOf(file(photoId, "$stem.JPG", jpeg, FileRole.RENDERED, source)))
         db.photoDao().insertVersion(VersionEntity(photoId = photoId, createdAt = now))
         photoId
     }

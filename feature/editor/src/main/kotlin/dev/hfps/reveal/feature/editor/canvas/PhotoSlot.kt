@@ -117,11 +117,12 @@ fun PhotoSlot(
             state.view.eyedropper && phase is EditorPhase.Ready ->
                 Modifier.eyedropperGestures(controller, phase, state, actions)
 
-            // Once a pen has been used the pen adjusts and the finger pans and zooms (no tool switch).
+            // Once a pen has been used the pen adjusts and the finger pans and zooms (no tool switch). The targeted
+            // gesture is the inner modifier: it sees the Main pass first and consumes what it takes.
             state.view.targeted != null && phase is EditorPhase.Ready ->
                 Modifier
-                    .targetedGestures(controller, phase, state, actions)
                     .canvasGestures(zoom, scope, onTap = onToggleChrome, onHold = actions.onShowOriginal)
+                    .targetedGestures(controller, phase, state, actions)
 
             else -> Modifier.canvasGestures(
                 zoom,
@@ -311,21 +312,7 @@ private fun Modifier.targetedGestures(
 ): Modifier {
     val mapping = GeometryMapping.of(state.edit.recipe, state.edit.lens, ready.width, ready.height)
     val currentActions by rememberUpdatedState(actions)
-    val hover = Modifier.pointerInput(controller, ready, mapping) {
-        awaitPointerEventScope {
-            while (true) {
-                val event = awaitPointerEvent(PointerEventPass.Initial)
-                val change = event.changes.firstOrNull() ?: continue
-                if (change.type != PointerType.Stylus) continue
-                controller.penSeen = true
-                val leaving = event.type == PointerEventType.Exit || change.pressed
-                val at = if (leaving) null else change.position
-                controller.penHover = at
-                currentActions.onTargetedHover(at?.let { controller.imagePoint(it, mapping) })
-            }
-        }
-    }
-    return hover.pointerInput(controller, ready, mapping) {
+    return targetedHover(controller, mapping, actions).pointerInput(controller, ready, mapping) {
         awaitEachGesture {
             val down = awaitFirstDown()
             val pen = down.type == PointerType.Stylus
@@ -364,6 +351,31 @@ private fun TargetedHoverTooltip(state: EditorUiState, controller: PhotoControll
     val value = RecipeRanges[id].format(RecipeControls.get(state.edit.recipe, id, state.edit.asShot))
     val text = stringResource(R.string.editor_hover_targeted, stringResource(HistoryLabels.bandName(band)), value)
     HoverTooltipLayer(text, at, modifier)
+}
+
+/** A hovering pen over the photo with the targeted adjustment on: where it is, and the band under it (tooltip). */
+@Composable
+private fun Modifier.targetedHover(
+    controller: PhotoController,
+    mapping: GeometryMapping,
+    actions: EditorActions,
+): Modifier {
+    val currentActions by rememberUpdatedState(actions)
+    return pointerInput(controller, mapping) {
+        awaitPointerEventScope {
+            while (true) {
+                val event = awaitPointerEvent(PointerEventPass.Initial)
+                val change = event.changes.firstOrNull()
+                if (change != null && change.type == PointerType.Stylus) {
+                    controller.penSeen = true
+                    val leaving = event.type == PointerEventType.Exit || change.pressed
+                    val at = if (leaving) null else change.position
+                    controller.penHover = at
+                    currentActions.onTargetedHover(at?.let { controller.imagePoint(it, mapping) })
+                }
+            }
+        }
+    }
 }
 
 @Composable

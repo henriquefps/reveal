@@ -22,12 +22,13 @@ object PhotoListCodec {
     fun decode(text: String): PhotoQuery? = runCatching {
         val parts = text.split(SEPARATOR, limit = PARTS)
         require(parts.size == PARTS)
+        val fields = parts.iterator()
         PhotoQuery(
-            scope = checkNotNull(scope(parts[0])),
-            filter = PhotoFilter.valueOf(parts[1]),
-            minRating = parts[2].toInt(),
-            sort = PhotoSort.valueOf(parts[3]),
-            search = parts[4],
+            scope = checkNotNull(scope(fields.next())),
+            filter = PhotoFilter.valueOf(fields.next()),
+            minRating = fields.next().toInt(),
+            sort = PhotoSort.valueOf(fields.next()),
+            search = fields.next(),
         )
     }.getOrNull()
 

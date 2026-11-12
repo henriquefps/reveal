@@ -93,17 +93,7 @@ fun EditorTopBar(
         modifier = modifier.testTag(EditorTags.TOP_BAR),
     ) {
         val history = state.edit.history
-        if (filmstrip != null) {
-            RevealIconButton(
-                icon = if (filmstrip) PhosphorFill.FilmStrip else PhosphorRegular.FilmStrip,
-                contentDescription = stringResource(
-                    if (filmstrip) R.string.editor_filmstrip_hide else R.string.editor_filmstrip_show,
-                ),
-                onClick = { actions.onFilmstrip(!filmstrip) },
-                active = filmstrip,
-                modifier = Modifier.testTag(EditorTags.FILMSTRIP_TOGGLE),
-            )
-        }
+        if (filmstrip != null) FilmstripToggle(filmstrip, actions)
         RevealIconButton(
             icon = PhosphorRegular.ArrowUUpLeft,
             contentDescription = stringResource(R.string.editor_undo),
@@ -146,6 +136,20 @@ fun EditorTopBar(
             )
         }
     }
+}
+
+/** Shows or hides the tablet filmstrip ([shown] = it is shown now). */
+@Composable
+private fun FilmstripToggle(shown: Boolean, actions: EditorActions) {
+    RevealIconButton(
+        icon = if (shown) PhosphorFill.FilmStrip else PhosphorRegular.FilmStrip,
+        contentDescription = stringResource(
+            if (shown) R.string.editor_filmstrip_hide else R.string.editor_filmstrip_show,
+        ),
+        onClick = { actions.onFilmstrip(!shown) },
+        active = shown,
+        modifier = Modifier.testTag(EditorTags.FILMSTRIP_TOGGLE),
+    )
 }
 
 /** The compare views offered by a long-press on ◐, in menu order. */

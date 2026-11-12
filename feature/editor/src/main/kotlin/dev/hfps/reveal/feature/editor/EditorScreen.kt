@@ -199,7 +199,6 @@ fun EditorContent(
     val chrome = rememberEditorChrome(initialTool, initialSnap, initialMode)
     PhotoContentSize(photo, state)
     val scope = rememberCoroutineScope()
-    val keys = rememberEditorKeys(state, actions, photo, chrome, filmstrip, scope)
     LaunchedEffect(chrome.activeMode) {
         for (tool in EditorTools.all) {
             (tool.behaviour as? ToolBehaviour.Mode)?.onActive?.invoke(actions, chrome.activeMode == tool.id)
@@ -211,7 +210,7 @@ fun EditorContent(
             .fillMaxSize()
             .background(colors.background)
             .onPlaced(photo::onRootPlaced)
-            .then(keys),
+            .editorKeys(state, actions, photo, chrome, filmstrip, scope),
     ) {
         val kind = EditorLayoutKind.of(maxWidth, maxHeight)
         val host = PanelHost(state, actions, chrome.focus, chrome.navigator)

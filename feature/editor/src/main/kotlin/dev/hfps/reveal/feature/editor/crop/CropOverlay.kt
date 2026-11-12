@@ -33,6 +33,7 @@ import androidx.compose.ui.input.pointer.PointerType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChanged
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
@@ -55,7 +56,6 @@ import dev.hfps.reveal.pipeline.gl.ViewTransform
 import dev.hfps.reveal.pipeline.recipe.Geometry
 import dev.hfps.reveal.pipeline.recipe.GuideLine
 import dev.hfps.reveal.pipeline.recipe.UprightMode
-import java.util.Locale
 import kotlin.math.atan2
 import kotlin.math.hypot
 import kotlin.math.roundToInt
@@ -279,7 +279,10 @@ fun BoxScope.CropOverlay(host: ModeHost, modifier: Modifier = Modifier) {
 
         hoveredGuide != null -> {
             val (a, b) = hoveredGuide
-            stringResource(R.string.editor_hover_guide, "%.1f".format(Locale.getDefault(), axisAngle(a, b)))
+            stringResource(
+                R.string.editor_hover_guide,
+                "%.1f".format(LocalConfiguration.current.locales[0], axisAngle(a, b)),
+            )
         }
 
         else -> null

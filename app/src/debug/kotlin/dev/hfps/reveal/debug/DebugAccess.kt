@@ -4,6 +4,7 @@ import dagger.hilt.EntryPoint
 import dagger.hilt.InstallIn
 import dagger.hilt.components.SingletonComponent
 import dev.hfps.reveal.data.edit.EditRepository
+import dev.hfps.reveal.data.editor.EditorLayoutPreferences
 import dev.hfps.reveal.data.handoff.HandoffRepository
 import dev.hfps.reveal.data.library.LibraryRepository
 
@@ -19,4 +20,6 @@ interface DebugAccess {
     fun edits(): EditRepository
 
     fun handoffs(): HandoffRepository
+
+    fun editorLayout(): EditorLayoutPreferences
 }

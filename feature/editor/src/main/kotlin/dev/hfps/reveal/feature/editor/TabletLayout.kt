@@ -82,24 +82,13 @@ import kotlin.math.roundToInt
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 
-/** What every part of the tablet layout reads (one holder instead of seven parameters). */
-internal class TabletChrome(
-    val state: EditorUiState,
-    val actions: EditorActions,
-    val photo: PhotoController,
-    val chrome: EditorChrome,
-    val host: PanelHost,
-    val select: (EditorTool) -> Unit,
-    val onToggleChrome: () -> Unit,
-)
-
 /**
  * The tablet / unfolded foldable editor (>= 840dp, docs/plan/ux.md "Landscape and tablets"): the full top bar across
  * the window; below it the photo with the filmstrip under it, the panel column (its left edge drags to resize it,
  * the width is remembered) and the tool rail. A mode's controls take the panel column and the rail (the filmstrip
  * hides while a mode is open).
  */
-@Suppress("LongMethod")
+@Suppress("LongMethod", "CyclomaticComplexMethod")
 @Composable
 internal fun TabletLayout(t: TabletChrome, filmstrip: FilmstripUi?, layout: EditorLayout, windowWidth: Dp) {
     val colors = RevealTheme.colors
@@ -316,8 +305,9 @@ private fun PanelResizeHandle(width: Dp, range: ClosedRange<Dp>, onResize: (Dp) 
  * The editor's keyboard shortcuts ([EditorKeys]) as a modifier for the editor's root, which takes the focus when it
  * appears so a hardware keyboard reaches it; a focused text field still gets its own keys first.
  */
+@Suppress("CyclomaticComplexMethod")
 @Composable
-internal fun rememberEditorKeys(
+internal fun Modifier.editorKeys(
     state: EditorUiState,
     actions: EditorActions,
     photo: PhotoController,
@@ -328,7 +318,7 @@ internal fun rememberEditorKeys(
     val focus = remember { FocusRequester() }
     val current by rememberUpdatedState(Triple(state, actions, filmstrip))
     LaunchedEffect(focus) { runCatching { focus.requestFocus() } }
-    return Modifier
+    return this
         .focusRequester(focus)
         .onPreviewKeyEvent { event ->
             if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false

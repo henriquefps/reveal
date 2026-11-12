@@ -68,6 +68,9 @@ class TabletEditorTest {
     @Before
     fun tabletOnly() {
         assumeTrue("needs the tablet layout", context.resources.configuration.screenWidthDp >= TABLET_DP)
+        // The layout is remembered across runs (the device keeps app data): start from the defaults.
+        access.editorLayout().setPanelWidth(DEFAULT_PANEL_DP)
+        access.editorLayout().setFilmstripVisible(true)
     }
 
     @After
@@ -212,24 +215,32 @@ class TabletEditorTest {
                 // A quarter turn from where the display is (tablets differ in their natural orientation), and back.
                 var start = 0
                 scenario.onActivity { start = it.display.rotation }
-                for (rotation in listOf((start + 1) % QUARTERS, start)) {
-                    val wasPortrait = portrait()
-                    automation.setRotation(rotation)
-                    compose.waitUntil(TIMEOUT_MS) { portrait() != wasPortrait }
-                    waitDeveloped()
-                    compose.waitUntilAtLeastOneExists(hasTestTag(hueRed), TIMEOUT_MS)
-                    assertThat(history().entries.size).isEqualTo(steps)
-                    assertThat(committedExposure()).isWithin(EPS).of(0.5f)
-                    // Same ViewModel, same renderer: only the surface was recreated.
-                    assertThat(EditorMetrics.renderer).isSameInstanceAs(renderer)
-                    if (portrait()) {
-                        Thread.sleep(ROTATION_SETTLE_MS)
-                        shot("editor-portrait-mixer")
-                    }
+                for (rotation in listOf(
+                    (start + 1) % QUARTERS,
+                    start,
+                )) {
+                    rotateAndCheck(rotation, steps, renderer, hueRed)
                 }
             } finally {
                 automation.setRotation(UiAutomation.ROTATION_UNFREEZE)
             }
+        }
+    }
+
+    /** Turns the display to [rotation] and checks the open sub-panel, the steps and the renderer survived. */
+    private fun rotateAndCheck(rotation: Int, steps: Int, renderer: Any?, hueRed: String) {
+        val wasPortrait = portrait()
+        instrumentation.uiAutomation.setRotation(rotation)
+        compose.waitUntil(TIMEOUT_MS) { portrait() != wasPortrait }
+        waitDeveloped()
+        compose.waitUntilAtLeastOneExists(hasTestTag(hueRed), TIMEOUT_MS)
+        assertThat(history().entries.size).isEqualTo(steps)
+        assertThat(committedExposure()).isWithin(EPS).of(0.5f)
+        // Same ViewModel, same renderer: only the surface was recreated.
+        assertThat(EditorMetrics.renderer).isSameInstanceAs(renderer)
+        if (portrait()) {
+            Thread.sleep(ROTATION_SETTLE_MS)
+            shot("editor-portrait-mixer")
         }
     }
 
@@ -384,11 +395,11 @@ class TabletEditorTest {
         size = 1f
     }
 
-    @Suppress("unused")
     private val access get() = EntryPointAccessors.fromApplication(context, DebugAccess::class.java)
 
     private companion object {
         const val TABLET_DP = 840
+        const val DEFAULT_PANEL_DP = 400f
         const val TIMEOUT_MS = 30_000L
         const val EPS = 1e-3f
         const val DRAG_PX = 120f

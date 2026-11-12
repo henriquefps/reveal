@@ -27,13 +27,21 @@ enum class EditorKeyCommand {
 object EditorKeys {
     fun command(key: Key, ctrl: Boolean, shift: Boolean, alt: Boolean): EditorKeyCommand? = when {
         alt -> null
-        ctrl && key == Key.Z -> if (shift) EditorKeyCommand.REDO else EditorKeyCommand.UNDO
-        ctrl && key == Key.Y && !shift -> EditorKeyCommand.REDO
-        ctrl || shift -> null
-        key == Key.Backslash -> EditorKeyCommand.COMPARE
-        key == Key.DirectionRight -> EditorKeyCommand.NEXT
-        key == Key.DirectionLeft -> EditorKeyCommand.PREVIOUS
-        key == Key.Z -> EditorKeyCommand.ZOOM_100
+        ctrl -> withCtrl(key, shift)
+        shift -> null
+        else -> plain[key]
+    }
+
+    private fun withCtrl(key: Key, shift: Boolean): EditorKeyCommand? = when (key) {
+        Key.Z -> if (shift) EditorKeyCommand.REDO else EditorKeyCommand.UNDO
+        Key.Y -> if (shift) null else EditorKeyCommand.REDO
         else -> null
     }
+
+    private val plain: Map<Key, EditorKeyCommand> = mapOf(
+        Key.Backslash to EditorKeyCommand.COMPARE,
+        Key.DirectionRight to EditorKeyCommand.NEXT,
+        Key.DirectionLeft to EditorKeyCommand.PREVIOUS,
+        Key.Z to EditorKeyCommand.ZOOM_100,
+    )
 }

@@ -21,6 +21,8 @@ import dev.hfps.reveal.data.library.DocumentTreeFactory
 import dev.hfps.reveal.data.library.LibraryRepository
 import dev.hfps.reveal.data.library.SidecarSync
 import dev.hfps.reveal.data.model.SourceKind
+import dev.hfps.reveal.data.preset.BuiltInPresetSource
+import dev.hfps.reveal.data.preset.PresetRepository
 import dev.hfps.reveal.data.storage.SafDocumentTree
 import dev.hfps.reveal.data.storage.StorageVolumes
 import dev.hfps.reveal.data.sync.ServerTree
@@ -28,6 +30,7 @@ import dev.hfps.reveal.data.thumb.EditedThumbnails
 import dev.hfps.reveal.data.thumb.GpuEditedThumbnails
 import dev.hfps.reveal.data.thumb.PhotoImages
 import dev.hfps.reveal.data.thumb.ThumbnailRepository
+import dev.hfps.reveal.pipeline.preset.SmartCorrection
 import java.io.File
 import javax.inject.Qualifier
 import javax.inject.Singleton
@@ -120,6 +123,24 @@ object DataModule {
     @Provides
     @Singleton
     fun provideEdits(database: RevealDatabase): EditRepository = EditRepository(database)
+
+    /** The smart presets' per-photo correction (docs/adr/0019 "Smart slot"): none until M3/B binds its own here. */
+    @Provides
+    @Singleton
+    fun provideSmartCorrection(): SmartCorrection = SmartCorrection.NONE
+
+    /** The app's own presets: none until the built-in looks (M3/B) bind theirs here. */
+    @Provides
+    @Singleton
+    fun provideBuiltInPresets(): BuiltInPresetSource = BuiltInPresetSource.NONE
+
+    @Provides
+    @Singleton
+    fun providePresets(
+        @ApplicationContext context: Context,
+        database: RevealDatabase,
+        builtIns: BuiltInPresetSource,
+    ): PresetRepository = PresetRepository(database, File(context.filesDir, "preset-covers"), builtIns)
 
     @Provides
     @Singleton

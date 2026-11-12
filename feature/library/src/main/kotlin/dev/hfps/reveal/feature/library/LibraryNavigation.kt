@@ -20,6 +20,7 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalResources
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -31,6 +32,7 @@ import dev.hfps.reveal.data.thumb.ThumbnailRepository
 import dev.hfps.reveal.feature.export.ui.ExportRequest
 import dev.hfps.reveal.feature.export.ui.ExportSheetHost
 import dev.hfps.reveal.feature.library.LibraryViewModel.Companion.encode
+import dev.hfps.reveal.feature.library.presets.ApplyPresetSheet
 import dev.hfps.reveal.feature.library.viewer.ViewerScreen
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.launch
@@ -114,6 +116,9 @@ fun LibraryScreen(
     LibraryMessages(viewModel.events, snackbar)
     val thumbnails = remember(viewModel) { RepositoryThumbnails(viewModel.thumbnails) }
     var exportRequest by remember { mutableStateOf<ExportRequest?>(null) }
+    var choosingPreset by remember { mutableStateOf(false) }
+    val presetLibrary by viewModel.presetLibrary.collectAsStateWithLifecycle()
+    val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val actions = remember(viewModel) {
         LibraryActions(
@@ -142,12 +147,24 @@ fun LibraryScreen(
                     if (versions.isNotEmpty()) exportRequest = ExportRequest.Versions(versions)
                 }
             },
+            onApplyPreset = { choosingPreset = true },
             onSettings = onSettings,
             onGallery = onGallery,
             onAbout = onAbout,
         )
     }
     ExportSheetHost(request = exportRequest, onDismiss = { exportRequest = null })
+    if (choosingPreset) {
+        ApplyPresetSheet(
+            library = presetLibrary,
+            count = state.selected.size,
+            onApply = { uuid, strength ->
+                choosingPreset = false
+                viewModel.applyPreset(context, uuid, strength)
+            },
+            onDismiss = { choosingPreset = false },
+        )
+    }
     BackHandler(enabled = state.selecting) { viewModel.setSelected(emptySet()) }
     BackHandler(enabled = !state.selecting && state.searchOpen) { viewModel.setSearchOpen(false) }
     BoxWithConstraints(modifier) {
@@ -208,6 +225,13 @@ private fun LibraryMessages(events: Flow<LibraryMessage>, snackbar: SnackbarHost
                 is LibraryMessage.Reset -> resources.getQuantityString(
                     R.plurals.library_edits_reset,
                     message.count,
+                    message.count,
+                )
+
+                is LibraryMessage.PresetQueued -> resources.getQuantityString(
+                    R.plurals.presets_batch_queued,
+                    message.count,
+                    message.name,
                     message.count,
                 )
 

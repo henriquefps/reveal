@@ -107,6 +107,8 @@ data class LibraryActions(
     val onResetEdits: () -> Unit = {},
     /** Opens the export sheet for the selected photos. */
     val onExport: () -> Unit = {},
+    /** Opens the preset chooser for the selected photos (docs/adr/0019 "Batch"). */
+    val onApplyPreset: () -> Unit = {},
     /** Deletes the sync conflict copies of the selected photos, here and on the other devices. */
     val onDeleteConflictCopies: () -> Unit = {},
     val onSettings: () -> Unit = {},

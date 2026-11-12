@@ -157,6 +157,31 @@ class EditRepository(private val db: RevealDatabase, private val clock: () -> Lo
     }
 
     /**
+     * Applies [transform] to the current recipe of every version of [versionIds] in one transaction: one history step
+     * per changed version, named [action] (and [name], e.g. a preset's), labelled with the recipe groups it changed.
+     * The library's batch apply of a preset uses it (docs/adr/0019 "Batch"). Returns how many versions changed.
+     */
+    suspend fun applyEach(
+        versionIds: Collection<Long>,
+        action: HistoryAction,
+        name: String? = null,
+        transform: (Recipe) -> Recipe,
+    ): Int = db.withTransaction {
+        var changed = 0
+        for (versionId in versionIds) {
+            val current = recipe(versionId)
+            val next = transform(current)
+            val changes = RecipeDiff.between(current, next)
+            if (changes.isNotEmpty()) {
+                val groups = RecipeGroup.entries.filter { group -> changes.any { it.field.group == group } }
+                commitStep(versionId, next, StepLabel(changes, action, groups, name))
+                changed++
+            }
+        }
+        changed
+    }
+
+    /**
      * "Previous": the recipe of the most recently edited version other than [excludeVersionId] (null when no other
      * photo has an edit). [excludeVersionId] -1 excludes nothing (a photo opened from another app).
      */
@@ -242,6 +267,8 @@ class EditRepository(private val db: RevealDatabase, private val clock: () -> Lo
         val value: String? = null,
         val action: String? = null,
         val groups: List<String>? = null,
+        /** The applied thing's own name (a preset's, docs/adr/0019). */
+        val name: String? = null,
     )
 
     @Serializable
@@ -254,7 +281,9 @@ class EditRepository(private val db: RevealDatabase, private val clock: () -> Lo
     private val labelList = ListSerializer(Label.serializer())
 
     private fun encodeLabel(label: StepLabel): String {
-        val action = label.action?.let { Label(action = it.name, groups = label.groups.map(RecipeGroup::name)) }
+        val action = label.action?.let {
+            Label(action = it.name, groups = label.groups.map(RecipeGroup::name), name = label.name)
+        }
         return json.encodeToString(
             labelList,
             listOfNotNull(action) + label.changes.map { Label(it.field.name, it.value) },
@@ -274,6 +303,7 @@ class EditRepository(private val db: RevealDatabase, private val clock: () -> Lo
             groups = actionItem?.groups.orEmpty().mapNotNull { name ->
                 RecipeGroup.entries.firstOrNull { it.name == name }
             },
+            name = actionItem?.name,
         )
     }.getOrDefault(StepLabel(emptyList()))
 

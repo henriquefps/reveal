@@ -90,7 +90,6 @@
     <string name="library_action_paste_edits">Colar edições</string>
     <string name="library_action_preset">Aplicar predefinição</string>
     <string name="library_action_export">Exportar</string>
-    <string name="library_action_coming">Em breve</string>
     <string name="library_rating_none">Sem estrelas</string>
     <string name="library_saved_database_only">Salvo só no Reveal: a pasta é somente leitura, então nenhum arquivo XMP foi gravado.</string>
     <plurals name="library_removed">
@@ -170,4 +169,39 @@
     <string name="library_cloud_only">Original só no servidor</string>
     <string name="library_cloud_preview">Só a prévia inteligente: o original está em outro aparelho</string>
     <string name="library_action_delete_conflicts">Apagar cópias de conflito</string>
+
+    <!-- Predefinições na seleção (docs/adr/0019 "Batch") -->
+    <string name="presets_batch_title">Aplicar uma predefinição</string>
+    <string name="presets_batch_strength">Intensidade</string>
+    <string name="presets_batch_apply">Aplicar</string>
+    <string name="presets_batch_cancel">Cancelar</string>
+    <string name="presets_batch_empty">Nenhuma predefinição ainda: crie uma no painel Predefinições do editor ou importe um arquivo por lá.</string>
+    <string name="presets_batch_channel">Predefinições</string>
+    <plurals name="presets_batch_progress">
+        <item quantity="one">%1$s: %2$d de %3$d foto</item>
+        <item quantity="many">%1$s: %2$d de %3$d fotos</item>
+        <item quantity="other">%1$s: %2$d de %3$d fotos</item>
+    </plurals>
+    <string name="presets_batch_default_group">Minhas predefinições</string>
+    <string name="presets_batch_favourites">Favoritas</string>
+    <plurals name="presets_batch_for">
+        <item quantity="one">Em %d foto, um passo que pode ser desfeito</item>
+        <item quantity="many">Em %d fotos, um passo que pode ser desfeito em cada</item>
+        <item quantity="other">Em %d fotos, um passo que pode ser desfeito em cada</item>
+    </plurals>
+    <plurals name="presets_batch_queued">
+        <item quantity="one">Aplicando %1$s a %2$d foto…</item>
+        <item quantity="many">Aplicando %1$s a %2$d fotos…</item>
+        <item quantity="other">Aplicando %1$s a %2$d fotos…</item>
+    </plurals>
+    <plurals name="presets_batch_done">
+        <item quantity="one">%1$s aplicada a %2$d foto</item>
+        <item quantity="many">%1$s aplicada a %2$d fotos</item>
+        <item quantity="other">%1$s aplicada a %2$d fotos</item>
+    </plurals>
+    <plurals name="presets_batch_cancelled">
+        <item quantity="one">Interrompido: %1$s aplicada a %2$d foto</item>
+        <item quantity="many">Interrompido: %1$s aplicada a %2$d fotos</item>
+        <item quantity="other">Interrompido: %1$s aplicada a %2$d fotos</item>
+    </plurals>
 </resources>

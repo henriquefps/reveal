@@ -5,6 +5,8 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.ImageBitmap
 import dev.hfps.reveal.feature.editor.edit.AsShot
 import dev.hfps.reveal.feature.editor.open.OpenError
+import dev.hfps.reveal.feature.editor.presets.PresetThumbnailSource
+import dev.hfps.reveal.feature.editor.presets.PresetsState
 import dev.hfps.reveal.feature.editor.tools.ToolId
 import dev.hfps.reveal.pipeline.auto.AutoScope
 import dev.hfps.reveal.pipeline.gl.ClippingWarnings
@@ -12,6 +14,8 @@ import dev.hfps.reveal.pipeline.gl.CompareMode
 import dev.hfps.reveal.pipeline.gl.GpuDevelopRenderer
 import dev.hfps.reveal.pipeline.gl.Histogram
 import dev.hfps.reveal.pipeline.optics.LensProfile
+import dev.hfps.reveal.pipeline.preset.Preset
+import dev.hfps.reveal.pipeline.preset.PresetSection
 import dev.hfps.reveal.pipeline.recipe.BaseLook
 import dev.hfps.reveal.pipeline.recipe.ColourBand
 import dev.hfps.reveal.pipeline.recipe.ControlId
@@ -145,6 +149,8 @@ data class EditorUiState(
     val view: ViewOptions = ViewOptions(),
     /** Latest histogram of the displayed photo (null until the first one). */
     val histogram: Histogram? = null,
+    /** The preset library and the applied preset (docs/adr/0019). */
+    val presets: PresetsState = PresetsState(),
 ) {
     val ready: Boolean get() = phase is EditorPhase.Ready
 }
@@ -239,4 +245,39 @@ class EditorActions(
     val onPanelWidth: (Float) -> Unit = {},
     /** Tablet portrait: the docked panel was resized to a height in dp; remembered. */
     val onPanelHeight: (Float) -> Unit = {},
+    // ------------------------------------------------------------------ presets (docs/adr/0019)
+    /** Applies a preset by id: one history step (replacing the last applied one while it is current). */
+    val onApplyPreset: (String) -> Unit = {},
+    /** Per drag frame: the applied preset's strength 0..2 (not committed). */
+    val onPresetStrength: (Float) -> Unit = {},
+    /** Strength released: the applied preset's step is replaced. */
+    val onPresetStrengthDone: () -> Unit = {},
+    val onCreatePreset: () -> Unit = {},
+    val onCreatePresetDismiss: () -> Unit = {},
+    /** Saves the edit's sections as a preset: name, user group id or a new group's name. */
+    val onSavePreset: (name: String, groupId: Long?, newGroup: String?, sections: Set<PresetSection>) -> Unit =
+        { _, _, _, _ -> },
+    val onPresetFavourite: (String, Boolean) -> Unit = { _, _ -> },
+    val onRenamePreset: (String, String) -> Unit = { _, _ -> },
+    val onDuplicatePreset: (String, String) -> Unit = { _, _ -> },
+    val onDeletePreset: (String) -> Unit = {},
+    val onMovePreset: (String, Long) -> Unit = { _, _ -> },
+    /** Moves a preset one place earlier (-1) or later (+1) in its group. */
+    val onShiftPreset: (String, Int) -> Unit = { _, _ -> },
+    val onRenamePresetGroup: (Long, String) -> Unit = { _, _ -> },
+    val onDeletePresetGroup: (Long) -> Unit = {},
+    val onShiftPresetGroup: (Long, Int) -> Unit = { _, _ -> },
+    val onKeepPack: (Long) -> Unit = {},
+    val onRemovePack: (Long) -> Unit = {},
+    /** Imports a `.revealpreset` / `.revealpack` picked with the system file picker. */
+    val onImportPresets: (android.net.Uri) -> Unit = {},
+    val onExportPreset: (String, android.net.Uri) -> Unit = { _, _ -> },
+    /** Exports a user group as a pack: the document, the author and the licence name shown to importers. */
+    val onExportPresetGroup: (Long, android.net.Uri, String, String) -> Unit = { _, _, _, _ -> },
+    /** The live previews (null: placeholders, e.g. screenshot tests without a GPU). */
+    val presetThumbnails: PresetThumbnailSource? = null,
+    /** The recipe the panel previews presets on (the applied preset's base while it is current). */
+    val presetBase: () -> Recipe? = { null },
+    /** A preset at full strength on a base recipe, as previews show it. */
+    val presetPreview: (Preset, Recipe) -> Recipe = { preset, base -> preset.apply(base) },
 )

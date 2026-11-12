@@ -15,8 +15,11 @@ import dev.hfps.reveal.data.library.LibraryRepository
 import dev.hfps.reveal.data.library.SidecarOutcome
 import dev.hfps.reveal.data.model.PhotoQuery
 import dev.hfps.reveal.data.model.PickFlag
+import dev.hfps.reveal.data.preset.PresetLibrary
+import dev.hfps.reveal.data.preset.PresetRepository
 import dev.hfps.reveal.data.storage.StorageVolumes
 import dev.hfps.reveal.data.thumb.ThumbnailRepository
+import dev.hfps.reveal.feature.library.presets.PresetBatchWorker
 import dev.hfps.reveal.pipeline.recipe.HistoryAction
 import dev.hfps.reveal.pipeline.recipe.Recipe
 import dev.hfps.reveal.pipeline.recipe.RecipeGroup
@@ -28,6 +31,7 @@ import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
@@ -39,6 +43,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.receiveAsFlow
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
@@ -59,6 +64,9 @@ sealed interface LibraryMessage {
 
     /** Edits reset on [count] photos. */
     data class Reset(val count: Int) : LibraryMessage
+
+    /** A preset is being applied to [count] photos in the background. */
+    data class PresetQueued(val name: String, val count: Int) : LibraryMessage
 }
 
 /**
@@ -76,7 +84,24 @@ class LibraryViewModel @Inject constructor(
     private val edits: EditRepository,
     private val writer: HistoryWriter,
     private val sync: SyncRepository,
+    private val presets: PresetRepository,
 ) : ViewModel() {
+    /** The preset library, for "Apply preset" on the selection (docs/adr/0019 "Batch"). */
+    val presetLibrary: StateFlow<PresetLibrary> =
+        presets.library().stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT), PresetLibrary())
+
+    /** Applies the preset [uuid] at [strength] to the selected photos in the background; clears the selection. */
+    fun applyPreset(context: android.content.Context, uuid: String, strength: Float) {
+        viewModelScope.launch {
+            val versions = selectedVersions()
+            if (versions.isEmpty()) return@launch
+            val name = presetLibrary.value[uuid]?.name ?: presets.preset(uuid)?.name ?: return@launch
+            PresetBatchWorker.enqueue(context.applicationContext, uuid, strength, versions)
+            messages.send(LibraryMessage.PresetQueued(name, versions.size))
+            setSelected(emptySet())
+        }
+    }
+
     /** True when the route asked to open on "Opened from other apps" (a hand-off of several photos, ADR 0011). */
     private val fromApps: Boolean = savedState.get<Boolean>(KEY_FROM_APPS) == true
 
@@ -321,6 +346,7 @@ class LibraryViewModel @Inject constructor(
         private const val GRID_DEBOUNCE_MS = 250L
         private const val VOLUME_DEBOUNCE_MS = 500L
         private const val TAG = "RevealLibrary"
+        private const val STOP_TIMEOUT = 5_000L
 
         fun LibrarySelection.encode(): String = when (this) {
             is LibrarySelection.Folder -> "f:$sourceId"

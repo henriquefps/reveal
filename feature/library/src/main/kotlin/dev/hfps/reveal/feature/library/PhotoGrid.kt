@@ -86,6 +86,12 @@ object LibraryTags {
     const val SOURCES = "library-sources"
     const val ADD_FOLDER = "library-add-folder"
     const val EXPORT = "library-export"
+    const val APPLY_PRESET = "library-apply-preset"
+    const val PRESET_STRENGTH = "library-preset-strength"
+    const val PRESET_APPLY_CONFIRM = "library-preset-apply"
+
+    /** A preset row of the "Apply preset" chooser. */
+    fun preset(uuid: String): String = "library-preset-$uuid"
     const val MENU = "library-menu"
     const val SELECTION_BAR = "library-selection"
     const val EMPTY = "library-empty"

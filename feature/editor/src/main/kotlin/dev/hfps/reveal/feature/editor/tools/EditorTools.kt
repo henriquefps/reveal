@@ -21,6 +21,7 @@ import dev.hfps.reveal.feature.editor.panels.HistoryPanel
 import dev.hfps.reveal.feature.editor.panels.LightPanel
 import dev.hfps.reveal.feature.editor.panels.OpticsPanel
 import dev.hfps.reveal.feature.editor.panels.PanelHost
+import dev.hfps.reveal.feature.editor.presets.PresetsPanel
 import dev.hfps.reveal.pipeline.auto.AutoScope
 import dev.hfps.reveal.pipeline.recipe.RecipeGroup
 
@@ -53,6 +54,8 @@ sealed interface ToolBehaviour {
         @param:StringRes val title: Int,
         val group: RecipeGroup?,
         val showAuto: Boolean = false,
+        /** The content scrolls by itself (a lazy grid): the card gives it its height instead of a scroll. */
+        val ownsScroll: Boolean = false,
         val content: @Composable (PanelHost) -> Unit,
     ) : ToolBehaviour
 
@@ -99,7 +102,7 @@ object EditorTools {
             R.string.editor_tool_presets,
             PhosphorRegular.SquaresFour,
             PhosphorFill.SquaresFour,
-            ToolBehaviour.Unavailable,
+            ToolBehaviour.Panel(R.string.editor_tool_presets, group = null, ownsScroll = true) { PresetsPanel(it) },
         ),
         EditorTool(
             ToolId.AUTO,

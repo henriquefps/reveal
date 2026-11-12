@@ -20,7 +20,7 @@ object HistoryLabels {
         val action = label.action
         val more = label.changes.size - 1
         return when {
-            action != null -> action(context, action, label.groups)
+            action != null -> action(context, action, label.groups, label.name)
 
             more < 0 -> ""
 
@@ -43,6 +43,14 @@ object HistoryLabels {
 
     /** The string resource of a copy/paste group's name, for composables. */
     fun groupNameRes(group: RecipeGroup): Int = GROUP_NAMES.getValue(group)
+
+    private fun action(context: Context, action: HistoryAction, groups: List<RecipeGroup>, name: String?): String =
+        when {
+            action == HistoryAction.PRESET && name != null ->
+                context.getString(R.string.history_action_preset_named, name)
+
+            else -> action(context, action, groups)
+        }
 
     private fun action(context: Context, action: HistoryAction, groups: List<RecipeGroup>): String = when (action) {
         HistoryAction.RESET_GROUP -> context.getString(

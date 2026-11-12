@@ -23,7 +23,7 @@ enum class HistoryAction {
     /** One-tap Auto (reserved for the Auto workstream). */
     AUTO,
 
-    /** A preset applied (reserved for the presets workstream). */
+    /** A preset applied (docs/adr/0019); [StepLabel.name] is the preset's name. */
     PRESET,
 
     /** Black & white Auto mix (docs/adr/0013): the grey mixer computed from the photo. */
@@ -38,12 +38,14 @@ enum class HistoryAction {
 
 /**
  * What one history step shows in the list: an optional [action] (named steps) with the [groups] it touched, and the
- * field [changes] from [RecipeDiff] (always stored, so a step can be explained in detail later).
+ * field [changes] from [RecipeDiff] (always stored, so a step can be explained in detail later). [name] names what the
+ * action applied when it has a name of its own (a preset's).
  */
 data class StepLabel(
     val changes: List<HistoryStep>,
     val action: HistoryAction? = null,
     val groups: List<RecipeGroup> = emptyList(),
+    val name: String? = null,
 )
 
 /** One committed step: the full recipe *after* it (a snapshot, ADR 0006) and its label. */
@@ -78,11 +80,30 @@ data class EditHistory(
      * optional [action]/[groups]. Null when nothing user-visible changed (an empty diff is not a step, even for a
      * named action: "Reset all" on an unedited photo adds nothing).
      */
-    fun commit(recipe: Recipe, action: HistoryAction? = null, groups: List<RecipeGroup> = emptyList()): EditHistory? {
+    fun commit(
+        recipe: Recipe,
+        action: HistoryAction? = null,
+        groups: List<RecipeGroup> = emptyList(),
+        name: String? = null,
+    ): EditHistory? {
         val changes = RecipeDiff.between(current, recipe)
         if (changes.isEmpty()) return null
         val kept = entries.subList(0, cursor + 1)
-        return copy(entries = kept + HistoryEntry(recipe, StepLabel(changes, action, groups)), cursor = kept.size)
+        return copy(entries = kept + HistoryEntry(recipe, StepLabel(changes, action, groups, name)), cursor = kept.size)
+    }
+
+    /**
+     * Replaces the step at the cursor with [recipe] under the same label's action, groups and name (a preset's strength
+     * changed after it was applied, docs/adr/0019), dropping the redo steps above it. When [recipe] no longer differs
+     * from the step below, the step is removed. Null when there is no step at the cursor or nothing changes.
+     */
+    @Suppress("ReturnCount")
+    fun amend(recipe: Recipe): EditHistory? {
+        if (cursor < 0) return null
+        val step = entries[cursor]
+        if (step.recipe == recipe && cursor == entries.lastIndex) return null
+        val below = copy(entries = entries.subList(0, cursor), cursor = cursor - 1)
+        return below.commit(recipe, step.label.action, step.label.groups, step.label.name) ?: below
     }
 
     fun undo(): EditHistory? = goTo(cursor - 1)

@@ -33,11 +33,13 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -75,6 +77,8 @@ import dev.hfps.reveal.feature.editor.layout.rememberEditorChrome
 import dev.hfps.reveal.feature.editor.panels.PanelCardContent
 import dev.hfps.reveal.feature.editor.panels.PanelHost
 import dev.hfps.reveal.feature.editor.panels.PasteChooserSheet
+import dev.hfps.reveal.feature.editor.presets.PresetMessages
+import dev.hfps.reveal.feature.editor.presets.PresetThumbnailSource
 import dev.hfps.reveal.feature.editor.tools.EditorTool
 import dev.hfps.reveal.feature.editor.tools.EditorTools
 import dev.hfps.reveal.feature.editor.tools.ModeHost
@@ -84,6 +88,7 @@ import dev.hfps.reveal.feature.export.ui.ExportRequest
 import dev.hfps.reveal.feature.export.ui.ExportSheetHost
 import dev.hfps.reveal.pipeline.geometry.GeometryMapping
 import dev.hfps.reveal.pipeline.gl.CompareMode
+import dev.hfps.reveal.pipeline.recipe.Recipe
 import kotlinx.coroutines.launch
 
 /** The editor of the photo in its [EditorRoute]: always dark (the darkroom). The actions wire one per editor verb. */
@@ -160,7 +165,39 @@ fun EditorScreen(
             onFilmstrip = strip::setFilmstripVisible,
             onPanelWidth = strip::setPanelWidth,
             onPanelHeight = strip::setPanelHeight,
+            onApplyPreset = viewModel::applyPreset,
+            onPresetStrength = viewModel::setPresetStrength,
+            onPresetStrengthDone = viewModel::commitPresetStrength,
+            onCreatePreset = viewModel::openCreatePreset,
+            onCreatePresetDismiss = viewModel::dismissCreatePreset,
+            onSavePreset = viewModel::savePreset,
+            onPresetFavourite = viewModel::setPresetFavourite,
+            onRenamePreset = viewModel::renamePreset,
+            onDuplicatePreset = viewModel::duplicatePreset,
+            onDeletePreset = viewModel::deletePreset,
+            onMovePreset = viewModel::movePreset,
+            onShiftPreset = viewModel::shiftPreset,
+            onRenamePresetGroup = viewModel::renamePresetGroup,
+            onDeletePresetGroup = viewModel::deletePresetGroup,
+            onShiftPresetGroup = viewModel::shiftPresetGroup,
+            onKeepPack = viewModel::keepPack,
+            onRemovePack = viewModel::removePack,
+            onImportPresets = viewModel::importPresets,
+            onExportPreset = viewModel::exportPreset,
+            onExportPresetGroup = viewModel::exportPresetGroup,
+            presetThumbnails = object : PresetThumbnailSource {
+                override fun cached(key: String) = viewModel.thumbnails?.cached(key)
+
+                override suspend fun render(key: String, recipe: Recipe) = viewModel.thumbnails?.render(key, recipe)
+            },
+            presetBase = viewModel::presetBase,
+            presetPreview = viewModel::presetPreview,
         )
+    }
+    LaunchedEffect(viewModel, context) {
+        viewModel.presetEvents.collect { event ->
+            PresetMessages.text(context, event)?.let { Toast.makeText(context, it, Toast.LENGTH_LONG).show() }
+        }
     }
     val filmstrip = remember(photos, strip) {
         FilmstripUi(photos, strip.currentVersionId, strip.thumbs).takeIf { photos.size > 1 && it.index >= 0 }
@@ -219,6 +256,11 @@ fun EditorContent(
         val onToggleChrome = { chrome.immersive = !chrome.immersive }
         val select: (EditorTool) -> Unit = { tool ->
             chrome.select(tool, kind, actions) { snap -> scope.launch { chrome.sheet.animateTo(snap) } }
+        }
+        val currentSelect by rememberUpdatedState(select)
+        DisposableEffect(Unit) {
+            EditorMetrics.selectTool = { id -> scope.launch { currentSelect(EditorTools[id]) } }
+            onDispose { EditorMetrics.selectTool = null }
         }
         PhotoSurface(photo.renderer, onFirstFrame = actions.onDeveloped, modifier = Modifier.fillMaxSize())
         when (kind) {

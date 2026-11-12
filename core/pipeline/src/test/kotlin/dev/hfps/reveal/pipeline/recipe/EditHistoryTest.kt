@@ -113,4 +113,24 @@ class EditHistoryTest {
         assertThat(history.entries).hasSize(500)
         assertThat(checkNotNull(history.goTo(-1)).current).isEqualTo(Recipe.DEFAULT)
     }
+
+    @Test
+    fun `amend replaces the step at the cursor keeping its name, and an empty diff removes it`() {
+        val first = EditHistory().commit(Recipe(light = Light(exposureEv = 1f)))!!
+        val preset = first.commit(
+            Recipe(light = Light(exposureEv = 1f, contrast = 20f)),
+            HistoryAction.PRESET,
+            listOf(RecipeGroup.LIGHT),
+            "Soft",
+        )!!
+        val amended = preset.amend(Recipe(light = Light(exposureEv = 1f, contrast = 10f)))!!
+        assertThat(amended.entries).hasSize(2)
+        assertThat(amended.current.light.contrast).isEqualTo(10f)
+        assertThat(amended.entries[1].label.action).isEqualTo(HistoryAction.PRESET)
+        assertThat(amended.entries[1].label.name).isEqualTo("Soft")
+        val removed = amended.amend(first.current)!!
+        assertThat(removed.entries).hasSize(1)
+        assertThat(removed.cursor).isEqualTo(0)
+        assertThat(EditHistory().amend(Recipe.DEFAULT)).isNull()
+    }
 }

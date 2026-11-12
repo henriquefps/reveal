@@ -82,6 +82,7 @@ class SyncStore(
     private val edits = db.editDao()
     private val meta = db.metaDao()
     private val json = SyncApi.json
+    private val presetSync = PresetSync(db, clock)
 
     // ------------------------------------------------------------------ pairing
 
@@ -90,6 +91,7 @@ class SyncStore(
         val now = clock()
         sync.markAllPhotos(now)
         sync.markAllVersions(now)
+        sync.markAllPresets(now)
         for (setting in settings) meta.delete(settingKey(setting.key))
     }
 
@@ -122,6 +124,7 @@ class SyncStore(
             val change = when (record.kind) {
                 Kinds.PHOTO -> photoChange(record)
                 Kinds.VERSION -> versionChange(record, maxData)
+                Kinds.PRESET -> presetSync.change(record)
                 else -> null
             }
             if (change == null) {
@@ -313,6 +316,8 @@ class SyncStore(
             record.kind == Kinds.VERSION -> applyVersion(record, deviceName, stats)
 
             record.kind == Kinds.SETTING -> applySetting(record)
+
+            record.kind == Kinds.PRESET -> presetSync.apply(record)
 
             else -> true
         }

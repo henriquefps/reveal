@@ -167,12 +167,16 @@ fun PanelCardContent(
                     alpha = 1f - backProgress * BACK_FADE
                 },
         ) { shown ->
-            Column(
-                Modifier
-                    .verticalScroll(rememberScrollState())
-                    .padding(bottom = 8.dp),
-            ) {
-                (shown?.content ?: panel.content)(host)
+            if (shown == null && panel.ownsScroll) {
+                Column(Modifier.padding(bottom = 8.dp)) { panel.content(host) }
+            } else {
+                Column(
+                    Modifier
+                        .verticalScroll(rememberScrollState())
+                        .padding(bottom = 8.dp),
+                ) {
+                    (shown?.content ?: panel.content)(host)
+                }
             }
         }
     }

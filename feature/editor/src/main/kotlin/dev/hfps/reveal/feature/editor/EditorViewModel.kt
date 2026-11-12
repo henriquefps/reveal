@@ -20,6 +20,9 @@ import dev.hfps.reveal.data.edit.EditRepository
 import dev.hfps.reveal.data.edit.HistoryOp
 import dev.hfps.reveal.data.edit.HistoryWriter
 import dev.hfps.reveal.data.library.LibraryRepository
+import dev.hfps.reveal.data.preset.PresetEvent
+import dev.hfps.reveal.data.preset.PresetFilesIo
+import dev.hfps.reveal.data.preset.PresetRepository
 import dev.hfps.reveal.data.sync.RemoteEdits
 import dev.hfps.reveal.feature.editor.edit.AsShot
 import dev.hfps.reveal.feature.editor.edit.OpticsAnalysis
@@ -28,6 +31,11 @@ import dev.hfps.reveal.feature.editor.open.OpenError
 import dev.hfps.reveal.feature.editor.open.OpenEvent
 import dev.hfps.reveal.feature.editor.open.OpenException
 import dev.hfps.reveal.feature.editor.open.PhotoOpener
+import dev.hfps.reveal.feature.editor.presets.CreatePresetDraft
+import dev.hfps.reveal.feature.editor.presets.PresetSession
+import dev.hfps.reveal.feature.editor.presets.PresetSteps
+import dev.hfps.reveal.feature.editor.presets.PresetThumbnails
+import dev.hfps.reveal.feature.editor.presets.PreviewInput
 import dev.hfps.reveal.feature.editor.tools.ToolId
 import dev.hfps.reveal.feature.export.ui.ExportRequest
 import dev.hfps.reveal.pipeline.PipelineInput
@@ -45,6 +53,11 @@ import dev.hfps.reveal.pipeline.gl.ClippingWarnings
 import dev.hfps.reveal.pipeline.gl.CompareMode
 import dev.hfps.reveal.pipeline.gl.GpuDevelopRenderer
 import dev.hfps.reveal.pipeline.input.colourOnly
+import dev.hfps.reveal.pipeline.preset.ApplyContext
+import dev.hfps.reveal.pipeline.preset.Preset
+import dev.hfps.reveal.pipeline.preset.PresetPatch
+import dev.hfps.reveal.pipeline.preset.PresetSection
+import dev.hfps.reveal.pipeline.preset.SmartCorrection
 import dev.hfps.reveal.pipeline.recipe.BaseLook
 import dev.hfps.reveal.pipeline.recipe.ColourBand
 import dev.hfps.reveal.pipeline.recipe.ColourToolControls
@@ -72,8 +85,11 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.update
@@ -87,6 +103,7 @@ import kotlinx.coroutines.withContext
  * and the view options, pushing both to the renderer. Survives configuration changes; leaving the screen cancels the
  * decode and closes the renderer.
  */
+@Suppress("LargeClass")
 @HiltViewModel
 class EditorViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
@@ -94,6 +111,8 @@ class EditorViewModel @Inject constructor(
     private val library: LibraryRepository,
     private val edits: EditRepository,
     private val writer: HistoryWriter,
+    private val presets: PresetRepository,
+    private val smartCorrection: SmartCorrection,
 ) : ViewModel() {
     private val route: EditorRoute = savedStateHandle.toRoute<EditorRoute>()
 
@@ -155,6 +174,11 @@ class EditorViewModel @Inject constructor(
             }
         }
         viewModelScope.launch {
+            presets.library().collect { library ->
+                _state.update { it.copy(presets = it.presets.copy(library = library)) }
+            }
+        }
+        viewModelScope.launch {
             val previous = edits.previous(versionId ?: NO_VERSION) != null
             _state.update { it.copy(edit = it.edit.copy(hasPrevious = previous)) }
         }
@@ -177,6 +201,11 @@ class EditorViewModel @Inject constructor(
                     AsShot(it.temperatureK.roundToInt().toFloat(), it.tint.roundToInt().toFloat())
                 }
                 val autoWb = prepareAuto(input)
+                thumbnails = withContext(Dispatchers.Default) {
+                    val small = PreviewInput.of(input)
+                    val full = maxOf(photo.fullWidth, photo.fullHeight).toFloat() / maxOf(small.width, small.height)
+                    PresetThumbnails(small, full.coerceAtLeast(1f))
+                }
                 prepareOptics(input)
                 val ready = gpu.await()
                 // The renderer starts on the stored recipe (attach() pushes it).
@@ -828,6 +857,8 @@ class EditorViewModel @Inject constructor(
         EditorMetrics.setControl = null
         EditorMetrics.recipes = null
         EditorMetrics.history = null
+        thumbnails?.close()
+        thumbnails = null
         // Closes the renderer once it exists (a creation cancelled half-way closes itself).
         gpu.invokeOnCompletion { failure -> if (failure == null) gpu.getCompleted().close() }
     }
@@ -861,6 +892,184 @@ class EditorViewModel @Inject constructor(
 
     private fun colourOnly(input: PipelineInput) = input.colourOnly()
 
+    // ------------------------------------------------------------------ presets (docs/adr/0019)
+
+    /** The live previews of the presets panel; null until the proxy is decoded. */
+    @Volatile
+    var thumbnails: PresetThumbnails? = null
+        private set
+
+    private val _presetEvents = MutableSharedFlow<PresetEvent>(extraBufferCapacity = EVENT_BUFFER)
+
+    /** One-shot outcomes of preset imports and exports (the screen shows them as toasts). */
+    val presetEvents: SharedFlow<PresetEvent> = _presetEvents.asSharedFlow()
+
+    private val presetFiles by lazy { PresetFilesIo(context.contentResolver, presets) }
+
+    /** The applied preset while its step is still the history's last word, else null. */
+    private fun currentSession(): PresetSession? {
+        val state = _state.value
+        return state.presets.session?.takeIf { it.isCurrent(state.edit.history) }
+    }
+
+    /** What a strength between the photo and a preset knows about the photo (the as-shot white balance of a RAW). */
+    private fun applyContext(): ApplyContext {
+        val edit = _state.value.edit
+        return if (edit.isRaw) ApplyContext(edit.asShot.temperatureK, edit.asShot.tint) else ApplyContext()
+    }
+
+    /** The recipe the presets panel previews each preset on: the applied preset's base while one is current. */
+    fun presetBase(): Recipe = currentSession()?.before ?: _state.value.edit.committed
+
+    /** [preset] at full strength on [base], as the panel previews it. */
+    fun presetPreview(preset: Preset, base: Recipe): Recipe = preset.apply(base, 1f, applyContext(), smartCorrection)
+
+    /**
+     * Applies a preset as one history step (docs/adr/0019). While the last applied preset is still current, a tap on
+     * another one replaces it (browsing presets), else it applies on top of the edit.
+     */
+    fun applyPreset(uuid: String) {
+        viewModelScope.launch {
+            val preset = presets.preset(uuid) ?: return@launch
+            val history = _state.value.edit.history
+            val below = currentSession()?.below(history) ?: history
+            val next = preset.apply(below.current, 1f, applyContext(), smartCorrection)
+            commitPreset(history, below, preset, next, 1f)
+            presets.markUsed(uuid)
+        }
+    }
+
+    /** Per drag frame: the applied preset at [strength] (0..2) on its base; nothing is committed. */
+    fun setPresetStrength(strength: Float) {
+        val session = currentSession() ?: return
+        val recipe = session.preset.apply(session.before, strength, applyContext(), smartCorrection)
+        val next = _state.updateAndGet {
+            it.copy(
+                edit = it.edit.copy(recipe = recipe),
+                presets = it.presets.copy(session = session.copy(strength = strength)),
+            )
+        }
+        renderer()?.setRecipe(next.edit.recipe)
+    }
+
+    /** Strength released: the applied preset's step is replaced by the new strength (removed at 0). */
+    @Suppress("ReturnCount")
+    fun commitPresetStrength() {
+        val state = _state.value
+        val session = state.presets.session ?: return
+        val history = state.edit.history
+        if (!session.isCurrent(history)) return
+        if (state.edit.recipe == session.applied) return
+        commitPreset(history, session.below(history), session.preset, state.edit.recipe, session.strength)
+    }
+
+    private fun commitPreset(history: EditHistory, below: EditHistory, preset: Preset, recipe: Recipe, s: Float) {
+        val (next, session) = PresetSteps.commit(below, preset, recipe, s)
+        _state.update {
+            it.copy(
+                edit = it.edit.copy(recipe = next.current, history = next),
+                presets = it.presets.copy(session = session),
+            )
+        }
+        renderer()?.setRecipe(next.current)
+        val version = versionId ?: return
+        if (below.cursor != history.cursor) writer.write(HistoryOp.Move(version, below.cursor))
+        if (next !== below) writer.write(HistoryOp.Commit(version, next.current, next.entries[next.cursor].label))
+    }
+
+    /** Opens "Create preset" with the sections the edit changed (minus the photo-specific ones) ticked. */
+    fun openCreatePreset() {
+        val sections = PresetSection.suggestedFor(_state.value.edit.committed)
+        _state.update { it.copy(presets = it.presets.copy(creating = CreatePresetDraft(sections))) }
+    }
+
+    fun dismissCreatePreset() = _state.update { it.copy(presets = it.presets.copy(creating = null)) }
+
+    /** Saves the committed edit's [sections] as a preset named [name] in a user group (or a new one). */
+    fun savePreset(name: String, groupId: Long?, newGroup: String?, sections: Set<PresetSection>) {
+        val recipe = _state.value.edit.committed
+        dismissCreatePreset()
+        if (sections.isEmpty() || name.isBlank()) return
+        viewModelScope.launch {
+            val group = newGroup?.takeIf { it.isNotBlank() }?.let { presets.createGroup(it) } ?: groupId
+            presets.create(name, PresetPatch.fromSections(recipe, sections), group)
+            _presetEvents.tryEmit(PresetEvent.Created(name.trim()))
+        }
+    }
+
+    fun setPresetFavourite(uuid: String, favourite: Boolean) {
+        viewModelScope.launch { presets.setFavourite(uuid, favourite) }
+    }
+
+    fun renamePreset(uuid: String, name: String) {
+        viewModelScope.launch { presets.rename(uuid, name) }
+    }
+
+    fun duplicatePreset(uuid: String, name: String) {
+        viewModelScope.launch { presets.duplicate(uuid, name) }
+    }
+
+    fun deletePreset(uuid: String) {
+        viewModelScope.launch { presets.delete(uuid) }
+    }
+
+    fun movePreset(uuid: String, groupId: Long) {
+        viewModelScope.launch { presets.move(uuid, groupId) }
+    }
+
+    /** Moves a preset one place earlier ([delta] -1) or later (+1) within its group. */
+    fun shiftPreset(uuid: String, delta: Int) {
+        val group = _state.value.presets.library.groups.firstOrNull { g -> g.presets.any { it.uuid == uuid } } ?: return
+        val order = group.presets.map { it.uuid }.toMutableList()
+        val from = order.indexOf(uuid)
+        val to = (from + delta).coerceIn(0, order.lastIndex)
+        if (from == to) return
+        order.add(to, order.removeAt(from))
+        viewModelScope.launch { presets.reorder(order) }
+    }
+
+    fun renamePresetGroup(groupId: Long, name: String) {
+        viewModelScope.launch { presets.renameGroup(groupId, name) }
+    }
+
+    fun deletePresetGroup(groupId: Long) {
+        viewModelScope.launch { presets.deleteGroup(groupId) }
+    }
+
+    /** Moves a group one place earlier or later among the stored groups. */
+    fun shiftPresetGroup(groupId: Long, delta: Int) {
+        val order = _state.value.presets.library.groups.mapNotNull { it.rowId }.toMutableList()
+        val from = order.indexOf(groupId)
+        if (from < 0) return
+        val to = (from + delta).coerceIn(0, order.lastIndex)
+        if (from == to) return
+        order.add(to, order.removeAt(from))
+        viewModelScope.launch { presets.reorderGroups(order) }
+    }
+
+    fun keepPack(packRowId: Long) {
+        viewModelScope.launch { presets.keepPack(packRowId) }
+    }
+
+    fun removePack(packRowId: Long) {
+        viewModelScope.launch { presets.removePack(packRowId) }
+    }
+
+    /** Imports a `.revealpreset` or `.revealpack` from [uri] (SAF). */
+    fun importPresets(uri: Uri) {
+        viewModelScope.launch { _presetEvents.tryEmit(presetFiles.import(uri)) }
+    }
+
+    /** Writes a preset to the document [uri] (SAF "create document"). */
+    fun exportPreset(uuid: String, uri: Uri) {
+        viewModelScope.launch { _presetEvents.tryEmit(presetFiles.exportPreset(uuid, uri)) }
+    }
+
+    /** Writes a user group as a pack to [uri]. */
+    fun exportPresetGroup(groupId: Long, uri: Uri, author: String, licence: String) {
+        viewModelScope.launch { _presetEvents.tryEmit(presetFiles.exportGroup(groupId, uri, author, licence)) }
+    }
+
     private companion object {
         /** Screen proxy bounds (ADR 0002 "Proxies and tiles"): about the screen's long edge. */
         const val MIN_PROXY_EDGE = 2400
@@ -874,5 +1083,7 @@ class EditorViewModel @Inject constructor(
 
         /** "No version" for queries that exclude the current one. */
         const val NO_VERSION = -1L
+
+        const val EVENT_BUFFER = 8
     }
 }

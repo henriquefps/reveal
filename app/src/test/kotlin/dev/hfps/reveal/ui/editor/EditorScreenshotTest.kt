@@ -34,6 +34,12 @@ import dev.hfps.reveal.data.db.PhotoRow
 import dev.hfps.reveal.data.editor.EditorLayout
 import dev.hfps.reveal.data.model.PhotoFormat
 import dev.hfps.reveal.data.model.PickFlag
+import dev.hfps.reveal.data.preset.GroupKind
+import dev.hfps.reveal.data.preset.LibraryGroup
+import dev.hfps.reveal.data.preset.LibraryPreset
+import dev.hfps.reveal.data.preset.PackInfo
+import dev.hfps.reveal.data.preset.PresetLibrary
+import dev.hfps.reveal.data.preset.PresetOrigin
 import dev.hfps.reveal.designsystem.components.RevealBottomSheet
 import dev.hfps.reveal.designsystem.components.slider.NumericInputContent
 import dev.hfps.reveal.designsystem.theme.EditorTheme
@@ -52,6 +58,10 @@ import dev.hfps.reveal.feature.editor.layout.FilmstripUi
 import dev.hfps.reveal.feature.editor.layout.PanelSnap
 import dev.hfps.reveal.feature.editor.panels.PasteChooserContent
 import dev.hfps.reveal.feature.editor.panels.toSliderSpec
+import dev.hfps.reveal.feature.editor.presets.CreatePresetDraft
+import dev.hfps.reveal.feature.editor.presets.PresetSession
+import dev.hfps.reveal.feature.editor.presets.PresetThumbnailSource
+import dev.hfps.reveal.feature.editor.presets.PresetsState
 import dev.hfps.reveal.feature.editor.tools.ToolId
 import dev.hfps.reveal.feature.export.encode.EncoderSupport
 import dev.hfps.reveal.feature.export.model.ExportColour
@@ -70,9 +80,13 @@ import dev.hfps.reveal.pipeline.gl.CompareMode
 import dev.hfps.reveal.pipeline.gl.Histogram
 import dev.hfps.reveal.pipeline.optics.LensProfile
 import dev.hfps.reveal.pipeline.optics.SonyLensProfile
+import dev.hfps.reveal.pipeline.preset.Preset
+import dev.hfps.reveal.pipeline.preset.PresetPatch
+import dev.hfps.reveal.pipeline.preset.PresetSection
 import dev.hfps.reveal.pipeline.recipe.Aspect
 import dev.hfps.reveal.pipeline.recipe.AspectPreset
 import dev.hfps.reveal.pipeline.recipe.BandValues
+import dev.hfps.reveal.pipeline.recipe.BaseLook
 import dev.hfps.reveal.pipeline.recipe.Colour
 import dev.hfps.reveal.pipeline.recipe.ColourGrading
 import dev.hfps.reveal.pipeline.recipe.ColourMixer
@@ -164,6 +178,29 @@ class EditorPhoneScreenshotTest : EditorScreenshotBase("phone") {
 
     /** Detail (docs/adr/0012): every amount at 0, so the shaping sliders are disabled. */
     @Test fun detail() = shoot("detail") { Editor(tool = ToolId.DETAIL) }
+
+    @Test fun presets() = shoot("presets") { PresetsEditor() }
+
+    @Test fun presetsApplied() = shoot("presets_applied") { PresetsEditor(applied = true) }
+
+    @Test fun presetsExpanded() = shoot("presets_expanded") { PresetsEditor(snap = PanelSnap.EXPANDED) }
+
+    @Test fun presetsFontScale200() = shoot("presets_font200") { Scaled(2f) { PresetsEditor(applied = true) } }
+
+    @Test fun presetsEmpty() = shoot("presets_empty") { PresetsEditor(library = PresetLibrary()) }
+
+    @Test fun presetsTrialPack() {
+        composeRule.setContent { PresetsEditor() }
+        composeRule.onNodeWithTag(EditorTags.presetChip(TestPresets.PACK_GROUP)).performScrollTo().performClick()
+        composeRule.waitForIdle()
+        capture("presets_trial_pack")
+    }
+
+    @Test fun presetsCreate() {
+        composeRule.setContent { PresetsEditor(creating = true) }
+        composeRule.waitForIdle()
+        captureScreen("presets_create")
+    }
 
     /** Detail with sharpening and both noise reductions on, the whole panel. */
     @Test fun detailEdited() = shoot("detail_edited") {
@@ -311,6 +348,8 @@ class EditorPhoneScreenshotTest : EditorScreenshotBase("phone") {
 class EditorLandscapeScreenshotTest : EditorScreenshotBase("landscape") {
     @Test fun light() = shoot("light") { Editor() }
 
+    @Test fun presets() = shoot("presets") { PresetsEditor(applied = true) }
+
     @Test fun colour() = shoot("colour") { Editor(tool = ToolId.COLOUR) }
 
     @Test fun cropMode() = shoot("crop") { CropEditor() }
@@ -343,6 +382,8 @@ class EditorTabletScreenshotTest : EditorScreenshotBase("tablet") {
     override val strip: FilmstripUi? get() = Strip.ui
 
     @Test fun light() = shoot("light") { Editor() }
+
+    @Test fun presets() = shoot("presets") { PresetsEditor(applied = true) }
 
     @Test fun split() = shoot("split") {
         Editor(view = ViewOptions(compare = CompareMode.Split(leftRight = true, position = 0.4f)))
@@ -409,6 +450,8 @@ class EditorTabletScreenshotTest : EditorScreenshotBase("tablet") {
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 @Config(sdk = [35], qualifiers = "w934dp-h1495dp-mdpi")
 class EditorTabletPortraitScreenshotTest : EditorScreenshotBase("tablet_portrait") {
+    @Test fun presets() = shoot("presets") { PresetsEditor(applied = true) }
+
     override val strip: FilmstripUi? get() = Strip.ui
 
     @Test fun light() = shoot("light") { Editor() }
@@ -512,6 +555,7 @@ abstract class EditorScreenshotBase(private val size: String) {
         optics: Optics = Optics(),
         lens: LensProfile? = null,
         layout: EditorLayout = EditorLayout(),
+        presets: PresetsState = PresetsState(),
     ) {
         val recipe = base.copy(geometry = geometry, detail = detail, effects = effects, optics = optics)
         EditorTheme {
@@ -533,8 +577,9 @@ abstract class EditorScreenshotBase(private val size: String) {
                     ),
                     view = view,
                     histogram = Photos.histogram,
+                    presets = presets,
                 ),
-                actions = EditorActions(onBack = {}),
+                actions = EditorActions(onBack = {}, presetThumbnails = TestPresets.thumbnails),
                 initialTool = tool,
                 initialSnap = snap,
                 initialMode = mode,
@@ -542,6 +587,29 @@ abstract class EditorScreenshotBase(private val size: String) {
                 layout = layout,
             )
         }
+    }
+
+    /** The Presets panel on the placeholder library; [applied] shows the strength of an applied preset. */
+    @Composable
+    protected fun PresetsEditor(
+        applied: Boolean = false,
+        library: PresetLibrary = TestPresets.library,
+        snap: PanelSnap = PanelSnap.HALF,
+        creating: Boolean = false,
+    ) {
+        val session = if (applied) TestPresets.session else null
+        Editor(
+            tool = ToolId.PRESETS,
+            snap = snap,
+            base = session?.applied ?: Photos.recipe,
+            history = if (applied) TestPresets.history else EditHistory(),
+            preview = if (applied) TestPresets.appliedImage else Photos.edited,
+            presets = PresetsState(
+                library = library,
+                session = session,
+                creating = if (creating) CreatePresetDraft(PresetSection.suggestedFor(Photos.recipe)) else null,
+            ),
+        )
     }
 
     /** The editor on the colour-tools recipe, with the sub-panel behind [row] opened. */
@@ -697,6 +765,39 @@ private object Photos {
     val bwEdited: ImageBitmap = bitmap(CpuDevelop.render(input, bw))
 
     val edited: ImageBitmap = bitmap(editedRgba)
+
+    /** A recipe that "Evening walk" was made from. */
+    val recipeForPresets = recipe.copy(light = recipe.light.copy(contrast = 30f, shadows = 50f))
+
+    private val smallInput = PipelineInput(
+        input.kind,
+        input.width / 4,
+        input.height / 4,
+        FloatArray(input.width / 4 * (input.height / 4) * 3) { i ->
+            val p = i / 3
+            val x = p % (input.width / 4) * 4
+            val y = p / (input.width / 4) * 4
+            input.linearRgb[(y * input.width + x) * 3 + i % 3]
+        },
+        input.cameraToXyz,
+        input.asShotMultipliers,
+        input.saturation,
+    )
+
+    /** [r] developed on the CPU (at a quarter size for the preset thumbnails). */
+    fun render(r: Recipe, small: Boolean = false): ImageBitmap {
+        if (!small) return bitmap(CpuDevelop.render(input, r))
+        val w = smallInput.width
+        val h = smallInput.height
+        val rgba = CpuDevelop.render(smallInput, r)
+        val pixels = IntArray(w * h) { i ->
+            val red = rgba[i * 4].toInt() and 0xFF
+            val g = rgba[i * 4 + 1].toInt() and 0xFF
+            val b = rgba[i * 4 + 2].toInt() and 0xFF
+            (0xFF shl 24) or (red shl 16) or (g shl 8) or b
+        }
+        return Bitmap.createBitmap(pixels, w, h, Bitmap.Config.ARGB_8888).asImageBitmap()
+    }
     val original: ImageBitmap = bitmap(CpuDevelop.render(input, Recipe.DEFAULT))
     val histogram: Histogram = Histogram.fromRgba8(editedRgba)
 
@@ -708,6 +809,174 @@ private object Photos {
             (0xFF shl 24) or (r shl 16) or (g shl 8) or b
         }
         return Bitmap.createBitmap(pixels, WIDTH, HEIGHT, Bitmap.Config.ARGB_8888).asImageBitmap()
+    }
+}
+
+/**
+ * Placeholder presets for the goldens only (the real built-in looks come from M3/B): a looks group, the user's
+ * default group and a pack on trial, with thumbnails developed on the CPU from the synthetic scene.
+ */
+private object TestPresets {
+    const val PACK_GROUP = "5c3e1b2a-0d3f-4a7b-9c8d-2e1f0a9b8c70"
+
+    private fun id(i: Int) = "0f8fad5b-d9cb-469f-a165-7086772895%02d".format(i)
+
+    private fun preset(i: Int, name: String, recipe: Recipe, vararg sections: PresetSection) =
+        Preset(id(i), name, PresetPatch.fromSections(recipe, sections.toList()))
+
+    private val looks = listOf(
+        preset(
+            1,
+            "Warm",
+            Recipe(colour = Colour(WhiteBalance(6500f, 10f, WbMode.CUSTOM), vibrance = 15f)),
+            PresetSection.WHITE_BALANCE,
+            PresetSection.VIBRANCE,
+        ),
+        preset(
+            2,
+            "Cool",
+            Recipe(colour = Colour(WhiteBalance(4300f, -5f, WbMode.CUSTOM))),
+            PresetSection.WHITE_BALANCE,
+        ),
+        preset(
+            3,
+            "Matte",
+            Recipe(
+                light = Light(
+                    contrast = -25f,
+                    curve = Curves(rgb = listOf(CurvePoint(0f, 0.08f), CurvePoint(1f, 0.95f))),
+                ),
+            ),
+            PresetSection.CONTRAST,
+            PresetSection.TONE_CURVE,
+        ),
+        preset(
+            4,
+            "Punchy",
+            Recipe(light = Light(contrast = 35f), colour = Colour(vibrance = 30f)),
+            PresetSection.CONTRAST,
+            PresetSection.VIBRANCE,
+        ),
+        preset(
+            5,
+            "Black & white with a longer name",
+            Recipe(profile = Profile(treatment = Treatment.BLACK_WHITE)),
+            PresetSection.TREATMENT,
+        ),
+        preset(
+            6,
+            "Faded",
+            Recipe(colour = Colour(saturation = -40f), light = Light(blacks = 30f)),
+            PresetSection.SATURATION,
+            PresetSection.BLACKS,
+        ),
+        preset(7, "Vivid", Recipe(profile = Profile(BaseLook.VIVID)), PresetSection.PROFILE),
+        preset(
+            8,
+            "Teal & orange",
+            Recipe(
+                colour = Colour(
+                    grading = ColourGrading(shadows = GradeWheel(200f, 35f), highlights = GradeWheel(40f, 30f)),
+                ),
+            ),
+            PresetSection.COLOUR_GRADING,
+        ),
+    )
+    private val mine = listOf(
+        preset(11, "Evening walk", Photos.recipeForPresets, PresetSection.CONTRAST, PresetSection.SHADOWS),
+        preset(
+            12,
+            "Soft portrait",
+            Recipe(profile = Profile(BaseLook.PORTRAIT), effects = Effects(clarity = -15f)),
+            PresetSection.PROFILE,
+            PresetSection.CLARITY,
+        ),
+    )
+    private val pack = listOf(
+        preset(
+            21,
+            "Golden",
+            Recipe(colour = Colour(WhiteBalance(7000f, 12f, WbMode.CUSTOM), saturation = 10f)),
+            PresetSection.WHITE_BALANCE,
+            PresetSection.SATURATION,
+        ),
+        preset(
+            22,
+            "Dusk",
+            Recipe(light = Light(exposureEv = -0.4f, highlights = -40f)),
+            PresetSection.EXPOSURE,
+            PresetSection.HIGHLIGHTS,
+        ),
+    )
+
+    val library = PresetLibrary(
+        listOf(
+            LibraryGroup(
+                "aa0e8400-e29b-41d4-a716-446655440000",
+                null,
+                "Looks",
+                GroupKind.BUILT_IN,
+                looks.mapIndexed { i, p ->
+                    LibraryPreset(
+                        p,
+                        null,
+                        "aa0e8400-e29b-41d4-a716-446655440000",
+                        PresetOrigin.BUILT_IN,
+                        favourite =
+                            i == 2,
+                    )
+                },
+            ),
+            LibraryGroup(
+                "bb0e8400-e29b-41d4-a716-446655440000",
+                1L,
+                "",
+                GroupKind.USER,
+                mine.mapIndexed { i, p ->
+                    LibraryPreset(p, 10L + i, "bb0e8400-e29b-41d4-a716-446655440000", PresetOrigin.USER)
+                },
+            ),
+            LibraryGroup(
+                PACK_GROUP,
+                2L,
+                "Golden hour",
+                GroupKind.PACK,
+                pack.mapIndexed { i, p -> LibraryPreset(p, 20L + i, PACK_GROUP, PresetOrigin.PACK) },
+                PackInfo(
+                    1L,
+                    "6a5b4c3d-2e1f-4a0b-8c9d-0e1f2a3b4c5d",
+                    "Golden hour",
+                    "Ana Example",
+                    1,
+                    "Personal use",
+                    "",
+                    null,
+                    null,
+                    trial = true,
+                ),
+            ),
+        ),
+    )
+
+    /** "Matte" applied at 75 %. */
+    private val applied = looks[2]
+    val history: EditHistory = EditHistory().commit(Photos.recipe)!!.let { h ->
+        h.commit(applied.apply(Photos.recipe, 0.75f), HistoryAction.PRESET, listOf(RecipeGroup.LIGHT), applied.name)!!
+    }
+    val session = PresetSession(applied, Photos.recipe, 0, 0.75f, history.current)
+    val appliedImage: ImageBitmap = Photos.render(history.current)
+
+    private val images = HashMap<String, ImageBitmap>()
+
+    /** CPU-developed thumbnails, synchronous (the goldens never wait for a GPU). */
+    val thumbnails = object : PresetThumbnailSource {
+        override fun cached(key: String): ImageBitmap? {
+            val id = key.split('|')[2]
+            val preset = library.all.first { it.uuid == id }.preset
+            return images.getOrPut(id) { Photos.render(preset.apply(Photos.recipe), small = true) }
+        }
+
+        override suspend fun render(key: String, recipe: Recipe): ImageBitmap? = cached(key)
     }
 }
 

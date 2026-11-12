@@ -58,6 +58,7 @@ import androidx.compose.ui.semantics.onLongClick
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.semantics.testTag
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -354,8 +355,8 @@ private fun PresetCell(
                 ).joinToString(", ")
                 onClick { onClick().let { true } }
                 onLongClick { onLongClick().let { true } }
-            }
-            .testTag(EditorTags.preset(preset.uuid)),
+                testTag = EditorTags.preset(preset.uuid)
+            },
     ) {
         Box(
             Modifier

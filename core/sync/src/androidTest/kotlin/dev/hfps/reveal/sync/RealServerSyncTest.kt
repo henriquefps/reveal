@@ -228,7 +228,8 @@ class RealServerSyncTest {
         phone.sync() // pushes and looks the photo up: missing on the server
         val uploader =
             BlobUploader(phone.db, phone.store, phone.trees, SmartPreviewMaker(File(phone.files, "previews")))
-        val made = runBlocking { uploader.previews(phone.api, limit = 5) }
+        // An edited photo gets a preview only while the originals backup is off (ADR 0018 FIX/P).
+        val made = runBlocking { uploader.previews(phone.api, limit = 5, originalsOff = true) }
         assertThat(made).isAtLeast(1)
         phone.sync() // the photo record now names its preview
         tablet.sync()
@@ -338,8 +339,11 @@ class RealServerSyncTest {
         val push = (t1 - t0) / 1_000_000
         val pull = (t2 - t1) / 1_000_000
         Log.i(TAG, "1000 edited photos: push $push ms ($pushed), pull $pull ms ($pulled)")
-        val rows =
-            runBlocking { tablet.db.photoDao().rows(PhotoQuerySql.toQuery(PhotoQuery(scope = LibraryScope.Server))) }
+        // Only described (no original or preview on the server): in the Server source, unlisted (FIX/V).
+        val server = runBlocking { checkNotNull(tablet.db.syncDao().serverSource()).id }
+        val rows = runBlocking {
+            tablet.db.photoDao().rows(PhotoQuerySql.toQuery(PhotoQuery(scope = LibraryScope.Source(server))))
+        }
         assertThat(rows.count { it.hasEdit }).isAtLeast(1000)
     }
 

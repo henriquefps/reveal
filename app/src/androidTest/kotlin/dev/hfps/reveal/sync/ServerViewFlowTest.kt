@@ -1,17 +1,17 @@
 package dev.hfps.reveal.sync
 
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsOff
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.v2.createEmptyComposeRule
-import androidx.compose.ui.test.longClick
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollToKey
-import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.performSemanticsAction
 import androidx.test.core.app.ActivityScenario
 import androidx.test.espresso.Espresso
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -42,7 +42,6 @@ import java.security.MessageDigest
 import java.util.UUID
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
-import org.junit.After
 import org.junit.Assume.assumeTrue
 import org.junit.Before
 import org.junit.Rule
@@ -76,16 +75,28 @@ class ServerViewFlowTest {
     fun setUp() {
         val links = args.getString("syncLinks")?.split(',')?.map { it.trim() }.orEmpty()
         assumeTrue("needs -e syncLinks <link 1>,<link 2>", links.size >= 2)
-        runBlocking { sync.unpair() }
-        runBlocking { sync.pair(checkNotNull(PairingLink.parse(links[0]))) }
-        val second = checkNotNull(PairingLink.parse(links[1]))
-        val key = SyncApi(second.url, null).pair(PairRequest(second.token, "Scripted tablet", "android", "test")).apiKey
-        other = SyncApi(second.url, key)
+        // A pairing link is good once: both devices pair once for the whole class.
+        if (paired == null) {
+            runBlocking { sync.unpair() }
+            runBlocking { sync.pair(checkNotNull(PairingLink.parse(links[0]))) }
+            val second = checkNotNull(PairingLink.parse(links[1]))
+            val key =
+                SyncApi(second.url, null).pair(PairRequest(second.token, "Scripted tablet", "android", "test")).apiKey
+            paired = SyncApi(second.url, key)
+        }
+        other = checkNotNull(paired)
     }
 
-    @After
-    fun tearDown() {
-        runBlocking { sync.unpair() }
+    /** Synthetic content only: a screenshot for the PR (`files/pr-shots`). */
+    private fun shot(name: String) {
+        compose.waitForIdle()
+        Thread.sleep(SETTLE_MS)
+        val dir = java.io.File(context.filesDir, "pr-shots").apply { mkdirs() }
+        instrumentation.uiAutomation.takeScreenshot()?.let { bitmap ->
+            java.io.File(dir, "$name.png").outputStream().use {
+                bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it)
+            }
+        }
     }
 
     private fun sha256(bytes: ByteArray) =
@@ -202,12 +213,15 @@ class ServerViewFlowTest {
         val looked = other.lookup(listOf(editedRaw, plainRaw))
         assertThat(looked.found.map { it.fingerprint }).containsExactly(editedRaw)
 
+        // The library reopens the last place: start from the sources list.
+        runBlocking { library.setLastSelection(null) }
         ActivityScenario.launch(MainActivity::class.java).use {
             val actions = context.getString(LibraryR.string.library_source_actions, folder.name)
             compose.waitUntilAtLeastOneExists(hasContentDescription(actions), TIMEOUT_MS)
             compose.onNode(hasContentDescription(actions)).performClick()
             compose.onNodeWithText(context.getString(LibraryR.string.library_source_remove)).performClick()
             compose.waitUntilAtLeastOneExists(hasTestTag(ServerViewTags.REMOVE_DIALOG), TIMEOUT_MS)
+            shot("remove-folder")
             // The folder has an edited photo: "Also delete from the server" starts unchecked.
             compose.onNodeWithTag(ServerViewTags.REMOVE_ALSO_SERVER).assertIsOff()
             compose.onNodeWithTag(ServerViewTags.REMOVE_CONFIRM).performClick()
@@ -222,11 +236,14 @@ class ServerViewFlowTest {
             openServerScope()
             compose.onNodeWithTag(LibraryTags.GRID).performScrollToKey(photo.id)
             compose.waitUntilAtLeastOneExists(hasTestTag(LibraryTags.cell(photo.id)), TIMEOUT_MS)
-            compose.onNodeWithTag(LibraryTags.cell(photo.id)).performTouchInput { longClick() }
+            compose.onNodeWithTag(LibraryTags.cell(photo.id)).performSemanticsAction(SemanticsActions.OnLongClick)
+            shot("server-selected")
             compose.onNode(hasContentDescription(context.getString(LibraryR.string.library_menu))).performClick()
+            shot("server-selection-menu")
             compose.waitUntilAtLeastOneExists(hasTestTag(ServerViewTags.DELETE_FROM_SERVER), TIMEOUT_MS)
             compose.onNodeWithTag(ServerViewTags.DELETE_FROM_SERVER).performClick()
             compose.waitUntilAtLeastOneExists(hasTestTag(ServerViewTags.DELETE_DIALOG), TIMEOUT_MS)
+            shot("delete-from-server")
             compose.onNodeWithTag(ServerViewTags.DELETE_CONFIRM).performClick()
             compose.waitUntil(TIMEOUT_MS) { "SVE$run.ARW" !in serverNames() }
             runBlocking { sync.syncMetadata() }
@@ -235,9 +252,21 @@ class ServerViewFlowTest {
         folder.delete()
     }
 
-    private companion object {
-        const val TIMEOUT_MS = 60_000L
-        const val EDITOR_TIMEOUT_MS = 120_000L
-        const val RUN_SPACE = 100_000L
+    companion object {
+        private var paired: SyncApi? = null
+
+        @JvmStatic
+        @org.junit.AfterClass
+        fun unpair() {
+            if (paired == null) return
+            paired = null
+            val context = InstrumentationRegistry.getInstrumentation().targetContext
+            runBlocking { EntryPointAccessors.fromApplication(context, DebugAccess::class.java).sync().unpair() }
+        }
+
+        private const val SETTLE_MS = 800L
+        private const val TIMEOUT_MS = 60_000L
+        private const val EDITOR_TIMEOUT_MS = 120_000L
+        private const val RUN_SPACE = 100_000L
     }
 }

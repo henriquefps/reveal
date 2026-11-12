@@ -30,6 +30,7 @@ import dev.hfps.reveal.data.thumb.EditedThumbnails
 import dev.hfps.reveal.data.thumb.GpuEditedThumbnails
 import dev.hfps.reveal.data.thumb.PhotoImages
 import dev.hfps.reveal.data.thumb.ThumbnailRepository
+import dev.hfps.reveal.pipeline.preset.SmartCorrection
 import java.io.File
 import javax.inject.Qualifier
 import javax.inject.Singleton
@@ -122,6 +123,11 @@ object DataModule {
     @Provides
     @Singleton
     fun provideEdits(database: RevealDatabase): EditRepository = EditRepository(database)
+
+    /** The smart presets' per-photo correction (docs/adr/0019 "Smart slot"): none until M3/B binds its own here. */
+    @Provides
+    @Singleton
+    fun provideSmartCorrection(): SmartCorrection = SmartCorrection.NONE
 
     /** The app's own presets: none until the built-in looks (M3/B) bind theirs here. */
     @Provides

@@ -8,6 +8,7 @@ import androidx.compose.ui.test.junit4.v2.createEmptyComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipeLeft
@@ -88,7 +89,7 @@ class PresetsFlowTest {
         try {
             open(uri) {
                 openPresets(group)
-                click(EditorTags.preset(uuid))
+                clickPreset(uuid)
                 compose.waitUntil(TIMEOUT_MS) { history.entries.size == 1 }
                 val step = history.entries.single()
                 assertThat(step.label.action).isEqualTo(HistoryAction.PRESET)
@@ -198,7 +199,7 @@ class PresetsFlowTest {
             open(photo) {
                 openPresets(group.uuid)
                 // Try one on the photo, then keep the pack from the panel's banner.
-                click(EditorTags.preset(pack.presets.first().id))
+                clickPreset(pack.presets.first().id)
                 compose.waitUntil(TIMEOUT_MS) { history.entries.size == 1 }
                 click(EditorTags.PRESET_KEEP_PACK)
                 compose.waitUntil(TIMEOUT_MS) {
@@ -306,6 +307,13 @@ class PresetsFlowTest {
         click(EditorTags.tool(ToolId.PRESETS))
         compose.waitUntilAtLeastOneExists(hasTestTag(EditorTags.presetChip(group)), TIMEOUT_MS)
         click(EditorTags.presetChip(group))
+    }
+
+    /** A preset cell: the lazy grid composes only what is on screen, so scroll it to the cell first. */
+    private fun clickPreset(uuid: String) {
+        compose.waitUntilAtLeastOneExists(hasTestTag(EditorTags.PRESET_GRID), TIMEOUT_MS)
+        compose.onNodeWithTag(EditorTags.PRESET_GRID).performScrollToNode(hasTestTag(EditorTags.preset(uuid)))
+        click(EditorTags.preset(uuid))
     }
 
     private fun click(tag: String) {

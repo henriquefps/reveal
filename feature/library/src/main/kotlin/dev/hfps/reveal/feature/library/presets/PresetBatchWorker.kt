@@ -35,6 +35,8 @@ interface PresetBatchEntryPoint {
     fun presets(): PresetRepository
 
     fun edits(): EditRepository
+
+    fun smartCorrection(): SmartCorrection
 }
 
 /** One batch: the preset, its strength and the versions, and how many are done (resumable after a kill). */
@@ -85,7 +87,7 @@ class PresetBatchWorker(context: Context, params: WorkerParameters) : CoroutineW
         var changed = 0
         while (job.done < total && !isStopped) {
             val chunk = job.versionIds.subList(job.done, minOf(total, job.done + CHUNK))
-            changed += apply(graph.edits(), preset, job.strength, chunk)
+            changed += apply(graph.edits(), preset, job.strength, chunk, graph.smartCorrection())
             job = job.copy(done = job.done + chunk.size)
             jobs.write(jobId, job)
             setProgress(workDataOf(KEY_DONE to job.done, KEY_TOTAL to total))
@@ -98,10 +100,15 @@ class PresetBatchWorker(context: Context, params: WorkerParameters) : CoroutineW
         return if (isStopped) Result.failure() else Result.success(workDataOf(KEY_DONE to job.done))
     }
 
-    private suspend fun apply(edits: EditRepository, preset: Preset, strength: Float, versions: List<Long>): Int =
-        edits.applyEach(versions, HistoryAction.PRESET, preset.name) { recipe ->
-            preset.apply(recipe, strength, smartCorrection = smart)
-        }
+    private suspend fun apply(
+        edits: EditRepository,
+        preset: Preset,
+        strength: Float,
+        versions: List<Long>,
+        smart: SmartCorrection,
+    ): Int = edits.applyEach(versions, HistoryAction.PRESET, preset.name) { recipe ->
+        preset.apply(recipe, strength, smartCorrection = smart)
+    }
 
     private fun foreground(done: Int, total: Int, name: String): ForegroundInfo = ForegroundInfo(
         PresetBatchNotifications.PROGRESS_ID,
@@ -116,10 +123,6 @@ class PresetBatchWorker(context: Context, params: WorkerParameters) : CoroutineW
         const val KEY_TOTAL: String = "total"
         const val UNIQUE_NAME: String = "preset-batch"
         const val CHUNK: Int = 25
-
-        /** The smart correction of smart presets (M3/B binds it); null applies the style only. */
-        @Volatile
-        var smart: SmartCorrection? = null
 
         /** Enqueues [preset] at [strength] on [versionIds]; returns the work id. Batches run one after another. */
         fun enqueue(context: Context, presetId: String, strength: Float, versionIds: List<Long>): UUID {

@@ -57,6 +57,7 @@ import dev.hfps.reveal.pipeline.preset.ApplyContext
 import dev.hfps.reveal.pipeline.preset.Preset
 import dev.hfps.reveal.pipeline.preset.PresetPatch
 import dev.hfps.reveal.pipeline.preset.PresetSection
+import dev.hfps.reveal.pipeline.preset.SmartCorrection
 import dev.hfps.reveal.pipeline.recipe.BaseLook
 import dev.hfps.reveal.pipeline.recipe.ColourBand
 import dev.hfps.reveal.pipeline.recipe.ColourToolControls
@@ -111,6 +112,7 @@ class EditorViewModel @Inject constructor(
     private val edits: EditRepository,
     private val writer: HistoryWriter,
     private val presets: PresetRepository,
+    private val smartCorrection: SmartCorrection,
 ) : ViewModel() {
     private val route: EditorRoute = savedStateHandle.toRoute<EditorRoute>()
 
@@ -920,7 +922,7 @@ class EditorViewModel @Inject constructor(
     fun presetBase(): Recipe = currentSession()?.before ?: _state.value.edit.committed
 
     /** [preset] at full strength on [base], as the panel previews it. */
-    fun presetPreview(preset: Preset, base: Recipe): Recipe = preset.apply(base, 1f, applyContext())
+    fun presetPreview(preset: Preset, base: Recipe): Recipe = preset.apply(base, 1f, applyContext(), smartCorrection)
 
     /**
      * Applies a preset as one history step (docs/adr/0019). While the last applied preset is still current, a tap on
@@ -931,7 +933,7 @@ class EditorViewModel @Inject constructor(
             val preset = presets.preset(uuid) ?: return@launch
             val history = _state.value.edit.history
             val below = currentSession()?.below(history) ?: history
-            val next = preset.apply(below.current, 1f, applyContext())
+            val next = preset.apply(below.current, 1f, applyContext(), smartCorrection)
             commitPreset(history, below, preset, next, 1f)
             presets.markUsed(uuid)
         }
@@ -940,7 +942,7 @@ class EditorViewModel @Inject constructor(
     /** Per drag frame: the applied preset at [strength] (0..2) on its base; nothing is committed. */
     fun setPresetStrength(strength: Float) {
         val session = currentSession() ?: return
-        val recipe = session.preset.apply(session.before, strength, applyContext())
+        val recipe = session.preset.apply(session.before, strength, applyContext(), smartCorrection)
         val next = _state.updateAndGet {
             it.copy(
                 edit = it.edit.copy(recipe = recipe),

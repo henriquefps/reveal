@@ -425,7 +425,7 @@ JSON; `EXCLUDED` paths; `FieldKind` per path), `PresetSection` (chooser sections
 `PresetStrength` (per-kind scaling; exact at 0 and 1). A new recipe field is presettable automatically: give it a
 `FieldKind` in `PresetFields.kinds` and a control range in `controls` if it is not linear. Files: `PresetFiles`
 (`.revealpreset`), `PresetPacks` (`.revealpack` zip, limits in `PresetLimits`, errors `PresetError`). Smart presets
-(M3/B): `SmartPart` is carried verbatim, `SmartCorrection` resolves it before the style.
+(M3/B): `SmartPart` is carried verbatim, `SmartCorrection` (Hilt binding in `DataModule`, `SmartCorrection.NONE` by default) resolves it before the style, in the editor and the batch.
 
 Library (`:core:data/preset`, DB v7): `PresetRepository` (`library()` flow of `PresetLibrary` = built-in groups from
 `BuiltInPresetSource` (bound in `DataModule`, `NONE` until M3/B) + user/pack groups; create, rename, move, reorder,
@@ -442,7 +442,7 @@ of `PresetCellModel`, strength slider), `PresetSheets.kt` (create, options, ⋯ 
 `applyPreset` (replaces the session's step while current), `setPresetStrength` (per frame) /
 `commitPresetStrength` (replaces the step; 0 undoes it). Library: selection menu → `presets/ApplyPresetSheet.kt` →
 `PresetBatchWorker` (WorkManager, job file `files/preset-jobs`, 25 photos per transaction, notification + Cancel;
-`PresetBatchWorker.smart` for M3/B). Goldens: `phone_presets*`, `landscape_presets`, `tablet_presets`,
+the `SmartCorrection` binding). Goldens: `phone_presets*`, `landscape_presets`, `tablet_presets`,
 `tablet_portrait_presets` (placeholder presets in `EditorScreenshotTest.TestPresets`, tests only).
 
 ```sh

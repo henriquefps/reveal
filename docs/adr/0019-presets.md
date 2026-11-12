@@ -22,7 +22,7 @@ sync (the `preset` record kind is reserved there).
 | Fields | `PresetFields`: derived from the default recipe's JSON (every leaf; arrays and nullable values are leaves), minus the per-frame/per-photo ones (see "Fields"). A field added to the recipe later is presettable without code: a number scales linearly, anything else switches. |
 | Strength | 0-200 % from the photo's current value to the preset's and beyond, per field kind (see "Strength"). Exactly the photo at 0 and exactly the preset at 100 %. |
 | History | Applying is one `HistoryAction.PRESET` step labelled with the preset's name; moving the strength slider replaces that step live (working recipe per frame) and commits on release (the step is replaced, not added). |
-| Smart slot | `Preset.smart: SmartPart?` carries the file's `smart` object verbatim; `SmartCorrection` (M3/B) resolves it per photo before the style patch, which alone is scaled by strength. |
+| Smart slot | `Preset.smart: SmartPart?` carries the file's `smart` object verbatim; `SmartCorrection` (bound in `DataModule`, `SmartCorrection.NONE` until M3/B binds its own) resolves it per photo before the style patch, which alone is scaled by strength; the editor (apply, strength, previews) and the batch worker use the same binding. |
 | Files | `.revealpreset`: one JSON object. `.revealpack`: a zip with `manifest.json`, the presets, a licence text and a cover. Strict validation, size limits, no code. |
 | Library | Room v7: `preset_packs`, `preset_groups`, `presets`, `preset_marks` (favourite, last used; keyed by uuid so built-ins have them too). |
 | Sync | Each preset is one `preset` record (ADR 0017) with its group and pack inside; deletes are tombstones; trial packs do not sync. |

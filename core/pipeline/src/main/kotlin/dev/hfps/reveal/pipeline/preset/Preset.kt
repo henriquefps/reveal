@@ -54,9 +54,17 @@ data class Preset(
  */
 data class SmartPart(val rules: JsonObject)
 
-/** Resolves a [SmartPart] on one photo: [before] with the correction (exposure, white balance, …) applied. */
+/**
+ * Resolves a [SmartPart] on one photo: [before] with the correction (exposure, white balance, …) applied. The app
+ * binds one (Hilt, `:core:data` `DataModule`); [NONE] until the photo-analysis workstream binds its own.
+ */
 fun interface SmartCorrection {
     fun correct(preset: Preset, smart: SmartPart, before: Recipe): Recipe
+
+    companion object {
+        /** No correction: a smart preset applies its style only. */
+        val NONE: SmartCorrection = SmartCorrection { _, _, before -> before }
+    }
 }
 
 /** Ids of presets, groups and packs. */

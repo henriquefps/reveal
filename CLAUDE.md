@@ -637,13 +637,24 @@ smart preview is adopted; failures logged once with `describe`; `SmartPreviewMak
 `sync_records` (dirty marks by `SyncTriggers`, quiet while `meta` `sync.applying` is set; create databases with
 `RevealDatabase.configure`), `photo_cloud`, `sync_uploads`, `sync_aliases`, `sync_inbox`, `versions.copy_of`,
 `sources.backup`. Server photos: `sources.kind = SERVER`, document id `<fingerprint>/<name>`, `data/sync/ServerTree`.
-Smart previews: `:core:pipeline` `preview/SmartPreviewCodec` (`PhotoOpener` opens them). Live editor reload:
+Smart previews: `:core:pipeline` `preview/SmartPreviewCodec` (`PhotoOpener` opens them; writes format 2, reads 1
+and 2: `preview/PreviewPlanes.kt`, noise-relative steps from `PreviewNoise`, tables in the header). What goes up (ADR
+0018 amendment FIX/P): originals of backup-on folders **and of every edited photo** (`SyncDao.backupCandidates`); a
+preview only when the original cannot go up (`previewCandidates(originalsOff, …)`: unreadable, or edited with the
+originals backup off); previews no longer needed are dropped (`BlobUploader.markDrops` before the push, `drops` =
+`DELETE /v1/blobs/{sha}` in the blob run, `sync_uploads.kind = drop_preview`); format 1 ones are remade 3 per run on
+unmetered networks (`photo_cloud.preview_format`, DB v9). Grid: `CloudState.ELSEWHERE` = only another device has it
+and no preview. Live editor reload:
 `data/sync/RemoteEdits`. UI: `feature/settings/sync/` (Sync screen, `PairingScanner` CameraX + ZXing), library
 `SpecialSource.SERVER`, `CloudState` badges, conflict cells (`LibraryTags.copy`). A new synced field: add it to the
 payload, `photoData`/`versionChange` and the apply path, and (if it lives in a new column) to the triggers.
 
 ```sh
 ./gradlew :core:sync:testDebugUnitTest            # FakeSyncServer: two devices, conflicts, NAS, uploads, 1,000 photos
+./gradlew :core:sync:testDebugUnitTest --tests '*SmartPreviewRulesTest*'   # which photos send what, drops, format 1 remakes
+# preview format sizes and developed CIEDE2000 vs format 1 (host rdumps of the CC0 RAWs and/or JPEGs; ~1 min each):
+REVEAL_PREVIEW_SIZES=$PWD/build/calibration/sony-zv-e10.rdump,<more rdumps or .jpg> ./gradlew --no-configuration-cache \
+  :core:pipeline:testDebugUnitTest --tests '*SmartPreviewSizesTest*' --rerun -i     # prints PREVIEW lines
 # against the real server (loopback only; the emulator through adb reverse; stop it afterwards):
 scripts/sync/local-server.sh start <work dir> 3471 [NAS files: CC0 samples or synthetic]
 adb -s emulator-<port> reverse tcp:3471 tcp:3471

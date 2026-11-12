@@ -47,9 +47,10 @@
     <string name="sync_section_what">What syncs</string>
     <string name="sync_edits_always">Edits with their history, versions, ratings, flags, labels and your export author always sync.</string>
     <string name="sync_previews">Smart previews</string>
-    <string name="sync_previews_subtitle">A developable copy (about 2560 px) of photos only this device has, so your other devices can edit them.</string>
+    <string name="sync_previews_subtitle">A developable copy (about 2560 px, a few MB) of edited photos whose original cannot reach the server, so your other devices can keep editing them. Ratings, flags and labels sync without one.</string>
     <string name="sync_originals">Back up originals</string>
-    <string name="sync_originals_subtitle">Photos only this device has are uploaded once. Photos the server already has, such as its NAS folders, never are.</string>
+    <string name="sync_originals_subtitle">Photos only this device has are uploaded once: every photo of a folder with backup on, and every photo you edit. Photos the server already has, such as its NAS folders, never are.</string>
+    <string name="sync_folders_hint">Off: only photos you edit are backed up.</string>
     <string name="sync_wifi_only">Originals over Wi-Fi only</string>
     <string name="sync_section_folders">Back up originals of these folders</string>
     <string name="sync_section_storage">Storage</string>

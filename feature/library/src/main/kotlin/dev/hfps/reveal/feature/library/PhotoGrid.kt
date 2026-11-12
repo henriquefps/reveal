@@ -549,6 +549,12 @@ internal enum class CloudState {
     PREVIEW,
 
     /**
+     * Only another device has the original and the server has no smart preview of it (only edited photos get one,
+     * ADR 0018 "Smart previews"): its ratings and labels are here, its pixels are not.
+     */
+    ELSEWHERE,
+
+    /**
      * Another app handed it over and Reveal can no longer read it (its grant ended, ADR 0011): it shows and edits its
      * local preview.
      */
@@ -566,7 +572,9 @@ internal fun cloudState(row: PhotoRow): CloudState = when {
 
     row.remote && row.cloudOriginal -> CloudState.CLOUD
 
-    row.remote -> CloudState.PREVIEW
+    row.remote && row.cloudPreview -> CloudState.PREVIEW
+
+    row.remote -> CloudState.ELSEWHERE
 
     row.cloudOriginal -> CloudState.BACKED_UP
 
@@ -578,6 +586,7 @@ private fun cloudIcon(state: CloudState) = when (state) {
     CloudState.BACKED_UP -> PhosphorRegular.CloudCheck
     CloudState.CLOUD -> PhosphorRegular.Cloud
     CloudState.PREVIEW, CloudState.LOCAL_PREVIEW -> PhosphorRegular.Image
+    CloudState.ELSEWHERE -> PhosphorRegular.DeviceMobile
 }
 
 @Composable
@@ -636,6 +645,7 @@ internal fun cloudDescription(state: CloudState): Int? = when (state) {
     CloudState.BACKED_UP -> R.string.library_cloud_backed_up
     CloudState.CLOUD -> R.string.library_cloud_only
     CloudState.PREVIEW -> R.string.library_cloud_preview
+    CloudState.ELSEWHERE -> R.string.library_cloud_elsewhere
     CloudState.LOCAL_PREVIEW -> R.string.library_local_preview
 }
 

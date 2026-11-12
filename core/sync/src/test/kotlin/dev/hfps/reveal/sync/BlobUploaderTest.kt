@@ -63,7 +63,7 @@ class BlobUploaderTest {
         val photo = phone.addPhoto("DSC1", Random(1).nextBytes(512))
         val bytes = Random(2).nextBytes(4500)
         val (sha, file) = queue(photo, bytes)
-        runBlocking { uploader().previews(phone.api, limit = 0, noBackup = false) }
+        runBlocking { uploader().previews(phone.api, limit = 0) }
         assertThat(server.blobs[sha]).isEqualTo(bytes)
         assertThat(server.patchCount.get()).isEqualTo(5)
         assertThat(file.exists()).isFalse()
@@ -82,7 +82,7 @@ class BlobUploaderTest {
         val bytes = Random(4).nextBytes(3000)
         val (sha, _) = queue(photo, bytes)
         server.cutNextChunkAt = 400
-        runBlocking { uploader().previews(phone.api, limit = 0, noBackup = false) }
+        runBlocking { uploader().previews(phone.api, limit = 0) }
         assertThat(server.blobs[sha]).isEqualTo(bytes)
     }
 
@@ -97,7 +97,7 @@ class BlobUploaderTest {
         var chunks = 0
         assertThrows(SyncHttpException::class.java) {
             runBlocking {
-                first.previews(phone.api, limit = 0, noBackup = false) { sent, _ ->
+                first.previews(phone.api, limit = 0) { sent, _ ->
                     chunks++
                     if (chunks == 2) server.failPatches = 100
                     assertThat(sent).isAtMost(2000L)
@@ -110,7 +110,7 @@ class BlobUploaderTest {
         // A new uploader (as after a restart) asks HEAD and goes on from 2000: three more chunks, not five.
         server.failPatches = 0
         val before = server.patchCount.get()
-        runBlocking { uploader().previews(phone.api, limit = 0, noBackup = false) }
+        runBlocking { uploader().previews(phone.api, limit = 0) }
         assertThat(server.blobs[sha]).isEqualTo(bytes)
         assertThat(server.patchCount.get() - before).isEqualTo(3)
     }
@@ -121,7 +121,7 @@ class BlobUploaderTest {
         val bytes = Random(8).nextBytes(2000)
         val (sha, _) = queue(photo, bytes)
         server.blobs[sha] = bytes
-        runBlocking { uploader().previews(phone.api, limit = 0, noBackup = false) }
+        runBlocking { uploader().previews(phone.api, limit = 0) }
         assertThat(server.patchCount.get()).isEqualTo(0)
         assertThat(runBlocking { phone.db.syncDao().cloud(photo) }!!.previewSha).isEqualTo(sha)
     }

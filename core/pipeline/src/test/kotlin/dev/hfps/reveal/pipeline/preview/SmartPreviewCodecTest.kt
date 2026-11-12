@@ -19,10 +19,105 @@ import org.junit.Assert.assertThrows
 import org.junit.Test
 
 class SmartPreviewCodecTest {
-    private fun roundTrip(input: PipelineInput, jpeg: ByteArray = byteArrayOf(1, 2, 3)): SmartPreviewCodec.Decoded {
-        val bytes = SmartPreviewCodec.encode(input, jpeg, input.width * 2, input.height * 2)
+    private fun roundTrip(
+        input: PipelineInput,
+        jpeg: ByteArray = byteArrayOf(1, 2, 3),
+        version: Int = SmartPreviewCodec.VERSION,
+    ): SmartPreviewCodec.Decoded {
+        val bytes = SmartPreviewCodec.encode(input, jpeg, input.width * 2, input.height * 2, version)
         assertThat(SmartPreviewCodec.isSmartPreview(bytes.copyOf(8))).isTrue()
+        assertThat(SmartPreviewCodec.version(ByteArrayInputStream(bytes))).isEqualTo(version)
         return SmartPreviewCodec.decode(ByteArrayInputStream(bytes))
+    }
+
+    /** A flat grey field with Gaussian noise of relative [sigma] (a photo's grain), and a smooth clean gradient. */
+    private fun noisy(width: Int, height: Int, level: Float, sigma: Double, seed: Long): PipelineInput {
+        val random = java.util.Random(seed)
+        val ramp = SyntheticImages.grayRamp(width, height)
+        val px = FloatArray(width * height * 3) { (level * (1 + sigma * random.nextGaussian())).toFloat() }
+        return PipelineInput(ramp.kind, width, height, px, ramp.cameraToXyz, ramp.asShotMultipliers)
+    }
+
+    @Test
+    fun `previews written by 0_5_x (version 1) still open, with their metadata`() {
+        val scene = SyntheticImages.scene(64, 40)
+        val input = PipelineInput(
+            scene.kind,
+            scene.width,
+            scene.height,
+            scene.linearRgb,
+            scene.cameraToXyz,
+            scene.asShotMultipliers,
+            saturation = 0.9f,
+            noise = NoiseInfo(iso = 800, make = "Sony", model = "ZV-E10"),
+        )
+        val old = roundTrip(input, byteArrayOf(4, 4), SmartPreviewCodec.VERSION_1)
+        assertThat(old.jpeg).isEqualTo(byteArrayOf(4, 4))
+        assertThat(old.input.noise).isEqualTo(input.noise)
+        val bytes = SmartPreviewCodec.encode(input, byteArrayOf(4, 4), 64, 40, SmartPreviewCodec.VERSION_1)
+        assertThat(SmartPreviewCodec.readJpeg(ByteArrayInputStream(bytes))).isEqualTo(byteArrayOf(4, 4))
+        assertThat(SmartPreviewCodec.size(ByteArrayInputStream(bytes))).isEqualTo(64 to 40)
+        // Both versions develop alike on a clean scene.
+        val recipe = Recipe(light = Light(exposureEv = 0.7f, contrast = 20f))
+        val a = CpuDevelop.render(old.input, recipe)
+        val b = CpuDevelop.render(roundTrip(input).input, recipe)
+        var sum = 0L
+        for (i in a.indices) sum += abs((a[i].toInt() and 0xFF) - (b[i].toInt() and 0xFF))
+        assertThat(sum.toDouble() / a.size).isLessThan(0.5)
+    }
+
+    @Test
+    fun `a smooth clean gradient keeps fine steps, no banding`() {
+        // 2 x 1024: green from 2^-10 to 1 over ten stops, nothing to hide a coarse step in.
+        val w = 1024
+        val ramp = SyntheticImages.grayRamp(w, 2)
+        val px = FloatArray(w * 2 * 3) { i ->
+            val x = (i / 3) % w
+            Math.pow(2.0, -10.0 + 10.0 * x / (w - 1)).toFloat()
+        }
+        val input = PipelineInput(ramp.kind, w, 2, px, ramp.cameraToXyz, ramp.asShotMultipliers)
+        val out = roundTrip(input).input
+        var worst = 0.0
+        for (i in 0 until w * 2) {
+            for (c in 0..2) worst = maxOf(worst, abs(ln(out.linearRgb[i * 3 + c] / px[i * 3 + c].toDouble()) / ln(2.0)))
+        }
+        // Within half of the finest green step and the finest chroma step (stops).
+        assertThat(worst).isLessThan(0.0045)
+        // Monotone: a gradient never steps back.
+        for (x in 1 until w) assertThat(out.linearRgb[x * 3 + 1]).isAtLeast(out.linearRgb[(x - 1) * 3 + 1])
+    }
+
+    @Test
+    fun `steps follow the photo's own noise and the rounding stays a fraction of it`() {
+        val sigma = 0.02
+        val input = noisy(256, 256, 0.18f, sigma, seed = 7)
+        val v1 = SmartPreviewCodec.encode(input, ByteArray(0), 256, 256, SmartPreviewCodec.VERSION_1)
+        val v2 = SmartPreviewCodec.encode(input, ByteArray(0), 256, 256)
+        val out = SmartPreviewCodec.decode(ByteArrayInputStream(v2)).input
+        var sq = 0.0
+        for (i in 0 until 256 * 256) {
+            val e = ln(out.linearRgb[i * 3 + 1] / input.linearRgb[i * 3 + 1].toDouble())
+            sq += e * e
+        }
+        val rms = kotlin.math.sqrt(sq / (256 * 256))
+        // The added error is well under the grain (a uniform rounding of step s has s / sqrt(12)).
+        assertThat(rms).isLessThan(sigma / 2)
+        assertThat(rms).isGreaterThan(sigma / 100) // coarser than the exact 16-bit codes of version 1
+        assertThat(v2.size).isLessThan(v1.size * 6 / 10)
+    }
+
+    @Test
+    fun `damaged quantiser tables are refused, never misread`() {
+        val bytes = SmartPreviewCodec.encode(SyntheticImages.grayRamp(9, 7), ByteArray(0), 9, 7)
+        val at = String(bytes, Charsets.ISO_8859_1).indexOf("\"luma\":[") + "\"luma\":[".length
+        // A table entry of 0 codes (same header length): refused.
+        val zero = bytes.copyOf().also { it[at] = '0'.code.toByte() }
+        if (bytes[at + 1] == ','.code.toByte()) {
+            assertThrows(IOException::class.java) { SmartPreviewCodec.decode(ByteArrayInputStream(zero)) }
+        }
+        // Not JSON any more: refused as a bad header, not a parser crash.
+        val broken = bytes.copyOf().also { it[at] = '}'.code.toByte() }
+        assertThrows(IOException::class.java) { SmartPreviewCodec.decode(ByteArrayInputStream(broken)) }
     }
 
     @Test

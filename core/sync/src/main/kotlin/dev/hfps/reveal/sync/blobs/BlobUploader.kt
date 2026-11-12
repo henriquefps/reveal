@@ -14,8 +14,10 @@ import dev.hfps.reveal.data.handoff.LocalPreviews
 import dev.hfps.reveal.data.library.DocumentTreeFactory
 import dev.hfps.reveal.data.storage.isAccessError
 import dev.hfps.reveal.pipeline.preview.MadePreview
+import dev.hfps.reveal.pipeline.preview.SmartPreviewCodec
 import dev.hfps.reveal.pipeline.preview.SmartPreviewMaker
 import dev.hfps.reveal.pipeline.preview.SmartPreviewMaker.Companion.toHex
+import dev.hfps.reveal.sync.api.DropResult
 import dev.hfps.reveal.sync.api.SyncApi
 import dev.hfps.reveal.sync.api.SyncHttpException
 import dev.hfps.reveal.sync.api.UploadCreateRequest
@@ -64,40 +66,39 @@ class BlobUploader(
     // ------------------------------------------------------------------ previews
 
     /**
-     * Makes and uploads the smart previews this device owes (up to [limit] new ones), then the pending uploads. Returns
-     * how many candidates moved on: made, sent, or set aside because they cannot be made (never tried again until
-     * their file changes).
+     * Makes and uploads the smart previews this device owes (up to [limit] new ones, ADR 0018 "Smart previews":
+     * device-only photos whose original cannot go up, unreadable ones and, when [originalsOff], edited ones), plus up
+     * to [reformat] made again because this device uploaded them in an older format (0.5.x, about 9 MB: the caller
+     * asks for those on an unmetered network only), then the pending uploads. Returns how many candidates moved on:
+     * made, sent, or set aside because they cannot be made (never tried again until their file changes).
      */
-    suspend fun previews(api: SyncApi, limit: Int, noBackup: Boolean, progress: Progress = Progress { _, _ -> }): Int {
+    suspend fun previews(
+        api: SyncApi,
+        limit: Int,
+        originalsOff: Boolean = false,
+        reformat: Int = 0,
+        progress: Progress = Progress { _, _ -> },
+    ): Int {
         var made = 0
         var parked = 0
-        for (candidate in sync.previewCandidates(noBackup, limit)) {
+        val outdated = if (reformat > 0) {
+            sync.outdatedPreviews(originalsOff, SmartPreviewCodec.VERSION, reformat)
+        } else {
+            emptyList()
+        }
+        for (candidate in sync.previewCandidates(originalsOff, limit) + outdated) {
             currentCoroutineContext().ensureActive()
             val preview = runCatching { makePreview(candidate) }
                 .onFailure { if (it is CancellationException) throw it }
                 .onFailure { Log.w(TAG, "No smart preview for photo ${candidate.photoId}: ${describe(it)}") }
                 .getOrNull()
             if (preview == null) {
-                // Unreadable (unplugged, damaged): remember this file so it is not tried on every run.
-                val cloud = sync.cloud(candidate.photoId) ?: PhotoCloudEntity(candidate.photoId)
-                sync.putCloud(cloud.copy(previewFingerprint = candidate.fingerprint))
+                setAside(candidate, outdated = candidate in outdated)
                 parked++
-                continue
+            } else {
+                queuePreview(candidate, preview)
+                made++
             }
-            sync.insertUpload(
-                SyncUploadEntity(
-                    photoId = candidate.photoId,
-                    kind = SyncUploadEntity.KIND_PREVIEW,
-                    sha256 = preview.sha256,
-                    size = preview.size,
-                    fingerprint = candidate.fingerprint,
-                    file = preview.file.path,
-                    width = preview.width,
-                    height = preview.height,
-                    updatedAt = clock(),
-                ),
-            )
-            made++
         }
         var sent = 0
         for (upload in sync.pendingUploads(SyncUploadEntity.KIND_PREVIEW, PENDING_BATCH)) {
@@ -105,6 +106,117 @@ class BlobUploader(
             if (sendPreview(api, upload, progress)) sent++
         }
         return made + sent + parked
+    }
+
+    /** A preview that cannot be made: not tried again for this file. */
+    private suspend fun setAside(candidate: CloudCandidate, outdated: Boolean) {
+        val cloud = sync.cloud(candidate.photoId) ?: PhotoCloudEntity(candidate.photoId)
+        if (outdated) {
+            // Given up making it again: the old preview stays (it still develops).
+            sync.putCloud(cloud.copy(previewFormat = SmartPreviewCodec.VERSION))
+        } else {
+            // Unreadable (unplugged, damaged): remember this file so it is not tried on every run.
+            sync.putCloud(cloud.copy(previewFingerprint = candidate.fingerprint))
+        }
+    }
+
+    private suspend fun queuePreview(candidate: CloudCandidate, preview: MadePreview) {
+        sync.insertUpload(
+            SyncUploadEntity(
+                photoId = candidate.photoId,
+                kind = SyncUploadEntity.KIND_PREVIEW,
+                sha256 = preview.sha256,
+                size = preview.size,
+                fingerprint = candidate.fingerprint,
+                file = preview.file.path,
+                width = preview.width,
+                height = preview.height,
+                updatedAt = clock(),
+            ),
+        )
+    }
+
+    /**
+     * Previews this device made for photos that no longer qualify (unedited again, or their original reached the
+     * server): the photo record stops naming them (pushed by the next metadata sync) and a drop is queued for
+     * [drops]. Local only; returns how many were marked.
+     */
+    suspend fun markDrops(limit: Int = DROP_BATCH): Int {
+        val stale = sync.droppablePreviews(limit)
+        for (preview in stale) {
+            db.withTransaction {
+                val cloud = sync.cloud(preview.photoId) ?: return@withTransaction
+                sync.putCloud(
+                    cloud.copy(
+                        previewSha = null,
+                        previewWidth = null,
+                        previewHeight = null,
+                        previewFingerprint = null,
+                        previewFormat = null,
+                    ),
+                )
+                queueDrop(preview.photoId, preview.sha256)
+                markPhotoDirty(preview.photoId)
+            }
+        }
+        return stale.size
+    }
+
+    /**
+     * Asks the server to drop the queued previews (`DELETE /v1/blobs/{sha256}`, ADR 0017). One a photo record still
+     * names there waits for the push (the next run asks again, a bounded number of times); a server without the route
+     * keeps them all queued. Returns how many were settled.
+     */
+    suspend fun drops(api: SyncApi, limit: Int = DROP_BATCH): Int {
+        var settled = 0
+        for (drop in sync.pendingUploads(SyncUploadEntity.KIND_DROP, limit)) {
+            currentCoroutineContext().ensureActive()
+            if (sync.previewNamed(drop.sha256)) {
+                // Named again here (the same preview made again): nothing to drop.
+                sync.deleteUpload(drop.id)
+                settled++
+                continue
+            }
+            when (api.dropPreview(drop.sha256)) {
+                DropResult.DROPPED, DropResult.GONE, DropResult.REFUSED -> {
+                    sync.deleteUpload(drop.id)
+                    settled++
+                }
+
+                DropResult.REFERENCED -> {
+                    val attempts = drop.attempts + 1
+                    val state = if (attempts >= MAX_DROP_ATTEMPTS) SyncUploadEntity.STATE_FAILED else drop.state
+                    sync.updateUpload(drop.copy(attempts = attempts, state = state, updatedAt = clock()))
+                }
+
+                DropResult.UNSUPPORTED -> {
+                    Log.i(TAG, "The server cannot drop previews yet: they wait for its update")
+                    return settled
+                }
+            }
+        }
+        return settled
+    }
+
+    private suspend fun queueDrop(photoId: Long, sha: String) {
+        sync.insertUpload(
+            SyncUploadEntity(
+                photoId = photoId,
+                kind = SyncUploadEntity.KIND_DROP,
+                sha256 = sha,
+                size = 0,
+                updatedAt = clock(),
+            ),
+        )
+    }
+
+    private suspend fun markPhotoDirty(photoId: Long) {
+        val photo = db.photoDao().get(photoId) ?: return
+        val record = sync.record(Kinds.PHOTO, photo.uuid)
+        sync.putRecord(
+            record?.copy(dirty = true, modifiedAt = clock())
+                ?: SyncRecordEntity(Kinds.PHOTO, photo.uuid, 0, dirty = true, modifiedAt = clock()),
+        )
     }
 
     @Suppress("ThrowsCount")
@@ -128,32 +240,37 @@ class BlobUploader(
             sync.updateUpload(upload.copy(state = SyncUploadEntity.STATE_FAILED, updatedAt = clock()))
             return false
         }
+        val format = runCatching { file.inputStream().use(SmartPreviewCodec::version) }
+            .getOrDefault(SmartPreviewCodec.VERSION)
         val done = send(api, upload, FileSource(file), progress)
         if (done) {
-            previewUploaded(upload.photoId, upload.sha256, upload.width ?: 0, upload.height ?: 0, upload.fingerprint)
+            previewUploaded(upload, format)
             file.delete()
         }
         return done
     }
 
-    private suspend fun previewUploaded(photoId: Long, sha: String, width: Int, height: Int, fingerprint: String?) {
+    private suspend fun previewUploaded(upload: SyncUploadEntity, format: Int) {
         db.withTransaction {
-            val cloud = sync.cloud(photoId) ?: PhotoCloudEntity(photoId)
+            val cloud = sync.cloud(upload.photoId) ?: PhotoCloudEntity(upload.photoId)
+            // The preview it replaces (an older format, or of the file before it changed), when this device made it:
+            // dropped once the record names the new one.
+            val replaced = cloud.previewSha?.takeIf {
+                it != upload.sha256 && (cloud.previewFormat != null || cloud.previewFingerprint != null)
+            }
             sync.putCloud(
                 cloud.copy(
-                    previewSha = sha,
-                    previewWidth = width,
-                    previewHeight = height,
-                    previewFingerprint = fingerprint,
+                    previewSha = upload.sha256,
+                    previewWidth = upload.width ?: 0,
+                    previewHeight = upload.height ?: 0,
+                    previewFingerprint = upload.fingerprint,
+                    previewFormat = format,
                 ),
             )
+            sync.cancelDrops(upload.sha256)
+            if (replaced != null) queueDrop(upload.photoId, replaced)
             // The photo record now names its preview: push it.
-            val photo = db.photoDao().get(photoId) ?: return@withTransaction
-            val record = sync.record(Kinds.PHOTO, photo.uuid)
-            sync.putRecord(
-                record?.copy(dirty = true, modifiedAt = clock())
-                    ?: SyncRecordEntity(Kinds.PHOTO, photo.uuid, 0, dirty = true, modifiedAt = clock()),
-            )
+            markPhotoDirty(upload.photoId)
         }
     }
 
@@ -351,6 +468,10 @@ class BlobUploader(
         private const val STATUS_EXISTS = "exists"
         const val DEFAULT_CHUNK = 8L * 1024 * 1024
         private const val PENDING_BATCH = 50
+        private const val DROP_BATCH = 50
+
+        /** A drop the server keeps answering `referenced` for (the record never got pushed): given up after this. */
+        private const val MAX_DROP_ATTEMPTS = 20
         private const val MAX_FAILURES = 5
         private const val MAX_CHECKSUM_FAILURES = 3
         private const val BUFFER = 64 * 1024

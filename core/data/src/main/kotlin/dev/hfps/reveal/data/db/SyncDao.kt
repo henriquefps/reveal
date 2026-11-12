@@ -21,6 +21,24 @@ data class CloudCandidate(
     val backup: Boolean,
 )
 
+/** A smart preview this device made for a photo that no longer needs one. */
+data class DroppablePreview(@ColumnInfo(name = "photo_id") val photoId: Long, val sha256: String)
+
+/**
+ * The photos [SyncDao.previewCandidates] and [SyncDao.outdatedPreviews] start from: device-only (looked up, missing on
+ * the server), visible, in a reachable folder or hand-off, main file printed, nothing queued, and whose original cannot
+ * go to the server: Reveal cannot read it, or it is edited while the originals backup is off (`:originalsOff`).
+ */
+private const val PREVIEW_PHOTOS =
+    "SELECT p.id AS photo_id, p.source_id, f.id AS file_id, f.document_id, f.name, f.size, f.fingerprint, " +
+        "s.backup FROM photos p JOIN sources s ON s.id = p.source_id JOIN photo_files f ON f.photo_id = p.id " +
+        "JOIN photo_cloud c ON c.photo_id = p.id WHERE s.kind != 'SERVER' AND s.state = 'AVAILABLE' " +
+        "AND p.hidden = 0 AND c.original_on_server = 0 AND c.checked_at > 0 AND f.fingerprint IS NOT NULL " +
+        "AND (f.role = 'RAW' OR NOT EXISTS (SELECT 1 FROM photo_files o WHERE o.photo_id = p.id AND " +
+        "o.role = 'RAW')) AND (f.unreadable_at IS NOT NULL OR (p.has_edit = 1 AND :originalsOff)) " +
+        "AND NOT EXISTS (SELECT 1 FROM sync_uploads u WHERE u.photo_id = p.id AND u.kind = 'preview' AND " +
+        "u.state = 'pending') "
+
 /** Counts for the Sync screen. */
 data class SyncCounts(
     val pending: Int,
@@ -91,9 +109,10 @@ interface SyncDao {
     @Query(
         "SELECT (SELECT COUNT(*) FROM sync_records WHERE dirty = 1) AS pending, " +
             "(SELECT COUNT(*) FROM sync_records) AS records, " +
-            "(SELECT COUNT(*) FROM sync_uploads WHERE state = 'pending') AS uploads_pending, " +
-            "(SELECT COALESCE(SUM(size - `offset`), 0) FROM sync_uploads WHERE state = 'pending') " +
-            "AS upload_bytes_pending, " +
+            "(SELECT COUNT(*) FROM sync_uploads WHERE state = 'pending' AND kind != 'drop_preview') " +
+            "AS uploads_pending, " +
+            "(SELECT COALESCE(SUM(size - `offset`), 0) FROM sync_uploads WHERE state = 'pending' " +
+            "AND kind != 'drop_preview') AS upload_bytes_pending, " +
             "(SELECT COALESCE(SUM(size), 0) FROM sync_uploads WHERE state = 'done') AS uploaded_bytes",
     )
     fun observeCounts(): Flow<SyncCounts>
@@ -217,33 +236,56 @@ interface SyncDao {
 
     /**
      * Device-only photos (looked up, missing on the server) that need a smart preview from this device (ADR 0018
-     * "Smart previews"): edited, rated or picked ones, and every one whose original is not backed up ([noBackup], its
-     * folder's backup is off, or Reveal cannot read it any more). Edited first, then newest. A photo's preview is made
-     * again when its file changes.
+     * "Smart previews", FIX/P): an edited photo's original is backed up instead ([backupCandidates]), so a preview is
+     * only for an original that cannot go up: one Reveal cannot read any more (the preview is then the only copy), or
+     * an edited one while the originals backup is off ([originalsOff]). Ratings, flags and labels travel without one.
+     * Edited first, then newest. A photo's preview is made again when its file changes.
      */
     @Query(
-        "SELECT p.id AS photo_id, p.source_id, f.id AS file_id, f.document_id, f.name, f.size, f.fingerprint, " +
-            "s.backup FROM photos p JOIN sources s ON s.id = p.source_id JOIN photo_files f ON f.photo_id = p.id " +
-            "JOIN photo_cloud c ON c.photo_id = p.id WHERE s.kind != 'SERVER' AND s.state = 'AVAILABLE' " +
-            "AND p.hidden = 0 AND c.original_on_server = 0 AND c.checked_at > 0 AND f.fingerprint IS NOT NULL " +
-            "AND (f.role = 'RAW' OR NOT EXISTS (SELECT 1 FROM photo_files o WHERE o.photo_id = p.id AND " +
-            "o.role = 'RAW')) AND (c.preview_fingerprint IS NULL OR c.preview_fingerprint != f.fingerprint) " +
-            "AND (p.has_edit = 1 OR p.rating > 0 OR p.flag = 'PICK' OR s.backup = 0 OR :noBackup OR " +
-            "f.unreadable_at IS NOT NULL) " +
-            "AND NOT EXISTS (SELECT 1 FROM sync_uploads u WHERE u.photo_id = p.id AND u.kind = 'preview' AND " +
-            "u.state = 'pending') ORDER BY p.has_edit DESC, p.sort_time DESC LIMIT :limit",
+        PREVIEW_PHOTOS + "AND (c.preview_fingerprint IS NULL OR c.preview_fingerprint != f.fingerprint) " +
+            "ORDER BY p.has_edit DESC, p.sort_time DESC LIMIT :limit",
     )
-    suspend fun previewCandidates(noBackup: Boolean, limit: Int): List<CloudCandidate>
+    suspend fun previewCandidates(originalsOff: Boolean, limit: Int): List<CloudCandidate>
 
     /**
-     * Device-only photos (looked up, missing on the server) of folders with the backup on, not queued yet. A file
-     * Reveal cannot read (ADR 0011 "Unreadable hand-offs") waits until it can: its smart preview goes instead.
+     * Photos that still qualify for a preview and whose preview this device uploaded in a format older than [format]
+     * (0.5.0-0.5.1 wrote format 1, about 9 MB): made again lazily, newest first. Not for unreadable originals (their
+     * preview is the hand-off's own, it cannot be made again).
+     */
+    @Query(
+        PREVIEW_PHOTOS + "AND c.preview_fingerprint = f.fingerprint AND c.preview_sha IS NOT NULL " +
+            "AND f.unreadable_at IS NULL AND COALESCE(c.preview_format, 1) < :format " +
+            "ORDER BY p.sort_time DESC LIMIT :limit",
+    )
+    suspend fun outdatedPreviews(originalsOff: Boolean, format: Int, limit: Int): List<CloudCandidate>
+
+    /**
+     * Previews this device made (it uploaded them, or 0.5.x did: a preview fingerprint) for photos that no longer
+     * qualify: not edited and readable, or their original reached the server (ADR 0018 "Smart previews").
+     */
+    @Query(
+        "SELECT c.photo_id AS photo_id, c.preview_sha AS sha256 FROM photo_cloud c " +
+            "JOIN photos p ON p.id = c.photo_id JOIN sources s ON s.id = p.source_id " +
+            "WHERE c.preview_sha IS NOT NULL AND s.kind != 'SERVER' " +
+            "AND p.hidden = 0 AND (c.preview_format IS NOT NULL OR c.preview_fingerprint IS NOT NULL) " +
+            "AND (c.original_on_server = 1 OR (p.has_edit = 0 AND NOT EXISTS (SELECT 1 FROM photo_files f " +
+            "WHERE f.photo_id = p.id AND f.unreadable_at IS NOT NULL))) " +
+            "AND NOT EXISTS (SELECT 1 FROM sync_uploads u WHERE u.photo_id = p.id AND u.kind = 'preview' AND " +
+            "u.state = 'pending') LIMIT :limit",
+    )
+    suspend fun droppablePreviews(limit: Int): List<DroppablePreview>
+
+    /**
+     * Device-only photos (looked up, missing on the server) of folders with the backup on, and edited photos of any
+     * folder or hand-off (an edit is worth its original, like Lightroom; ADR 0018 "Smart previews"), not queued yet.
+     * Removing the edit later never deletes an uploaded original. A file Reveal cannot read (ADR 0011 "Unreadable
+     * hand-offs") waits until it can: its smart preview goes instead.
      */
     @Query(
         "SELECT p.id AS photo_id, p.source_id, f.id AS file_id, f.document_id, f.name, f.size, f.fingerprint, " +
             "s.backup FROM photos p JOIN sources s ON s.id = p.source_id JOIN photo_files f ON f.photo_id = p.id " +
             "JOIN photo_cloud c ON c.photo_id = p.id WHERE s.kind != 'SERVER' AND s.state = 'AVAILABLE' " +
-            "AND s.backup = 1 AND p.hidden = 0 AND c.original_on_server = 0 AND c.checked_at > 0 " +
+            "AND (s.backup = 1 OR p.has_edit = 1) AND p.hidden = 0 AND c.original_on_server = 0 AND c.checked_at > 0 " +
             "AND f.fingerprint IS NOT NULL AND f.unreadable_at IS NULL AND (f.role = 'RAW' OR NOT EXISTS " +
             "(SELECT 1 FROM photo_files o WHERE o.photo_id = p.id AND o.role = 'RAW')) AND NOT EXISTS " +
             "(SELECT 1 FROM sync_uploads u WHERE u.photo_id = p.id AND u.kind = 'original' AND u.state != 'done') " +
@@ -261,6 +303,14 @@ interface SyncDao {
 
     @Query("SELECT * FROM sync_uploads WHERE state = 'pending' AND kind = :kind ORDER BY id LIMIT :limit")
     suspend fun pendingUploads(kind: String, limit: Int): List<SyncUploadEntity>
+
+    /** True when a photo record on this device names [sha256] as its smart preview (a drop of it must wait). */
+    @Query("SELECT COUNT(*) > 0 FROM photo_cloud WHERE preview_sha = :sha256")
+    suspend fun previewNamed(sha256: String): Boolean
+
+    /** Cancels queued drops of [sha256] (the same preview is named again). */
+    @Query("DELETE FROM sync_uploads WHERE kind = 'drop_preview' AND sha256 = :sha256 AND state = 'pending'")
+    suspend fun cancelDrops(sha256: String)
 
     @Query("SELECT * FROM sync_uploads WHERE id = :id")
     suspend fun upload(id: Long): SyncUploadEntity?

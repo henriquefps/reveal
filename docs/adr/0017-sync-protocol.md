@@ -190,6 +190,25 @@ single `Range` requests, `HEAD` for size). `404 not_found` when the server does 
 Uploads are per device: another device's upload id is `404`. Two devices uploading the same blob each upload; the
 second to finish finds it in place and is told `exists`.
 
+### Dropping a smart preview
+
+Added in 0.5.2 (FIX/P; schema migration `0002_preview_refs`). A device may drop a smart preview **it uploaded** that no
+live photo record names any more (its photo was un-edited, or its original reached the server, ADR 0018 "Smart
+previews"): `DELETE /v1/blobs/{sha256}` →
+
+- `204`: the row and the file are gone (a later upload of the same bytes is a new blob).
+- `404 not_found`: no such blob (dropped before).
+- `403 forbidden`: `details.reason` is `original` (originals are never dropped by a device) or `other_device` (another
+  device uploaded it).
+- `409 conflict`, `details.reason = referenced`: a photo record that is not deleted still names it in
+  `data.preview.sha256`. The client pushes the record without it first, then asks again.
+
+The reference check and the delete are one transaction (an index on `json_extract(data, '$.preview.sha256')` of live
+photo records), so a record naming the preview keeps it; a preview upload completing at the same moment is serialised
+with the drop. A record pushed later that names a dropped preview (a device that wrote the photo without having pulled the
+change) gets `404` on download; the device that owns the preview pushes the record again with its current preview
+when it sees one without it. Servers before 0.5.2 answer `405`: the app keeps its drops queued until the server is updated.
+
 ### Originals and the fingerprint lookup
 
 `POST /v1/fingerprints/lookup` `{"fingerprints": ["v1:…", …]}` (at most 1000) →
@@ -265,10 +284,10 @@ Every error is JSON:
 | --- | --- |
 | 400 | `invalid_request`, `invalid_cursor`, `invalid_json` |
 | 401 | `unauthorized`, `invalid_pairing_token` |
-| 403 | `forbidden` (admin: missing `X-Reveal-Admin` or foreign `Origin`) |
+| 403 | `forbidden` (admin: missing `X-Reveal-Admin` or foreign `Origin`; `DELETE /v1/blobs`: an original or another device's preview) |
 | 404 | `not_found` |
 | 405 | `method_not_allowed` |
-| 409 | `offset_mismatch`, `upload_busy` (another request is writing the same upload), `conflict` (admin: e.g. changing a backup root that holds blobs) |
+| 409 | `offset_mismatch`, `upload_busy` (another request is writing the same upload), `conflict` (admin: e.g. changing a backup root that holds blobs; `DELETE /v1/blobs`: still referenced) |
 | 413 | `too_large` |
 | 415 | `unsupported_media_type` |
 | 422 | `invalid_change`, `checksum_mismatch` |
@@ -311,8 +330,8 @@ exactly 2 MiB, 2 MiB + 1).
 - Device clocks decide conflicts. A device with a clock far in the future always wins; the loser is still kept as a
   copy, so nothing is lost. A server-side clock check is a possible later addition (`modifiedAt` far ahead of the
   server's time could be clamped).
-- Blobs are never garbage collected in v1 (originals are a backup; previews are small). A sweep of blobs no record
-  references can come later without a protocol change.
+- Originals are never garbage collected (they are a backup). Since 0.5.2 a device drops the smart previews it no
+  longer needs ("Dropping a smart preview"); a server-side sweep of blobs no record references can still come later.
 - Encryption at rest of originals (`sync.md` "Security", optional) is not in v1; the backup root can live on an
   encrypted volume.
 - Smart previews are made by devices (the server has no RAW decoder), so a NAS photo nobody opened yet has no

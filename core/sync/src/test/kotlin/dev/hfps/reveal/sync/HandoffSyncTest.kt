@@ -169,7 +169,7 @@ class HandoffSyncTest {
         assertThat(runBlocking { dao.backupCandidates(10) }).isEmpty()
 
         // Its smart preview is what the server gets: the local one, as it is (no read of the original).
-        val previewsDone = runBlocking { uploader.previews(phone.api, 10, noBackup = false) }
+        val previewsDone = runBlocking { uploader.previews(phone.api, 10) }
         assertThat(previewsDone).isAtLeast(1)
         assertThat(tree.opens).isEqualTo(1)
         val cloud = runBlocking { dao.cloud(photo) }!!

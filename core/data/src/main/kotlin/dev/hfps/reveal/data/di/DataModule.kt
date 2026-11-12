@@ -23,6 +23,7 @@ import dev.hfps.reveal.data.library.SidecarSync
 import dev.hfps.reveal.data.model.SourceKind
 import dev.hfps.reveal.data.preset.AppBuiltInPresets
 import dev.hfps.reveal.data.preset.BuiltInPresetSource
+import dev.hfps.reveal.data.preset.PresetDownloader
 import dev.hfps.reveal.data.preset.PresetRepository
 import dev.hfps.reveal.data.storage.SafDocumentTree
 import dev.hfps.reveal.data.storage.StorageVolumes
@@ -132,6 +133,11 @@ object DataModule {
     @Provides
     @Singleton
     fun provideSmartCorrection(): SmartCorrection = SmartCorrection.NONE
+
+    /** Downloads a preset or pack the user asked for by link (docs/adr/0019 "Import from a link"). */
+    @Provides
+    @Singleton
+    fun providePresetDownloader(): PresetDownloader = PresetDownloader()
 
     /** The app's own presets: the built-in looks and smart presets (docs/adr/0020). */
     @Provides

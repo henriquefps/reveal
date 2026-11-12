@@ -7,6 +7,7 @@ import dev.hfps.reveal.pipeline.cpu.ColorSpaces
 import dev.hfps.reveal.pipeline.cpu.CpuDevelop
 import dev.hfps.reveal.pipeline.cpu.Luma
 import dev.hfps.reveal.pipeline.recipe.Recipe
+import java.util.stream.IntStream
 import kotlin.math.max
 import kotlin.math.min
 
@@ -30,21 +31,25 @@ object FaceInput {
         val rgb = CpuDevelop.renderLinear(small, Recipe())
         val gain = gain(rgb)
         val m = ColorSpaces.SRGB.fromXyz * ColorSpaces.REC2020.toXyz
+        val k = DoubleArray(9) { m[it / 3, it % 3] }
         val out = FloatArray(rgb.size)
-        val p = DoubleArray(3)
-        for (i in 0 until rgb.size / 3) {
-            val o = i * 3
-            p[0] = rgb[o] * gain
-            p[1] = rgb[o + 1] * gain
-            p[2] = rgb[o + 2] * gain
-            val s = m.times(p)
-            for (c in 0..2) out[o + c] = encode(s[c].coerceIn(0.0, 1.0)).toFloat()
+        // Rows in parallel; per pixel the same arithmetic as `Mat3.times`, without its allocation.
+        IntStream.range(0, small.height).parallel().forEach { y ->
+            for (i in y * small.width until (y + 1) * small.width) {
+                val o = i * 3
+                val r = rgb[o] * gain
+                val g = rgb[o + 1] * gain
+                val b = rgb[o + 2] * gain
+                out[o] = encode((k[0] * r + k[1] * g + k[2] * b).coerceIn(0.0, 1.0)).toFloat()
+                out[o + 1] = encode((k[3] * r + k[4] * g + k[5] * b).coerceIn(0.0, 1.0)).toFloat()
+                out[o + 2] = encode((k[6] * r + k[7] * g + k[8] * b).coerceIn(0.0, 1.0)).toFloat()
+            }
         }
         return DetectionImage(small.width, small.height, out)
     }
 
     /** Gain that lifts the median display luminance towards [TARGET_MEDIAN] (never darkens). */
-    private fun gain(rgb: FloatArray): Double {
+    internal fun gain(rgb: FloatArray): Double {
         val bins = IntArray(HISTOGRAM_BINS)
         val n = rgb.size / 3
         for (i in 0 until n) {
@@ -64,7 +69,7 @@ object FaceInput {
         return (TARGET_MEDIAN / y).coerceIn(1.0, MAX_GAIN)
     }
 
-    private fun encode(v: Double): Double =
+    internal fun encode(v: Double): Double =
         if (v <= 0.0031308) v * 12.92 else 1.055 * StrictMath.pow(v, 1 / 2.4) - 0.055
 
     /** Area average of [input] to at most [maxSide] px on its long side (whole-pixel blocks, so it stays cheap). */
@@ -75,7 +80,7 @@ object FaceInput {
         val h = max(1, (input.height.toLong() * maxSide / long).toInt())
         val out = FloatArray(w * h * 3)
         val src = input.linearRgb
-        for (y in 0 until h) {
+        IntStream.range(0, h).parallel().forEach { y ->
             val y0 = (y.toLong() * input.height / h).toInt()
             val y1 = max(y0 + 1, ((y + 1L) * input.height / h).toInt())
             for (x in 0 until w) {

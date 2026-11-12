@@ -273,6 +273,8 @@ class EditorActions(
     val onRemovePack: (Long) -> Unit = {},
     /** Imports a `.revealpreset` / `.revealpack` picked with the system file picker. */
     val onImportPresets: (android.net.Uri) -> Unit = {},
+    /** Opens "Import from a link" (docs/adr/0019): the link field, then a confirmation before any download. */
+    val onImportPresetLink: () -> Unit = {},
     val onExportPreset: (String, android.net.Uri) -> Unit = { _, _ -> },
     /** Exports a user group as a pack: the document, the author and the licence name shown to importers. */
     val onExportPresetGroup: (Long, android.net.Uri, String, String) -> Unit = { _, _, _, _ -> },

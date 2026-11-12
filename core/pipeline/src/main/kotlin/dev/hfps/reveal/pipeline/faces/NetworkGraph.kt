@@ -70,9 +70,10 @@ class NetworkGraph private constructor(
 
                 MAX_POOL -> maxPool(v(0), shapes[op.inputs[0]], shapes[out], op.options)
 
-                ADD -> add(v(0), v(1))
+                // In place when the first operand dies here (its buffer is the graph's own, never the input).
+                ADD -> add(v(0), v(1), into = reusable(op, 0, index, values))
 
-                RELU -> FloatArray(v(0).size) { max(0f, v(0)[it]) }
+                RELU -> relu(v(0), into = reusable(op, 0, index, values))
 
                 PAD -> pad(v(0), shapes[op.inputs[0]], checkNotNull(ints[op.inputs[1]]), shapes[out])
 
@@ -86,6 +87,13 @@ class NetworkGraph private constructor(
             for (t in op.inputs) if (lastUse[t] == index && t != input) values[t] = null
         }
         return outputs.map { checkNotNull(values[it]) }
+    }
+
+    /** The buffer of [op]'s input [i] when this op is its last reader and the graph computed it, else null. */
+    private fun reusable(op: Op, i: Int, index: Int, values: Array<FloatArray?>): FloatArray? {
+        val t = op.inputs[i]
+        if (t == input || lastUse[t] != index || op.inputs.count { it == t } > 1) return null
+        return values[t]
     }
 
     private fun conv(
@@ -106,17 +114,7 @@ class NetworkGraph private constructor(
         val padLeft = padBefore(o[0], iw, ow, sw, kw)
         val out = FloatArray(oh * ow * oc)
         if (kh == 1 && kw == 1 && sh == 1 && sw == 1) {
-            // Pointwise: the bulk of the network's work.
-            for (p in 0 until oh * ow) {
-                val xi = p * ic
-                val oi = p * oc
-                for (c in 0 until oc) {
-                    var acc = b[c]
-                    val wi = c * ic
-                    for (i in 0 until ic) acc += x[xi + i] * w[wi + i]
-                    out[oi + c] = acc
-                }
-            }
+            pointwise(x, w, b, out, oh * ow, ic, oc)
             return out
         }
         for (y in 0 until oh) {
@@ -204,9 +202,17 @@ class NetworkGraph private constructor(
         return out
     }
 
-    private fun add(a: FloatArray, b: FloatArray): FloatArray {
+    private fun add(a: FloatArray, b: FloatArray, into: FloatArray?): FloatArray {
         require(a.size == b.size) { "ADD needs equal shapes" }
-        return FloatArray(a.size) { a[it] + b[it] }
+        val out = into ?: FloatArray(a.size)
+        for (i in a.indices) out[i] = a[i] + b[i]
+        return out
+    }
+
+    private fun relu(a: FloatArray, into: FloatArray?): FloatArray {
+        val out = into ?: FloatArray(a.size)
+        for (i in a.indices) out[i] = max(0f, a[i])
+        return out
     }
 
     private fun pad(x: FloatArray, xs: IntArray, p: IntArray, os: IntArray): FloatArray {
@@ -268,6 +274,98 @@ class NetworkGraph private constructor(
         private const val VERSION = 1
         private const val KIND_HALF = 1
         private const val KIND_INT = 2
+
+        /**
+         * Pointwise (1 x 1) convolution, the bulk of the network's work: every output is `b[c] + Σ x[i] · w[c][i]`
+         * summed in `i` order, exactly as the plain loop, but computed 2 pixels x 4 channels at a time so each loaded
+         * input and weight is used several times (the results are bit-identical, `FaceSpeedupTest`).
+         */
+        internal fun pointwise(x: FloatArray, w: FloatArray, b: FloatArray, out: FloatArray, n: Int, ic: Int, oc: Int) {
+            var c = 0
+            while (c + 4 <= oc) {
+                val w0 = c * ic
+                val w1 = w0 + ic
+                val w2 = w1 + ic
+                val w3 = w2 + ic
+                var p = 0
+                while (p + 2 <= n) {
+                    val xa = p * ic
+                    val xb = xa + ic
+                    var a0 = b[c]
+                    var a1 = b[c + 1]
+                    var a2 = b[c + 2]
+                    var a3 = b[c + 3]
+                    var b0 = a0
+                    var b1 = a1
+                    var b2 = a2
+                    var b3 = a3
+                    for (i in 0 until ic) {
+                        val u = x[xa + i]
+                        val v = x[xb + i]
+                        val k0 = w[w0 + i]
+                        val k1 = w[w1 + i]
+                        val k2 = w[w2 + i]
+                        val k3 = w[w3 + i]
+                        a0 += u * k0
+                        a1 += u * k1
+                        a2 += u * k2
+                        a3 += u * k3
+                        b0 += v * k0
+                        b1 += v * k1
+                        b2 += v * k2
+                        b3 += v * k3
+                    }
+                    val oa = p * oc + c
+                    val ob = oa + oc
+                    out[oa] = a0
+                    out[oa + 1] = a1
+                    out[oa + 2] = a2
+                    out[oa + 3] = a3
+                    out[ob] = b0
+                    out[ob + 1] = b1
+                    out[ob + 2] = b2
+                    out[ob + 3] = b3
+                    p += 2
+                }
+                while (p < n) {
+                    for (k in 0 until 4) out[p * oc + c + k] = dot(x, p * ic, w, (c + k) * ic, ic, b[c + k])
+                    p++
+                }
+                c += 4
+            }
+            while (c < oc) {
+                for (p in 0 until n) out[p * oc + c] = dot(x, p * ic, w, c * ic, ic, b[c])
+                c++
+            }
+        }
+
+        internal fun dot(x: FloatArray, xi: Int, w: FloatArray, wi: Int, n: Int, bias: Float): Float {
+            var acc = bias
+            for (i in 0 until n) acc += x[xi + i] * w[wi + i]
+            return acc
+        }
+
+        /** The plain pointwise loop [pointwise] must match bit for bit (tests). */
+        internal fun pointwiseReference(
+            x: FloatArray,
+            w: FloatArray,
+            b: FloatArray,
+            out: FloatArray,
+            n: Int,
+            ic: Int,
+            oc: Int,
+        ) {
+            for (p in 0 until n) {
+                val xi = p * ic
+                val oi = p * oc
+                for (c in 0 until oc) {
+                    var acc = b[c]
+                    val wi = c * ic
+                    for (i in 0 until ic) acc += x[xi + i] * w[wi + i]
+                    out[oi + c] = acc
+                }
+            }
+        }
 
         /** TensorFlow's SAME padding before the first row/column (VALID: none). */
         private fun padBefore(padding: Int, input: Int, output: Int, stride: Int, kernel: Int): Int =

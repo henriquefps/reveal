@@ -93,6 +93,29 @@ class PresetStrengthTest {
     }
 
     @Test
+    fun `each photo of a batch blends from its own as-shot white balance`() {
+        val patch =
+            patchOf(Recipe(colour = Colour(WhiteBalance(5000f, 10f, WbMode.CUSTOM))), PresetSection.WHITE_BALANCE)
+        assertThat(patch.usesAsShot).isTrue()
+        assertThat(patchOf(Recipe(light = Light(contrast = 20f)), PresetSection.CONTRAST).usesAsShot).isFalse()
+        val unedited = Recipe() // as shot
+        // Two RAWs shot at 3200 K and 7000 K: half way in mired to 5000 K, each from its own camera value.
+        val tungsten = patch.apply(unedited, 0.5f, ApplyContext(3200f, -4f)).colour.whiteBalance
+        val shade = patch.apply(unedited, 0.5f, ApplyContext(7000f, 6f)).colour.whiteBalance
+        assertThat(tungsten.temperatureK!!).isWithin(0.5f).of(mired(3200f, 5000f))
+        assertThat(shade.temperatureK!!).isWithin(0.5f).of(mired(7000f, 5000f))
+        assertThat(tungsten.tint!!).isWithin(1e-4f).of(3f)
+        assertThat(shade.tint!!).isWithin(1e-4f).of(8f)
+        // The context rounds the camera's values as the editor's sliders show them; a JPEG has none.
+        val ctx = ApplyContext.of(dev.hfps.reveal.pipeline.cpu.WhiteBalanceModel.Cct(5123.4, -2.6))
+        assertThat(ctx).isEqualTo(ApplyContext(5123f, -3f))
+        assertThat(ApplyContext.of(null as dev.hfps.reveal.pipeline.cpu.WhiteBalanceModel.Cct?))
+            .isEqualTo(ApplyContext.UNKNOWN)
+    }
+
+    private fun mired(from: Float, to: Float): Float = (1e6 / ((1e6 / from + 1e6 / to) / 2)).toFloat()
+
+    @Test
     fun `switches take the preset's value from half strength`() {
         val patch = patchOf(
             Recipe(profile = Profile(BaseLook.PORTRAIT, 100f, Treatment.BLACK_WHITE)),

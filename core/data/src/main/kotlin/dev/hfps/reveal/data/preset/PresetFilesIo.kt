@@ -7,7 +7,9 @@ import dev.hfps.reveal.pipeline.preset.PresetError
 import dev.hfps.reveal.pipeline.preset.PresetFormatException
 import dev.hfps.reveal.pipeline.preset.PresetLimits
 import java.io.BufferedInputStream
+import java.io.File
 import java.io.IOException
+import java.io.InputStream
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -23,6 +25,9 @@ sealed interface PresetEvent {
     data object Exported : PresetEvent
 
     data object ExportFailed : PresetEvent
+
+    /** A download from a link failed before anything was imported ([status] = the HTTP status for HTTP_STATUS). */
+    data class DownloadFailed(val error: PresetDownloadError, val status: Int = 0) : PresetEvent
 }
 
 /**
@@ -31,9 +36,14 @@ sealed interface PresetEvent {
  */
 class PresetFilesIo(private val resolver: ContentResolver, private val presets: PresetRepository) {
     /** Imports the preset or pack at [uri]. */
-    suspend fun import(uri: Uri): PresetEvent = withContext(Dispatchers.IO) {
+    suspend fun import(uri: Uri): PresetEvent = import { resolver.openInputStream(uri) }
+
+    /** Imports the preset or pack in [file] (a download from a link, docs/adr/0019 "Import from a link"). */
+    suspend fun import(file: File): PresetEvent = import { file.inputStream() }
+
+    private suspend fun import(open: () -> InputStream?): PresetEvent = withContext(Dispatchers.IO) {
         try {
-            val stream = resolver.openInputStream(uri) ?: return@withContext PresetEvent.Refused(null)
+            val stream = open() ?: return@withContext PresetEvent.Refused(null)
             BufferedInputStream(stream).use { input ->
                 input.mark(ZIP_MAGIC.size)
                 val head = ByteArray(ZIP_MAGIC.size)

@@ -10,6 +10,7 @@ import dev.hfps.reveal.pipeline.InputKind
 import dev.hfps.reveal.pipeline.NoiseInfo
 import dev.hfps.reveal.pipeline.PipelineInput
 import dev.hfps.reveal.pipeline.cpu.Mat3
+import dev.hfps.reveal.pipeline.cpu.WhiteBalanceModel
 
 /** The RAW decoded fine, but LibRaw has no colour matrix for its camera, so it cannot be developed correctly. */
 class UnsupportedCameraException(val make: String?, val model: String?) :
@@ -76,6 +77,15 @@ object PipelineInputMapper {
     /** The noise model's facts from [info]: ISO (RAW only: standard decoders do not report it), make and model. */
     fun noise(info: ColorInfo): NoiseInfo =
         NoiseInfo(iso = (info as? RawColorInfo)?.iso, make = info.make, model = info.model)
+
+    /**
+     * The camera's as-shot white balance from a RAW header alone (no pixels: the library's batch apply reads one per
+     * photo); the same value as `WhiteBalanceModel.asShot(map(...))`. `null` for standard images and for a RAW
+     * without a colour matrix.
+     */
+    fun asShot(info: ColorInfo): WhiteBalanceModel.Cct? = (info as? RawColorInfo)?.let { raw ->
+        raw.cameraToXyz?.let { matrix -> WhiteBalanceModel.asShot(matrix.toMat3(), multipliers(raw)) }
+    }
 
     /** As-shot multipliers (R, G, B) with G = 1: the file's, else daylight, else neutral. */
     fun multipliers(info: RawColorInfo): FloatArray {

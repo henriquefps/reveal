@@ -166,11 +166,19 @@ class EditRepository(private val db: RevealDatabase, private val clock: () -> Lo
         action: HistoryAction,
         name: String? = null,
         transform: (Recipe) -> Recipe,
+    ): Int = applyEachVersion(versionIds, action, name) { _, recipe -> transform(recipe) }
+
+    /** [applyEach] with the version id passed to [transform] (a per-photo value, e.g. its as-shot white balance). */
+    suspend fun applyEachVersion(
+        versionIds: Collection<Long>,
+        action: HistoryAction,
+        name: String? = null,
+        transform: (Long, Recipe) -> Recipe,
     ): Int = db.withTransaction {
         var changed = 0
         for (versionId in versionIds) {
             val current = recipe(versionId)
-            val next = transform(current)
+            val next = transform(versionId, current)
             val changes = RecipeDiff.between(current, next)
             if (changes.isNotEmpty()) {
                 val groups = RecipeGroup.entries.filter { group -> changes.any { it.field.group == group } }

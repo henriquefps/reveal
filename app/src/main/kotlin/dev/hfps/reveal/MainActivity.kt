@@ -9,6 +9,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.viewModels
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -32,6 +33,8 @@ import dev.hfps.reveal.designsystem.theme.RevealTheme
 import dev.hfps.reveal.designsystem.theme.isDark
 import dev.hfps.reveal.feature.editor.EditorRoute
 import dev.hfps.reveal.feature.editor.navigateToEditor
+import dev.hfps.reveal.feature.editor.presets.PresetLinkHost
+import dev.hfps.reveal.feature.editor.presets.PresetLinkViewModel
 import dev.hfps.reveal.feature.editor.presets.PresetMessages
 import dev.hfps.reveal.feature.library.LibraryRoute
 import dev.hfps.reveal.feature.library.ViewerRoute
@@ -55,6 +58,9 @@ class MainActivity : ComponentActivity() {
 
     /** What the last hand-off from another app (ADR 0011) resolved to, until navigated to. */
     private val openRequest = MutableStateFlow<HandoffOutcome?>(null)
+
+    /** "Import from a link" for a preset link shared to or opened with Reveal (docs/adr/0019). */
+    private val presetLink: PresetLinkViewModel by viewModels()
 
     /** Ignores finger touches while a pen is down (palm rejection, docs/adr/0016). */
     private val palmRejection = PalmRejection()
@@ -105,6 +111,7 @@ class MainActivity : ComponentActivity() {
                         }
                     },
                 )
+                PresetLinkHost(presetLink)
             }
         }
     }
@@ -157,6 +164,7 @@ class MainActivity : ComponentActivity() {
         outState.putBoolean(KEY_FROM_INTENT, openedFromIntent)
     }
 
+    @Suppress("ReturnCount") // One early return per kind of intent: preset file, preset link, photo hand-off.
     private fun handleIntent(intent: Intent?) {
         // A preset or pack file (docs/adr/0019): imported into the library, never a photo hand-off.
         PresetIntents.presetFile(intent, contentResolver)?.let { uri ->
@@ -166,6 +174,11 @@ class MainActivity : ComponentActivity() {
                     Toast.makeText(this@MainActivity, it, Toast.LENGTH_LONG).show()
                 }
             }
+            return
+        }
+        // A link to a preset or pack (shared text or an https link): confirmed by the user before any download.
+        PresetIntents.presetLink(intent)?.let { link ->
+            presetLink.offer(link)
             return
         }
         val request = HandoffIntents.parse(intent) ?: return

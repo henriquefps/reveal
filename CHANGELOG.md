@@ -6,6 +6,19 @@ All notable changes to Reveal are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- Import presets from a link: paste an `https://` link in the presets panel (⋯ → Import from a link…) or share a
+  link to Reveal. Reveal names the site and downloads only after you confirm, with progress and Cancel, at most
+  32 MB, secure links only; the file is checked like one you open, and a pack lands on trial as usual. Nothing is
+  ever fetched in the background (docs/privacy.md lists all of Reveal's network use).
+- A `bench` build (minified like a release, its own app id) and `scripts/bench/release-bench.sh` to measure the
+  release code on a phone or tablet: face analysis per photo and the preset grid's scrolling.
+
+### Fixed
+- Applying a preset with a white balance to many photos at once now blends each photo from its own camera
+  white balance ("as shot"), as the editor does, instead of jumping to the preset's value at 50 % strength. The same
+  for smart presets that reset the white balance to as shot.
+
 ## [0.4.0] - 2026-11-12
 
 MS: sync with your own server. Pair phone and tablet with the reveal-sync server by QR code; edits, ratings and

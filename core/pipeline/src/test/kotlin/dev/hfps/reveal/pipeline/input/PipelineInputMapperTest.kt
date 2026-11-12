@@ -16,6 +16,7 @@ import dev.hfps.image.decode.Orientation
 import dev.hfps.reveal.pipeline.InputKind
 import dev.hfps.reveal.pipeline.cpu.ColorSpaces
 import dev.hfps.reveal.pipeline.cpu.CpuDevelop
+import dev.hfps.reveal.pipeline.cpu.WhiteBalanceModel
 import dev.hfps.reveal.pipeline.recipe.Recipe
 import kotlin.math.abs
 import org.junit.Assert.assertThrows
@@ -133,6 +134,23 @@ class PipelineInputMapperTest {
         assertThat(input.width).isEqualTo(3)
         val turned = PipelineInputMapper.map(image(3, 2), raw(orientation = 6))
         assertThat(turned.width).isEqualTo(2)
+    }
+
+    @Test
+    fun `the as-shot white balance from the header equals the mapped input's, per camera setting`() {
+        val warm = raw(asShot = WhiteBalance(1.6, 1.0, 2.4))
+        val cool = raw(asShot = WhiteBalance(2.6, 1.0, 1.3))
+        for (info in listOf(warm, cool)) {
+            val header = checkNotNull(PipelineInputMapper.asShot(info))
+            val mapped = WhiteBalanceModel.asShot(PipelineInputMapper.map(image(1, 1), info))
+            assertThat(header.temperatureK).isWithin(1e-9).of(mapped.temperatureK)
+            assertThat(header.tint).isWithin(1e-9).of(mapped.tint)
+        }
+        // Two shots with different as-shot settings have different as-shot kelvin (what a batch blends from).
+        val a = checkNotNull(PipelineInputMapper.asShot(warm)).temperatureK
+        val b = checkNotNull(PipelineInputMapper.asShot(cool)).temperatureK
+        assertThat(abs(a - b)).isGreaterThan(500.0)
+        assertThat(PipelineInputMapper.asShot(raw(matrix = null))).isNull()
     }
 
     private fun image(width: Int, height: Int, vararg values: Int): LinearImage {

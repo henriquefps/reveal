@@ -884,7 +884,7 @@ class EditorViewModel @Inject constructor(
         // never slower; Auto waits for them, and the Auto WB chip value is refined with the faces once they are in.
         val features = viewModelScope.async(Dispatchers.Default) {
             val start = SystemClock.elapsedRealtime()
-            runCatching { PhotoFeatures.of(input) }.getOrNull()?.let {
+            runCatching { PhotoFeatures.of(input, sample = sample, wb = wbAnalysis) }.getOrNull()?.let {
                 PhotoFeatures(sample, wbAnalysis, it.faces, it.saliency, lens = input.lens)
             }.also { EditorMetrics.features(it?.faces?.size ?: -1, SystemClock.elapsedRealtime() - start) }
         }

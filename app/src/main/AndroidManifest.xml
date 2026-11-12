@@ -84,6 +84,22 @@
                 <data android:pathPattern=".*\\.revealpreset" />
                 <data android:pathPattern=".*\\.revealpack" />
             </intent-filter>
+            <!-- A link to a preset or pack (docs/adr/0019 "Import from a link"): shared text (a browser's Share of the
+                 link) and https links to the files. Nothing is downloaded until the user confirms the host. -->
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
+            </intent-filter>
+            <intent-filter android:autoVerify="false">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https" />
+                <data android:host="*" />
+                <data android:pathPattern=".*\\.revealpreset" />
+                <data android:pathPattern=".*\\.revealpack" />
+            </intent-filter>
             <!-- Explicit hand-off from Hoard and other apps (ADR 0011): ClipData of content URIs. A typed filter
                  (image/*, RAW types, application/octet-stream for providers that do not know RAW) and a type-less one
                  for senders that leave the type unset. -->

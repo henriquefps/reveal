@@ -60,8 +60,10 @@ to), `p` = the preset's. Per `FieldKind`:
 | `SWITCH` | look, treatment, WB mode, lens corrections and CA switches, any enum/boolean | the preset's value from **50 %**, the photo's below |
 
 `null` absolute white balance means *as shot*. When the photo's as-shot kelvin/tint are known (`ApplyContext`, the
-editor has them from the input) a `null` side blends from that value, and a preset that says "as shot" lands back
-on `null` at 100 % and above. Without them (the library's batch apply) the absolute pair switches at 50 %. At `s = 0`
+editor has them from the input, the batch from each RAW's header) a `null` side blends from that value, and a preset
+that says "as shot" lands back on `null` at 100 % and above. Without them (a JPEG, an offline file) the absolute pair
+switches at 50 %. The values are the camera's, rounded to whole kelvin and tint as the sliders show them
+(`ApplyContext.of`), so the editor and the batch give a photo the same result. At `s = 0`
 the result is the photo, at `s = 1` exactly the preset's values (no arithmetic). Values past a range at 200 % clamp.
 Tested per kind in `PresetStrengthTest`.
 
@@ -154,12 +156,37 @@ is shown. `PresetPacks.read` / `write`, `PresetFilesTest`.
 ### Import and export
 
 Import: the presets panel's ⋯ (SAF, `.revealpreset`, `.revealpack` or a share of either), "Open with Reveal" on the
-file and Share to Reveal (`MainActivity` routes both MIME types and the extensions to the import). A `.revealpreset`
+file, Share to Reveal (`MainActivity` routes both MIME types and the extensions to the import) and a link (below). A `.revealpreset`
 lands in its `group` (a user group with that name, created if needed); an existing id is updated when the file's
 `version` is higher, else kept. A pack is imported as a **trial**: its groups show in the panel with the pack's
 name, author and licence and a banner "Keep pack / Remove", so the presets can be tried on the user's own photos
 (live previews) before keeping it. A newer version of a kept pack replaces its presets. Export: a preset as
 `.revealpreset`, a user group as `.revealpack` (through the share sheet or SAF).
+
+### Import from a link (M3/F)
+
+`docs/plan/distribution.md` sells packs "as a file or link that the app imports". A link reaches Reveal three ways:
+pasted in the panel's ⋯ "Import from a link…", shared to Reveal as text (a browser's Share of the page or link:
+`SEND` `text/plain`) or opened with Reveal (`VIEW` of an `https` URL ending in `.revealpack` / `.revealpreset`; most
+browsers keep web links to themselves, so sharing is the dependable route). `PresetLinks.parse` takes the first
+`http(s)://` token of the text.
+
+| Rule | Decision |
+| --- | --- |
+| Consent | Nothing is fetched until the user confirms a sheet that names the **host** and shows the full URL. No automatic downloads, no background fetches, no retries, no prefetch of covers or link previews. |
+| Transport | `https` only: an `http` link is refused in the field ("only secure links"), and so is a redirect to `http` (`followSslRedirects(false)` plus a network interceptor that refuses any non-https hop). The platform's CA store; no pinning (any https host may serve a pack). |
+| Limits | At most `PresetLimits.PACK_BYTES` (32 MiB, the pack limit): refused by `Content-Length` before reading and counted while reading (a chunked body stops at the limit). Connect 15 s, read 30 s, the whole call 180 s. |
+| What is sent | The request line, `User-Agent: Reveal` and an `Accept` of the two MIME types. No cookies, no cache, no identity, no device data. |
+| Progress and cancel | The sheet shows received/total bytes (an indeterminate bar when the server sends no length) and Cancel; cancelling (or dismissing the sheet) cancels the call and deletes the partial file. |
+| Validation | The file (under `cacheDir/preset-downloads`, deleted after use) goes through `PresetFilesIo.import`: zip sniffing, then `importPack` / `importPreset` exactly as a file, so a pack lands **on trial**. The server's MIME type is ignored. |
+| Errors | `PresetDownloadError`: `NOT_HTTPS`, `HTTP_STATUS` (with the code), `TOO_LARGE`, `TIMEOUT`, `NETWORK`, each a message in both languages; a file that downloads but does not validate gets the file import's `PresetError` message. |
+
+Code: `:core:data/preset` `PresetLinks`, `PresetDownloader` (OkHttp, the client `:core:sync` already ships),
+`PresetIntents.presetLink`; `:feature:editor/presets` `PresetLinkViewModel` + `PresetLinkSheet` (hosted by the editor
+and by `MainActivity`). The network use is listed in `docs/privacy.md`. Tests: `PresetLinksTest`,
+`PresetDownloaderTest` (a local TLS server: pack on trial, preset, invalid file, cleartext and https-to-http redirect,
+size by length and while chunked, HTTP error, timeout, cancel), instrumented `PresetLinkFlowTest` (shared link
+confirmed then on trial and nothing fetched before; pasted link; cleartext refused; cancel imports nothing).
 
 ## Library (database v7)
 
@@ -189,7 +216,13 @@ loser of a non-version record is dropped). Favourites of built-ins and recents s
 
 The library's selection menu "Apply preset…" picks a preset and a strength and enqueues `PresetBatchWorker`
 (WorkManager, like exports): one history step per photo (`PRESET`), in transactions of 25, with a progress
-notification and Cancel; a cancel keeps the photos already done. Each photo can undo its own step. Smart presets'
+notification and Cancel; a cancel keeps the photos already done. Each photo can undo its own step. A preset that
+sets an absolute temperature or tint (`PresetPatch.usesAsShot`) blends it from **each photo's own** as-shot white
+balance: the worker reads every RAW's header (`ThumbnailRepository.applyContext`, no decode) before the chunk's
+transaction; a smart preset uses the input it already decodes for the photo's features (M3/F; before, the batch had
+no as-shot values and the white balance switched at 50 %). Tested by `PresetStrengthTest` and the instrumented
+`PresetBatchWhiteBalanceTest` (CC0 RAWs of different as-shot white balance; a plain preset and a smart preset whose
+rule resets to as shot). Smart presets'
 correction is resolved per photo by M3/B's `SmartCorrection` inside the same worker.
 
 ## Previews

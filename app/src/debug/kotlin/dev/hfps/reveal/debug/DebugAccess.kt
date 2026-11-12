@@ -9,6 +9,7 @@ import dev.hfps.reveal.data.editor.EditorLayoutPreferences
 import dev.hfps.reveal.data.handoff.HandoffRepository
 import dev.hfps.reveal.data.library.LibraryRepository
 import dev.hfps.reveal.data.preset.PresetRepository
+import dev.hfps.reveal.data.thumb.ThumbnailRepository
 import dev.hfps.reveal.sync.SyncRepository
 
 /**
@@ -31,4 +32,6 @@ interface DebugAccess {
     fun database(): RevealDatabase
 
     fun presets(): PresetRepository
+
+    fun thumbnails(): ThumbnailRepository
 }

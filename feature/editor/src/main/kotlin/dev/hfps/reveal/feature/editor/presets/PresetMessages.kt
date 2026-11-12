@@ -2,6 +2,7 @@ package dev.hfps.reveal.feature.editor.presets
 
 import android.content.Context
 import dev.hfps.reveal.data.preset.ImportResult
+import dev.hfps.reveal.data.preset.PresetDownloadError
 import dev.hfps.reveal.data.preset.PresetEvent
 import dev.hfps.reveal.feature.editor.R
 import dev.hfps.reveal.pipeline.preset.PresetError
@@ -10,10 +11,22 @@ import dev.hfps.reveal.pipeline.preset.PresetError
 object PresetMessages {
     fun text(context: Context, event: PresetEvent): String? = when (event) {
         is PresetEvent.Created -> context.getString(R.string.presets_created, event.name)
+
         is PresetEvent.Imported -> imported(context, event.result)
+
         is PresetEvent.Refused -> context.getString(refused(event.error))
+
         PresetEvent.Exported -> context.getString(R.string.presets_exported)
+
         PresetEvent.ExportFailed -> context.getString(R.string.presets_export_failed)
+
+        is PresetEvent.DownloadFailed -> when (event.error) {
+            PresetDownloadError.NOT_HTTPS -> context.getString(R.string.presets_link_not_https)
+            PresetDownloadError.HTTP_STATUS -> context.getString(R.string.presets_link_failed_status, event.status)
+            PresetDownloadError.TOO_LARGE -> context.getString(R.string.presets_link_failed_size)
+            PresetDownloadError.TIMEOUT -> context.getString(R.string.presets_link_failed_timeout)
+            PresetDownloadError.NETWORK -> context.getString(R.string.presets_link_failed_network)
+        }
     }
 
     private fun imported(context: Context, result: ImportResult): String {

@@ -203,7 +203,9 @@ Folder first: `HandoffRepository.store` opens it (`foreign`), sets `handoff_at`,
 after every fingerprint pass -> `handoff/HandoffMerge` (culling `resolve`, versions moved, sync uuid adopted or
 tombstone + `sync_aliases`, local previews deleted). "Opened from other apps" = `photos.handoff_at IS NOT NULL` (folder
 photos included). Unreadable hand-offs: `HandoffPreviewer` makes `LocalPreviews` (`noBackupFilesDir/handoff-previews`,
-by fingerprint: `.jpg` display always, `.rvsp` smart preview for non-persistable grants) after `receive`;
+by fingerprint: `.jpg` display always, `.rvsp` smart preview for non-persistable grants) after `receive`; smart
+previews wait while an editor is open (`editorOpened/Closed`, heap), the editor writes its photo's from its own input
+(`LibraryRepository.keepSmartPreview`, after full resolution);
 `photo_files.unreadable_at` is set by any refused read (`storage/isAccessError`; `ImageInput.fromUri` turns a provider's
 `IllegalArgumentException` into `FileNotFoundException`) and by `LibraryRepository.checkHandoffs` (refresh);
 thumbnails, `PhotoImages`, `editTarget` (file URI of the `.rvsp`) and `exportTarget` (`OriginalReach.PREVIEW`) fall

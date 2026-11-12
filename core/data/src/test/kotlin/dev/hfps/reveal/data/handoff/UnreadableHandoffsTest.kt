@@ -112,6 +112,9 @@ class UnreadableHandoffsTest {
 
     private suspend fun receive(uri: Uri): Long {
         val outcome = handoffs().receive(HandoffRequest(listOf(uri)))
+        // The editor this opens comes and goes (the app's editor does the same through its view model).
+        previewer.editorOpened()
+        previewer.editorClosed()
         previewer.idle()
         return (outcome as HandoffOutcome.OpenEditor).versionId
     }
@@ -133,6 +136,24 @@ class UnreadableHandoffsTest {
         assertThat(rows()).hasSize(1)
         assertThat(displays.get()).isEqualTo(1)
         assertThat(smarts.get()).isEqualTo(1)
+        assertThat(previews.smart(print)).isNotNull()
+    }
+
+    @Test
+    fun `while an editor is open only display images are made, smart previews follow when it closes`() = runTest {
+        val (uri, file) = galleryFile("20261112_101550.jpg")
+        val print = FileFingerprint.of(file.readBytes())
+        // A single photo opens the editor: the hand-off expects it, then it opens.
+        handoffs().receive(HandoffRequest(listOf(uri)))
+        previewer.editorOpened()
+        val deadline = System.currentTimeMillis() + 10_000
+        while (previews.display(print) == null && System.currentTimeMillis() < deadline) Thread.sleep(20)
+        assertThat(previews.display(print)).isNotNull()
+        Thread.sleep(200)
+        assertThat(previews.smart(print)).isNull()
+
+        previewer.editorClosed()
+        previewer.idle()
         assertThat(previews.smart(print)).isNotNull()
     }
 

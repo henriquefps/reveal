@@ -8,6 +8,10 @@ import java.io.File
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -41,12 +45,18 @@ interface PreviewMaking {
  * cannot be read again. Right after a hand-off, one shot at a time in the background (the photo the editor opens
  * first): the display image always, the smart preview when the grant is not persistable. A preview already there (the
  * same photo shared again) is not made twice.
+ *
+ * Memory: a smart preview decodes a 2560 px proxy (about 100 MB of heap), as the editor's open does. So the display
+ * images of a batch come first, and smart previews wait while an editor is open ([editorOpened]); the photo the editor
+ * opens gets its smart preview from the editor's own input instead (`LibraryRepository.keepSmartPreview`), with no
+ * second decode.
  */
 class HandoffPreviewer(
     private val tree: DocumentTree,
     val previews: LocalPreviews,
     private val scope: CoroutineScope,
     private val making: PreviewMaking = PreviewMaking.DEFAULT,
+    private val clock: () -> Long = System::currentTimeMillis,
 ) {
     /** One shot to preview: its main file's fingerprint and documents (URIs), [smart] = make the smart preview too. */
     data class Shot(
@@ -62,11 +72,37 @@ class HandoffPreviewer(
 
     private val lock = Mutex()
     private val jobs = ArrayList<Job>()
+    private val editors = MutableStateFlow(0)
 
-    /** Previews [shots] in order, after the ones scheduled before. */
+    /** Until when (Unix ms) an editor this hand-off opens is expected: it is created after `receive` returns. */
+    @Volatile
+    private var expectedUntil = 0L
+
+    /** The hand-off opens the editor: smart previews wait for it (at most [EXPECT_MS] if it never comes). */
+    fun expectEditor() {
+        expectedUntil = clock() + EXPECT_MS
+    }
+
+    /** An editor opened (its decode and full-resolution zoom need the heap): smart previews wait until it closes. */
+    fun editorOpened() {
+        expectedUntil = 0L
+        editors.update { it + 1 }
+    }
+
+    fun editorClosed() = editors.update { (it - 1).coerceAtLeast(0) }
+
+    /** Previews [shots] in order, after the ones scheduled before: every display image, then the smart previews. */
     fun schedule(shots: List<Shot>) {
         if (shots.isEmpty()) return
-        val job = scope.launch { lock.withLock { shots.forEach { make(it) } } }
+        val job = scope.launch {
+            lock.withLock {
+                shots.forEach { display(it) }
+                for (shot in shots.filter { it.smart }) {
+                    quiet()
+                    smart(shot)
+                }
+            }
+        }
         synchronized(jobs) {
             jobs.removeAll { it.isCompleted }
             jobs += job
@@ -78,20 +114,27 @@ class HandoffPreviewer(
         synchronized(jobs) { jobs.toList() }.joinAll()
     }
 
-    private fun make(shot: Shot) {
+    private fun display(shot: Shot) = guarded {
+        if (previews.display(shot.fingerprint) == null) {
+            write({ previews.putDisplay(shot.fingerprint, it) }) { out ->
+                open(shot.raw).use { raw ->
+                    open(shot.rendered).use { rendered -> making.display(raw, rendered, out) }
+                }
+            }
+        }
+    }
+
+    private fun smart(shot: Shot) = guarded {
+        if (previews.smart(shot.fingerprint) == null) {
+            write({ previews.putSmart(shot.fingerprint, it) }) { out ->
+                tree.openInput(shot.main.id, shot.main.name).use { making.smart(it, out) }
+            }
+        }
+    }
+
+    private inline fun guarded(block: () -> Unit) {
         try {
-            if (previews.display(shot.fingerprint) == null) {
-                write({ previews.putDisplay(shot.fingerprint, it) }) { out ->
-                    open(shot.raw).use { raw ->
-                        open(shot.rendered).use { rendered -> making.display(raw, rendered, out) }
-                    }
-                }
-            }
-            if (shot.smart && previews.smart(shot.fingerprint) == null) {
-                write({ previews.putSmart(shot.fingerprint, it) }) { out ->
-                    tree.openInput(shot.main.id, shot.main.name).use { making.smart(it, out) }
-                }
-            }
+            block()
         } catch (e: CancellationException) {
             throw e
         } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
@@ -99,6 +142,16 @@ class HandoffPreviewer(
             Log.w(TAG, "No local preview for a hand-off: ${e.javaClass.simpleName}")
         } catch (e: OutOfMemoryError) {
             Log.w(TAG, "No memory for a hand-off's local preview", e)
+        }
+    }
+
+    /** No editor open or about to open. */
+    private suspend fun quiet() {
+        while (true) {
+            editors.first { it == 0 }
+            val wait = expectedUntil - clock()
+            if (wait <= 0 && editors.value == 0) return
+            delay(wait.coerceIn(1, POLL_MS))
         }
     }
 
@@ -116,5 +169,7 @@ class HandoffPreviewer(
 
     private companion object {
         const val TAG = "RevealHandoff"
+        const val EXPECT_MS = 30_000L
+        const val POLL_MS = 250L
     }
 }

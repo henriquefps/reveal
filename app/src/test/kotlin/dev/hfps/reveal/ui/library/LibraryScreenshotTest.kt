@@ -134,7 +134,8 @@ internal object LibrarySamples {
             row.copy(
                 sourceId = if (i == 2) 1 else 9,
                 handoffAt = if (i < 3) time("2026:11:12 09:30:00") else time("2026:11:10 18:05:00"),
-                handoffTitle = if (i < 3) "Hoard picks" else null,
+                // Titles, not arrival times: a time header would render in the machine's time zone.
+                handoffTitle = if (i < 3) "Hoard picks" else "Gallery",
                 unreadable = i >= 3,
                 hasEdit = i == 4,
                 editTime = if (i == 4) 1L else null,

@@ -262,7 +262,11 @@ database, but the picture would be gone. So, **always**, while the grant is aliv
   (`noBackupFilesDir/handoff-previews`, `LocalPreviews`, keyed by the main file's fingerprint, so a re-share under
   another URI finds them): the **display image** (1600 px JPEG) for every hand-off, and a **smart preview**
   (`SmartPreviewCodec`, the 2560 px one sync makes, ADR 0018) when the grant is not persistable. Smart previews are
-  capped at 1.5 GiB (least recently used first); a forgotten or merged hand-off loses both.
+  capped at 1.5 GiB (least recently used first); a forgotten or merged hand-off loses both. Memory: a smart preview
+  decodes a 2560 px proxy (about 100 MB of heap), like the editor's open, and the two together ran the phone's 256 MB
+  heap out (the editor's full-resolution zoom failed). So display images come first, smart previews wait while an
+  editor is open, and the photo the editor opens gets its smart preview from the editor's own input once its full
+  resolution is loaded (`LibraryRepository.keepSmartPreview`; no second decode).
 - A refused read marks the file (`photo_files.unreadable_at`, DB version 8; a successful read or a re-share clears it).
   `LibraryRepository.checkHandoffs` checks every hand-off document at start (and after a gallery permission change);
   thumbnails, the viewer, the editor, the export and sync mark it when they meet it.

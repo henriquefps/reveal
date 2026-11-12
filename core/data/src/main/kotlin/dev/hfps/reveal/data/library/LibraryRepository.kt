@@ -471,6 +471,34 @@ class LibraryRepository(
         return ok
     }
 
+    /**
+     * The smart preview of a hand-off, written by the editor from the input it opened (ADR 0011, unreadable hand-offs):
+     * the same pixels, no second decode of the original. Nothing when the photo is not a hand-off or already has one.
+     * [write] gets the display JPEG (may be empty) and the stream.
+     */
+    @Suppress("ReturnCount")
+    suspend fun keepSmartPreview(versionId: Long, write: (jpeg: ByteArray, out: java.io.OutputStream) -> Unit) {
+        withContext(Dispatchers.IO) {
+            val local = previews ?: return@withContext
+            val photoId = photoDao.photoIdOfVersion(versionId) ?: return@withContext
+            val photo = photoDao.get(photoId) ?: return@withContext
+            if (sourceDao.get(photo.sourceId)?.kind != SourceKind.HANDOFF) return@withContext
+            val files = photoDao.files(photoId)
+            val main =
+                files.firstOrNull { it.role == FileRole.RAW } ?: files.firstOrNull { it.role == FileRole.RENDERED }
+            val fingerprint = main?.fingerprint ?: return@withContext
+            if (local.smart(fingerprint) != null) return@withContext
+            val jpeg = local.display(fingerprint)?.readBytes() ?: ByteArray(0)
+            val temp = local.temp()
+            try {
+                temp.outputStream().buffered().use { write(jpeg, it) }
+                local.putSmart(fingerprint, temp)
+            } finally {
+                temp.delete()
+            }
+        }
+    }
+
     /** The smart preview of a photo whose original cannot be read now, or null. */
     @Suppress("ReturnCount")
     private suspend fun smartPreviewUri(detail: PhotoDetail): Uri? {

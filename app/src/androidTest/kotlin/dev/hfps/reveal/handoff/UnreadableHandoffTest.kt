@@ -183,8 +183,10 @@ class UnreadableHandoffTest {
         assertThat(photo.hasEdit).isTrue()
         assertThat(runBlocking { access.edits().recipe(photo.versionId) }.light.exposureEv).isEqualTo(0.5f)
         assertThat(fromApps().map { it.id }).containsExactly(photo.id)
-        compose.waitUntil(TIMEOUT_MS) { File(card.dir, "${stem}_2.xmp").isFile }
-        assertThat(XmpReader.read(File(card.dir, "${stem}_2.xmp").readBytes()).flag).isEqualTo(PickFlag.PICK)
+        // The sidecar is created, then written: wait for its content, not its name.
+        val sidecar = File(card.dir, "${stem}_2.xmp")
+        compose.waitUntil(TIMEOUT_MS) { runCatching { XmpReader.read(sidecar.readBytes()).flag }.getOrNull() != null }
+        assertThat(XmpReader.read(sidecar.readBytes()).flag).isEqualTo(PickFlag.PICK)
         runBlocking { access.library().removeSource(sourceId) }
     }
 

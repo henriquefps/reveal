@@ -130,7 +130,7 @@ class HandoffRepository(
                 }
             }
         }
-        schedulePreviews(stored, initial ?: stored.firstOrNull(), persisted)
+        schedulePreviews(stored, initial, persisted)
         val first = initial ?: stored.firstOrNull()
         when {
             first == null -> HandoffOutcome.Nothing
@@ -496,16 +496,19 @@ class HandoffRepository(
     }
 
     /**
-     * Local previews of the hand-off photos (ADR 0011 "Unreadable hand-offs"), [first] first: the display image for
+     * Local previews of the hand-off photos (ADR 0011 "Unreadable hand-offs"), [initial] first: the display image for
      * each, the smart preview for those whose grant is temporary. Folder photos need none (their folder stays
      * readable).
      */
     private fun schedulePreviews(
         stored: List<Pair<Shot, StoredShot>>,
-        first: Pair<Shot, StoredShot>?,
+        initial: Pair<Shot, StoredShot>?,
         persisted: Set<Uri>,
     ) {
         val previewer = previewer ?: return
+        // The editor opens after `receive` returns (one photo, or the initial one): its decode comes first.
+        if (initial != null || stored.size == 1) previewer.expectEditor()
+        val first = initial ?: stored.firstOrNull()
         val ordered = listOfNotNull(first) + stored.filter { it !== first }
         val shots = ordered.filterNot { it.second.foreign }.mapNotNull { (shot, _) ->
             val fingerprint = shot.main.fingerprint ?: return@mapNotNull null

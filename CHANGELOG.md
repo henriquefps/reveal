@@ -70,6 +70,12 @@ All notable changes to Reveal are documented here. The format follows
   luminance noise reduction drags cost about a quarter less. Colour noise reduction removes slightly more colour noise.
   Photos edited with Detail look marginally different (pipeline version 8).
 
+### Fixed
+- At 100 % on some tablets (Galaxy Tab S9 Ultra), a pixel row or column could be shown twice or skipped every dozen
+  rows after a double-tap; 1:1 views now land exactly on the photo's pixels on every GPU.
+- On lower-density screens (tablets), tapping the far end of a slider's track no longer opens the number entry meant
+  for the value next to it.
+
 ## [0.2.1] - 2026-11-11
 
 ### Added

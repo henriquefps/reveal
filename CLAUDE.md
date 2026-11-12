@@ -322,7 +322,9 @@ Zoom: `EditorViewModel.loadFullResolution` decodes the original after the proxy 
 `GpuDevelopRenderer.setFullResolution(source, k)`. `gl/ZoomTiles.kt` keeps the atlas (8 x 6 slots of 512 px + 8 px
 border, levels 0-1), the index texture and the scheduling (settled edit + 150 ms, centre first, grids prefetched);
 the tiles are developed by a `TiledRenderer` on a shared EGL context (`prepareZoom`, `developTile`); the output pass
-reads them where the index says so (`OUTPUT_FRAG`, `sampleTile`). Pure maths in `zoom/ZoomGrid.kt` (`ZoomView`).
+reads them where the index says so (`OUTPUT_FRAG`, `sampleTile`). 1:1 views (tiles at 100 %, proxy at scale 1) are pixel-aligned by
+`zoom/PixelAlignment` in `drawOutput`: never `floor` a screen pixel centre that may sit on a pixel edge (ADR 0012
+"Pixel alignment at 1:1"; Adreno 740 duplicated rows there). Pure maths in `zoom/ZoomGrid.kt` (`ZoomView`).
 Tests/APIs: `renderer.awaitZoom(...)`, `renderView(view, w, h, settings)`, `renderShown(settings)`, `zoomStats`.
 
 ```sh

@@ -260,7 +260,20 @@ add (release build, real SD card).
 
 Filters (FIX/L): `LibraryMeasurementsTest` also times the grid's query for each group and a few combinations over
 the 10,000 photos (`REVEAL_LIBRARY filter <name>: N rows, query X ms`, must stay under 1 s) and flings the
-unfiltered home.
+unfiltered home (`-e grid folder` flings the folder alone, the start screen before FIX/L). Galaxy Tab S9 Ultra, debug
+build, 120 Hz, the 7,000 synthetic photos plus ~260 hand-offs left by other tests (most of them preview-only):
+
+| Step | Result |
+| --- | --- |
+| Filter query, home (7,259 rows) / one folder (7,000) | 120-141 ms / 93-96 ms (median of 5) |
+| Filter query, narrow (picked, starred or rejected, RAW + starred, edited, apps or server) | 18-46 ms |
+| Filter query, not synced (7,259) / folder + JPEG + not edited (4,000) | 110-117 ms / 66 ms |
+| First rows / first grid frame, home | 175-197 ms / 754-1,033 ms (includes the activity launch) |
+| Fling, folder alone vs home (20 flings) | past deadline 19.8 % vs 28.2 %; main thread p50 3.8 vs 3.5 ms, p99 64 vs 69 ms |
+
+The query is off the main thread and the filter bar does not recompose the grid; the home's extra misses come from
+the hand-off cells whose thumbnails are rendered from smart previews (one at a time since FIX/L: three at once ran
+the 512 MB heap out during a fling). Release-build numbers at 120 Hz on the owner's phone are for the orchestrator.
 
 ## Consequences
 

@@ -255,6 +255,9 @@ Where the bytes go: in format 1 a 24 MP RAW at 2560 x 1710 is ~6.6 MB of green a
 deflate: the residual is the noise. A plain bit cut (11-bit green, 8-bit chroma) still leaves ~3.5 MB. Only a step
 tied to the noise brings it down, and the developed difference then grows with the step (above), so the steps were
 chosen at the edge of "p99 below 1": 1.5-3 MB would need steps about twice as coarse (p99 1.5-2.5, max block 2-3).
+Decision (owner, 2026-11-12): keep A, quality first (~45 % of format 1). The 1.5-3 MB target came from the old "a
+preview for every rated, picked or unbacked photo" rule; with edited photos backing up their original, previews are
+rare (unreadable files, or the originals backup off), so their size matters far less than their fidelity.
 
 ## Consequences
 

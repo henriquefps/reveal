@@ -1,0 +1,120 @@
+package dev.hfps.reveal.data.handoff
+
+import android.util.Log
+import dev.hfps.image.ImageInput
+import dev.hfps.reveal.data.storage.DocumentTree
+import dev.hfps.reveal.pipeline.preview.SmartPreviewMaker
+import java.io.File
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.joinAll
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+
+/** Makes the two local previews from open documents (the real one decodes; tests write marker bytes). */
+interface PreviewMaking {
+    /** Writes the display JPEG of a shot (its RAW and/or rendering) to [out]. */
+    fun display(raw: ImageInput?, rendered: ImageInput?, out: File)
+
+    /** Writes the smart preview of the shot's main file to [out]. */
+    fun smart(main: ImageInput, out: File)
+
+    companion object {
+        /** The app's: `SmartPreviewMaker`'s display JPEG and smart preview (the ones sync makes). */
+        val DEFAULT: PreviewMaking = object : PreviewMaking {
+            override fun display(raw: ImageInput?, rendered: ImageInput?, out: File) {
+                out.writeBytes(SmartPreviewMaker.displayJpeg(raw, rendered, LocalPreviews.DISPLAY_EDGE))
+            }
+
+            override fun smart(main: ImageInput, out: File) {
+                out.outputStream().buffered().use { SmartPreviewMaker.write(main, it) }
+            }
+        }
+    }
+}
+
+/**
+ * Keeps a local preview of each hand-off photo while Reveal can still read it (ADR 0011 "Unreadable hand-offs"): a
+ * sender such as the Samsung Gallery grants access only while the receiving activity lives, after which the original
+ * cannot be read again. Right after a hand-off, one shot at a time in the background (the photo the editor opens
+ * first): the display image always, the smart preview when the grant is not persistable. A preview already there (the
+ * same photo shared again) is not made twice.
+ */
+class HandoffPreviewer(
+    private val tree: DocumentTree,
+    val previews: LocalPreviews,
+    private val scope: CoroutineScope,
+    private val making: PreviewMaking = PreviewMaking.DEFAULT,
+) {
+    /** One shot to preview: its main file's fingerprint and documents (URIs), [smart] = make the smart preview too. */
+    data class Shot(
+        val fingerprint: String,
+        val main: Document,
+        val raw: Document?,
+        val rendered: Document?,
+        val smart: Boolean,
+    )
+
+    /** A document of the hand-off tree: its id (the content URI) and name. */
+    data class Document(val id: String, val name: String)
+
+    private val lock = Mutex()
+    private val jobs = ArrayList<Job>()
+
+    /** Previews [shots] in order, after the ones scheduled before. */
+    fun schedule(shots: List<Shot>) {
+        if (shots.isEmpty()) return
+        val job = scope.launch { lock.withLock { shots.forEach { make(it) } } }
+        synchronized(jobs) {
+            jobs.removeAll { it.isCompleted }
+            jobs += job
+        }
+    }
+
+    /** Waits for every scheduled preview (tests, and the access check that follows a hand-off). */
+    suspend fun idle() {
+        synchronized(jobs) { jobs.toList() }.joinAll()
+    }
+
+    private fun make(shot: Shot) {
+        try {
+            if (previews.display(shot.fingerprint) == null) {
+                write({ previews.putDisplay(shot.fingerprint, it) }) { out ->
+                    open(shot.raw).use { raw ->
+                        open(shot.rendered).use { rendered -> making.display(raw, rendered, out) }
+                    }
+                }
+            }
+            if (shot.smart && previews.smart(shot.fingerprint) == null) {
+                write({ previews.putSmart(shot.fingerprint, it) }) { out ->
+                    tree.openInput(shot.main.id, shot.main.name).use { making.smart(it, out) }
+                }
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
+            // Unreadable already, or not an image we can develop: the photo shows what the sender's URI still gives.
+            Log.w(TAG, "No local preview for a hand-off: ${e.javaClass.simpleName}")
+        } catch (e: OutOfMemoryError) {
+            Log.w(TAG, "No memory for a hand-off's local preview", e)
+        }
+    }
+
+    private fun open(document: Document?): ImageInput? = document?.let { tree.openInput(it.id, it.name) }
+
+    private inline fun write(store: (File) -> Unit, block: (File) -> Unit) {
+        val temp = previews.temp()
+        try {
+            block(temp)
+            store(temp)
+        } finally {
+            temp.delete()
+        }
+    }
+
+    private companion object {
+        const val TAG = "RevealHandoff"
+    }
+}

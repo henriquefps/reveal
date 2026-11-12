@@ -22,7 +22,13 @@ data class SyncRecordEntity(
     /** When the device made the change (Unix ms, the device's clock): the push's `modifiedAt`. */
     @ColumnInfo(name = "modified_at") val modifiedAt: Long,
     val deleted: Boolean = false,
-)
+) {
+    companion object {
+        /** The record kinds the library's own code writes (the sync module's `Kinds`). */
+        const val KIND_PHOTO = "photo"
+        const val KIND_VERSION = "version"
+    }
+}
 
 /**
  * The cloud state of a photo (ADR 0018 "Cloud states"): whether the server can serve its original (an indexed NAS file

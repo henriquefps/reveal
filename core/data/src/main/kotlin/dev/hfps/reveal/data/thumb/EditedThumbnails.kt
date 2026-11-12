@@ -2,8 +2,10 @@ package dev.hfps.reveal.data.thumb
 
 import android.graphics.Bitmap
 import androidx.core.graphics.createBitmap
+import androidx.core.graphics.scale
 import dev.hfps.image.ImageInput
 import dev.hfps.image.proxy.ProxyBuilder
+import dev.hfps.reveal.pipeline.PipelineInput
 import dev.hfps.reveal.pipeline.gl.GpuDevelopRenderer
 import dev.hfps.reveal.pipeline.input.PipelineInputMapper
 import dev.hfps.reveal.pipeline.recipe.Recipe
@@ -18,6 +20,12 @@ import kotlinx.coroutines.sync.withLock
 /** Renders a small image of a recipe (the grid's "edited" thumbnail). */
 fun interface EditedThumbnails {
     suspend fun render(input: ImageInput, recipe: Recipe, longEdge: Int): Bitmap
+
+    /**
+     * The same from an input already decoded (a hand-off's local smart preview, ADR 0011); [fullLongEdge] is the
+     * original's long edge (Detail's lengths). Null when this renderer cannot.
+     */
+    suspend fun renderPreview(input: PipelineInput, fullLongEdge: Int, recipe: Recipe, longEdge: Int): Bitmap? = null
 }
 
 /**
@@ -48,13 +56,30 @@ class GpuEditedThumbnails(private val scope: CoroutineScope) : EditedThumbnails 
             orientation ?: proxy.info.orientation,
             metadata,
         )
-        val gpu = renderer ?: GpuDevelopRenderer.create().also { renderer = it }
         // Detail's lengths are full-resolution pixels: a thumbnail is developed at its own scale (ADR 0012).
-        val full = maxOf(proxy.stats.fullWidth, proxy.stats.fullHeight).toFloat()
-        val scale = (full / maxOf(pipelineInput.width, pipelineInput.height)).coerceAtLeast(1f)
-        gpu.upload(pipelineInput, scale)
+        draw(pipelineInput, maxOf(proxy.stats.fullWidth, proxy.stats.fullHeight), recipe)
+    }
+
+    override suspend fun renderPreview(input: PipelineInput, fullLongEdge: Int, recipe: Recipe, longEdge: Int): Bitmap =
+        lock.withLock {
+            idle?.cancel()
+            val bitmap = draw(input, fullLongEdge, recipe)
+            val long = maxOf(bitmap.width, bitmap.height)
+            if (long <= longEdge) return@withLock bitmap
+            val scale = longEdge.toFloat() / long
+            bitmap.scale(
+                (bitmap.width * scale).toInt().coerceAtLeast(1),
+                (bitmap.height * scale).toInt().coerceAtLeast(1),
+            ).also { if (it !== bitmap) bitmap.recycle() }
+        }
+
+    /** Develops [input] with [recipe] on the shared renderer (called under [lock]). */
+    private suspend fun draw(input: PipelineInput, fullLongEdge: Int, recipe: Recipe): Bitmap {
+        val gpu = renderer ?: GpuDevelopRenderer.create().also { renderer = it }
+        val scale = (fullLongEdge.toFloat() / maxOf(input.width, input.height)).coerceAtLeast(1f)
+        gpu.upload(input, scale)
         val rgba = gpu.renderOutput(recipe)
-        val bitmap = createBitmap(pipelineInput.width, pipelineInput.height)
+        val bitmap = createBitmap(input.width, input.height)
         bitmap.copyPixelsFromBuffer(ByteBuffer.wrap(rgba))
         idle = scope.launch {
             delay(IDLE_MS)
@@ -63,7 +88,7 @@ class GpuEditedThumbnails(private val scope: CoroutineScope) : EditedThumbnails 
                 renderer = null
             }
         }
-        bitmap
+        return bitmap
     }
 
     private companion object {

@@ -138,6 +138,11 @@ class SyncStore(
     }
 
     private suspend fun photoChange(record: SyncRecordEntity): PushChange? {
+        if (record.deleted) {
+            // A hand-off photo merged into a folder photo (ADR 0011 "One photo across sources"): the server's copy of
+            // it goes; its versions now name the folder photo.
+            return PushChange(Kinds.PHOTO, record.recordId, record.rev, record.modifiedAt, deleted = true)
+        }
         val photo = sync.photoByUuid(record.recordId) ?: return null
         val data = photoData(photo) ?: return null
         return PushChange(
@@ -382,6 +387,14 @@ class SyncStore(
     private suspend fun applyPhoto(record: FeedRecord): Boolean {
         if (record.deleted) {
             val photo = sync.photoByUuid(record.id) ?: return true
+            // Another server id still names this photo (another device merged a hand-off into its folder photo, ADR
+            // 0011 "One photo across sources"): the photo lives on under that id.
+            val survivor = sync.aliasesOf(photo.id).firstOrNull()
+            if (survivor != null) {
+                sync.deleteAlias(survivor)
+                sync.setPhotoUuid(photo.id, survivor)
+                return true
+            }
             // Only photos that live on the server alone go away; a file on this device stays in its folder.
             if (photo.sourceId == serverSource().id) photos.deletePhotos(listOf(photo.id))
             return true

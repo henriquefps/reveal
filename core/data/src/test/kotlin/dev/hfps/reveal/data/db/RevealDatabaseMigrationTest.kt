@@ -222,6 +222,34 @@ class RevealDatabaseMigrationTest {
     }
 
     @Test
+    fun `version 7 gets an empty unreadable mark on its files`() {
+        helper.createDatabase(name, 7).use { db ->
+            db.execSQL(
+                "INSERT INTO sources (id, tree_uri, root_document_id, display_name, state, writable, added_at, kind, " +
+                    "backup) VALUES (1, 'reveal-handoff:', '', 'h', 'AVAILABLE', 1, 0, 'HANDOFF', 1)",
+            )
+            db.execSQL(
+                "INSERT INTO photos (id, uuid, source_id, folder, folder_document_id, stem_key, name, format, " +
+                    "has_raw, sort_time, orientation, rating, flag, has_edit, metadata_state, added_at, hidden) " +
+                    "VALUES " +
+                    "(1, 'u1', 1, 'f', '', 'a', 'A.JPG', 'JPEG', 0, 0, 1, 3, 'PICK', 0, 'READ', 0, 0)",
+            )
+            db.execSQL(
+                "INSERT INTO photo_files (id, photo_id, source_id, relative_path, document_id, name, size, modified, " +
+                    "role, fingerprint) VALUES (1, 1, 1, 'content://media/1', 'content://media/1', 'A.JPG', 9, 9, " +
+                    "'RENDERED', 'v1:aa')",
+            )
+        }
+        helper.runMigrationsAndValidate(name, 8, true).use { db ->
+            db.query("SELECT fingerprint, unreadable_at FROM photo_files").use { c ->
+                assertThat(c.moveToFirst()).isTrue()
+                assertThat(c.getString(0)).isEqualTo("v1:aa")
+                assertThat(c.isNull(1)).isTrue()
+            }
+        }
+    }
+
+    @Test
     fun `every exported schema up to the current version exists`() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val folder = "dev.hfps.reveal.data.db.RevealDatabase"

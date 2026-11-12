@@ -6,6 +6,28 @@ All notable changes to Reveal are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- A photo another app handed over (Hoard's picks, a share) that is also in one of your folders (the SD card, the camera
+  folder) is now one photo, the folder's, whichever came first: the picks, ratings and labels show in the folder (its
+  "Picked" filter included) and go to its XMP sidecar, edits made on either are kept (both, as versions, when both were
+  edited), and other synced devices see one photo. "Opened from other apps" still lists it with its batch.
+- Photos you share from the Samsung Gallery no longer become blank once Reveal is closed: while Reveal can read them it
+  keeps a local preview, so they still show in the library and the viewer, can be edited, and export at preview size
+  (2560 px; the export sheet says so before you start). They are marked "preview only"; sharing the photo again gives
+  back the full original. Photos shared before this version have no preview yet: gallery access (below) or sharing
+  them again brings them back.
+- Sync no longer retries originals it cannot read every few seconds: they wait until Reveal can read them again and
+  their smart preview goes to the server instead. A blob run that moves nothing forward does not start another one at
+  once.
+- Smart previews that failed with "IllegalArgumentException" for some photos: a document its app no longer serves is
+  now treated as unreadable (not as a broken file), and previews never fail on unusual values in a photo or its lens
+  profile. The log names where any remaining failure happens.
+
+### Added
+- Optional gallery access: when a photo the gallery shared can no longer be read, the library offers once to let Reveal
+  read your photos (selected photos only is fine), so those photos get their full thumbnail, export and backup back.
+  "Not now" is remembered; Settings → Gallery access turns it on later (docs/privacy.md).
+
 ## [0.5.0] - 2026-11-12
 
 M3: presets. Built-in presets designed on real photos, live previews of each preset on your photo, strength,

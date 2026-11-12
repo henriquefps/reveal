@@ -525,9 +525,16 @@ internal enum class CloudState {
 
     /** Only another device has the original; this one has its smart preview. */
     PREVIEW,
+
+    /**
+     * Another app handed it over and Reveal can no longer read it (its grant ended, ADR 0011): it shows and edits its
+     * local preview.
+     */
+    LOCAL_PREVIEW,
 }
 
 internal fun cloudState(row: PhotoRow): CloudState = when {
+    row.unreadable -> CloudState.LOCAL_PREVIEW
     row.remote && row.cloudOriginal -> CloudState.CLOUD
     row.remote -> CloudState.PREVIEW
     row.cloudOriginal -> CloudState.BACKED_UP
@@ -538,7 +545,7 @@ private fun cloudIcon(state: CloudState) = when (state) {
     CloudState.LOCAL -> null
     CloudState.BACKED_UP -> PhosphorRegular.CloudCheck
     CloudState.CLOUD -> PhosphorRegular.Cloud
-    CloudState.PREVIEW -> PhosphorRegular.Image
+    CloudState.PREVIEW, CloudState.LOCAL_PREVIEW -> PhosphorRegular.Image
 }
 
 @Composable
@@ -591,6 +598,7 @@ internal fun cellDescription(row: PhotoRow): String {
         CloudState.BACKED_UP -> parts += stringResource(R.string.library_cloud_backed_up)
         CloudState.CLOUD -> parts += stringResource(R.string.library_cloud_only)
         CloudState.PREVIEW -> parts += stringResource(R.string.library_cloud_preview)
+        CloudState.LOCAL_PREVIEW -> parts += stringResource(R.string.library_local_preview)
     }
     return parts.joinToString(", ")
 }

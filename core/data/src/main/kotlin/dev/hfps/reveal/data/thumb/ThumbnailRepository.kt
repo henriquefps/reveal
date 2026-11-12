@@ -20,14 +20,17 @@ import dev.hfps.reveal.data.db.CacheEntryEntity
 import dev.hfps.reveal.data.db.PhotoFileEntity
 import dev.hfps.reveal.data.db.RevealDatabase
 import dev.hfps.reveal.data.edit.EditRepository
+import dev.hfps.reveal.data.handoff.LocalPreviews
 import dev.hfps.reveal.data.library.DocumentTreeFactory
 import dev.hfps.reveal.data.model.FileRole
 import dev.hfps.reveal.data.model.SourceState
 import dev.hfps.reveal.data.storage.DocumentTree
+import dev.hfps.reveal.data.storage.isAccessError
 import dev.hfps.reveal.pipeline.PIPELINE_VERSION
 import dev.hfps.reveal.pipeline.PipelineInput
 import dev.hfps.reveal.pipeline.input.PipelineInputMapper
 import dev.hfps.reveal.pipeline.preset.ApplyContext
+import dev.hfps.reveal.pipeline.preview.SmartPreviewCodec
 import java.io.File
 import java.io.IOException
 import java.util.concurrent.ConcurrentHashMap
@@ -53,6 +56,8 @@ class ThumbnailRepository(
     private val dir: File,
     private val maxBytes: Long = DEFAULT_MAX_BYTES,
     private val clock: () -> Long = System::currentTimeMillis,
+    /** Hand-offs Reveal can no longer read show their local preview (ADR 0011 "Unreadable hand-offs"). */
+    private val previews: LocalPreviews? = null,
 ) {
     private val cache = db.cacheDao()
     private val photos = db.photoDao()
@@ -117,6 +122,7 @@ class ThumbnailRepository(
     private suspend fun availableTree(sourceId: Long): DocumentTree? =
         db.sourceDao().get(sourceId)?.takeIf { it.state == SourceState.AVAILABLE }?.let(trees::open)
 
+    @Suppress("ReturnCount")
     private suspend fun decodePreview(target: Target): Bitmap? {
         val tree = availableTree(target.sourceId) ?: return null
         val main = target.main
@@ -126,11 +132,18 @@ class ThumbnailRepository(
                 embeddedPreview(input)
                     ?: rendered?.let { tree.openInput(it.documentId, it.name).use(::decodeStandard) }
                     ?: decodeStandard(input)
-            }
+            }.also { if (main.unreadableAt != null) photos.setReadable(main.documentId) }
         } catch (e: CancellationException) {
             throw e
         } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
-            Log.w(TAG, "No thumbnail for photo ${target.photoId} (${main.name})", e)
+            if (isAccessError(e)) {
+                // A hand-off whose grant ended (ADR 0011): remember it, and show its local preview.
+                photos.setUnreadable(main.documentId, clock())
+                localPreview(main)?.let { return it }
+                Log.i(TAG, "No access to photo ${target.photoId} and no local preview")
+                return null
+            }
+            Log.w(TAG, "No thumbnail for photo ${target.photoId}", e)
             null
         } catch (e: OutOfMemoryError) {
             Log.w(TAG, "No memory for the thumbnail of photo ${target.photoId}", e)
@@ -138,6 +151,7 @@ class ThumbnailRepository(
         }
     }
 
+    @Suppress("ReturnCount")
     private suspend fun renderEdited(target: Target, versionId: Long, editTime: Long): Bitmap? {
         val renderer = edited
         val tree = availableTree(target.sourceId)
@@ -148,6 +162,10 @@ class ThumbnailRepository(
         } catch (e: CancellationException) {
             throw e
         } catch (@Suppress("TooGenericExceptionCaught") e: Throwable) {
+            if (isAccessError(e)) {
+                photos.setUnreadable(target.main.documentId, clock())
+                return renderLocal(renderer, target, versionId)
+            }
             Log.w(TAG, "Edited thumbnail of version $versionId ($editTime) failed; showing the original", e)
             null
         }
@@ -203,6 +221,33 @@ class ThumbnailRepository(
             Log.w(TAG, "No as-shot white balance for version $versionId", e)
             ApplyContext.UNKNOWN
         }
+    }
+
+    /** The local display image of an unreadable hand-off (ADR 0011), scaled to [EDGE]; null without one. */
+    @Suppress("ReturnCount")
+    private fun localPreview(main: PhotoFileEntity): Bitmap? {
+        val local = previews ?: return null
+        val file = local.display(main.fingerprint)
+        val bytes = when {
+            file != null -> file.readBytes()
+            else -> local.smart(main.fingerprint)?.inputStream()?.use(SmartPreviewCodec::readJpeg)
+        } ?: return null
+        if (bytes.isEmpty()) return null
+        return BitmapDecoding.decode(bytes, EDGE, 1).bitmap
+    }
+
+    /** The edit of an unreadable hand-off rendered from its local smart preview; null without one. */
+    private suspend fun renderLocal(renderer: EditedThumbnails, target: Target, versionId: Long): Bitmap? {
+        val file = previews?.smart(target.main.fingerprint) ?: return null
+        return runCatching {
+            val decoded = file.inputStream().use(SmartPreviewCodec::decode)
+            renderer.renderPreview(
+                decoded.input,
+                maxOf(decoded.fullWidth, decoded.fullHeight),
+                edits.recipe(versionId),
+                EDGE,
+            )
+        }.onFailure { if (it is CancellationException) throw it }.getOrNull()
     }
 
     /** The embedded JPEG of a RAW (or a JPEG's own EXIF thumbnail is too small: never used). */

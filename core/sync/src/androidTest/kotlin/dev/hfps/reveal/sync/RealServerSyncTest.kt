@@ -31,12 +31,12 @@ import dev.hfps.reveal.data.model.SourceState
 import dev.hfps.reveal.data.storage.DocumentEntry
 import dev.hfps.reveal.data.storage.DocumentTree
 import dev.hfps.reveal.pipeline.preview.SmartPreviewCodec
+import dev.hfps.reveal.pipeline.preview.SmartPreviewMaker
 import dev.hfps.reveal.pipeline.recipe.RecipeDiff
 import dev.hfps.reveal.sync.account.PairingLink
 import dev.hfps.reveal.sync.api.PairRequest
 import dev.hfps.reveal.sync.api.SyncApi
 import dev.hfps.reveal.sync.blobs.BlobUploader
-import dev.hfps.reveal.sync.blobs.SmartPreviewMaker
 import dev.hfps.reveal.sync.engine.SyncEngine
 import dev.hfps.reveal.sync.engine.SyncStore
 import dev.hfps.reveal.sync.files.ServerFiles

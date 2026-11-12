@@ -160,6 +160,27 @@ TalkBack; "Delete conflict copies" in the selection menu deletes them here and p
   10,000-record first pull, against a baseline).
 - JVM: `OriginalPolicyTest`, `RangeCacheTest` (one block for a header, a growing read-ahead for a whole file).
 
+## Amendment 2026-11-12 (FIX/S, 0.5.1): hand-offs and retries
+
+- **Unreadable originals** (ADR 0011 "Unreadable hand-offs"): opening an original that Reveal can no longer read
+  (`SecurityException`, a missing document, or a provider's `IllegalArgumentException`, which `ImageInput.fromUri`
+  reports as missing) marks the file `unreadable_at` and drops its queued upload: it is **parked**, not retried every
+  run (0.5.0 retried ~10 such originals every few seconds). `backupCandidates` skips unreadable files until a read
+  clears the mark (a re-share, gallery access); `previewCandidates` includes them, and the hand-off's local smart
+  preview is uploaded as it is (`SmartPreviewMaker.adopt`).
+- **No tight loop**: a blob run asks for the next one at once only when it moved something forward (made, sent, or
+  set aside a preview) and work is left; otherwise the next metadata sync or the periodic job tries again. A preview
+  that cannot be made is set aside per file (as before) and logged once with its class, the place in Reveal's code and,
+  for programming errors only, the message (`BlobUploader.describe`; never a URI).
+- **Smart previews of any file**: `SmartPreviewMaker` (moved to `:core:pipeline/preview`) gives an `IOException` for
+  what cannot be developed (a camera without a colour matrix); `SmartPreviewCodec` never fails on a non-finite sample
+  (NaN encodes as black) or lens term (the lens is left out); the decoders never ask for a non-parametric colour space
+  (`StandardDecoder.decodableSpace`). Verified on JPEG-only (1 x 1, 3 x 1001, 2561 x 1707, rotated), PNG, WebP, HEIC,
+  Display P3, BT.2020 HLG and the six CC0 RAWs (`SmartPreviewMakerTest`).
+- **Merged hand-offs**: a photo tombstone is pushed for a hand-off merged into a folder photo when the server knew
+  both; pulling it keeps a photo another server id names (an alias: `sync_aliases`) under that id instead of deleting
+  it. `versions.photo_id` changes are tracked (trigger version 3).
+
 ## Consequences
 
 - The grid now has one cell per version (a photo with a conflict copy has two); selection stays per photo.

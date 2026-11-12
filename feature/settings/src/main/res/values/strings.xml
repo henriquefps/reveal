@@ -9,6 +9,11 @@
     <string name="settings_section_sync">Sync</string>
     <string name="settings_sync">Sync with your server</string>
     <string name="settings_sync_off">Not paired</string>
+    <string name="settings_section_photos">Photos</string>
+    <string name="settings_gallery">Gallery access</string>
+    <string name="settings_gallery_full">Allowed: photos shared from the gallery stay readable</string>
+    <string name="settings_gallery_partial">Selected photos only</string>
+    <string name="settings_gallery_off">Off: photos shared from the gallery are readable while Reveal is open</string>
     <string name="settings_sync_on">Paired with %1$s</string>
     <string name="sync_title">Sync</string>
     <string name="sync_section_pair">Pair this device</string>

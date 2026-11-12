@@ -7,13 +7,13 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.google.common.truth.Truth.assertThat
 import dev.hfps.reveal.data.db.RevealDatabase
 import dev.hfps.reveal.data.library.DocumentTreeFactory
+import dev.hfps.reveal.pipeline.preview.SmartPreviewMaker
 import dev.hfps.reveal.sync.account.MemorySecretStore
 import dev.hfps.reveal.sync.account.PairingLink
 import dev.hfps.reveal.sync.account.SyncAccountStore
 import dev.hfps.reveal.sync.api.SyncApi
 import dev.hfps.reveal.sync.api.SyncHttpException
 import dev.hfps.reveal.sync.blobs.BlobUploader
-import dev.hfps.reveal.sync.blobs.SmartPreviewMaker
 import dev.hfps.reveal.sync.engine.SyncEngine
 import dev.hfps.reveal.sync.engine.SyncStore
 import dev.hfps.reveal.sync.files.ServerFiles

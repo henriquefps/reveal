@@ -205,13 +205,16 @@ class SyncRepository(
         val api = api() ?: return@withContext false
         val options = accounts.options.value
         try {
-            if (options.previews) uploader.previews(api, PREVIEWS_PER_RUN, noBackup = !options.originals)
-            if (options.originals && originalsAllowed) uploader.originals(api, ORIGINALS_PER_RUN)
+            var progress = 0
+            if (options.previews) progress += uploader.previews(api, PREVIEWS_PER_RUN, noBackup = !options.originals)
+            if (options.originals && originalsAllowed) progress += uploader.originals(api, ORIGINALS_PER_RUN)
             val left =
                 db.syncDao().pendingUploads(dev.hfps.reveal.data.db.SyncUploadEntity.KIND_PREVIEW, 1).isNotEmpty() ||
                     (options.previews && db.syncDao().previewCandidates(!options.originals, 1).isNotEmpty()) ||
                     (options.originals && originalsAllowed && db.syncDao().backupCandidates(1).isNotEmpty())
-            left
+            // A run that moved nothing forward (every item unreadable or failing) does not start the next one at
+            // once: the next metadata sync or the periodic job tries again.
+            left && progress > 0
         } catch (e: SyncHttpException) {
             runtime.update { it.copy(problem = problemOf(e)) }
             if (e.code == "storage_not_configured" || !e.transient) false else throw e

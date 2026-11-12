@@ -10,11 +10,15 @@ import dev.hfps.reveal.data.db.PhotoCloudEntity
 import dev.hfps.reveal.data.db.RevealDatabase
 import dev.hfps.reveal.data.db.SyncRecordEntity
 import dev.hfps.reveal.data.db.SyncUploadEntity
+import dev.hfps.reveal.data.handoff.LocalPreviews
 import dev.hfps.reveal.data.library.DocumentTreeFactory
+import dev.hfps.reveal.data.storage.isAccessError
+import dev.hfps.reveal.pipeline.preview.MadePreview
+import dev.hfps.reveal.pipeline.preview.SmartPreviewMaker
+import dev.hfps.reveal.pipeline.preview.SmartPreviewMaker.Companion.toHex
 import dev.hfps.reveal.sync.api.SyncApi
 import dev.hfps.reveal.sync.api.SyncHttpException
 import dev.hfps.reveal.sync.api.UploadCreateRequest
-import dev.hfps.reveal.sync.blobs.SmartPreviewMaker.Companion.toHex
 import dev.hfps.reveal.sync.engine.Kinds
 import dev.hfps.reveal.sync.engine.SyncStore
 import java.io.File
@@ -45,6 +49,8 @@ class BlobUploader(
     private val store: SyncStore,
     private val trees: DocumentTreeFactory,
     private val maker: SmartPreviewMaker,
+    /** Hand-offs' local smart previews (ADR 0011 "Unreadable hand-offs"): uploaded as they are. */
+    private val local: LocalPreviews? = null,
     private val clock: () -> Long = System::currentTimeMillis,
 ) {
     private val sync = db.syncDao()
@@ -57,19 +63,25 @@ class BlobUploader(
 
     // ------------------------------------------------------------------ previews
 
-    /** Makes and uploads the smart previews this device owes (up to [limit] new ones), then the pending uploads. */
+    /**
+     * Makes and uploads the smart previews this device owes (up to [limit] new ones), then the pending uploads. Returns
+     * how many candidates moved on: made, sent, or set aside because they cannot be made (never tried again until
+     * their file changes).
+     */
     suspend fun previews(api: SyncApi, limit: Int, noBackup: Boolean, progress: Progress = Progress { _, _ -> }): Int {
         var made = 0
+        var parked = 0
         for (candidate in sync.previewCandidates(noBackup, limit)) {
             currentCoroutineContext().ensureActive()
             val preview = runCatching { makePreview(candidate) }
                 .onFailure { if (it is CancellationException) throw it }
-                .onFailure { Log.w(TAG, "No smart preview for photo ${candidate.photoId}: ${it.javaClass.simpleName}") }
+                .onFailure { Log.w(TAG, "No smart preview for photo ${candidate.photoId}: ${describe(it)}") }
                 .getOrNull()
             if (preview == null) {
                 // Unreadable (unplugged, damaged): remember this file so it is not tried on every run.
                 val cloud = sync.cloud(candidate.photoId) ?: PhotoCloudEntity(candidate.photoId)
                 sync.putCloud(cloud.copy(previewFingerprint = candidate.fingerprint))
+                parked++
                 continue
             }
             sync.insertUpload(
@@ -92,12 +104,22 @@ class BlobUploader(
             currentCoroutineContext().ensureActive()
             if (sendPreview(api, upload, progress)) sent++
         }
-        return made + sent
+        return made + sent + parked
     }
 
+    @Suppress("ThrowsCount")
     private suspend fun makePreview(candidate: CloudCandidate): MadePreview {
+        // A hand-off's local smart preview is the same thing, made while Reveal could read it (ADR 0011).
+        local?.smart(candidate.fingerprint)?.let { return maker.adopt(it) }
         val source = db.sourceDao().get(candidate.sourceId) ?: throw IOException("no source")
-        return trees.open(source).openInput(candidate.documentId, candidate.name).use { maker.make(it) }
+        return try {
+            trees.open(source).openInput(candidate.documentId, candidate.name).use { maker.make(it) }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
+            if (isAccessError(e)) db.photoDao().setUnreadable(candidate.documentId, clock())
+            throw e
+        }
     }
 
     private suspend fun sendPreview(api: SyncApi, upload: SyncUploadEntity, progress: Progress): Boolean {
@@ -156,9 +178,7 @@ class BlobUploader(
             currentCoroutineContext().ensureActive()
             val ok = runCatching { sendOriginal(api, upload, progress) }
                 .onFailure { if (it is CancellationException || it is SyncHttpException) throw it }
-                .onFailure {
-                    Log.w(TAG, "Original of photo ${upload.photoId} not uploaded: ${it.javaClass.simpleName}")
-                }
+                .onFailure { Log.w(TAG, "Original of photo ${upload.photoId} not uploaded: ${describe(it)}") }
                 .getOrDefault(false)
             if (ok) sent++
         }
@@ -174,7 +194,18 @@ class BlobUploader(
             sync.deleteUpload(queued.id)
             return false
         }
-        val input = trees.open(source).openInput(main.documentId, main.name)
+        val input = try {
+            trees.open(source).openInput(main.documentId, main.name)
+        } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
+            if (!isAccessError(e)) throw e
+            // Reveal cannot read it now (a hand-off whose grant ended, ADR 0011): parked, not retried every run. It
+            // is queued again once it can be read (`backupCandidates` skips unreadable files); its smart preview goes
+            // meanwhile.
+            db.photoDao().setUnreadable(main.documentId, clock())
+            sync.deleteUpload(queued.id)
+            Log.i(TAG, "Original of photo ${photo.id} cannot be read: it waits until it can (${describe(e)})")
+            return false
+        }
         DocumentSource(input).use { blob ->
             var upload = queued
             if (upload.sha256.isEmpty() || upload.size != blob.size) {
@@ -303,6 +334,20 @@ class BlobUploader(
 
     companion object {
         private const val TAG = "RevealSync"
+
+        /**
+         * A failure for the log: its class, and where it was thrown in Reveal's code (class, method, line), so a
+         * report from a release build points at the cause. The message only for programming errors (no URIs).
+         */
+        fun describe(error: Throwable): String {
+            val frame = error.stackTrace.firstOrNull { it.className.startsWith("dev.hfps.") }
+                ?.let { " at ${it.className.substringAfterLast('.')}.${it.methodName}:${it.lineNumber}" }.orEmpty()
+            val message = error.message?.takeIf { error is IllegalArgumentException || error is IllegalStateException }
+                ?.let { ": " + it.take(MAX_MESSAGE) }.orEmpty()
+            return error.javaClass.simpleName + message + frame
+        }
+
+        private const val MAX_MESSAGE = 120
         private const val STATUS_EXISTS = "exists"
         const val DEFAULT_CHUNK = 8L * 1024 * 1024
         private const val PENDING_BATCH = 50

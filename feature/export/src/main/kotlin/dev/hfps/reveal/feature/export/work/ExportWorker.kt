@@ -119,9 +119,10 @@ class ExportWorker(context: Context, params: WorkerParameters) : CoroutineWorker
         // A previous run was killed while writing this item: remove its partial file first.
         state.partialUri?.let { run.destinations.deletePartial(it.toUri()) }
         val target = run.job.items[index].versionId?.let { run.graph.library().exportTarget(it) }
-        val item = resolve(run.graph, run.job.items[index], run.job.firstSequence + index, target)
+        val resolved = resolve(run.graph, run.job.items[index], run.job.firstSequence + index, target)
         try {
-            if (item == null) throw ExportException(ExportFailure.SOURCE_MISSING)
+            if (resolved == null) throw ExportException(ExportFailure.SOURCE_MISSING)
+            val item = previewIfUnreadable(run, index, resolved, target)
             if (target != null && !original(run, index, target.reach, item.uri, state.waitingSince)) {
                 return !isStopped
             }
@@ -136,7 +137,9 @@ class ExportWorker(context: Context, params: WorkerParameters) : CoroutineWorker
                     onPartial = { uri -> jobs.update(run.jobId, index) { it.copy(partialUri = uri.toString()) } },
                 )
             }
-            jobs.update(run.jobId, index) { ItemState(ItemStatus.DONE, result.uri.toString(), result.fileName) }
+            jobs.update(run.jobId, index) {
+                ItemState(ItemStatus.DONE, result.uri.toString(), result.fileName, previewSize = it.previewSize)
+            }
             Log.i(TAG, "item ${index + 1}/${run.total}: $result")
             return true
         } catch (e: RenderCancelledException) {
@@ -181,6 +184,18 @@ class ExportWorker(context: Context, params: WorkerParameters) : CoroutineWorker
                 false
             }
         }
+    }
+
+    /**
+     * A hand-off Reveal can no longer read (ADR 0011): its local smart preview, at its size; the notification says so
+     * (share the photo to Reveal again for the full size). Otherwise [item] as it is.
+     */
+    private suspend fun previewIfUnreadable(run: Run, index: Int, item: ExportItem, target: ExportTarget?): ExportItem {
+        val preview = target?.previewUri
+        if (target?.reach != OriginalReach.PREVIEW || preview == null || readable(item.uri)) return item
+        jobs.update(run.jobId, index) { it.copy(previewSize = true) }
+        Log.i(TAG, "item ${index + 1}/${run.total}: the original cannot be read, exporting its preview")
+        return item.copy(uri = preview, renderedUri = null)
     }
 
     private suspend fun readable(uri: Uri): Boolean = runInterruptible(Dispatchers.IO) {
@@ -232,7 +247,7 @@ class ExportWorker(context: Context, params: WorkerParameters) : CoroutineWorker
             notifications.waiting(waiting)
             retryLater(applicationContext, jobId)
         } else {
-            notifications.finished(done, failed, total)
+            notifications.finished(done, failed, total, states.count { it.status == ItemStatus.DONE && it.previewSize })
         }
         return Result.success()
     }
@@ -396,13 +411,16 @@ class ExportNotifications(private val context: Context) {
         runCatching { manager.notify(PROGRESS_ID, progressNotification(workId, done, total, fraction)) }
     }
 
-    fun finished(done: Int, failed: Int, total: Int) {
+    fun finished(done: Int, failed: Int, total: Int, previewSize: Int = 0) {
         val title = if (failed == 0) {
             context.resources.getQuantityString(R.plurals.export_notification_done, done, done)
         } else {
             context.getString(R.string.export_notification_failed, failed, total)
         }
-        notifyEnd(title)
+        val text = previewSize.takeIf { it > 0 }?.let {
+            context.resources.getQuantityString(R.plurals.export_notification_preview_size, it, it)
+        }
+        notifyEnd(title, text)
     }
 
     fun cancelled() = notifyEnd(context.getString(R.string.export_notification_cancelled))
@@ -428,10 +446,11 @@ class ExportNotifications(private val context: Context) {
     fun waiting(count: Int) =
         notifyEnd(context.resources.getQuantityString(R.plurals.export_notification_waiting, count, count))
 
-    private fun notifyEnd(title: String) {
+    private fun notifyEnd(title: String, text: String? = null) {
         val notification = NotificationCompat.Builder(context, CHANNEL)
             .setSmallIcon(android.R.drawable.stat_sys_upload_done)
             .setContentTitle(title)
+            .apply { if (text != null) setContentText(text).setStyle(NotificationCompat.BigTextStyle().bigText(text)) }
             .setAutoCancel(true)
             .build()
         runCatching { manager.notify(DONE_ID, notification) }

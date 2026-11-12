@@ -91,4 +91,14 @@
         <item quantity="many">%d fotos esperam os originais: eles estão só em outro aparelho. A exportação termina sozinha quando aquele aparelho fizer o backup no seu servidor de sincronização.</item>
         <item quantity="other">%d fotos esperam os originais: eles estão só em outro aparelho. A exportação termina sozinha quando aquele aparelho fizer o backup no seu servidor de sincronização.</item>
     </plurals>
+    <plurals name="export_notification_preview_size">
+        <item quantity="one">%d foto foi exportada no tamanho da prévia: o Reveal não consegue mais ler o original. Compartilhe-a com o Reveal de novo para o tamanho completo.</item>
+        <item quantity="many">%d fotos foram exportadas no tamanho da prévia: o Reveal não consegue mais ler os originais. Compartilhe-as com o Reveal de novo para o tamanho completo.</item>
+        <item quantity="other">%d fotos foram exportadas no tamanho da prévia: o Reveal não consegue mais ler os originais. Compartilhe-as com o Reveal de novo para o tamanho completo.</item>
+    </plurals>
+    <plurals name="export_preview_only">
+        <item quantity="one">%d foto será exportada no tamanho da prévia (2560 px): o Reveal não consegue mais ler o original. Compartilhe-a com o Reveal de novo para exportar no tamanho completo.</item>
+        <item quantity="many">%d fotos serão exportadas no tamanho da prévia (2560 px): o Reveal não consegue mais ler os originais. Compartilhe-as com o Reveal de novo para exportar no tamanho completo.</item>
+        <item quantity="other">%d fotos serão exportadas no tamanho da prévia (2560 px): o Reveal não consegue mais ler os originais. Compartilhe-as com o Reveal de novo para exportar no tamanho completo.</item>
+    </plurals>
 </resources>

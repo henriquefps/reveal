@@ -14,6 +14,9 @@ import dev.hfps.reveal.data.db.PhotoQuerySql
 import dev.hfps.reveal.data.db.PhotoRow
 import dev.hfps.reveal.data.db.RevealDatabase
 import dev.hfps.reveal.data.db.SourceEntity
+import dev.hfps.reveal.data.handoff.HandoffMerge
+import dev.hfps.reveal.data.handoff.LocalPreviews
+import dev.hfps.reveal.data.handoff.MergeReport
 import dev.hfps.reveal.data.index.IndexProgress
 import dev.hfps.reveal.data.index.IndexReport
 import dev.hfps.reveal.data.index.LibraryIndexer
@@ -25,6 +28,7 @@ import dev.hfps.reveal.data.model.SourceState
 import dev.hfps.reveal.data.storage.DocumentTree
 import dev.hfps.reveal.data.storage.SafDocumentTree
 import dev.hfps.reveal.data.storage.StorageVolumes
+import dev.hfps.reveal.data.storage.isAccessError
 import dev.hfps.reveal.data.sync.ServerTree
 import java.io.IOException
 import java.util.concurrent.ConcurrentHashMap
@@ -86,6 +90,8 @@ data class ExportTarget(
     val renderedUri: Uri?,
     /** Where [uri] reads the original from (ADR 0018 "Export"). */
     val reach: OriginalReach = OriginalReach.DEVICE,
+    /** [OriginalReach.PREVIEW] only: the local smart preview to export from while [uri] cannot be read. */
+    val previewUri: Uri? = null,
 )
 
 /** Where a photo's original can be read now. */
@@ -98,6 +104,12 @@ enum class OriginalReach {
 
     /** Only another device has it (this one has its smart preview): wait until its backup reaches the server. */
     ELSEWHERE,
+
+    /**
+     * A hand-off Reveal can no longer read (ADR 0011 "Unreadable hand-offs"): [ExportTarget.uri] is tried again, else
+     * the export reads the local smart preview ([ExportTarget.previewUri]) at its size and says so.
+     */
+    PREVIEW,
 }
 
 /** What the editor opens for a version: the RAW of a pair (else the rendering), and the rendering for the preview. */
@@ -127,10 +139,13 @@ class LibraryRepository(
     private val clock: () -> Long = System::currentTimeMillis,
     /** The sync provider's authority (`ServerTree.authority`), for smart preview URIs; null without sync. */
     private val serverAuthority: String? = null,
+    /** Local previews of hand-offs (ADR 0011 "Unreadable hand-offs"); null in tests without them. */
+    private val previews: LocalPreviews? = null,
 ) {
     private val sourceDao = db.sourceDao()
     private val photoDao = db.photoDao()
     private val indexer = LibraryIndexer(db, clock)
+    private val merge = HandoffMerge(db, clock)
     private val jobs = ConcurrentHashMap<Long, Job>()
     private val fingerprintJobs = ConcurrentHashMap<Long, Job>()
     private val progress = MutableStateFlow<Map<Long, IndexProgress>>(emptyMap())
@@ -157,6 +172,9 @@ class LibraryRepository(
             )
         }
     }
+
+    /** Hand-off documents Reveal cannot read now (the gallery access offer, ADR 0011). */
+    fun unreadableHandoffs(): Flow<List<String>> = photoDao.observeUnreadableHandoffs()
 
     /** How many photos only the sync server has (the library's Server entry, ADR 0018). */
     fun serverPhotoCount(): Flow<Int> = db.syncDao().observeServerPhotoCount()
@@ -234,6 +252,35 @@ class LibraryRepository(
             }
             if (reindex && state == SourceState.AVAILABLE) index(source.id)
         }
+        checkHandoffs()
+    }
+
+    /**
+     * Which hand-off documents Reveal can still read (ADR 0011 "Unreadable hand-offs"): a temporary grant ends with
+     * the process, a gallery permission given or taken changes it. Marks and clears `unreadable_at`; returns how many
+     * cannot be read. Opens each document once (no read).
+     */
+    suspend fun checkHandoffs(): Int = withContext(Dispatchers.IO) {
+        val source = sourceDao.handoff() ?: return@withContext 0
+        val tree = trees.open(source)
+        var unreadable = 0
+        for (file in photoDao.handoffFiles()) {
+            val readable = try {
+                tree.openInput(file.documentId, file.name).close()
+                true
+            } catch (e: CancellationException) {
+                throw e
+            } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
+                !isAccessError(e)
+            }
+            if (readable) {
+                if (file.unreadableAt != null) photoDao.setReadable(file.documentId)
+            } else {
+                unreadable++
+                photoDao.setUnreadable(file.documentId, clock())
+            }
+        }
+        unreadable
     }
 
     /** The source's state now. Never throws. */
@@ -301,6 +348,7 @@ class LibraryRepository(
             try {
                 val stored = indexer.fillFingerprints(source.id, trees.open(source))
                 if (stored > 0) Log.i(TAG, "Fingerprinted $stored files of source ${source.id}")
+                mergeHandoffs(source.id)
             } catch (e: CancellationException) {
                 throw e
             } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
@@ -309,6 +357,20 @@ class LibraryRepository(
         }
         fingerprintJobs[source.id] = job
         job.invokeOnCompletion { fingerprintJobs.remove(source.id, job) }
+    }
+
+    /**
+     * Makes each hand-off photo whose file this folder holds the folder's photo (ADR 0011 "One photo across sources");
+     * runs after every fingerprint pass, so rows printed before this existed are merged on the first walk too.
+     */
+    suspend fun mergeHandoffs(sourceId: Long): MergeReport = withContext(Dispatchers.IO) {
+        val report = merge.mergeInto(sourceId)
+        if (report.merged > 0) {
+            Log.i(TAG, "Merged ${report.merged} hand-off photos into source $sourceId")
+            if (report.cullingChanged.isNotEmpty()) sidecars.write(report.cullingChanged)
+            previews?.delete(report.fingerprints)
+        }
+        report
     }
 
     /** What the library showed last (an opaque string of the UI), so a fresh start reopens it. */
@@ -375,10 +437,38 @@ class LibraryRepository(
         val detail = detail(photoId) ?: return@withContext null
         val main = detail.raw ?: detail.rendered ?: return@withContext null
         photoDao.setOpened(photoId, clock())
+        localPreview(detail, main)?.let { local ->
+            return@withContext EditTarget(photoId, versionId, local, main.name, null)
+        }
         smartPreviewUri(detail)?.let { smart ->
             return@withContext EditTarget(photoId, versionId, smart, main.name, null)
         }
         EditTarget(photoId, versionId, main.uri, main.name, detail.rendered?.uri?.takeIf { detail.raw != null })
+    }
+
+    /**
+     * The local smart preview of a hand-off Reveal cannot read now (ADR 0011 "Unreadable hand-offs"), or null (it can,
+     * or there is none: the editor then reports the original's error).
+     */
+    @Suppress("ReturnCount")
+    private suspend fun localPreview(detail: PhotoDetail, main: DetailFile): Uri? {
+        val local = previews ?: return null
+        val source = sourceDao.get(detail.photo.sourceId) ?: return null
+        if (source.kind != SourceKind.HANDOFF || readable(source, main)) return null
+        val fingerprint = photoDao.files(detail.photo.id).firstOrNull { it.documentId == main.documentId }?.fingerprint
+        return local.smart(fingerprint)?.let(Uri::fromFile)
+    }
+
+    /** Opens [file] once; false (and marked) when access is refused or it is gone. */
+    private suspend fun readable(source: SourceEntity, file: DetailFile): Boolean {
+        val ok = try {
+            trees.open(source).openInput(file.documentId, file.name).close()
+            true
+        } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
+            !isAccessError(e)
+        }
+        if (ok) photoDao.setReadable(file.documentId) else photoDao.setUnreadable(file.documentId, clock())
+        return ok
     }
 
     /** The smart preview of a photo whose original cannot be read now, or null. */
@@ -402,6 +492,7 @@ class LibraryRepository(
     }
 
     /** What an export of [versionId] reads (no side effect, unlike [editTarget]); null when the version is gone. */
+    @Suppress("CyclomaticComplexMethod") // one branch per place an original can be read from (ADR 0011, 0018)
     suspend fun exportTarget(versionId: Long): ExportTarget? = withContext(Dispatchers.IO) {
         val photoId = photoDao.photoIdOfVersion(versionId) ?: return@withContext null
         val detail = detail(photoId) ?: return@withContext null
@@ -410,6 +501,9 @@ class LibraryRepository(
         val target = ExportTarget(versionId, main.uri, main.name, detail.photo.rating, pair)
         val source = sourceDao.get(detail.photo.sourceId) ?: return@withContext target
         val onServer = db.syncDao().cloud(photoId)?.originalOnServer == true
+        localPreview(detail, main)?.let { local ->
+            return@withContext target.copy(renderedUri = null, reach = OriginalReach.PREVIEW, previewUri = local)
+        }
         when {
             source.kind == SourceKind.SERVER ->
                 target.copy(renderedUri = null, reach = if (onServer) OriginalReach.SERVER else OriginalReach.ELSEWHERE)
@@ -436,6 +530,14 @@ class LibraryRepository(
 
     private fun PhotoFileEntity.detail(tree: DocumentTree) =
         DetailFile(name, size, role, tree.uri(documentId), documentId)
+
+    /**
+     * How many of [versionIds] belong to hand-offs Reveal can no longer read (ADR 0011 "Unreadable hand-offs"): an
+     * export of those reads their local preview.
+     */
+    suspend fun unreadableCount(versionIds: List<Long>): Int = withContext(Dispatchers.IO) {
+        versionIds.chunked(SQL_ARGS).sumOf { photoDao.unreadableVersions(it) }
+    }
 
     /** Opens a source's tree (the thumbnail loader and the viewer read files through it). */
     suspend fun tree(sourceId: Long): DocumentTree = withContext(Dispatchers.IO) {

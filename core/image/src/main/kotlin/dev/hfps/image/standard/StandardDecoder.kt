@@ -72,7 +72,7 @@ object StandardDecoder {
             inSampleSize = sample
             inPreferredConfig = Bitmap.Config.ARGB_8888
             inPremultiplied = false
-            bounds.outColorSpace?.let { inPreferredColorSpace = it }
+            decodableSpace(bounds.outColorSpace)?.let { inPreferredColorSpace = it }
         }
         val bitmap = if (options.region == null) {
             BitmapFactory.decodeFileDescriptor(fd, null, decodeOptions)
@@ -100,6 +100,17 @@ object StandardDecoder {
         } finally {
             bitmap.recycle()
         }
+    }
+
+    /**
+     * The colour space to ask `BitmapFactory` for, given the file's [space]: the file's own when it is RGB with an
+     * ICC parametric transfer function, else BT.2020 (wide, parametric). The platform refuses any other preferred space
+     * with an `IllegalArgumentException` (HDR files in BT.2020 HLG or PQ, Android 14+; seen as failed smart previews).
+     */
+    fun decodableSpace(space: ColorSpace?): ColorSpace? = when {
+        space == null -> null
+        space is ColorSpace.Rgb && space.transferParameters != null -> space
+        else -> ColorSpace.get(ColorSpace.Named.BT2020)
     }
 
     /** Linearises a software `ARGB_8888` [bitmap] in its own colour space. */

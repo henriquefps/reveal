@@ -191,7 +191,8 @@ class RegionTileSource(
     private val space: ColorSpace.Rgb = decoder.decodeRegion(Rect(0, 0, 1, 1), BitmapFactory.Options()).let {
         val cs = it.colorSpace as? ColorSpace.Rgb ?: ColorSpace.get(ColorSpace.Named.SRGB) as ColorSpace.Rgb
         it.recycle()
-        cs
+        // The regions are asked for in this space: one the platform accepts (an HDR space is not one).
+        StandardDecoder.decodableSpace(cs) as ColorSpace.Rgb
     }
     private val info: ColorInfo = StandardDecoder.colorInfoOf(space)
     private val lut: ShortArray = space.eotf.let { eotf -> Linearize.lut { eotf.applyAsDouble(it) } }

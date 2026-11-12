@@ -35,6 +35,7 @@ import dev.hfps.reveal.data.model.PhotoQuery
 import dev.hfps.reveal.data.model.PickFlag
 import dev.hfps.reveal.data.model.SourceState
 import dev.hfps.reveal.designsystem.theme.RevealTheme
+import dev.hfps.reveal.feature.library.GalleryAccessContent
 import dev.hfps.reveal.feature.library.LibraryActions
 import dev.hfps.reveal.feature.library.LibraryContent
 import dev.hfps.reveal.feature.library.LibrarySelection
@@ -122,6 +123,33 @@ internal object LibrarySamples {
             )
             return bitmap.asImageBitmap()
         }
+    }
+
+    /**
+     * "Opened from other apps" (ADR 0011): two batches, the older gallery shares unreadable now ("preview only"), one
+     * picked photo a folder holds too.
+     */
+    fun fromApps(): LibraryUiState {
+        val handed = rows.take(7).mapIndexed { i, row ->
+            row.copy(
+                sourceId = if (i == 2) 1 else 9,
+                handoffAt = if (i < 3) time("2026:11:12 09:30:00") else time("2026:11:10 18:05:00"),
+                handoffTitle = if (i < 3) "Hoard picks" else null,
+                unreadable = i >= 3,
+                hasEdit = i == 4,
+                editTime = if (i == 4) 1L else null,
+            )
+        }
+        val query = PhotoQuery(scope = LibraryScope.FromApps)
+        return LibraryUiState(
+            sources = sources,
+            sourcesLoaded = true,
+            selection = LibrarySelection.Special(SpecialSource.FROM_APPS),
+            query = query,
+            entries = buildGridEntries(handed, query),
+            photoCount = handed.size,
+            photosLoaded = true,
+        )
     }
 
     fun grid(
@@ -239,6 +267,27 @@ class PhoneLibraryScreenshotTest : LibraryScreenshotBase("phone") {
             }
         }
         composeRule.onRoot().captureRoboImage("src/test/screenshots/library/phone_paste_chooser_light.png")
+    }
+
+    /** Hand-offs Reveal can no longer read carry the "preview only" badge (ADR 0011 "Unreadable hand-offs"). */
+    @Test fun fromAppsPreviewOnly() = shoot(
+        "from_apps_preview_only_light",
+        dark = false,
+        state = LibrarySamples.fromApps(),
+    )
+
+    /** The once-only gallery access offer (ADR 0011 "Gallery access"). */
+    @Test fun galleryAccess() {
+        composeRule.setContent {
+            RevealTheme(darkTheme = true) {
+                Box(Modifier.fillMaxSize().background(RevealTheme.colors.background), Alignment.BottomCenter) {
+                    Surface(color = RevealTheme.colors.card, shape = RevealTheme.shapes.sheet) {
+                        GalleryAccessContent(onAllow = {}, onDecline = {}, modifier = Modifier.padding(top = 24.dp))
+                    }
+                }
+            }
+        }
+        composeRule.onRoot().captureRoboImage("src/test/screenshots/library/phone_gallery_access_dark.png")
     }
 
     @Test fun indexing() = shoot(

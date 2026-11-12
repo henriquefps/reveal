@@ -4,9 +4,9 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.google.common.truth.Truth.assertThat
 import dev.hfps.reveal.data.db.SyncUploadEntity
 import dev.hfps.reveal.data.library.DocumentTreeFactory
+import dev.hfps.reveal.pipeline.preview.SmartPreviewMaker
 import dev.hfps.reveal.sync.api.SyncHttpException
 import dev.hfps.reveal.sync.blobs.BlobUploader
-import dev.hfps.reveal.sync.blobs.SmartPreviewMaker
 import java.io.ByteArrayInputStream
 import java.io.File
 import java.nio.file.Files

@@ -147,6 +147,12 @@ data class PhotoFileEntity(
      * walk) or when the file could not be read.
      */
     val fingerprint: String? = null,
+    /**
+     * When Reveal last failed to read this document because access was refused or it is gone (a hand-off whose
+     * temporary grant ended, ADR 0011 "Unreadable hand-offs"); null = readable (or never refused). Cleared by the next
+     * successful read and by a new hand-off of the file (new rows).
+     */
+    @ColumnInfo(name = "unreadable_at") val unreadableAt: Long? = null,
 )
 
 /**

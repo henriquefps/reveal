@@ -85,4 +85,12 @@
         <item quantity="one">%d photo waits for its original: it is only on another device. The export finishes by itself once that device backs it up to your sync server.</item>
         <item quantity="other">%d photos wait for their originals: they are only on another device. The export finishes by itself once that device backs them up to your sync server.</item>
     </plurals>
+    <plurals name="export_notification_preview_size">
+        <item quantity="one">%d photo was exported at preview size: Reveal can no longer read its original. Share it to Reveal again for the full size.</item>
+        <item quantity="other">%d photos were exported at preview size: Reveal can no longer read their originals. Share them to Reveal again for the full size.</item>
+    </plurals>
+    <plurals name="export_preview_only">
+        <item quantity="one">%d photo will be exported at preview size (2560 px): Reveal can no longer read its original. Share it to Reveal again to export it at full size.</item>
+        <item quantity="other">%d photos will be exported at preview size (2560 px): Reveal can no longer read their originals. Share them to Reveal again to export them at full size.</item>
+    </plurals>
 </resources>

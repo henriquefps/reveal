@@ -43,7 +43,7 @@ class TestDevice(
         java.io.File(System.getProperty("java.io.tmpdir"), "reveal-covers-$name-${System.nanoTime()}"),
     ) { now }
     val api = SyncApi(url, key)
-    private val folder: Long = runBlocking {
+    val folder: Long = runBlocking {
         db.sourceDao().insert(
             SourceEntity(
                 treeUri = "content://$name/tree",
@@ -90,6 +90,48 @@ class TestDevice(
         photoId = photoId, sourceId = folder, relativePath = name, documentId = name, name = name,
         size = bytes.size.toLong(), modified = 1, role = role, fingerprint = FileFingerprint.of(bytes),
     )
+
+    /** A photo another app handed over (ADR 0011): the JPEG under the "Opened from other apps" source. */
+    fun addHandoffPhoto(stem: String, jpeg: ByteArray): Long = runBlocking {
+        val source = db.sourceDao().handoff()?.id ?: db.sourceDao().insert(
+            SourceEntity(
+                treeUri = "reveal-handoff:", rootDocumentId = "", displayName = "apps", volumeId = null,
+                volumeName = null, state = SourceState.AVAILABLE, writable = true, addedAt = 0,
+                kind = dev.hfps.reveal.data.model.SourceKind.HANDOFF,
+            ),
+        )
+        val uri = "content://media/external/images/media/${stem.hashCode()}"
+        val photoId = db.photoDao().insertPhoto(
+            PhotoEntity(
+                sourceId = source, folder = uri, folderDocumentId = "", stemKey = stem.lowercase(), name = "$stem.JPG",
+                format = PhotoFormat.JPEG, hasRaw = false, sortTime = now, addedAt = now, handoffAt = now,
+            ),
+        )
+        db.photoDao().insertFiles(
+            listOf(
+                PhotoFileEntity(
+                    photoId = photoId, sourceId = source, relativePath = uri, documentId = uri, name = "$stem.JPG",
+                    size = jpeg.size.toLong(), modified = 1, role = FileRole.RENDERED,
+                    fingerprint = FileFingerprint.of(jpeg),
+                ),
+            ),
+        )
+        db.photoDao().insertVersion(VersionEntity(photoId = photoId, createdAt = now))
+        photoId
+    }
+
+    /** The same JPEG in this device's folder (as the indexer files a JPEG-only shot). */
+    fun addFolderJpeg(stem: String, jpeg: ByteArray): Long = runBlocking {
+        val photoId = db.photoDao().insertPhoto(
+            PhotoEntity(
+                sourceId = folder, folder = "", folderDocumentId = "root", stemKey = stem.lowercase(),
+                name = "$stem.JPG", format = PhotoFormat.JPEG, hasRaw = false, sortTime = now, addedAt = now,
+            ),
+        )
+        db.photoDao().insertFiles(listOf(file(photoId, "$stem.JPG", jpeg, FileRole.RENDERED)))
+        db.photoDao().insertVersion(VersionEntity(photoId = photoId, createdAt = now))
+        photoId
+    }
 
     fun version(photoId: Long): Long = runBlocking { checkNotNull(db.photoDao().firstVersion(photoId)) }
 

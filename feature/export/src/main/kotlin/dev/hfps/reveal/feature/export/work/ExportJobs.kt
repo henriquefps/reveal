@@ -49,6 +49,8 @@ data class ItemState(
     val partialUri: String? = null,
     /** When the item started waiting for its original (Unix ms), kept across attempts. */
     val waitingSince: Long? = null,
+    /** Exported from a local smart preview at its size: the original could not be read (ADR 0011). */
+    val previewSize: Boolean = false,
 )
 
 /**

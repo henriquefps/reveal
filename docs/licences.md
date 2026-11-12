@@ -32,6 +32,19 @@ with its licence; add a row in the same change that adds the dependency, and mir
 The shipped list was checked against `./gradlew :app:dependencies --configuration releaseRuntimeClasspath` for 0.1.0
 (every group on that classpath is covered by a row above).
 
+## Shipped in debug builds only (the mask lab, docs/adr/0021)
+
+Until M4 ships masks, `:core:ml` is a debug-only dependency: release builds contain none of these. When M4 moves them
+into release, move the rows above (and into `R.array.about_licences`).
+
+| Component | Version source | Licence |
+| --- | --- | --- |
+| LiteRT (`com.google.ai.edge.litert:litert`, `litert-gpu`, `litert-api`: `libLiteRt.so`, `libLiteRtClGlAccelerator.so`, `liblitert_jni.so`; third-party notices in the AAR) | `gradle/libs.versions.toml` (`litert`) | Apache-2.0 |
+| MediaPipe Selfie Multiclass 256, Selfie Segmenter, Hair Segmenter, MagicTouch interactive segmenter (model files, fetched at build time) | URL + SHA-256 in `core/ml/models.json` | Apache-2.0 (Google LLC, the MediaPipe authors) |
+| DeepLab-v3 MobileNetV2 ADE20K (TensorFlow model zoo, TFLite export) | `core/ml/models.json` | Apache-2.0 (weights; trained on ADE20K, see docs/adr/0021 "Training-data terms") |
+| LR-ASPP MobileNetV3-Large (torchvision weights, LiteRT export by litert-community) | `core/ml/models.json` | BSD-3-Clause |
+| MODNet (ZHKKKe/MODNet weights, LiteRT export by litert-community) | `core/ml/models.json` | Apache-2.0 |
+
 ## Shipped in the sync server (`sync-server/`, a separate program)
 
 | Component | Version source | Licence |
@@ -52,7 +65,8 @@ The shipped list was checked against `./gradlew :app:dependencies --configuratio
 | JUnit 4 | EPL-1.0 |
 | Truth | Apache-2.0 |
 | Robolectric | MIT |
-| Wikimedia Commons public-domain photographs (NASA) as test fixtures (`core/pipeline/src/test/resources/faces`, not shipped) | Public domain |
+| Wikimedia Commons public-domain photographs (NASA) as test fixtures (`core/pipeline/src/test/resources/faces`, `core/ml/src/androidTest/assets/fixtures`, not shipped) | Public domain |
+| Spike-only mask models measured but not bundled (IS-Net, DeepLab-v3 Xception-65 ADE20K, DeepLab-v3 VOC, UniSal; `bundled: false` in `core/ml/models.json`) | Apache-2.0 |
 | Roborazzi | Apache-2.0 |
 | ktlint, ktlint-gradle | MIT |
 | golangci-lint (sync server CI, includes staticcheck and gosec) | GPL-3.0 (tool only, not linked) |

@@ -1,0 +1,71 @@
+{
+  "comment": "On-device mask models (docs/adr/0021). Pinned files fetched at build time by scripts/ml/fetch_models.py; never committed, never downloaded at runtime. 'bundled' = carried by the APK (today: debug builds only, through the mask lab). Keep ids stable: a recipe refers to <id>@<version>.",
+  "models": [
+    {
+      "id": "selfie-multiclass", "version": 1, "asset": "selfie-multiclass-v1.tflite", "bundled": true,
+      "url": "https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_multiclass_256x256/float32/1/selfie_multiclass_256x256.tflite",
+      "sha256": "c6748b1253a99067ef71f7e26ca71096cd449baefa8f101900ea23016507e0e0", "bytes": 16371837,
+      "licence": "Apache-2.0", "source": "Google MediaPipe Image Segmenter (SelfieMulticlass 256x256), model card May 2023"
+    },
+    {
+      "id": "selfie-segmenter", "version": 1, "asset": "selfie-segmenter-v1.tflite", "bundled": true,
+      "url": "https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_segmenter/float16/1/selfie_segmenter.tflite",
+      "sha256": "191ac9529ae506ee0beefa6b2c945a172dab9d07d1e802a290a4e4038226658b", "bytes": 249537,
+      "licence": "Apache-2.0", "source": "Google MediaPipe Image Segmenter (SelfieSegmenter, square)"
+    },
+    {
+      "id": "hair-segmenter", "version": 1, "asset": "hair-segmenter-v1.tflite", "bundled": true,
+      "url": "https://storage.googleapis.com/mediapipe-models/image_segmenter/hair_segmenter/float32/1/hair_segmenter.tflite",
+      "sha256": "2628cf3ce5f695f604cbea2841e00befcaa3624bf80caf3664bef2656d59bf84", "bytes": 781618,
+      "licence": "Apache-2.0", "source": "Google MediaPipe Image Segmenter (HairSegmenter)"
+    },
+    {
+      "id": "magic-touch", "version": 1, "asset": "magic-touch-v1.tflite", "bundled": true,
+      "url": "https://storage.googleapis.com/mediapipe-models/interactive_segmenter/magic_touch/float32/1/magic_touch.tflite",
+      "sha256": "e24338a717c1b7ad8d159666677ef400babb7f33b8ad60c4d96db4ecf694cd25", "bytes": 6227884,
+      "licence": "Apache-2.0", "source": "Google MediaPipe Interactive Segmenter (MagicTouch)"
+    },
+    {
+      "id": "deeplab-v3-voc", "version": 1, "asset": "deeplab-v3-voc-v1.tflite", "bundled": false,
+      "url": "https://storage.googleapis.com/mediapipe-models/image_segmenter/deeplab_v3/float32/1/deeplab_v3.tflite",
+      "sha256": "ff36e24d40547fe9e645e2f4e8745d1876d6e38b332d39a82f0bf0f5d1d561b3", "bytes": 2780176,
+      "licence": "Apache-2.0", "source": "Google MediaPipe Image Segmenter (DeepLab-v3, PASCAL VOC classes)"
+    },
+    {
+      "id": "lraspp-mnv3-voc", "version": 1, "asset": "lraspp-mnv3-voc-v1.tflite", "bundled": true,
+      "url": "https://huggingface.co/litert-community/lraspp_mobilenet_v3_large/resolve/a536128c36d4bcd3da85ee9509a74dfc3bdf9521/lraspp_mobilenet_v3_large.tflite",
+      "sha256": "173bc7931ed05de173385ddae155610a9260c5b0e1649719c4738cb31db8b06f", "bytes": 12877728,
+      "licence": "BSD-3-Clause", "source": "torchvision lraspp_mobilenet_v3_large (COCO subset, VOC classes), LiteRT conversion by litert-community"
+    },
+    {
+      "id": "deeplab-v3-ade20k", "version": 1, "asset": "deeplab-v3-ade20k-v1.tflite", "bundled": true,
+      "url": "https://tfhub.dev/sayakpaul/lite-model/deeplabv3-mobilenetv2-ade20k/1/default/2?lite-format=tflite",
+      "sha256": "0acdf37d5db38e681646ce79557c2af516650ecca5377b15c9cb171f751556cb", "bytes": 2419921,
+      "licence": "Apache-2.0", "source": "TensorFlow DeepLab model zoo, MobileNetV2 ADE20K (150 classes), TFLite export on TF Hub/Kaggle"
+    },
+    {
+      "id": "deeplab-v3-ade20k-xception", "version": 1, "asset": "deeplab-v3-ade20k-xception-v1.tflite", "bundled": false,
+      "url": "https://tfhub.dev/sayakpaul/lite-model/deeplabv3-xception65-ade20k/1/default/2?lite-format=tflite",
+      "sha256": "f3f7ce57f86e382edd265b6158cd95ca68c5d70adc82549618b2ff0ac9ecd2ec", "bytes": 41655145,
+      "licence": "Apache-2.0", "source": "TensorFlow DeepLab model zoo, Xception-65 ADE20K, TFLite export on TF Hub/Kaggle"
+    },
+    {
+      "id": "modnet", "version": 1, "asset": "modnet-v1.tflite", "bundled": true,
+      "url": "https://huggingface.co/litert-community/MODNet-LiteRT/resolve/4d5bd22bde15c8ae5e215ca4799513844979a431/modnet.tflite",
+      "sha256": "f7d1e9eca9562abddb60e4b0a3ed0c29441ef09cd621954978f1613914cc64bc", "bytes": 26166776,
+      "licence": "Apache-2.0", "source": "ZHKKKe/MODNet portrait matting, LiteRT conversion by litert-community"
+    },
+    {
+      "id": "isnet-general", "version": 1, "asset": "isnet-general-v1.tflite", "bundled": false,
+      "url": "https://huggingface.co/litert-community/DIS-ISNet-LiteRT/resolve/1b966dbe2f33bd5ca1299cf94fbab59265210b6b/dis.tflite",
+      "sha256": "0c3c93b6a2a65e7c69137ec82596944e6bfb97d982c75bab03acb0738dbaa087", "bytes": 176223448,
+      "licence": "Apache-2.0", "source": "xuebinqin/DIS isnet-general-use, LiteRT conversion by litert-community"
+    },
+    {
+      "id": "unisal", "version": 1, "asset": "unisal-v1.tflite", "bundled": false,
+      "url": "https://huggingface.co/litert-community/UniSal-Saliency-LiteRT/resolve/a699e0f86da9adc73d2fbf210a673870bfef8b72/unisal_fp16.tflite",
+      "sha256": "60121fd9701d474e130f7ac6c2a45bdf48390c6157f640ff5ac01f22f7a0fe65", "bytes": 6532768,
+      "licence": "Apache-2.0", "source": "rdroste/unisal visual saliency (a heatmap, not a mask), LiteRT conversion by litert-community"
+    }
+  ]
+}

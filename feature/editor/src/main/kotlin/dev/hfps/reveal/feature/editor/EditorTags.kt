@@ -83,6 +83,7 @@ object EditorTags {
     const val EYEDROPPER_HINT = "editor-eyedropper-hint"
     const val HISTORY_LIST = "editor-history"
     const val MENU_HISTORY = "editor-menu-history"
+    const val MENU_MASK_LAB = "editor-menu-mask-lab"
     const val MENU_COPY = "editor-menu-copy"
     const val MENU_PASTE = "editor-menu-paste"
     const val MENU_PREVIOUS = "editor-menu-previous"

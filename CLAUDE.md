@@ -588,6 +588,36 @@ REVEAL_PRESET_DUMPS=<dumps and/or JPEGs> REVEAL_PRESET_OUT=<dir> ./gradlew --no-
 
 Env-driven opt-in tests need `--no-configuration-cache` (the cached configuration keeps the old environment).
 
+## On-device mask models (`:core:ml`, M4/S spike, ADR 0021)
+
+`:core:ml` is a `debugImplementation` of `:app` and `:feature:editor` until M4 ships masks (release builds carry no
+LiteRT, no model). Models: `core/ml/models.json` (URL, SHA-256, bytes, licence, `bundled`) fetched at build time by
+`scripts/ml/fetch_models.py` (stdlib; cache `~/.cache/reveal-ml` by checksum; `--check` re-downloads and verifies;
+`--all --out DIR` every candidate) through the `fetchMlModels` task into `core/ml/build/generated/ml-assets/ml/`
+(never commit a model). A new model = a `models.json` entry + a `ModelSpec` in `MaskModels` (tensor layout,
+normalisation, activation, `KindRule` per `MaskKind`); `MaskModelsTest` keeps both in step. Ids are `<id>@<version>`
+for recipes and caches: never reuse an id for another file. Pure Kotlin, JVM-tested: `tensor/` (`Resample` explicit
+weights, `InputSpec.encode`, `OutputSpec.decode` decodes only the wanted channels), `SegmentationModel`,
+`refine/GuidedRefiner` (fast colour guided filter; `GuidedFilterShader.APPLY_FRAG` is its GPU pass). Runtime:
+`runtime/LiteRtEngine` (CompiledModel; `Backend.GPU` registers the CPU too, so unsupported ops partition instead of
+failing). Debug mask lab: More ⋯ → Mask lab (`feature/editor/src/debug/.../masklab`, `tools/DebugTools` with a
+`src/release` no-op; strings in `src/debug/res`), input = `GpuDevelopRenderer.renderOutputImage(recipe)`.
+
+```sh
+python3 scripts/ml/fetch_models.py --check                    # pinned files still match upstream
+./gradlew :core:ml:testDebugUnitTest
+./gradlew :core:ml:assembleDebugAndroidTest && adb -s <serial> install --user 0 -r -t core/ml/build/outputs/apk/androidTest/debug/ml-debug-androidTest.apk
+adb -s <serial> shell am instrument -w -e class dev.hfps.reveal.ml.MaskModelsDeviceTest,dev.hfps.reveal.ml.GuidedFilterGpuTest dev.hfps.reveal.ml.test/androidx.test.runner.AndroidJUnitRunner
+adb -s <serial> shell am instrument -w -e class dev.hfps.reveal.ml.MaskBenchmark dev.hfps.reveal.ml.test/androidx.test.runner.AndroidJUnitRunner
+adb -s <serial> logcat -d -s REVEAL_ML        # parity, bench (per model and backend), refine
+# unbundled candidates: push files into the test app's files/models (run-as dev.hfps.reveal.ml.test) to benchmark them
+adb -s <serial> shell am instrument -w -e class dev.hfps.reveal.editor.MaskLabTest [-e shots true] dev.hfps.reveal.debug.test/androidx.test.runner.AndroidJUnitRunner
+```
+
+The ADR's COCO numbers and the private review sheets come from host scripts kept outside the repo (LiteRT/ONNX on the
+host, COCO val2017 panoptic subsets); review sheets of the owner's photos go only to the owner's private review
+folder, never to the repo or a PR.
+
 ## `:core:image` harness (ADR 0004)
 
 ```sh

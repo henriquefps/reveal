@@ -6,6 +6,13 @@ All notable changes to Reveal are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- Debug builds only: a "Mask lab" in the editor's More ⋯ menu runs the candidate on-device mask models (people and
+  their parts, sky, subject by tap or automatically) on the open photo and tints the mask, with edge refinement and
+  timings, to judge them before M4's masks. Release builds are unchanged (no models, no ML runtime).
+- `:core:ml`: on-device mask models through LiteRT, pinned model files fetched at build time, guided-filter edge
+  refinement (CPU reference and GPU pass); the choice of models is in docs/adr/0021.
+
 ## [0.5.5] - 2026-11-12
 
 ### Changed

@@ -6,14 +6,11 @@ import androidx.compose.ui.test.onRoot
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.github.takahirom.roborazzi.captureRoboImage
 import dev.hfps.reveal.data.db.PhotoRow
-import dev.hfps.reveal.data.model.LibraryScope
 import dev.hfps.reveal.data.model.PhotoFormat
 import dev.hfps.reveal.data.model.PhotoQuery
 import dev.hfps.reveal.designsystem.theme.RevealTheme
 import dev.hfps.reveal.feature.library.LibraryActions
 import dev.hfps.reveal.feature.library.LibraryContent
-import dev.hfps.reveal.feature.library.LibrarySelection
-import dev.hfps.reveal.feature.library.SpecialSource
 import dev.hfps.reveal.feature.library.buildGridEntries
 import dev.hfps.reveal.feature.settings.sync.BackupFolder
 import dev.hfps.reveal.feature.settings.sync.PairingState
@@ -99,22 +96,19 @@ class SyncScreenshotTest {
             copyDevice = "Tablet",
         )
         val sorted = rows.sortedWith(compareByDescending<PhotoRow> { it.sortTime }.thenBy { it.versionPosition })
-        val query = PhotoQuery(scope = LibraryScope.Server)
-        val state = LibrarySamples.grid().copy(
-            selection = LibrarySelection.Special(SpecialSource.SERVER),
+        val query = PhotoQuery.SERVER_ONLY
+        val state = LibrarySamples.grid(query, paired = true).copy(
             entries = buildGridEntries(sorted, query),
             photoCount = sorted.size,
-            serverPhotos = 9,
         )
         RevealTheme(darkTheme = false) { LibraryContent(state, LibraryActions(), LibrarySamples.thumbnails) }
     }
 
     @Test fun backedUpGrid() = shoot("phone_library_backed_up_dark") {
         val rows = LibrarySamples.rows.take(12).mapIndexed { i, row -> row.copy(cloudOriginal = i % 2 == 0) }
-        val state = LibrarySamples.grid().copy(
-            entries = buildGridEntries(rows, PhotoQuery(scope = LibraryScope.Source(1))),
+        val state = LibrarySamples.grid(PhotoQuery.ofSource(1), paired = true).copy(
+            entries = buildGridEntries(rows, PhotoQuery.ofSource(1)),
             photoCount = rows.size,
-            serverPhotos = 9,
         )
         RevealTheme(darkTheme = true) { LibraryContent(state, LibraryActions(), LibrarySamples.thumbnails) }
     }

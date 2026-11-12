@@ -11,6 +11,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import dagger.hilt.android.EntryPointAccessors
 import dev.hfps.reveal.MainActivity
+import dev.hfps.reveal.data.model.PhotoFilters
 import dev.hfps.reveal.debug.DebugAccess
 import dev.hfps.reveal.feature.library.LibraryMetrics
 import dev.hfps.reveal.library.SyntheticFolder
@@ -66,7 +67,7 @@ class SyncPullMeasurementsTest {
         val previews = (0 until VARIANTS).map { folder.gradientJpeg(it, 640, 427, 80) }
         for (i in 0 until LOCAL_PHOTOS) folder.jpeg("IMG_%05d.JPG".format(i), i, previews[i % previews.size])
         val (sourceId, _) = folder.addAndIndex(timeoutMs = 300_000)
-        runBlocking { access.library().setLastSelection("f:$sourceId") }
+        runBlocking { access.library().setLastFilters(PhotoFilters.folder(sourceId)) }
 
         val baseline = measure("baseline")
         val sync = access.sync()

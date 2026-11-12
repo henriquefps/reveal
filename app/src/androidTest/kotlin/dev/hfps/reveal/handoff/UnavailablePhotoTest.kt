@@ -8,7 +8,7 @@ import dagger.hilt.android.EntryPointAccessors
 import dev.hfps.image.source.FileFingerprint
 import dev.hfps.reveal.data.handoff.HandoffRequest
 import dev.hfps.reveal.data.model.LibraryScope
-import dev.hfps.reveal.data.model.PhotoFilter
+import dev.hfps.reveal.data.model.PhotoFilters
 import dev.hfps.reveal.data.model.PhotoQuery
 import dev.hfps.reveal.debug.DebugAccess
 import dev.hfps.reveal.debug.SyntheticDocumentsProvider
@@ -52,8 +52,8 @@ class UnavailablePhotoTest {
         return id to DocumentsContract.buildDocumentUri(SyntheticDocumentsProvider.AUTHORITY, id)
     }
 
-    private fun rows(filter: PhotoFilter = PhotoFilter.ALL) = runBlocking {
-        access.library().photoList(PhotoQuery(scope = LibraryScope.FromApps, filter = filter))
+    private fun rows(unavailable: Boolean = false) = runBlocking {
+        access.library().photoList(PhotoQuery.FROM_APPS.copy(unavailableOnly = unavailable))
             .filter { it.name.startsWith(stem) }
     }
 
@@ -75,10 +75,10 @@ class UnavailablePhotoTest {
     fun aPhotoWithNoGrantAndNoPreviewIsUnavailableAndTheFilterFindsIt() {
         val (_, _, goneId) = twoPhotosOneGone()
 
-        assertThat(rows(PhotoFilter.UNAVAILABLE).map { it.id }).containsExactly(goneId)
+        assertThat(rows(unavailable = true).map { it.id }).containsExactly(goneId)
         assertThat(rows().first { it.id == goneId }.unavailable).isTrue()
         assertThat(rows().filter { it.id != goneId }.map { it.unavailable }).containsExactly(false)
-        assertThat(runBlocking { access.library().unavailableCount(LibraryScope.FromApps).first() }).isAtLeast(1)
+        assertThat(runBlocking { access.library().unavailableCount(PhotoFilters.FROM_APPS).first() }).isAtLeast(1)
     }
 
     @Test
@@ -95,18 +95,18 @@ class UnavailablePhotoTest {
         val row = rows().first { it.name.startsWith("${stem}_3") }
         assertThat(row.unreadable).isTrue()
         assertThat(row.unavailable).isFalse()
-        assertThat(rows(PhotoFilter.UNAVAILABLE)).isEmpty()
+        assertThat(rows(unavailable = true)).isEmpty()
     }
 
     @Test
     fun tryAgainClearsThePhotoOnceItsGrantIsBack() {
         val (id, _, goneId) = twoPhotosOneGone()
         assertThat(runBlocking { access.library().recheckAccess(listOf(goneId), force = true) }).isAtLeast(1)
-        assertThat(rows(PhotoFilter.UNAVAILABLE)).isNotEmpty()
+        assertThat(rows(unavailable = true)).isNotEmpty()
 
         SyntheticDocumentsProvider.allow(context.filesDir, id)
         assertThat(runBlocking { access.library().recheckAccess(listOf(goneId), force = true) }).isEqualTo(0)
-        assertThat(rows(PhotoFilter.UNAVAILABLE)).isEmpty()
+        assertThat(rows(unavailable = true)).isEmpty()
         assertThat(rows().first { it.id == goneId }.unreadable).isFalse()
     }
 
@@ -118,6 +118,6 @@ class UnavailablePhotoTest {
         runBlocking { access.library().forget(listOf(goneId)) }
 
         assertThat(rows().map { it.id }).containsExactlyElementsIn(others)
-        assertThat(rows(PhotoFilter.UNAVAILABLE)).isEmpty()
+        assertThat(rows(unavailable = true)).isEmpty()
     }
 }

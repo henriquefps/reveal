@@ -11,14 +11,15 @@ import dev.hfps.reveal.data.FileDocumentTree
 import dev.hfps.reveal.data.db.PhotoQuerySql
 import dev.hfps.reveal.data.db.RevealDatabase
 import dev.hfps.reveal.data.db.SourceEntity
-import dev.hfps.reveal.data.model.LibraryScope
+import dev.hfps.reveal.data.model.CullingFilter
 import dev.hfps.reveal.data.model.MetadataState
-import dev.hfps.reveal.data.model.PhotoFilter
+import dev.hfps.reveal.data.model.PhotoFilters
 import dev.hfps.reveal.data.model.PhotoFormat
 import dev.hfps.reveal.data.model.PhotoQuery
 import dev.hfps.reveal.data.model.PhotoSort
 import dev.hfps.reveal.data.model.PickFlag
 import dev.hfps.reveal.data.model.SourceState
+import dev.hfps.reveal.data.model.TypeFilter
 import dev.hfps.reveal.data.synthetic.SyntheticExif
 import dev.hfps.reveal.data.synthetic.SyntheticShoot
 import java.io.File
@@ -87,9 +88,8 @@ class LibraryIndexerTest {
     private suspend fun index(tree: FileDocumentTree = FileDocumentTree(root)) =
         LibraryIndexer(db).index(sourceId, tree)
 
-    private suspend fun rows(
-        query: PhotoQuery = PhotoQuery(scope = LibraryScope.Source(sourceId), sort = PhotoSort.CAPTURE_OLDEST),
-    ) = db.photoDao().rows(PhotoQuerySql.toQuery(query))
+    private suspend fun rows(query: PhotoQuery = PhotoQuery.ofSource(sourceId).copy(sort = PhotoSort.CAPTURE_OLDEST)) =
+        db.photoDao().rows(PhotoQuerySql.toQuery(query))
 
     @Test
     fun `pairs collapse, sidecars and EXIF are read, sub-seconds order a burst`() = runTest {
@@ -162,25 +162,34 @@ class LibraryIndexerTest {
         jpeg("IMG_100%.jpg", "2026:08:07 11:00:00")
         File(root, "IMG_100%.xmp").writeText(SyntheticShoot.sidecar(rating = 2, creatorTool = "Lightroom"))
         index()
-        val scope = LibraryScope.Source(sourceId)
-        assertThat(rows(PhotoQuery(scope, PhotoFilter.RAW)).map { it.name }).containsExactly("DSC00001.ARW")
-        assertThat(rows(PhotoQuery(scope, PhotoFilter.JPEG)).map { it.name }).containsExactly("IMG_100%.jpg")
+        val folder = PhotoFilters.folder(sourceId)
         assertThat(
-            rows(PhotoQuery(scope, PhotoFilter.RATED, minRating = 2)).map {
+            rows(PhotoQuery(filters = folder.toggle(TypeFilter.RAW))).map {
+                it.name
+            },
+        ).containsExactly("DSC00001.ARW")
+        assertThat(
+            rows(PhotoQuery(filters = folder.toggle(TypeFilter.JPEG))).map {
                 it.name
             },
         ).containsExactly("IMG_100%.jpg")
-        assertThat(rows(PhotoQuery(scope, PhotoFilter.RATED, minRating = 3))).isEmpty()
-        assertThat(rows(PhotoQuery(scope, PhotoFilter.PICKED))).isEmpty()
-        assertThat(rows(PhotoQuery(scope, search = "100%")).map { it.name }).containsExactly("IMG_100%.jpg")
-        assertThat(rows(PhotoQuery(scope, search = "1_0"))).isEmpty()
-        assertThat(rows(PhotoQuery(scope, search = "dsc")).map { it.name }).containsExactly("DSC00001.ARW")
         assertThat(
-            rows(PhotoQuery(scope, sort = PhotoSort.NAME)).map {
+            rows(PhotoQuery(filters = folder.toggle(CullingFilter.STARRED))).map {
+                it.name
+            },
+        ).containsExactly("IMG_100%.jpg")
+        assertThat(rows(PhotoQuery(filters = folder.toggle(CullingFilter.PICKED)))).isEmpty()
+        assertThat(rows(PhotoQuery(filters = folder, search = "100%")).map { it.name }).containsExactly("IMG_100%.jpg")
+        assertThat(rows(PhotoQuery(filters = folder, search = "1_0"))).isEmpty()
+        assertThat(rows(PhotoQuery(filters = folder, search = "dsc")).map { it.name }).containsExactly("DSC00001.ARW")
+        assertThat(
+            rows(PhotoQuery(filters = folder, sort = PhotoSort.NAME)).map {
                 it.name
             },
         ).containsExactly("DSC00001.ARW", "IMG_100%.jpg").inOrder()
-        assertThat(rows(PhotoQuery(scope, sort = PhotoSort.CAPTURE_NEWEST)).first().name).isEqualTo("IMG_100%.jpg")
+        assertThat(
+            rows(PhotoQuery(filters = folder, sort = PhotoSort.CAPTURE_NEWEST)).first().name,
+        ).isEqualTo("IMG_100%.jpg")
     }
 
     @Test

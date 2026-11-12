@@ -15,7 +15,7 @@ import dev.hfps.reveal.data.library.LibraryRepository
 import dev.hfps.reveal.data.library.SidecarSync
 import dev.hfps.reveal.data.model.LibraryScope
 import dev.hfps.reveal.data.model.PhotoAvailability
-import dev.hfps.reveal.data.model.PhotoFilter
+import dev.hfps.reveal.data.model.PhotoFilters
 import dev.hfps.reveal.data.model.PhotoQuery
 import dev.hfps.reveal.data.sync.ServerTree
 import dev.hfps.reveal.data.synthetic.SyntheticExif
@@ -85,13 +85,13 @@ class UnavailablePhotosTest {
         val uri = Uri.parse("content://media/external/images/media/${name.hashCode() and 0xffff}")
         tree.aliases[uri.toString()] = file
         handoffs().receive(HandoffRequest(listOf(uri)))
-        val row = db.photoDao().rows(PhotoQuerySql.toQuery(PhotoQuery(scope = LibraryScope.FromApps)))
+        val row = db.photoDao().rows(PhotoQuerySql.toQuery(PhotoQuery.FROM_APPS))
             .first { it.name == name }
         return Shared(uri, file, row.id)
     }
 
-    private suspend fun rows(filter: PhotoFilter = PhotoFilter.ALL) =
-        library().photoList(PhotoQuery(scope = LibraryScope.FromApps, filter = filter))
+    private suspend fun rows(unavailable: Boolean = false) =
+        library().photoList(PhotoQuery.FROM_APPS.copy(unavailableOnly = unavailable))
 
     private suspend fun cloud(photo: Shared, original: Boolean = false, preview: Boolean = false) =
         db.syncDao().putCloud(
@@ -132,7 +132,7 @@ class UnavailablePhotosTest {
             previews.smartFile(photo.print).delete()
             if (original || preview) cloud(photo, original, preview)
             if (unreadable) markUnreadable(photo)
-            val row = db.photoDao().rows(PhotoQuerySql.toQuery(PhotoQuery(scope = LibraryScope.FromApps)))
+            val row = db.photoDao().rows(PhotoQuerySql.toQuery(PhotoQuery.FROM_APPS))
                 .first { it.id == photo.photoId }
             assertThat(row.unavailable)
                 .isEqualTo(PhotoAvailability.isUnavailable(unreadable, original, preview, localPreview = false))
@@ -146,14 +146,14 @@ class UnavailablePhotosTest {
         markUnreadable(photo)
         assertThat(rows().single().unreadable).isTrue()
         assertThat(rows().single().unavailable).isFalse()
-        assertThat(rows(PhotoFilter.UNAVAILABLE)).isEmpty()
-        assertThat(library().unavailableCount(LibraryScope.FromApps).first()).isEqualTo(0)
+        assertThat(rows(unavailable = true)).isEmpty()
+        assertThat(library().unavailableCount(PhotoFilters.FROM_APPS).first()).isEqualTo(0)
 
         // The preview is gone (cache trimmed): now nothing stands in for the file.
         previews.displayFile(photo.print).delete()
         previews.smartFile(photo.print).delete()
-        assertThat(rows(PhotoFilter.UNAVAILABLE).map { it.id }).containsExactly(photo.photoId)
-        assertThat(library().unavailableCount(LibraryScope.FromApps).first()).isEqualTo(1)
+        assertThat(rows(unavailable = true).map { it.id }).containsExactly(photo.photoId)
+        assertThat(library().unavailableCount(PhotoFilters.FROM_APPS).first()).isEqualTo(1)
     }
 
     @Test
@@ -163,10 +163,10 @@ class UnavailablePhotosTest {
         previews.displayFile(gone.print).delete()
         previews.smartFile(gone.print).delete()
         markUnreadable(gone)
-        assertThat(rows(PhotoFilter.UNAVAILABLE).map { it.name }).containsExactly("20261112_103200.jpg")
+        assertThat(rows(unavailable = true).map { it.name }).containsExactly("20261112_103200.jpg")
         // "All" holds hand-off photos too; the Server scope never does.
-        assertThat(library().unavailableCount(LibraryScope.All).first()).isEqualTo(1)
-        assertThat(library().unavailableCount(LibraryScope.Server).first()).isEqualTo(0)
+        assertThat(library().unavailableCount().first()).isEqualTo(1)
+        assertThat(library().unavailableCount(PhotoFilters.SERVER_ONLY).first()).isEqualTo(0)
     }
 
     @Test
@@ -175,17 +175,17 @@ class UnavailablePhotosTest {
         previews.displayFile(photo.print).delete()
         previews.smartFile(photo.print).delete()
         markUnreadable(photo)
-        assertThat(rows(PhotoFilter.UNAVAILABLE)).hasSize(1)
+        assertThat(rows(unavailable = true)).hasSize(1)
 
         // Still refused: stays marked. Inside the rate limit nothing is even tried.
         assertThat(library().recheckAccess(force = true)).isEqualTo(1)
         tree.refused -= photo.uri.toString()
         assertThat(library().recheckAccess()).isEqualTo(-1)
-        assertThat(rows(PhotoFilter.UNAVAILABLE)).hasSize(1)
+        assertThat(rows(unavailable = true)).hasSize(1)
 
         now += 60_000
         assertThat(library().recheckAccess()).isEqualTo(0)
-        assertThat(rows(PhotoFilter.UNAVAILABLE)).isEmpty()
+        assertThat(rows(unavailable = true)).isEmpty()
         assertThat(rows().single().unreadable).isFalse()
     }
 

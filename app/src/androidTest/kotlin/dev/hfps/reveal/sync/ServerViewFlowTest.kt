@@ -23,6 +23,7 @@ import dagger.hilt.android.EntryPointAccessors
 import dev.hfps.image.source.FileFingerprint
 import dev.hfps.reveal.MainActivity
 import dev.hfps.reveal.data.model.LibraryScope
+import dev.hfps.reveal.data.model.PhotoFilters
 import dev.hfps.reveal.data.model.PhotoQuery
 import dev.hfps.reveal.data.synthetic.SyntheticShoot
 import dev.hfps.reveal.debug.DebugAccess
@@ -31,6 +32,7 @@ import dev.hfps.reveal.feature.library.LibraryTags
 import dev.hfps.reveal.feature.library.R as LibraryR
 import dev.hfps.reveal.feature.library.ServerViewTags
 import dev.hfps.reveal.feature.library.viewer.ViewerTags
+import dev.hfps.reveal.library.LibraryFilterSteps.showOnly
 import dev.hfps.reveal.library.SyntheticFolder
 import dev.hfps.reveal.pipeline.recipe.RecipeDiff
 import dev.hfps.reveal.sync.account.PairingLink
@@ -141,14 +143,11 @@ class ServerViewFlowTest {
         return id
     }
 
-    private fun serverNames() =
-        runBlocking { library.photoList(PhotoQuery(scope = LibraryScope.Server)) }.map { it.name }
+    private fun serverNames() = runBlocking { library.photoList(PhotoQuery.SERVER_ONLY) }.map { it.name }
 
+    /** The home filtered to "Only on the server" (FIX/L). */
     private fun openServerScope() {
-        compose.waitUntilAtLeastOneExists(hasText(context.getString(LibraryR.string.library_server)), TIMEOUT_MS)
-        // The sources entry (a two-pane tablet that reopened Server also shows the name as the grid's title).
-        compose.onAllNodes(hasText(context.getString(LibraryR.string.library_server)) and hasClickAction())
-            .onFirst().performClick()
+        compose.showOnly(PhotoFilters.SERVER_ONLY, TIMEOUT_MS)
         compose.waitUntilAtLeastOneExists(hasTestTag(LibraryTags.GRID), TIMEOUT_MS)
     }
 
@@ -168,7 +167,7 @@ class ServerViewFlowTest {
 
         assertThat(serverNames()).contains("$openable.ARW")
         assertThat(serverNames()).doesNotContain("$described.ARW")
-        val photo = runBlocking { library.photoList(PhotoQuery(scope = LibraryScope.Server)) }
+        val photo = runBlocking { library.photoList(PhotoQuery.SERVER_ONLY) }
             .single { it.name == "$openable.ARW" }
         ActivityScenario.launch(MainActivity::class.java).use {
             openServerScope()
@@ -221,11 +220,11 @@ class ServerViewFlowTest {
         val dao = access.database().photoDao()
         compose.waitUntil(EDITOR_TIMEOUT_MS) {
             runBlocking { sync.syncMetadata() }
-            val photo = runBlocking { library.photoList(PhotoQuery(scope = LibraryScope.Server)) }
+            val photo = runBlocking { library.photoList(PhotoQuery.SERVER_ONLY) }
                 .firstOrNull { it.name == "$stem.JPG" }
             photo != null && runBlocking { dao.get(photo.id) }?.orientation == 6
         }
-        val photo = runBlocking { library.photoList(PhotoQuery(scope = LibraryScope.Server)) }
+        val photo = runBlocking { library.photoList(PhotoQuery.SERVER_ONLY) }
             .single { it.name == "$stem.JPG" }
         val shown = checkNotNull(runBlocking { access.photoImages().display(photo.id, DISPLAY_EDGE) })
         assertThat(shown.fullWidth).isLessThan(shown.fullHeight)
@@ -249,7 +248,7 @@ class ServerViewFlowTest {
                     null
             }
         }
-        val edited = runBlocking { library.photoList(PhotoQuery(scope = LibraryScope.Source(sourceId))) }
+        val edited = runBlocking { library.photoList(PhotoQuery.ofSource(sourceId)) }
             .single { it.name == "SVE$run.ARW" }
         runBlocking {
             val before = folder.edits.recipe(edited.versionId)
@@ -265,13 +264,14 @@ class ServerViewFlowTest {
         val looked = other.lookup(listOf(editedRaw, plainRaw))
         assertThat(looked.found.map { it.fingerprint }).containsExactly(editedRaw)
 
-        // The library reopens the last place: start from the sources list.
-        runBlocking { library.setLastSelection(null) }
+        // The library reopens its last filters: start from the unfiltered home, then Manage folders (FIX/L).
+        runBlocking { library.setLastFilters(PhotoFilters.NONE) }
         ActivityScenario.launch(MainActivity::class.java).use {
-            val actions = context.getString(LibraryR.string.library_source_actions, folder.name)
-            compose.waitUntilAtLeastOneExists(hasContentDescription(actions), TIMEOUT_MS)
-            compose.onNode(hasContentDescription(actions)).performClick()
-            compose.onNodeWithText(context.getString(LibraryR.string.library_source_remove)).performClick()
+            compose.waitUntilAtLeastOneExists(hasTestTag(LibraryTags.FOLDERS), TIMEOUT_MS)
+            compose.onNodeWithTag(LibraryTags.FOLDERS).performClick()
+            compose.waitUntilAtLeastOneExists(hasTestTag(LibraryTags.folderMenu(sourceId)), TIMEOUT_MS)
+            compose.onNodeWithTag(LibraryTags.folderMenu(sourceId)).performClick()
+            compose.onNodeWithTag(LibraryTags.FOLDER_REMOVE).performClick()
             compose.waitUntilAtLeastOneExists(hasTestTag(ServerViewTags.REMOVE_DIALOG), TIMEOUT_MS)
             shot("remove-folder")
             // The folder has an edited photo: "Also delete from the server" starts unchecked.
@@ -283,7 +283,7 @@ class ServerViewFlowTest {
             compose.waitUntil(TIMEOUT_MS) { "SVE$run.ARW" in serverNames() }
             assertThat(serverNames()).doesNotContain("SVP$run.ARW")
 
-            val photo = runBlocking { library.photoList(PhotoQuery(scope = LibraryScope.Server)) }
+            val photo = runBlocking { library.photoList(PhotoQuery.SERVER_ONLY) }
                 .single { it.name == "SVE$run.ARW" }
             openServerScope()
             compose.onNodeWithTag(LibraryTags.GRID).performScrollToKey(photo.id)

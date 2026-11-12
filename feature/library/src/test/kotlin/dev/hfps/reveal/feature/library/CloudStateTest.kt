@@ -13,10 +13,11 @@ class CloudStateTest {
         original: Boolean = false,
         preview: Boolean = false,
         unreadable: Boolean = false,
+        uploading: Boolean = false,
     ) = PhotoRow(
         id = 1, sourceId = 1, name = "p.arw", format = PhotoFormat.RAW, sortTime = 0, captureTime = null, rating = 4,
         label = null, flag = PickFlag.PICK, hasEdit = false, versionId = 1, editTime = null, cloudOriginal = original,
-        cloudPreview = preview, remote = remote, unreadable = unreadable,
+        cloudPreview = preview, remote = remote, unreadable = unreadable, uploading = uploading,
     )
 
     @Test
@@ -37,5 +38,13 @@ class CloudStateTest {
         assertThat(cloudState(row(original = true))).isEqualTo(CloudState.BACKED_UP)
         assertThat(cloudState(row(preview = true))).isEqualTo(CloudState.LOCAL)
         assertThat(cloudState(row(unreadable = true))).isEqualTo(CloudState.LOCAL_PREVIEW)
+    }
+
+    @Test
+    fun `an upload still waiting shows the pending badge until the server has the original`() {
+        assertThat(cloudState(row(uploading = true))).isEqualTo(CloudState.UPLOADING)
+        assertThat(cloudDescription(CloudState.UPLOADING)).isEqualTo(R.string.library_cloud_uploading)
+        // The original landed and only its preview waits: backed up.
+        assertThat(cloudState(row(uploading = true, original = true))).isEqualTo(CloudState.BACKED_UP)
     }
 }

@@ -27,10 +27,10 @@ class MainActivitySmokeTest {
 
     @Test
     fun theLibraryIsTheStartScreen() {
-        // An empty library offers "Add folder"; one with folders lists them (and still offers it); one with only
-        // photos other apps handed over opens on them (ADR 0011).
+        // An empty library offers "Add folder"; one with photos shows them all with the filter bar (FIX/L),
+        // hand-offs and Server photos included.
         composeRule.waitUntilAtLeastOneExists(
-            hasTestTag(LibraryTags.ADD_FOLDER) or hasTestTag(LibraryTags.SOURCES) or hasTestTag(LibraryTags.GRID),
+            hasTestTag(LibraryTags.ADD_FOLDER) or hasTestTag(LibraryTags.FILTERS) or hasTestTag(LibraryTags.GRID),
             10_000,
         )
         composeRule.onNodeWithTag(LibraryTags.MENU).assertIsDisplayed()

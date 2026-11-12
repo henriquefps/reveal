@@ -242,7 +242,7 @@ class RealServerSyncTest {
         assertThat(decoded.jpeg.size).isGreaterThan(1000)
         assertThat(runBlocking { files.original(fingerprint) }).isNull()
         val rows =
-            runBlocking { tablet.db.photoDao().rows(PhotoQuerySql.toQuery(PhotoQuery(scope = LibraryScope.Server))) }
+            runBlocking { tablet.db.photoDao().rows(PhotoQuerySql.toQuery(PhotoQuery.SERVER_ONLY)) }
         val row = rows.single { it.id == remote.file.photoId }
         assertThat(row.cloudPreview).isTrue()
         assertThat(row.cloudOriginal).isFalse()
@@ -342,7 +342,7 @@ class RealServerSyncTest {
         // Only described (no original or preview on the server): in the Server source, unlisted (FIX/V).
         val server = runBlocking { checkNotNull(tablet.db.syncDao().serverSource()).id }
         val rows = runBlocking {
-            tablet.db.photoDao().rows(PhotoQuerySql.toQuery(PhotoQuery(scope = LibraryScope.Source(server))))
+            tablet.db.photoDao().rows(PhotoQuerySql.toQuery(PhotoQuery.ofSource(server).copy(withUnopenable = true)))
         }
         assertThat(rows.count { it.hasEdit }).isAtLeast(1000)
     }

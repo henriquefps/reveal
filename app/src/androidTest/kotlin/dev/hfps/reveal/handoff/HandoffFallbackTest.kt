@@ -26,6 +26,7 @@ import dev.hfps.reveal.data.handoff.HandoffRequest
 import dev.hfps.reveal.data.library.OriginalPlace
 import dev.hfps.reveal.data.library.OriginalReach
 import dev.hfps.reveal.data.model.LibraryScope
+import dev.hfps.reveal.data.model.PhotoFilters
 import dev.hfps.reveal.data.model.PhotoQuery
 import dev.hfps.reveal.data.sync.ServerTree
 import dev.hfps.reveal.debug.DebugAccess
@@ -80,8 +81,8 @@ class HandoffFallbackTest {
 
     @After
     fun tearDown() {
-        // The library opens on its sources again: other tests start there (no selection).
-        runBlocking { access.library().setLastSelection(null) }
+        // The library opens on the unfiltered home again: other tests start there.
+        runBlocking { access.library().setLastFilters(PhotoFilters.NONE) }
         ids.forEach { SyntheticDocumentsProvider.allow(context.filesDir, it) }
         inbox.deleteRecursively()
         if (paired) runBlocking { access.sync().unpair() }
@@ -101,7 +102,7 @@ class HandoffFallbackTest {
     } + "$stem-$seed".toByteArray()
 
     private fun row(): PhotoRow = runBlocking {
-        access.library().photoList(PhotoQuery(scope = LibraryScope.FromApps)).single { it.name.startsWith(stem) }
+        access.library().photoList(PhotoQuery.FROM_APPS).single { it.name.startsWith(stem) }
     }
 
     /** Shares [uri] to Reveal for real (`ACTION_SEND`, temporary grant): the editor opens and the previews are made. */
@@ -118,8 +119,8 @@ class HandoffFallbackTest {
 
     /** Opens the photo's editor the way the owner does: Opened from other apps, the cell, the viewer's Edit. */
     private fun openFromLibrary(photo: PhotoRow, badge: String, check: () -> Unit) {
-        // The library reopens its last selection: "Opened from other apps".
-        runBlocking { access.library().setLastSelection("s:FROM_APPS") }
+        // The library reopens its last filters: "Opened from other apps".
+        runBlocking { access.library().setLastFilters(PhotoFilters.FROM_APPS) }
         ActivityScenario.launch(MainActivity::class.java).use {
             compose.waitUntilAtLeastOneExists(hasTestTag(LibraryTags.GRID), TIMEOUT_MS)
             compose.onNodeWithTag(LibraryTags.GRID).performScrollToKey(photo.id)

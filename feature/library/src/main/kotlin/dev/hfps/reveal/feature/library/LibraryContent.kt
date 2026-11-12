@@ -1,20 +1,21 @@
 package dev.hfps.reveal.feature.library
 
-import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.SnackbarHost
@@ -22,7 +23,6 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
-import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -31,6 +31,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
@@ -38,13 +39,16 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import dev.hfps.reveal.data.db.PhotoRow
 import dev.hfps.reveal.data.index.IndexPhase
 import dev.hfps.reveal.data.library.SourceItem
-import dev.hfps.reveal.data.model.PhotoFilter
+import dev.hfps.reveal.data.model.PhotoFilters
 import dev.hfps.reveal.data.model.PhotoQuery
 import dev.hfps.reveal.data.model.PhotoSort
 import dev.hfps.reveal.data.model.PickFlag
@@ -59,14 +63,16 @@ import dev.hfps.reveal.designsystem.icons.PhosphorRegular
 import dev.hfps.reveal.designsystem.theme.RevealTheme
 import java.text.NumberFormat
 
-/** Width from which the library shows the sources and the grid side by side (`docs/plan/ux.md`). */
+/**
+ * Width from which the library's top bar shows search, sort and the sync status's text (`docs/plan/ux.md`); sheets
+ * become centred dialogs from the same width (`DialogMinWidth`).
+ */
 val TwoPaneMinWidth: Dp = 840.dp
-private val SourcesPaneWidth = 320.dp
 private const val MAX_STARS = 5
 
 /**
- * The library screen without its ViewModel (screenshots, tests): the hfps shell with the sources list and the grid
- * (side by side from [TwoPaneMinWidth], one at a time below it).
+ * The library screen without its ViewModel (screenshots, tests): the hfps shell with one home grid of every photo,
+ * its filter bar, and the Recent view (FIX/L); the filter sheet and "Manage folders" open over it.
  */
 @Composable
 fun LibraryContent(
@@ -80,43 +86,10 @@ fun LibraryContent(
     BoxWithConstraints(modifier.fillMaxSize()) {
         val wide = maxWidth >= TwoPaneMinWidth
         RevealScaffold(topBar = { LibraryTopBar(state, actions, wide) }) {
-            if (wide) {
-                Row(Modifier.fillMaxSize()) {
-                    SourcesPane(
-                        state.sources,
-                        state.selection,
-                        actions,
-                        Modifier.width(SourcesPaneWidth).fillMaxHeight(),
-                        serverPhotos = state.serverPhotos,
-                        fromAppsPhotos = state.fromAppsPhotos,
-                    )
-                    VerticalDivider(color = RevealTheme.colors.hairline)
-                    Box(Modifier.weight(1f).fillMaxHeight()) {
-                        if (state.selection == null) {
-                            if (state.sources.isNotEmpty()) {
-                                EmptyState(
-                                    PhosphorRegular.Images,
-                                    stringResource(R.string.library_title),
-                                    stringResource(R.string.library_pick_source),
-                                )
-                            }
-                        } else {
-                            GridPane(state, actions, thumbnails, onGridDraw)
-                        }
-                    }
-                }
-            } else if (state.selection == null) {
-                if (state.sourcesLoaded) {
-                    SourcesPane(
-                        state.sources,
-                        null,
-                        actions,
-                        serverPhotos = state.serverPhotos,
-                        fromAppsPhotos = state.fromAppsPhotos,
-                    )
-                }
-            } else {
-                GridPane(state, actions, thumbnails, onGridDraw)
+            when {
+                !state.sourcesLoaded -> Unit
+                state.libraryEmpty && !state.recent -> EmptyLibrary(actions)
+                else -> GridPane(state, actions, thumbnails, onGridDraw)
             }
             SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter))
         }
@@ -125,10 +98,40 @@ fun LibraryContent(
         if (pasteGroups != null && copied != null) {
             PasteEditsSheet(copied, pasteGroups, state.selected.size, actions)
         }
+        if (state.filtersOpen) FilterSheet(state, actions)
+        if (state.foldersOpen) ManageFoldersSheet(state, actions)
     }
 }
 
 // ---------------------------------------------------------------------- top bars
+
+@Composable
+private fun syncText(badge: SyncBadge): String {
+    val count = NumberFormat.getIntegerInstance()
+    return when (badge) {
+        SyncBadge.NotPaired -> stringResource(R.string.library_sync_not_paired)
+        SyncBadge.Synced -> stringResource(R.string.library_sync_synced)
+        SyncBadge.Syncing -> stringResource(R.string.library_sync_syncing)
+        is SyncBadge.Uploading -> stringResource(R.string.library_sync_uploading, count.format(badge.count))
+        is SyncBadge.Waiting -> stringResource(R.string.library_sync_waiting, count.format(badge.count))
+        SyncBadge.Offline -> stringResource(R.string.library_sync_offline)
+        SyncBadge.Problem -> stringResource(R.string.library_sync_problem)
+    }
+}
+
+@Composable
+private fun syncIcon(badge: SyncBadge): Pair<ImageVector, Color> {
+    val colors = RevealTheme.colors
+    return when (badge) {
+        SyncBadge.NotPaired -> PhosphorRegular.CloudSlash to colors.mutedForeground
+        SyncBadge.Synced -> PhosphorRegular.CloudCheck to colors.mutedForeground
+        SyncBadge.Syncing -> PhosphorRegular.ArrowsClockwise to colors.primary
+        is SyncBadge.Uploading -> PhosphorRegular.CloudArrowUp to colors.primary
+        is SyncBadge.Waiting -> PhosphorRegular.Cloud to colors.mutedForeground
+        SyncBadge.Offline -> PhosphorRegular.CloudSlash to colors.warning
+        SyncBadge.Problem -> PhosphorRegular.WarningCircle to colors.destructive
+    }
+}
 
 @Composable
 private fun LibraryTopBar(state: LibraryUiState, actions: LibraryActions, wide: Boolean) {
@@ -137,46 +140,85 @@ private fun LibraryTopBar(state: LibraryUiState, actions: LibraryActions, wide: 
 
         state.searchOpen -> SearchTopBar(state.query, actions)
 
-        else -> {
-            val showBack = !wide && state.selection != null
-            RevealTopBar(
-                title = selectionTitle(state, wide),
-                onBack = if (showBack) ({ actions.onSelect(null) }) else null,
-                backContentDescription = stringResource(R.string.library_back),
-                actions = {
-                    if (state.selection?.scope() != null) {
-                        RevealIconButton(
-                            icon = PhosphorRegular.MagnifyingGlass,
-                            contentDescription = stringResource(R.string.library_search),
-                            onClick = { actions.onSearchOpen(true) },
-                        )
-                        SortMenu(state.query, actions)
-                    }
-                    OverflowMenu(actions)
-                },
+        state.recent -> RevealTopBar(
+            title = stringResource(R.string.library_recent),
+            onBack = { actions.onRecent(false) },
+            backContentDescription = stringResource(R.string.library_back),
+            actions = { OverflowMenu(state, actions, wide = true, home = false) },
+        )
+
+        else -> RevealTopBar(
+            title = stringResource(R.string.library_title),
+            actions = {
+                SyncStatus(state.syncBadge, wide, actions.onSync)
+                RevealIconButton(
+                    icon = PhosphorRegular.ClockCounterClockwise,
+                    contentDescription = stringResource(R.string.library_recent),
+                    onClick = { actions.onRecent(true) },
+                    modifier = Modifier.testTag(LibraryTags.RECENT),
+                )
+                RevealIconButton(
+                    icon = PhosphorRegular.Folder,
+                    contentDescription = stringResource(R.string.library_manage_folders),
+                    onClick = { actions.onFoldersOpen(true) },
+                    modifier = Modifier.testTag(LibraryTags.FOLDERS),
+                )
+                if (wide) {
+                    RevealIconButton(
+                        icon = PhosphorRegular.MagnifyingGlass,
+                        contentDescription = stringResource(R.string.library_search),
+                        onClick = { actions.onSearchOpen(true) },
+                    )
+                    SortMenu(state.query, actions)
+                }
+                RevealIconButton(
+                    icon = PhosphorRegular.Gear,
+                    contentDescription = stringResource(R.string.library_menu_settings),
+                    onClick = actions.onSettings,
+                    modifier = Modifier.testTag(LibraryTags.SETTINGS),
+                )
+                OverflowMenu(state, actions, wide, home = true)
+            },
+        )
+    }
+}
+
+/**
+ * The compact sync status (FIX/L): an icon on phones (with the count while uploading), icon and text on wide windows;
+ * a tap opens the Sync screen (pairing when not paired).
+ */
+@Composable
+private fun SyncStatus(badge: SyncBadge, wide: Boolean, onClick: () -> Unit) {
+    val colors = RevealTheme.colors
+    val count = NumberFormat.getIntegerInstance()
+    val text = syncText(badge)
+    val (icon, tint) = syncIcon(badge)
+    val short = (badge as? SyncBadge.Uploading)?.count?.let(count::format)
+    val label = if (wide) text else short
+    val description = stringResource(R.string.library_sync_status, text)
+    Row(
+        modifier = Modifier
+            .heightIn(min = 48.dp)
+            .widthIn(min = 48.dp)
+            .clip(RevealTheme.shapes.control)
+            .clickable(onClick = onClick)
+            .semantics(mergeDescendants = true) { contentDescription = description }
+            .padding(horizontal = 12.dp)
+            .testTag(LibraryTags.SYNC_STATUS),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.Center,
+    ) {
+        Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(20.dp))
+        if (label != null) {
+            Text(
+                label,
+                style = RevealTheme.typography.ui,
+                color = colors.foreground,
+                maxLines = 1,
+                modifier = Modifier.padding(start = 6.dp).clearAndSetSemantics {},
             )
         }
     }
-}
-
-@Composable
-private fun selectionTitle(state: LibraryUiState, wide: Boolean): String = when (val s = state.selection) {
-    null -> stringResource(R.string.library_title)
-
-    is LibrarySelection.Folder -> state.currentSource?.name ?: stringResource(R.string.library_title)
-
-    is LibrarySelection.Special -> if (wide && s.which == SpecialSource.ALL) {
-        stringResource(R.string.library_title)
-    } else {
-        stringResource(specialName(s.which))
-    }
-}
-
-private fun specialName(which: SpecialSource) = when (which) {
-    SpecialSource.ALL -> R.string.library_all_photos
-    SpecialSource.RECENT -> R.string.library_recent
-    SpecialSource.FROM_APPS -> R.string.library_from_apps
-    SpecialSource.SERVER -> R.string.library_server
 }
 
 @Composable
@@ -191,22 +233,32 @@ private fun SortMenu(query: PhotoQuery, actions: LibraryActions) {
         DropdownMenu(open, {
             open = false
         }, containerColor = RevealTheme.colors.card, shape = RevealTheme.shapes.control) {
-            listOf(
-                PhotoSort.CAPTURE_NEWEST to R.string.library_sort_newest,
-                PhotoSort.CAPTURE_OLDEST to R.string.library_sort_oldest,
-                PhotoSort.NAME to R.string.library_sort_name,
-            ).forEach { (sort, label) ->
-                MenuItem(if (query.sort == sort) PhosphorRegular.Check else null, stringResource(label)) {
-                    open = false
-                    actions.onQuery(query.copy(sort = sort))
-                }
-            }
+            SortItems(query, actions) { open = false }
         }
     }
 }
 
+/** The three orders, the current one ticked. */
 @Composable
-private fun OverflowMenu(actions: LibraryActions) {
+private fun SortItems(query: PhotoQuery, actions: LibraryActions, onDone: () -> Unit) {
+    listOf(
+        PhotoSort.CAPTURE_NEWEST to R.string.library_sort_newest,
+        PhotoSort.CAPTURE_OLDEST to R.string.library_sort_oldest,
+        PhotoSort.NAME to R.string.library_sort_name,
+    ).forEach { (sort, label) ->
+        MenuItem(if (query.sort == sort) PhosphorRegular.Check else null, stringResource(label)) {
+            onDone()
+            actions.onQuery(query.copy(sort = sort))
+        }
+    }
+}
+
+/**
+ * The ⋯ menu. On the phone's home it also holds search and sort (the bar has no room for them); everywhere it adds a
+ * folder, opens a single photo, the design system and About.
+ */
+@Composable
+private fun OverflowMenu(state: LibraryUiState, actions: LibraryActions, wide: Boolean, home: Boolean) {
     var open by remember { mutableStateOf(false) }
     Box {
         RevealIconButton(
@@ -218,6 +270,14 @@ private fun OverflowMenu(actions: LibraryActions) {
         DropdownMenu(open, {
             open = false
         }, containerColor = RevealTheme.colors.card, shape = RevealTheme.shapes.control) {
+            if (home && !wide) {
+                MenuItem(PhosphorRegular.MagnifyingGlass, stringResource(R.string.library_search)) {
+                    open = false
+                    actions.onSearchOpen(true)
+                }
+                SortItems(state.query, actions) { open = false }
+                HorizontalDivider(color = RevealTheme.colors.hairline)
+            }
             MenuItem(PhosphorRegular.FolderPlus, stringResource(R.string.library_add_folder)) {
                 open = false
                 actions.onAddFolder()
@@ -229,10 +289,6 @@ private fun OverflowMenu(actions: LibraryActions) {
             MenuItem(PhosphorRegular.Palette, stringResource(R.string.library_menu_gallery)) {
                 open = false
                 actions.onGallery()
-            }
-            MenuItem(PhosphorRegular.Gear, stringResource(R.string.library_menu_settings)) {
-                open = false
-                actions.onSettings()
             }
             MenuItem(PhosphorRegular.Info, stringResource(R.string.library_menu_about)) {
                 open = false
@@ -424,7 +480,7 @@ private fun SelectionOverflow(state: LibraryUiState, actions: LibraryActions, wi
                     actions.onForget(state.selectedUnavailable)
                 }
             }
-            if (state.serverScope) {
+            if (state.selectedRemote.isNotEmpty()) {
                 TaggedMenuItem(
                     PhosphorRegular.CloudSlash,
                     stringResource(R.string.library_action_delete_server),
@@ -496,20 +552,51 @@ private fun SelectionOverflow(state: LibraryUiState, actions: LibraryActions, wi
 
 // ---------------------------------------------------------------------- grid pane
 
-/** The empty grid of a folder, or of "Opened from other apps" before anything arrived. */
+/** The grid's empty states: nothing matches, Recent empty, a folder indexing or empty, nothing handed over yet. */
 @Composable
-private fun EmptyGrid(selection: LibrarySelection?) {
-    if (selection == LibrarySelection.Special(SpecialSource.FROM_APPS)) {
-        EmptyState(
+private fun EmptyGrid(state: LibraryUiState, actions: LibraryActions) {
+    val filters = state.filters
+    val plain = state.query.search.isBlank() && filters.count == 1
+    when {
+        state.recent -> EmptyState(
+            PhosphorRegular.ClockCounterClockwise,
+            stringResource(R.string.library_recent_empty_title),
+            stringResource(R.string.library_recent_empty_body),
+        )
+
+        plain && state.currentSource?.indexing != null -> EmptyState(
+            PhosphorRegular.MagnifyingGlass,
+            stringResource(R.string.library_folder_indexing_title),
+            stringResource(R.string.library_source_indexing),
+        )
+
+        plain && filters.singleFolder != null -> EmptyState(
+            PhosphorRegular.Images,
+            stringResource(R.string.library_folder_empty_title),
+            stringResource(R.string.library_folder_empty_body),
+        )
+
+        plain && filters.onlyFromApps -> EmptyState(
             PhosphorRegular.ArrowSquareIn,
             stringResource(R.string.library_from_apps_empty_title),
             stringResource(R.string.library_from_apps_empty_body),
         )
-    } else {
-        EmptyState(
+
+        state.filtered -> EmptyState(
+            PhosphorRegular.FunnelSimple,
+            stringResource(R.string.library_no_match_title),
+            stringResource(R.string.library_no_match_body),
+        ) {
+            GhostButton(stringResource(R.string.library_clear_filters), {
+                actions.onFilters(PhotoFilters.NONE)
+                actions.onSearchOpen(false)
+            })
+        }
+
+        else -> EmptyState(
             PhosphorRegular.Images,
-            stringResource(R.string.library_folder_empty_title),
-            stringResource(R.string.library_folder_empty_body),
+            stringResource(R.string.library_home_empty_title),
+            stringResource(R.string.library_home_empty_body),
         )
     }
 }
@@ -521,38 +608,16 @@ private fun GridPane(
     thumbnails: ThumbnailSource,
     onGridDraw: (Int) -> Unit,
 ) {
-    val source = state.currentSource
+    // The narrowed-to folder's banner; on the unfiltered home, the folder being indexed.
+    val banner = state.currentSource ?: state.sources.firstOrNull { it.indexing != null }.takeIf { !state.recent }
     Column(Modifier.fillMaxSize()) {
-        source?.let { SourceBanner(it) }
-        if (state.photoCount > 0 || state.filtered) FilterRow(state.query, actions)
+        banner?.let { SourceBanner(it) }
+        if (!state.recent) FilterBar(state, actions)
         Box(Modifier.weight(1f).fillMaxWidth()) {
-            val selection = state.selection
             when {
                 !state.photosLoaded -> Unit
 
-                state.photoCount == 0 && state.filtered -> EmptyState(
-                    PhosphorRegular.FunnelSimple,
-                    stringResource(R.string.library_no_match_title),
-                    stringResource(R.string.library_no_match_body),
-                ) {
-                    GhostButton(stringResource(R.string.library_clear_filters), {
-                        actions.onQuery(state.query.copy(filter = PhotoFilter.ALL, search = ""))
-                    })
-                }
-
-                state.photoCount == 0 && selection == LibrarySelection.Special(SpecialSource.RECENT) -> EmptyState(
-                    PhosphorRegular.ClockCounterClockwise,
-                    stringResource(R.string.library_recent_empty_title),
-                    stringResource(R.string.library_recent_empty_body),
-                )
-
-                state.photoCount == 0 && source?.indexing != null -> EmptyState(
-                    PhosphorRegular.MagnifyingGlass,
-                    stringResource(R.string.library_folder_indexing_title),
-                    stringResource(R.string.library_source_indexing),
-                )
-
-                state.photoCount == 0 -> EmptyGrid(selection)
+                state.photoCount == 0 -> EmptyGrid(state, actions)
 
                 else -> PhotoGrid(
                     entries = state.entries,
@@ -631,78 +696,6 @@ private fun BannerText(text: String, tint: Color) {
             color = RevealTheme.colors.foreground,
             modifier = Modifier.padding(start = 8.dp),
         )
-    }
-}
-
-@Composable
-private fun FilterRow(query: PhotoQuery, actions: LibraryActions) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .horizontalScroll(rememberScrollState())
-            .padding(horizontal = 8.dp, vertical = 4.dp),
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        fun set(filter: PhotoFilter) = actions.onQuery(query.copy(filter = filter))
-        RevealChip(stringResource(R.string.library_filter_all), query.filter == PhotoFilter.ALL, {
-            set(PhotoFilter.ALL)
-        })
-        RevealChip(stringResource(R.string.library_filter_edited), query.filter == PhotoFilter.EDITED, {
-            set(PhotoFilter.EDITED)
-        })
-        RevealChip(
-            stringResource(R.string.library_filter_not_edited),
-            query.filter == PhotoFilter.NOT_EDITED,
-            { set(PhotoFilter.NOT_EDITED) },
-        )
-        RevealChip(stringResource(R.string.library_filter_picked), query.filter == PhotoFilter.PICKED, {
-            set(PhotoFilter.PICKED)
-        })
-        RatedChip(query, actions)
-        RevealChip(stringResource(R.string.library_filter_raw), query.filter == PhotoFilter.RAW, {
-            set(PhotoFilter.RAW)
-        })
-        RevealChip(stringResource(R.string.library_filter_jpeg), query.filter == PhotoFilter.JPEG, {
-            set(PhotoFilter.JPEG)
-        })
-    }
-}
-
-@Composable
-private fun RatedChip(query: PhotoQuery, actions: LibraryActions) {
-    var open by remember { mutableStateOf(false) }
-    val selected = query.filter == PhotoFilter.RATED
-    Box {
-        RevealChip(
-            label = if (selected) {
-                stringResource(R.string.library_filter_rated, query.minRating)
-            } else {
-                stringResource(R.string.library_filter_rated_short)
-            },
-            selected = selected,
-            onClick = { open = true },
-            icon = PhosphorFill.Star,
-        )
-        DropdownMenu(open, {
-            open = false
-        }, containerColor = RevealTheme.colors.card, shape = RevealTheme.shapes.control) {
-            for (stars in 1..MAX_STARS) {
-                MenuItem(
-                    if (selected &&
-                        query.minRating == stars
-                    ) {
-                        PhosphorRegular.Check
-                    } else {
-                        null
-                    },
-                    stringResource(R.string.library_filter_rated, stars),
-                ) {
-                    open = false
-                    actions.onQuery(query.copy(filter = PhotoFilter.RATED, minRating = stars))
-                }
-            }
-        }
     }
 }
 

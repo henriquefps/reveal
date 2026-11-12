@@ -164,15 +164,29 @@ write-back), `LibraryIndexer` (walk → diff → sidecars → headers), `XmpRead
 malformed sidecar; `reveal:` namespace reserved for M5), `ThumbnailRepository` (embedded preview / JPEG, edited thumb
 via `GpuEditedThumbnails`), `PhotoImages` (viewer display + region decoder), `EditRepository` (recipes, undo/redo
 history for the editor). The editor route is `EditorRoute(versionId = …)` from the library or `EditorRoute(uri = …)`
-from other apps. The library is the start destination and reopens the last folder (`meta`); with no folder but hand-offs it starts on
-"Opened from other apps" (`LibraryViewModel.startSelection`).
+from other apps.
+
+One home with combinable filters (FIX/L, ADR 0006 "Filters"): the start destination is one grid of every photo
+(`LibraryScope.All` = this device's photos + the Server photos that open; `Recent` is its own view). Everything else is
+`PhotoFilters` (sealed groups: `SourceFilter.Folder/FromApps/ServerOnly`, `CullingFilter`, `EditFilter`, `TypeFilter`,
+`SyncFilter` while paired): `PhotoQuerySql.build` ORs within a group and ANDs across, bound args, indexed plans
+(EXPLAIN in `PhotoQuerySqlTest`). A new filter = a choice in `PhotoFilters`, its clause in `PhotoQuerySql`, its token in
+`PhotoListCodec` (format 2; format 1 and the old `library.lastSelection` still decode), its option in
+`feature/library/LibraryFilters.kt` (`filterGroups`), its count in `PhotoDao.observeFilterCounts`, strings in both
+languages. The last filters live in `meta` `library.filters` (`LibraryRepository.lastFilters`); a multi-photo hand-off
+opens on `PhotoFilters.FROM_APPS`. UI: `LibraryContent` (top bar: `SyncBadge` status -> Sync screen, Recent, Folders,
+Settings, ⋯), `FilterBar` + `FilterSheet` (`LibraryFilters.kt`), `ManageFoldersSheet` (`ManageFolders.kt`: show a
+folder = `LibraryViewModel.showFolder`, backup mode, remove). The viewer and the filmstrip get the grid's query
+(`PhotoListCodec.encode(state.gridQuery)`). Pending uploads: `CloudState.UPLOADING`. Instrumented steps that work in
+any language: `library/LibraryFilterSteps` (`showOnly`, `openFolder`, `activeTokens`).
 
 Instrumented library tests use the debug-only `SyntheticDocumentsProvider` (`app/src/debug`, authority
 `dev.hfps.reveal.debug.synthetic`, files under `files/saf-test`, own process) and `DebugAccess` (Hilt entry point):
 
 ```sh
-adb -s emulator-<port> shell am instrument -w -e class dev.hfps.reveal.library.LibraryFlowTest dev.hfps.reveal.debug.test/androidx.test.runner.AndroidJUnitRunner
-adb -s emulator-<port> shell am instrument -w -e class dev.hfps.reveal.library.LibraryMeasurementsTest dev.hfps.reveal.debug.test/androidx.test.runner.AndroidJUnitRunner   # 10,000 files
+adb -s emulator-<port> shell am instrument -w -e class dev.hfps.reveal.library.LibraryFlowTest,dev.hfps.reveal.library.LibraryFilterFlowTest dev.hfps.reveal.debug.test/androidx.test.runner.AndroidJUnitRunner
+adb -s emulator-<port> shell am instrument -w -e class dev.hfps.reveal.library.LibraryMeasurementsTest dev.hfps.reveal.debug.test/androidx.test.runner.AndroidJUnitRunner   # 10,000 files, filter query times
+./gradlew :core:data:testDebugUnitTest --tests '*PhotoQuerySqlTest*' --tests '*PhotoListCodecTest*'   # every group, combinations, EXPLAIN
 adb -s emulator-<port> logcat -d -s REVEAL_LIBRARY RevealLibrary
 ```
 
@@ -189,7 +203,7 @@ ClipData + `EXTRA_STREAM`) -> `HandoffRepository.receive` (pairs by stem and par
 Identity (ADR 0006 "Identity", DB v4): a file is its content fingerprint (`FileFingerprint` in `:core:image/source`,
 `photo_files.fingerprint`); hand-offs find their photo by fingerprint (any source, URI+size+mtime only for rows without
 one), never by name; folders fill fingerprints in the background after a walk (`LibraryIndexer.fillFingerprints`).
-Library scope `FromApps` = "Opened from other apps" (newest hand-off first, header per batch). Sidecars are only written
+The filter "Opened from other apps" (`SourceFilter.FromApps`) alone lists newest hand-off first, header per batch. Sidecars are only written
 when the sender included a writable `.xmp` item. Culling values (ADR 0011 "Culling"): `HandoffIntents.EXTRA_CULLING`
 (`Bundle` keyed by item URI string -> `Bundle` `rating`/`flag`/`label`, `CULLING_VERSION` 1, `cullingExtra()` builds it)
 -> `HandoffRequest.culling` -> `HandoffRepository.applyRatings` (values win unless the sidecar is newer than the photo's

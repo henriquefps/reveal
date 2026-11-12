@@ -15,7 +15,6 @@ import dev.hfps.reveal.data.library.LibraryRepository
 import dev.hfps.reveal.data.library.OriginalPlace
 import dev.hfps.reveal.data.library.PhotoDetail
 import dev.hfps.reveal.data.model.PhotoListCodec
-import dev.hfps.reveal.data.model.PhotoQuery
 import dev.hfps.reveal.data.model.PickFlag
 import dev.hfps.reveal.data.thumb.DisplayImage
 import dev.hfps.reveal.data.thumb.PhotoImages
@@ -23,11 +22,9 @@ import dev.hfps.reveal.data.thumb.RegionSource
 import dev.hfps.reveal.data.thumb.ThumbnailRepository
 import dev.hfps.reveal.feature.library.ConflictChoice
 import dev.hfps.reveal.feature.library.ForgetPrompt
-import dev.hfps.reveal.feature.library.LibraryViewModel
 import dev.hfps.reveal.feature.library.UnavailableHelper
 import dev.hfps.reveal.feature.library.UnavailableInfo
 import dev.hfps.reveal.feature.library.ViewerRoute
-import dev.hfps.reveal.feature.library.scope
 import dev.hfps.reveal.sync.SyncRepository
 import dev.hfps.reveal.sync.engine.ConflictSide
 import javax.inject.Inject
@@ -93,21 +90,14 @@ class ViewerViewModel @Inject constructor(
     private val _state = MutableStateFlow(ViewerUiState())
     val state: StateFlow<ViewerUiState> = _state.asStateFlow()
 
-    /** The grid's query with its scope (`PhotoListCodec`), for the editor's filmstrip; `null` without a scope. */
-    val strip: String? = LibraryViewModel.decodeSelection(route.selection)?.scope()?.let { scope ->
-        PhotoListCodec.encode((LibraryViewModel.decodeQuery(route.query) ?: PhotoQuery()).copy(scope = scope))
-    }
+    /** The grid's query (`PhotoListCodec`: view and filters), for the editor's filmstrip; `null` without one. */
+    val strip: String? = PhotoListCodec.decode(route.query)?.let(PhotoListCodec::encode)
 
     init {
         viewModelScope.launch {
-            val selection = LibraryViewModel.decodeSelection(route.selection)
-            val query = (LibraryViewModel.decodeQuery(route.query) ?: PhotoQuery())
-            val scope = selection?.scope()
-            val ids = if (scope == null) {
-                listOf(route.photoId)
-            } else {
-                library.photoList(query.copy(scope = scope)).map { it.id }.distinct().ifEmpty { listOf(route.photoId) }
-            }
+            val ids = PhotoListCodec.decode(route.query)?.let { query ->
+                library.photoList(query).map { it.id }.distinct()
+            }.orEmpty().ifEmpty { listOf(route.photoId) }
             _state.update {
                 it.copy(ids = ids, start = ids.indexOf(route.photoId).coerceAtLeast(0), loaded = true)
             }

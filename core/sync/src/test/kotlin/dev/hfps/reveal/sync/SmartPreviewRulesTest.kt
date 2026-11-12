@@ -127,7 +127,7 @@ class SmartPreviewRulesTest {
         val id = tablet.photoByFingerprint(FileFingerprint.of(raw))!!.id
         // Every photo of the Server source, listed or not (the Server scope lists only those that open, FIX/V).
         val server = checkNotNull(tablet.db.syncDao().serverSource()).id
-        tablet.db.photoDao().rows(PhotoQuerySql.toQuery(PhotoQuery(scope = LibraryScope.Source(server))))
+        tablet.db.photoDao().rows(PhotoQuerySql.toQuery(PhotoQuery.ofSource(server).copy(withUnopenable = true)))
             .single { it.id == id }
     }
 

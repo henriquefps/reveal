@@ -18,6 +18,7 @@ import dev.hfps.reveal.debug.DebugAccess
 import dev.hfps.reveal.feature.library.ConflictTags
 import dev.hfps.reveal.feature.library.LibraryTags
 import dev.hfps.reveal.feature.library.viewer.ViewerTags
+import dev.hfps.reveal.library.LibraryFilterSteps.openFolder
 import dev.hfps.reveal.library.SyntheticFolder
 import dev.hfps.reveal.pipeline.recipe.Light
 import dev.hfps.reveal.pipeline.recipe.Recipe
@@ -54,7 +55,7 @@ class ConflictChooserTest {
     private fun photoWithConflict(): Triple<Long, Long, Long> = runBlocking {
         folder.jpeg("IMG_C$run.JPG", 7, base = folder.gradientJpeg(7) + "conflict-$run".toByteArray())
         val (sourceId, _) = folder.addAndIndex()
-        val photo = access.library().photoList(PhotoQuery(scope = LibraryScope.Source(sourceId))).single()
+        val photo = access.library().photoList(PhotoQuery.ofSource(sourceId)).single()
         val db = access.database()
         val main = checkNotNull(db.photoDao().firstVersion(photo.id))
         val mainUuid = db.syncDao().versionsOf(photo.id).single().uuid
@@ -84,8 +85,7 @@ class ConflictChooserTest {
     fun keepingTheCopyFromTheGridMakesItThePhotosOnlyVersion() {
         val (sourceId, photoId, copy) = photoWithConflict()
         ActivityScenario.launch(MainActivity::class.java).use {
-            compose.waitUntilAtLeastOneExists(hasTestTag(LibraryTags.source(sourceId)), TIMEOUT_MS)
-            compose.onNodeWithTag(LibraryTags.source(sourceId)).performClick()
+            compose.openFolder(sourceId, TIMEOUT_MS)
             compose.waitUntilAtLeastOneExists(hasTestTag(LibraryTags.copy(copy)), TIMEOUT_MS)
             compose.onNodeWithTag(LibraryTags.copy(copy)).performClick()
             compose.waitUntilAtLeastOneExists(hasTestTag(ConflictTags.SHEET), TIMEOUT_MS)
@@ -101,8 +101,7 @@ class ConflictChooserTest {
     fun keepingTheMainVersionFromTheViewerDeletesTheCopy() {
         val (sourceId, photoId, _) = photoWithConflict()
         ActivityScenario.launch(MainActivity::class.java).use {
-            compose.waitUntilAtLeastOneExists(hasTestTag(LibraryTags.source(sourceId)), TIMEOUT_MS)
-            compose.onNodeWithTag(LibraryTags.source(sourceId)).performClick()
+            compose.openFolder(sourceId, TIMEOUT_MS)
             compose.waitUntilAtLeastOneExists(hasTestTag(LibraryTags.cell(photoId)), TIMEOUT_MS)
             compose.onNodeWithTag(LibraryTags.cell(photoId)).performClick()
             compose.waitUntilAtLeastOneExists(hasTestTag(ConflictTags.VIEWER_RESOLVE), TIMEOUT_MS)

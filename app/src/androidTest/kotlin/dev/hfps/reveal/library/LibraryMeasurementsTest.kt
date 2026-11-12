@@ -10,6 +10,13 @@ import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import dev.hfps.reveal.MainActivity
+import dev.hfps.reveal.data.model.CullingFilter
+import dev.hfps.reveal.data.model.EditFilter
+import dev.hfps.reveal.data.model.PhotoFilters
+import dev.hfps.reveal.data.model.PhotoQuery
+import dev.hfps.reveal.data.model.SourceFilter
+import dev.hfps.reveal.data.model.SyncFilter
+import dev.hfps.reveal.data.model.TypeFilter
 import dev.hfps.reveal.feature.library.LibraryMetrics
 import java.util.Collections
 import kotlinx.coroutines.flow.first
@@ -60,9 +67,11 @@ class LibraryMeasurementsTest {
         }
         log("unchanged re-index: list ${again.listMs} ms, save ${again.saveMs} ms, total ${again.totalMs} ms")
 
+        measureFilters(sourceId)
+
         // No Compose test rule here: it drives frames only while it synchronizes, which would starve the real
-        // touches below. The library reopens the folder it showed last, so launching lands on its grid.
-        runBlocking { folder.library.setLastSelection("f:$sourceId") }
+        // touches below. The library reopens its last filters: none, so launching lands on the home (FIX/L).
+        runBlocking { folder.library.setLastFilters(PhotoFilters.NONE) }
         LibraryMetrics.reset()
         ActivityScenario.launch(MainActivity::class.java).use { scenario ->
             waitFor(20_000) { LibraryMetrics.firstGridFrameMs >= 0 }
@@ -119,6 +128,35 @@ class LibraryMeasurementsTest {
         }
     }
 
+    /**
+     * What a filter change costs over the 10,000-photo library (FIX/L): the grid's observed query, from the request to
+     * its rows (median of [FILTER_RUNS]), for each group and a few combinations.
+     */
+    private fun measureFilters(sourceId: Long) {
+        val combos = listOf(
+            "home" to PhotoFilters.NONE,
+            "folder" to PhotoFilters.folder(sourceId),
+            "picked" to PhotoFilters(culling = setOf(CullingFilter.PICKED)),
+            "starred|rejected" to PhotoFilters(culling = setOf(CullingFilter.STARRED, CullingFilter.REJECTED)),
+            "raw+starred" to PhotoFilters(types = setOf(TypeFilter.RAW), culling = setOf(CullingFilter.STARRED)),
+            "edited" to PhotoFilters(edits = setOf(EditFilter.EDITED)),
+            "not synced" to PhotoFilters(sync = setOf(SyncFilter.NOT_SYNCED)),
+            "apps|server" to PhotoFilters(sources = setOf(SourceFilter.FromApps, SourceFilter.ServerOnly)),
+            "folder+jpeg+not edited" to PhotoFilters.folder(sourceId).toggle(TypeFilter.JPEG)
+                .toggle(EditFilter.NOT_EDITED),
+        )
+        for ((name, filters) in combos) {
+            var rows = 0
+            val times = (0 until FILTER_RUNS).map {
+                val start = System.nanoTime()
+                rows = runBlocking { folder.library.photos(PhotoQuery(filters = filters)).first() }.size
+                ms(start)
+            }.sorted()
+            log("filter $name: $rows rows, query ${times[times.size / 2]} ms (max ${times.last()})")
+            check(times[times.size / 2] < FILTER_BUDGET_MS) { "filter $name took ${times[times.size / 2]} ms" }
+        }
+    }
+
     private fun report(frames: List<Double>, refreshHz: Float) {
         if (frames.isEmpty()) {
             log("scroll: no frames")
@@ -171,6 +209,10 @@ class LibraryMeasurementsTest {
 
     private companion object {
         const val TAG = "REVEAL_LIBRARY"
+        const val FILTER_RUNS = 5
+
+        /** A filter change must stay well under a second on 10,000 photos (it is ~10x less on the phone). */
+        const val FILTER_BUDGET_MS = 1_000L
         const val PAIRS = 3_000
         const val JPEGS = 4_000
         const val SIDECAR_EVERY = 10

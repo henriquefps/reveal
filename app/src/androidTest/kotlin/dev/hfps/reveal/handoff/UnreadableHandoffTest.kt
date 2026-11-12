@@ -84,7 +84,7 @@ class UnreadableHandoffTest {
     } + "$stem-$seed".toByteArray()
 
     private fun fromApps() = runBlocking {
-        access.library().photoList(PhotoQuery(scope = LibraryScope.FromApps)).filter { it.name.startsWith(stem) }
+        access.library().photoList(PhotoQuery.FROM_APPS).filter { it.name.startsWith(stem) }
     }
 
     @Test
@@ -175,10 +175,10 @@ class UnreadableHandoffTest {
         val (sourceId, _) = card.addAndIndex()
         // The fingerprint pass runs after the walk, then the merge.
         compose.waitUntil(TIMEOUT_MS) {
-            runBlocking { access.library().photoList(PhotoQuery(scope = LibraryScope.Source(sourceId))) }
+            runBlocking { access.library().photoList(PhotoQuery.ofSource(sourceId)) }
                 .singleOrNull()?.flag == PickFlag.PICK
         }
-        val photo = runBlocking { access.library().photoList(PhotoQuery(scope = LibraryScope.Source(sourceId))) }
+        val photo = runBlocking { access.library().photoList(PhotoQuery.ofSource(sourceId)) }
             .single()
         assertThat(photo.hasEdit).isTrue()
         assertThat(runBlocking { access.edits().recipe(photo.versionId) }.light.exposureEv).isEqualTo(0.5f)

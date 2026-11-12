@@ -47,6 +47,8 @@ data class PhotoRow(
     @ColumnInfo(name = "cloud_preview") val cloudPreview: Boolean = false,
     /** The photo lives only on the sync server (the Server source): no file on this device. */
     val remote: Boolean = false,
+    /** This device still owes the server an upload of it (original or smart preview): the pending badge. */
+    val uploading: Boolean = false,
     /**
      * Reveal can no longer read one of its files (a hand-off whose temporary grant ended, ADR 0011): it shows and edits
      * its local preview ("preview only").
@@ -139,12 +141,47 @@ interface SourceDao {
     suspend fun delete(id: Long)
 }
 
+/** Per-choice photo counts for the filter sheet (`PhotoDao.observeFilterCounts`). */
+data class FilterCounts(
+    @ColumnInfo(name = "from_apps") val fromApps: Int = 0,
+    @ColumnInfo(name = "server_only") val serverOnly: Int = 0,
+    val picked: Int = 0,
+    val starred: Int = 0,
+    val rejected: Int = 0,
+    val edited: Int = 0,
+    @ColumnInfo(name = "not_edited") val notEdited: Int = 0,
+    val raw: Int = 0,
+    val jpeg: Int = 0,
+    val synced: Int = 0,
+    /** Every photo of the home (unfiltered). */
+    val total: Int = 0,
+) {
+    val notSynced: Int get() = total - synced
+}
+
 @Dao
 @Suppress("TooManyFunctions", "LongParameterList")
 interface PhotoDao {
     /** How many photos "Opened from other apps" lists (ADR 0011): the library starts there when it has no folder. */
     @Query("SELECT COUNT(*) FROM photos WHERE handoff_at IS NOT NULL AND hidden = 0")
     fun observeFromAppsCount(): Flow<Int>
+
+    /**
+     * How many photos of the library home each filter choice would show on its own (the filter sheet's counts; the
+     * folders' come with the sources). Not faceted: counted over every photo, whatever the other filters.
+     */
+    @Query(
+        "SELECT COALESCE(SUM(p.handoff_at IS NOT NULL AND NOT " + PhotoQuerySql.SERVER_SOURCE_SQL + "), 0) " +
+            "AS from_apps, COALESCE(SUM(" + PhotoQuerySql.SERVER_SOURCE_SQL + "), 0) AS server_only, " +
+            "COALESCE(SUM(p.flag = 'PICK'), 0) AS picked, COALESCE(SUM(p.rating >= 1), 0) AS starred, " +
+            "COALESCE(SUM(p.flag = 'REJECT'), 0) AS rejected, COALESCE(SUM(p.has_edit = 1), 0) AS edited, " +
+            "COALESCE(SUM(p.has_edit = 0), 0) AS not_edited, COALESCE(SUM(p.has_raw = 1), 0) AS raw, " +
+            "COALESCE(SUM(p.has_raw = 0), 0) AS jpeg, COALESCE(SUM(" + PhotoQuerySql.SYNCED_SQL + "), 0) AS synced, " +
+            "COUNT(*) AS total FROM photos p LEFT JOIN photo_cloud c ON c.photo_id = p.id " +
+            "WHERE p.hidden = 0 AND (NOT " + PhotoQuerySql.SERVER_SOURCE_SQL + " OR " +
+            PhotoQuerySql.SERVER_OPENABLE_SQL + ")",
+    )
+    fun observeFilterCounts(): Flow<FilterCounts>
 
     @RawQuery(
         observedEntities = [

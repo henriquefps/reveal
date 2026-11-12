@@ -139,7 +139,7 @@ same "local wall clock as UTC" convention, so date headers group both the same w
 `1234-ABCD`) and reads mount state from `StorageManager`; media broadcasts (mounted, unmounted, eject, removed) make
 the library re-probe. A source is `UNPLUGGED` when its volume is not mounted or its root no longer lists,
 `PERMISSION_LOST` on a `SecurityException`. Unplugged sources keep their index and cached thumbnails; the grid shows
-a `warning` banner, the sources list a warning icon, and the viewer says the folder is not available.
+a `warning` banner, "Manage folders" a warning icon, and the viewer says the folder is not available.
 
 ## XMP (`XmpReader`, `XmpWriter`)
 
@@ -191,7 +191,7 @@ after 5 s idle.
 
 ## Viewer
 
-Pages are the grid's list at the moment it opened (same scope, filter, order, search), so rating a photo out of a
+Pages are the grid's list at the moment it opened (same view, filters, order, search; `PhotoListCodec`), so rating a photo out of a
 filter does not move the page. Display: `FirstImageLoader` at the window's long edge (embedded preview, or the camera
 JPEG); an edited photo shows a develop render of its recipe instead. Pinch and double-tap to 100 % of the full
 size; past the display image's resolution, `RegionSource` (`BitmapRegionDecoder` on the camera rendering's
@@ -201,16 +201,43 @@ RAW needs the tiled renderer (M2). Info sheet: EXIF read from the files on deman
 
 ## UI (`:feature:library`)
 
-hfps shell; sources pane (All photos, Recent, Opened from other apps placeholder, folders with volume, count and
-state, Add folder) and grid, side by side from 840 dp, one at a time below (predictive back from the grid to the
-sources). The library reopens the folder it showed last (`meta`). Grid: 3 columns on a portrait phone, else
-`width / 120 dp`; 2 dp gaps; date headers; badges (`RAW+JPG`/`RAW`, edited dot, stars, pick/reject; rejected cells
-dimmed; badge text capped at 130 % font scale, the cell's TalkBack description carries everything). Filters: all /
-edited / not edited / picked / rated ≥ N / RAW (has a RAW) / JPEG (no RAW); sort newest, oldest, name; search by
-file name (`LIKE` with escaped wildcards). Multi-select: long-press, tap to toggle, drag across rows with auto-scroll;
-rate, pick, reject, clear flag, remove from library, select all; preset and export are disabled
-placeholders. "Open a photo…" (single document, M0's flow) stays in the menu; the editor route takes a version id
-from the library (it opens the RAW of a pair) or a URI from other apps.
+hfps shell around **one home grid** (FIX/L, below); "Manage folders" (a sheet, a dialog from 840 dp) lists the
+folders with volume, count, state and indexing, and adds, rescans, removes them and sets their backup mode. Grid: 3
+columns on a portrait phone, else `width / 120 dp`; 2 dp gaps; date headers; badges (`RAW+JPG`/`RAW`, edited dot,
+stars, pick/reject; rejected cells dimmed; badge text capped at 130 % font scale, the cell's TalkBack description
+carries everything). Sort newest, oldest, name; search by file name (`LIKE` with escaped wildcards). Multi-select:
+long-press, tap to toggle, drag across rows with auto-scroll; rate, pick, reject, clear flag, remove from library,
+select all, copy/paste/reset edits, presets, export, delete from server (the selected Server photos), delete conflict
+copies, on any filtered grid. "Open a photo…" (single document, M0's flow) stays in the menu; the editor route takes
+a version id from the library (it opens the RAW of a pair) or a URI from other apps.
+
+## Filters (FIX/L, 0.5.5)
+
+Before 0.5.5 the library was a list of places (All photos, Recent, Opened from other apps, Server, each folder) and
+one filter at a time. Now, like Lightroom or Google Photos, **the home is every photo and everything else is a
+filter** (the owner's design):
+
+- **`LibraryScope`** is only the view: `All` (the home: this device's photos and the Server photos that open,
+  `PhotoQuerySql.SERVER_OPENABLE_SQL`; a Server photo whose file is here was merged into this device's photo, ADR 0018,
+  so a photo has one row) and `Recent` (its own view, no filters).
+- **`PhotoFilters`** (`:core:data/model`): sealed groups, each a set of choices: Source (`SourceFilter.Folder(id)`,
+  `FromApps`, `ServerOnly`), Culling (`PICKED`, `STARRED` = any rating, `REJECTED`), Edits (`EDITED`, `NOT_EDITED`),
+  Type (`RAW` = has a RAW, `JPEG` = no RAW), Sync (`SYNCED` = the server holds the original of any file of the shot,
+  `photo_cloud.original_on_server` or a file's `on_server`, or the photo is a Server photo; `NOT_SYNCED` = the rest,
+  uploads still waiting included; offered only while paired, dropped on unpairing).
+- **One query builder**: `PhotoQuerySql.build(PhotoQuery)` joins the choices of a group with OR and the groups with
+  AND, every value bound. "Opened from other apps" alone orders and groups by hand-off batch (ADR 0011); otherwise
+  the sort applies. `PhotoQuery.unavailableOnly` (internal: "Try again", tests) and `withUnopenable` (sync tests) are
+  not filters. Counts per choice: one aggregate query, `PhotoDao.observeFilterCounts` (not faceted).
+- **Encoding**: `PhotoListCodec` format 2 (`2 | view | filters | sort | search`, filters as tokens `f:<id>`, `apps`,
+  `server`, `c:PICKED`, …) for the viewer and the editor's filmstrip routes, saved state and `meta`
+  `library.filters` (the last combination, restored on start). Format 1 routes and the old `library.lastSelection`
+  map to the equivalent filters (Server → Only on the server, From apps → Opened from other apps, a folder → that
+  folder; rated ≥ N → Starred).
+- **Plans**: `PhotoQuerySqlTest` runs EXPLAIN QUERY PLAN on the home, a folder, culling/type/sync/source combinations
+  and Recent: no table is read in full except `sources`, and every per-row subquery uses its `photo_id` index
+  (`+su.state` keeps SQLite off the `sync_uploads.state` index).
+- The "Unavailable" placeholder (ADR 0011) stays for this device's unreadable files, with no filter chip.
 
 ## Measurements
 
@@ -230,6 +257,10 @@ embedded previews + 4,000 JPEGs, 640x427 previews, 300 sidecars; 7,000 photos, 5
 The UI never waits for indexing: rows stream in (Room flow, coalesced to 4 updates/s while indexing) and the walk,
 the database writes and the header reads run on IO threads. Numbers on the owner's phone are for the orchestrator to
 add (release build, real SD card).
+
+Filters (FIX/L): `LibraryMeasurementsTest` also times the grid's query for each group and a few combinations over
+the 10,000 photos (`REVEAL_LIBRARY filter <name>: N rows, query X ms`, must stay under 1 s) and flings the
+unfiltered home.
 
 ## Consequences
 

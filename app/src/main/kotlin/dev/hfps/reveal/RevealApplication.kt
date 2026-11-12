@@ -14,7 +14,9 @@ class RevealApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
-        sync.start()
+        // Only the main process syncs: WorkManager is initialised there, and other processes (the debug documents
+        // provider) must never run a second sync.
+        if (getProcessName() == packageName) sync.start()
         // Exports shared to other apps whose share sheet never returned (the app was killed meanwhile): sweep them.
         thread(name = "reveal-share-sweep") { ShareCache.clear(this) }
     }

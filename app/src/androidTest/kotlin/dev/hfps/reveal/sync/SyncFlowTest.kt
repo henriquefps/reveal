@@ -3,6 +3,7 @@ package dev.hfps.reveal.sync
 import android.graphics.Bitmap
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.hasContentDescription
+import androidx.compose.ui.test.hasScrollToKeyAction
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.v2.createEmptyComposeRule
@@ -10,6 +11,7 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performScrollToKey
 import androidx.compose.ui.test.performTextInput
 import androidx.test.core.app.ActivityScenario
 import androidx.test.espresso.Espresso
@@ -114,6 +116,9 @@ class SyncFlowTest {
             assertThat(photo.cloudOriginal).isTrue()
             compose.waitUntilAtLeastOneExists(hasText(context.getString(LibraryR.string.library_server)), TIMEOUT_MS)
             compose.onNodeWithText(context.getString(LibraryR.string.library_server)).performClick()
+            // The server may hold many photos (other devices'): bring this one into the lazy grid first.
+            compose.waitUntilAtLeastOneExists(hasScrollToKeyAction(), TIMEOUT_MS)
+            compose.onNode(hasScrollToKeyAction()).performScrollToKey(photo.id)
             compose.waitUntilAtLeastOneExists(hasTestTag(LibraryTags.cell(photo.id)), TIMEOUT_MS)
             shot("library-server")
             compose.onNodeWithTag(LibraryTags.cell(photo.id)).performClick()
@@ -138,11 +143,11 @@ class SyncFlowTest {
             compose.onNodeWithTag(SyncTags.UNPAIR_CONFIRM).performClick()
             compose.waitUntilAtLeastOneExists(hasTestTag(SyncTags.SCAN), TIMEOUT_MS)
             assertThat(sync.account.value).isNull()
-            val left = runBlocking {
-                EntryPointAccessors.fromApplication(context, DebugAccess::class.java).library()
-                    .photoList(PhotoQuery(scope = LibraryScope.Server))
+            // The account goes first (the screen shows Scan at once); forgetting the server's photos follows.
+            val library = EntryPointAccessors.fromApplication(context, DebugAccess::class.java).library()
+            compose.waitUntil(TIMEOUT_MS) {
+                runBlocking { library.photoList(PhotoQuery(scope = LibraryScope.Server)) }.isEmpty()
             }
-            assertThat(left).isEmpty()
         }
     }
 

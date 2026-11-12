@@ -167,6 +167,8 @@ class SyncRepository(
         val api =
             api() ?: return@withContext null.also { runtime.update { it.copy(problem = SyncProblem.UNAUTHORIZED) } }
         mutex.withLock {
+            // Unpaired (or paired again) while this run waited: its key and server are gone, do nothing.
+            if (accounts.account.value != account) return@withLock null
             runtime.update { it.copy(running = true) }
             try {
                 val report = engine.sync(api, account.serverId)

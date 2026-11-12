@@ -118,6 +118,9 @@ class SyncApiTest {
             assertThat(accounts.account.value).isNull()
             assertThat(secrets.read()).isNull()
             assertThat(runBlocking { db.metaDao().get(SyncEngine.KEY_CURSOR) }).isNull()
+            // A sync that runs after unpairing (a job queued before) does nothing and brings nothing back.
+            assertThat(runBlocking { repository.syncMetadata() }).isNull()
+            assertThat(runBlocking { db.syncDao().serverSource() }).isNull()
         } finally {
             db.close()
         }

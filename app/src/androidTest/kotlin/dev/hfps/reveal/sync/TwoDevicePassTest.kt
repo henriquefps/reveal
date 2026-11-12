@@ -6,7 +6,6 @@ import com.google.common.truth.Truth.assertThat
 import dagger.hilt.android.EntryPointAccessors
 import dev.hfps.image.source.FileFingerprint
 import dev.hfps.reveal.data.model.LibraryScope
-import dev.hfps.reveal.data.model.PhotoQuery
 import dev.hfps.reveal.debug.DebugAccess
 import dev.hfps.reveal.library.SyntheticFolder
 import dev.hfps.reveal.pipeline.recipe.RecipeDiff
@@ -57,14 +56,8 @@ class TwoDevicePassTest {
             File(folder.dir, "PASS_$seed.JPG").writeBytes(bytes)
             folder.addAndIndex()
             runBlocking { access.library().refresh() }
+            // The folder's fingerprints are filled in the background after the walk: waiting for it finds the photo.
             val photo = waitForPhoto(fingerprint, LibraryScope.All)
-            // The folder's fingerprints are filled in the background after the walk; the photo syncs once printed.
-            repeat(ATTEMPTS) {
-                if (runBlocking { access.database().photoDao().filesByFingerprint(listOf(fingerprint)) }.isNotEmpty()) {
-                    return@repeat
-                }
-                Thread.sleep(WAIT_MS)
-            }
             val edits = access.edits()
             runBlocking {
                 val before = edits.recipe(photo)
@@ -78,25 +71,14 @@ class TwoDevicePassTest {
         }
     }
 
-    /** The version of the photo with [fingerprint] (syncing while waiting), in [scope] or anywhere. */
+    /** The first version of the photo whose file has [fingerprint] (syncing while waiting unless [scope] is local). */
     private fun waitForPhoto(fingerprint: String, scope: LibraryScope?): Long {
-        val library = access.library()
+        val photos = access.database().photoDao()
         repeat(ATTEMPTS) {
             if (scope == null) runBlocking { access.sync().syncMetadata() }
-            for (s in listOfNotNull(scope ?: LibraryScope.All, if (scope == null) LibraryScope.Server else null)) {
-                val rows = runBlocking { library.photoList(PhotoQuery(scope = s)) }
-                for (row in rows) {
-                    val printed = runBlocking { library.detail(row.id) }?.files.orEmpty()
-                    val match = printed.any { file ->
-                        runCatching {
-                            context.contentResolver.openInputStream(file.uri)?.use {
-                                FileFingerprint.of(it.readBytes())
-                            }
-                        }.getOrNull() == fingerprint
-                    }
-                    if (match) return row.versionId
-                }
-            }
+            val file = runBlocking { photos.filesByFingerprint(listOf(fingerprint)) }.firstOrNull()?.file
+            val version = file?.let { runBlocking { photos.firstVersion(it.photoId) } }
+            if (version != null) return version
             Thread.sleep(WAIT_MS)
         }
         error("photo not found")

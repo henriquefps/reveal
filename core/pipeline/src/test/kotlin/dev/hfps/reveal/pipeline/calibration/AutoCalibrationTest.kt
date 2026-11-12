@@ -1,4 +1,4 @@
-@file:Suppress("MagicNumber", "MaxLineLength", "LongMethod")
+@file:Suppress("MagicNumber", "MaxLineLength", "LongMethod", "CyclomaticComplexMethod")
 
 package dev.hfps.reveal.pipeline.calibration
 
@@ -10,15 +10,15 @@ import dev.hfps.reveal.pipeline.auto.AutoRules
 import dev.hfps.reveal.pipeline.auto.AutoScope
 import dev.hfps.reveal.pipeline.auto.PhotoFeatures
 import dev.hfps.reveal.pipeline.cpu.AutoWhiteBalance
-import dev.hfps.reveal.pipeline.cpu.WhiteBalanceModel
-import dev.hfps.reveal.pipeline.faces.Face
-import dev.hfps.reveal.pipeline.recipe.Colour
-import dev.hfps.reveal.pipeline.recipe.WbMode
-import dev.hfps.reveal.pipeline.recipe.WhiteBalance
 import dev.hfps.reveal.pipeline.cpu.ColorSpaces
 import dev.hfps.reveal.pipeline.cpu.CpuDevelop
 import dev.hfps.reveal.pipeline.cpu.OkLab
+import dev.hfps.reveal.pipeline.cpu.WhiteBalanceModel
+import dev.hfps.reveal.pipeline.faces.Face
+import dev.hfps.reveal.pipeline.recipe.Colour
 import dev.hfps.reveal.pipeline.recipe.Recipe
+import dev.hfps.reveal.pipeline.recipe.WbMode
+import dev.hfps.reveal.pipeline.recipe.WhiteBalance
 import java.io.File
 import java.util.Locale
 import java.util.stream.IntStream
@@ -49,7 +49,12 @@ class AutoCalibrationTest {
     private val dir: File? = System.getenv("REVEAL_CALIBRATION_DIR")?.takeIf { it.isNotBlank() }?.let(::File)
         ?.takeIf { it.isDirectory }
 
-    private class Stats(val lStar: DoubleArray, val chroma: Double, val faceL: Double = Double.NaN, val faceHue: Double = Double.NaN)
+    private class Stats(
+        val lStar: DoubleArray,
+        val chroma: Double,
+        val faceL: Double = Double.NaN,
+        val faceHue: Double = Double.NaN,
+    )
 
     private class Pair(
         val input: PipelineInput,
@@ -270,7 +275,12 @@ class AutoCalibrationTest {
             val guarded = AutoWhiteBalance.estimate(wb, faces = pair.faces)
             fun hue(cct: WhiteBalanceModel.Cct): Double {
                 if (pair.faces.isEmpty()) return Double.NaN
-                val w = WhiteBalance(mode = WbMode.CUSTOM, temperatureK = cct.temperatureK.toFloat(), tint = cct.tint.toFloat())
+                val w =
+                    WhiteBalance(
+                        mode = WbMode.CUSTOM,
+                        temperatureK = cct.temperatureK.toFloat(),
+                        tint = cct.tint.toFloat(),
+                    )
                 return renderStats(pair.input, Recipe(colour = Colour(whiteBalance = w)), pair.faces).faceHue
             }
             arrayOf(
@@ -286,8 +296,10 @@ class AutoCalibrationTest {
         }
         fun line(name: String, r: List<Array<Double>>) {
             if (r.isEmpty()) return
-            fun mean(i: Int) = r.map { it[i] }.filter { !it.isNaN() }.let { if (it.isEmpty()) Double.NaN else it.average() }
-            fun meanAbs(i: Int) = r.map { abs(it[i]) }.filter { !it.isNaN() }.let { if (it.isEmpty()) Double.NaN else it.average() }
+            fun mean(i: Int) =
+                r.map { it[i] }.filter { !it.isNaN() }.let { if (it.isEmpty()) Double.NaN else it.average() }
+            fun meanAbs(i: Int) =
+                r.map { abs(it[i]) }.filter { !it.isNaN() }.let { if (it.isEmpty()) Double.NaN else it.average() }
             println(
                 String.format(
                     Locale.ROOT,
@@ -303,8 +315,14 @@ class AutoCalibrationTest {
             AutoWhiteBalance.faceSkinHue(wb, pair.faces, WhiteBalanceModel.asShot(pair.input))
         }.sorted()
         val cameraHues = pairs.map { it.camera.faceHue }.filter { !it.isNaN() }.sorted()
-        println("AUTO-WB skin hue (guard measure) at the camera's as shot: " + guardHues.joinToString(" ") { String.format(Locale.ROOT, "%.0f", it) })
-        println("AUTO-WB skin hue of the camera JPEGs: " + cameraHues.joinToString(" ") { String.format(Locale.ROOT, "%.0f", it) })
+        println(
+            "AUTO-WB skin hue (guard measure) at the camera's as shot: " +
+                guardHues.joinToString(" ") { String.format(Locale.ROOT, "%.0f", it) },
+        )
+        println(
+            "AUTO-WB skin hue of the camera JPEGs: " +
+                cameraHues.joinToString(" ") { String.format(Locale.ROOT, "%.0f", it) },
+        )
         line("all", rows)
         line("faces", rows.filter { it[7] > 0 })
         line("no faces", rows.filter { it[7] == 0.0 })

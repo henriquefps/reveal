@@ -24,6 +24,16 @@ only live on a device are backed up.
 - Apply a preset to the library selection (strength included): runs in the background with progress and Cancel,
   one undoable step on each photo.
 - Presets sync between your devices with your sync server (with their groups, packs and favourites).
+- Auto sees faces and the subject: it exposes for the people in the photo (only when their faces are badly lit:
+  darker and lighter skin keep their own brightness), protects bright windows without darkening faces, and its white
+  balance ignores skin and keeps faces from turning green, magenta or blue. Faces are found on the device, offline,
+  by an open model (MediaPipe BlazeFace, Apache-2.0) run in Reveal's own code; nothing leaves the phone. On the
+  owner's test shoots Auto's brightness is now closer to the camera's (median error 4.8 → 3.4 L\*, faces 7.5 → 4.8).
+- Smart presets: a correction computed from each photo (exposure from the subject and the faces, highlight and shadow
+  limits, white balance with the skin guard, optional straightening) and then a style. The results are ordinary
+  slider values, and a smart preset applied to many photos adapts to each one. Built-in: Natural portrait, Bright
+  outdoor, Moody indoor, Clean auto.
+- 36 built-in presets in nine groups (Smart, Natural, Portrait, Landscape, Black & white, Film, Matte, Warm, Cool).
 - Sync with your own `reveal-sync` server (Settings → Sync): pair by scanning the server's QR code or pasting its
   link (the device key stays in the Android Keystore). Edits with their history, virtual copies, ratings, flags,
   labels and the export author follow you to every paired device, in the background and within seconds while the app

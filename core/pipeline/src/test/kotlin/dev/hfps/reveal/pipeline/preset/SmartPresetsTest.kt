@@ -1,3 +1,5 @@
+@file:Suppress("MaxLineLength")
+
 package dev.hfps.reveal.pipeline.preset
 
 import com.google.common.truth.Truth.assertThat
@@ -18,7 +20,9 @@ import org.junit.Test
 /** Smart presets (docs/adr/0020): the rules' file format, the correction per photo, batch adaptation, strength. */
 class SmartPresetsTest {
     private val style = PresetPatch.fromJson(
-        Json.parseToJsonElement("""{"light":{"contrast":12},"colour":{"saturation":-10},"effects":{"grainAmount":20}}""") as JsonObject,
+        Json.parseToJsonElement(
+            """{"colour":{"saturation":-10},"effects":{"grainAmount":20,"clarity":12}}""",
+        ) as JsonObject,
     ).patch
     private val rules = SmartRules(
         SmartRules.ExposureRule(),
@@ -71,7 +75,9 @@ class SmartPresetsTest {
     @Test
     fun `making a preset smart drops the style fields the correction owns`() {
         val withExposure = PresetPatch.fromJson(
-            Json.parseToJsonElement("""{"light":{"exposure":0.5,"contrast":12},"colour":{"vibrance":30}}""") as JsonObject,
+            Json.parseToJsonElement(
+                """{"light":{"exposure":0.5,"contrast":12},"colour":{"vibrance":30}}""",
+            ) as JsonObject,
         ).patch
         val p = Preset(PresetIds.newId(), "Mine", withExposure).smart(SmartRules(exposure = SmartRules.ExposureRule()))
         assertThat(p.patch.paths).containsExactly("light.contrast", "colour.vibrance")
@@ -86,8 +92,8 @@ class SmartPresetsTest {
         val b = preset.apply(Recipe(), 1f, smartCorrection = SmartCorrector(PhotoFeatures.of(dark)))
         // Two stops darker: about two stops more exposure, the style identical.
         assertThat(b.light.exposureEv - a.light.exposureEv).isWithin(0.15f).of(2f)
-        assertThat(a.light.contrast).isEqualTo(12f)
-        assertThat(b.light.contrast).isEqualTo(12f)
+        assertThat(a.effects.clarity).isEqualTo(12f)
+        assertThat(b.effects.clarity).isEqualTo(12f)
         assertThat(a.colour.saturation).isEqualTo(-10f)
         assertThat(a.effects.grainAmount).isEqualTo(20f)
         assertThat(a.colour.whiteBalance.mode).isEqualTo(WbMode.AUTO)
@@ -111,7 +117,9 @@ class SmartPresetsTest {
     fun `rules that are off keep the photo's values`() {
         val input = SyntheticImages.scene(240, 160)
         val before = Recipe(light = Light(exposureEv = 0.7f, shadows = 5f))
-        val out = SmartCorrector(PhotoFeatures.of(input)).correct(SmartRules(vibrance = SmartRules.VibranceRule()), before)
+        val out = SmartCorrector(
+            PhotoFeatures.of(input),
+        ).correct(SmartRules(vibrance = SmartRules.VibranceRule()), before)
         assertThat(out.light).isEqualTo(before.light)
         assertThat(out.colour.whiteBalance).isEqualTo(before.colour.whiteBalance)
     }
@@ -141,7 +149,9 @@ class SmartPresetsTest {
         val straight = SmartCorrector(features).correct(SmartRules(straighten = SmartRules.StraightenRule()), Recipe())
         assertThat(abs(straight.geometry.angle + 2.5f)).isLessThan(0.6f)
         // Over the rule's limit: left alone.
-        val limited = SmartCorrector(features).correct(SmartRules(straighten = SmartRules.StraightenRule(1.0)), Recipe())
+        val limited = SmartCorrector(
+            features,
+        ).correct(SmartRules(straighten = SmartRules.StraightenRule(1.0)), Recipe())
         assertThat(limited.geometry.angle).isEqualTo(0f)
         // No lines (a smooth image): left alone.
         val flat = PipelineInput.linearSrgb(w, h, FloatArray(w * h * 3) { 0.2f })

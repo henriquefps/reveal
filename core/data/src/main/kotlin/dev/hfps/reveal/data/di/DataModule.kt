@@ -21,6 +21,7 @@ import dev.hfps.reveal.data.library.DocumentTreeFactory
 import dev.hfps.reveal.data.library.LibraryRepository
 import dev.hfps.reveal.data.library.SidecarSync
 import dev.hfps.reveal.data.model.SourceKind
+import dev.hfps.reveal.data.preset.AppBuiltInPresets
 import dev.hfps.reveal.data.preset.BuiltInPresetSource
 import dev.hfps.reveal.data.preset.PresetRepository
 import dev.hfps.reveal.data.storage.SafDocumentTree
@@ -124,15 +125,18 @@ object DataModule {
     @Singleton
     fun provideEdits(database: RevealDatabase): EditRepository = EditRepository(database)
 
-    /** The smart presets' per-photo correction (docs/adr/0019 "Smart slot"): none until M3/B binds its own here. */
+    /**
+     * The fallback smart correction where no photo is known (docs/adr/0020): the editor and the batch make a
+     * per-photo `SmartCorrector` from each photo's features instead, so nothing app-wide can correct a photo.
+     */
     @Provides
     @Singleton
     fun provideSmartCorrection(): SmartCorrection = SmartCorrection.NONE
 
-    /** The app's own presets: none until the built-in looks (M3/B) bind theirs here. */
+    /** The app's own presets: the built-in looks and smart presets (docs/adr/0020). */
     @Provides
     @Singleton
-    fun provideBuiltInPresets(): BuiltInPresetSource = BuiltInPresetSource.NONE
+    fun provideBuiltInPresets(@ApplicationContext context: Context): BuiltInPresetSource = AppBuiltInPresets(context)
 
     @Provides
     @Singleton

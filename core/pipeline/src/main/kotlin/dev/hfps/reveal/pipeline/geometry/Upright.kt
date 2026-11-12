@@ -153,7 +153,8 @@ object Upright {
      * applies; `null` without usable lines. A weighted median, refined by the weighted mean of the lines within
      * [INLIER] of it.
      */
-    fun straightenAngle(lines: List<Segment>, transform: Transform): Double? = straightenEstimate(lines, transform)?.angle
+    fun straightenAngle(lines: List<Segment>, transform: Transform): Double? =
+        straightenEstimate(lines, transform)?.angle
 
     /**
      * [straightenAngle] with how much the lines agree: [StraightenEstimate.support] is the share of the axis-aligned

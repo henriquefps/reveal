@@ -1,4 +1,4 @@
-@file:Suppress("MagicNumber")
+@file:Suppress("MagicNumber", "CyclomaticComplexMethod", "NestedBlockDepth", "ReturnCount")
 
 package dev.hfps.reveal.pipeline.preset
 
@@ -76,7 +76,8 @@ data class SmartRules(
     }
 
     /** True when no rule runs (the preset then only has its style). */
-    val isEmpty: Boolean get() = exposure == null && tone == null && whiteBalance == null && vibrance == null && straighten == null
+    val isEmpty: Boolean get() = exposure == null && tone == null && whiteBalance == null && vibrance == null &&
+        straighten == null
 
     /** The preset sections the correction sets: a style patch should not set them too (it would override them). */
     val sections: Set<PresetSection>
@@ -103,14 +104,29 @@ data class SmartRules(
             exposure?.let {
                 put(
                     "exposure",
-                    obj("subjectBrightness" to JsonPrimitive(it.subjectBrightness), "faceBrightness" to JsonPrimitive(it.faceBrightness)),
+                    obj(
+                        "subjectBrightness" to JsonPrimitive(it.subjectBrightness),
+                        "faceBrightness" to JsonPrimitive(it.faceBrightness),
+                    ),
                 )
             }
             tone?.let {
-                put("tone", obj("maxHighlights" to JsonPrimitive(it.maxHighlights), "maxShadows" to JsonPrimitive(it.maxShadows)))
+                put(
+                    "tone",
+                    obj(
+                        "maxHighlights" to JsonPrimitive(it.maxHighlights),
+                        "maxShadows" to JsonPrimitive(it.maxShadows),
+                    ),
+                )
             }
             whiteBalance?.let {
-                put("whiteBalance", obj("mode" to JsonPrimitive(it.mode.serial), "skinGuard" to JsonPrimitive(it.skinGuard)))
+                put(
+                    "whiteBalance",
+                    obj(
+                        "mode" to JsonPrimitive(it.mode.serial),
+                        "skinGuard" to JsonPrimitive(it.skinGuard),
+                    ),
+                )
             }
             vibrance?.let { put("vibrance", obj("max" to JsonPrimitive(it.max))) }
             straighten?.let { put("straighten", obj("maxAngle" to JsonPrimitive(it.maxAngle))) }
@@ -191,8 +207,13 @@ data class SmartRules(
 class SmartCorrector(private val features: PhotoFeatures) : SmartCorrection {
     override fun correct(preset: Preset, smart: SmartPart, before: Recipe): Recipe {
         val rules = SmartRules.fromJson(smart.rules) ?: return before
-        return correct(rules, before, preset.patch)
+        val key = Triple(rules, before, preset.patch)
+        synchronized(this) { last?.let { (k, v) -> if (k == key) return v } }
+        // The strength slider re-applies the preset per frame; the correction does not depend on it: memoised.
+        return correct(rules, before, preset.patch).also { synchronized(this) { last = key to it } }
     }
+
+    private var last: Pair<Triple<SmartRules, Recipe, PresetPatch>, Recipe>? = null
 
     /** [before] with [rules] applied; [style] only lends its look to the analysis. */
     fun correct(rules: SmartRules, before: Recipe, style: PresetPatch = PresetPatch.EMPTY): Recipe {
@@ -202,6 +223,7 @@ class SmartCorrector(private val features: PhotoFeatures) : SmartCorrection {
             out = when (rule.mode) {
                 SmartRules.WhiteBalanceRule.Mode.AS_SHOT ->
                     out.copy(colour = out.colour.copy(whiteBalance = WhiteBalance()))
+
                 SmartRules.WhiteBalanceRule.Mode.AUTO -> features.wb?.let { wb ->
                     val faces = if (rule.skinGuard) features.faces else emptyList()
                     out.copy(colour = out.colour.copy(whiteBalance = AutoRules.whiteBalance(wb, faces)))
@@ -212,13 +234,31 @@ class SmartCorrector(private val features: PhotoFeatures) : SmartCorrection {
         if (light) {
             // The look the photo will have: the style's profile (and white balance when the correction leaves it).
             val styled = style.applyFull(out)
-            val look = out.copy(profile = styled.profile, colour = out.colour.copy(whiteBalance = if (rules.whiteBalance != null) out.colour.whiteBalance else styled.colour.whiteBalance))
+            val look = out.copy(
+                profile = styled.profile,
+                colour = out.colour.copy(
+                    whiteBalance = if (rules.whiteBalance !=
+                        null
+                    ) {
+                        out.colour.whiteBalance
+                    } else {
+                        styled.colour.whiteBalance
+                    },
+                ),
+            )
             val analysis = AutoAnalyser.analyse(features.sample, look, features.faces, features.saliency)
             val r = AutoRules.compute(analysis, rules.params())
             var l = out.light
             if (rules.exposure != null) l = l.copy(exposureEv = r.exposureEv)
             if (rules.tone != null) {
-                l = l.copy(contrast = r.contrast, highlights = r.highlights, shadows = r.shadows, whites = r.whites, blacks = r.blacks)
+                l =
+                    l.copy(
+                        contrast = r.contrast,
+                        highlights = r.highlights,
+                        shadows = r.shadows,
+                        whites = r.whites,
+                        blacks = r.blacks,
+                    )
             }
             out = out.copy(light = l)
             if (rules.vibrance != null) out = out.copy(colour = out.colour.copy(vibrance = r.vibrance))

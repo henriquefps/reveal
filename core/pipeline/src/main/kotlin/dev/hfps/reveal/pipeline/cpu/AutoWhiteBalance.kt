@@ -145,7 +145,13 @@ object AutoWhiteBalance {
         require(all.isNotEmpty()) { "no usable pixels for auto white balance" }
         val underFaces = all.filter { i -> faces.any { underFace(analysis, i, it) } }.toHashSet()
         // Keep the faces' blocks when they are nearly everything (a tight close-up): better than nothing.
-        val usable = if (all.size - underFaces.size >= FACE_MIN_REST * all.size) all.filter { it !in underFaces } else all
+        val usable = if (all.size - underFaces.size >=
+            FACE_MIN_REST * all.size
+        ) {
+            all.filter { it !in underFaces }
+        } else {
+            all
+        }
         val m = analysis.colour.cameraToXyz
         val asLight = HashMap<Int, WhiteBalanceModel.Cct>()
         for (i in usable) {
@@ -175,7 +181,11 @@ object AutoWhiteBalance {
     }
 
     /** The face skin guard: the smallest move of [estimate] that gives the faces' skin a natural hue. */
-    private fun skinGuard(analysis: WbAnalysis, estimate: WhiteBalanceModel.Cct, faces: List<Face>): WhiteBalanceModel.Cct {
+    private fun skinGuard(
+        analysis: WbAnalysis,
+        estimate: WhiteBalanceModel.Cct,
+        faces: List<Face>,
+    ): WhiteBalanceModel.Cct {
         val skin = faceSkin(analysis, faces) ?: return estimate
         val mired = MIRED_PER_K / estimate.temperatureK
         var best = estimate
@@ -194,7 +204,9 @@ object AutoWhiteBalance {
                 val nt = dt.toDouble() / FACE_MAX_TINT
                 val cost = nm * nm + nt * nt
                 // Inside the range first, then the smallest move; outside it everywhere: the nearest hue.
-                if (miss < bestMiss - HUE_EPSILON || (kotlin.math.abs(miss - bestMiss) <= HUE_EPSILON && cost < bestCost)) {
+                if (miss < bestMiss - HUE_EPSILON ||
+                    (kotlin.math.abs(miss - bestMiss) <= HUE_EPSILON && cost < bestCost)
+                ) {
                     best = cct
                     bestCost = cost
                     bestMiss = miss
@@ -205,6 +217,7 @@ object AutoWhiteBalance {
     }
 
     /** Score-weighted mean raw colour of the unclipped blocks on the faces' skin; `null` when none. */
+    @Suppress("NestedBlockDepth")
     private fun faceSkin(a: WbAnalysis, faces: List<Face>): DoubleArray? {
         val sum = DoubleArray(3)
         var weight = 0.0

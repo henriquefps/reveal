@@ -55,7 +55,13 @@ class OpticsAnalysis(val width: Int, val height: Int, val segments: List<Segment
         /** Analyses [input] (the upright linear proxy); [estimateCa] runs the CA estimate too. */
         fun of(input: PipelineInput, estimateCa: Boolean): OpticsAnalysis {
             val lines = ImageLines.of(input)
-            val ca = if (estimateCa) runCatching { CaEstimator.estimate(input.linearRgb, input.width, input.height) }.getOrNull() else null
+            val ca = if (estimateCa) {
+                runCatching {
+                    CaEstimator.estimate(input.linearRgb, input.width, input.height)
+                }.getOrNull()
+            } else {
+                null
+            }
             return OpticsAnalysis(lines.width, lines.height, lines.segments, ca)
         }
 

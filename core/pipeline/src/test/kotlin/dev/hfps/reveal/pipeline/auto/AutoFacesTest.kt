@@ -105,7 +105,14 @@ class AutoFacesTest {
         val target = noFace.sceneFor(p.faceTarget)
         // Inside the band at the protected exposure, so protection is what would push it lower.
         val face = target - p.faceTolerance - ev0 + 0.2
-        val withFace = AutoAnalysis(h, h.copyOf(), table, 0.0, 0.1, true, faceHistogram = bump(face), faceArea = 0.05, faceCount = 1)
+        val withFace =
+            AutoAnalysis(
+                h, h.copyOf(), table, 0.0, 0.1, true,
+                faceHistogram = bump(
+                    face,
+                ),
+                faceArea = 0.05, faceCount = 1,
+            )
         val ev = AutoRules.exposure(withFace, p)
         assertThat(face + ev).isAtLeast(target - p.faceTolerance - 0.011)
     }
@@ -123,7 +130,11 @@ class AutoFacesTest {
         assertThat(a.faceCount).isEqualTo(1)
         assertThat(checkNotNull(a.faceKey)).isWithin(0.1).of(kotlin.math.ln(0.4) / kotlin.math.ln(2.0))
         assertThat(a.faceArea).isWithin(1e-6).of(face.width.toDouble() * face.height)
-        val cropped = AutoAnalyser.analyse(input, Recipe(geometry = Geometry(crop = CropRect(0.5f, 0f, 1f, 1f))), listOf(face))
+        val cropped = AutoAnalyser.analyse(
+            input,
+            Recipe(geometry = Geometry(crop = CropRect(0.5f, 0f, 1f, 1f))),
+            listOf(face),
+        )
         assertThat(cropped.faceKey).isNull()
         assertThat(cropped.faceCount).isEqualTo(0)
     }
@@ -147,12 +158,14 @@ class AutoFacesTest {
         val w = 192
         val h = 128
         val rgb = FloatArray(w * h * 3)
-        for (y in 0 until h) for (x in 0 until w) {
-            val o = (y * w + x) * 3
-            val inObject = x in 130..170 && y in 40..80
-            rgb[o] = if (inObject) 0.85f else 0.45f
-            rgb[o + 1] = if (inObject) 0.2f else 0.5f
-            rgb[o + 2] = if (inObject) 0.15f else 0.45f
+        for (y in 0 until h) {
+            for (x in 0 until w) {
+                val o = (y * w + x) * 3
+                val inObject = x in 130..170 && y in 40..80
+                rgb[o] = if (inObject) 0.85f else 0.45f
+                rgb[o + 1] = if (inObject) 0.2f else 0.5f
+                rgb[o + 2] = if (inObject) 0.15f else 0.45f
+            }
         }
         val map = SaliencyMap.of(DetectionImage(w, h, rgb))
         assertThat(map.at(150f / w, 60f / h)).isGreaterThan(2 * map.at(30f / w, 100f / h))
@@ -169,9 +182,11 @@ class AutoFacesTest {
         val grey = cam.times(light.map { it * 0.3 }.toDoubleArray())
         val skin = cam.times(doubleArrayOf(light[0] * 0.42, light[1] * 0.33, light[2] * 0.2))
         val rgb = FloatArray(w * h * 3)
-        for (y in 0 until h) for (x in 0 until w) {
-            val c = if (x in 30 until 66 && y in 10 until 54) skin else grey
-            for (k in 0..2) rgb[(y * w + x) * 3 + k] = c[k].toFloat()
+        for (y in 0 until h) {
+            for (x in 0 until w) {
+                val c = if (x in 30 until 66 && y in 10 until 54) skin else grey
+                for (k in 0..2) rgb[(y * w + x) * 3 + k] = c[k].toFloat()
+            }
         }
         val input = PipelineInput.linearSrgb(w, h, rgb)
         val face = Face(30f / w, 10f / h, 66f / w, 54f / h, 0.95f)

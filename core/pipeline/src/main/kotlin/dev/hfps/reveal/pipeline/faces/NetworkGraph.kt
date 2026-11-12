@@ -1,5 +1,12 @@
 // Numeric kernels: the loops are the maths, written out for speed without allocation.
-@file:Suppress("MagicNumber", "NestedBlockDepth", "LongParameterList", "CyclomaticComplexMethod")
+@file:Suppress(
+    "MagicNumber",
+    "NestedBlockDepth",
+    "LongParameterList",
+    "CyclomaticComplexMethod",
+    "ComplexCondition",
+    "DestructuringDeclarationWithTooManyEntries",
+)
 
 package dev.hfps.reveal.pipeline.faces
 
@@ -50,13 +57,29 @@ class NetworkGraph private constructor(
             fun v(i: Int) = values[op.inputs[i]] ?: checkNotNull(constants[op.inputs[i]]) { "tensor not computed" }
             values[out] = when (op.code) {
                 CONV -> conv(v(0), shapes[op.inputs[0]], v(1), shapes[op.inputs[1]], v(2), shapes[out], op.options)
-                DEPTHWISE -> depthwise(v(0), shapes[op.inputs[0]], v(1), shapes[op.inputs[1]], v(2), shapes[out], op.options)
+
+                DEPTHWISE -> depthwise(
+                    v(0),
+                    shapes[op.inputs[0]],
+                    v(1),
+                    shapes[op.inputs[1]],
+                    v(2),
+                    shapes[out],
+                    op.options,
+                )
+
                 MAX_POOL -> maxPool(v(0), shapes[op.inputs[0]], shapes[out], op.options)
+
                 ADD -> add(v(0), v(1))
+
                 RELU -> FloatArray(v(0).size) { max(0f, v(0)[it]) }
+
                 PAD -> pad(v(0), shapes[op.inputs[0]], checkNotNull(ints[op.inputs[1]]), shapes[out])
+
                 RESIZE_BILINEAR -> resize(v(0), shapes[op.inputs[0]], shapes[out], op.options)
+
                 RESHAPE -> v(0).copyOf()
+
                 else -> error("unsupported operator ${op.code}")
             }
             // Drop what no later op reads: the peak stays at a few MB per run.
@@ -267,6 +290,7 @@ class NetworkGraph private constructor(
                     KIND_HALF -> constants[t] = FloatArray(n) {
                         halfToFloat(java.lang.Short.reverseBytes(s.readShort()).toInt() and 0xFFFF)
                     }
+
                     KIND_INT -> intData[t] = ints(n)
                 }
             }

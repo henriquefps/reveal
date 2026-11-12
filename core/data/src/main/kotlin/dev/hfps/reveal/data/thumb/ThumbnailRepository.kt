@@ -13,6 +13,7 @@ import dev.hfps.image.cache.FileIdentity
 import dev.hfps.image.cache.Variant
 import dev.hfps.image.decode.BitmapDecoding
 import dev.hfps.image.decode.Sampling
+import dev.hfps.image.proxy.ProxyBuilder
 import dev.hfps.image.source.readRange
 import dev.hfps.reveal.data.db.CacheEntryEntity
 import dev.hfps.reveal.data.db.PhotoFileEntity
@@ -23,6 +24,8 @@ import dev.hfps.reveal.data.model.FileRole
 import dev.hfps.reveal.data.model.SourceState
 import dev.hfps.reveal.data.storage.DocumentTree
 import dev.hfps.reveal.pipeline.PIPELINE_VERSION
+import dev.hfps.reveal.pipeline.PipelineInput
+import dev.hfps.reveal.pipeline.input.PipelineInputMapper
 import java.io.File
 import java.io.IOException
 import java.util.concurrent.ConcurrentHashMap
@@ -148,6 +151,36 @@ class ThumbnailRepository(
         }
     }
 
+    /**
+     * A small upright linear copy of [versionId]'s photo for the photo analysis (smart presets in a batch,
+     * docs/adr/0020): the editor's proxy decode at [longEdge] px, mapped like the editor's input. `null` when the
+     * source is offline.
+     */
+    suspend fun analysisInput(versionId: Long, longEdge: Int = ANALYSIS_EDGE): PipelineInput? = withContext(io) {
+        val photoId = photos.photoIdOfVersion(versionId) ?: return@withContext null
+        val target = target(photoId) ?: return@withContext null
+        val tree = availableTree(target.sourceId) ?: return@withContext null
+        try {
+            tree.openInput(target.main.documentId, target.main.name).use { input ->
+                val orientation = if (input.type.isRaw) {
+                    null
+                } else {
+                    runCatching {
+                        input.inspection.metadata.orientation
+                    }.getOrNull()
+                }
+                val proxy = ProxyBuilder.decodeProxy(input, longEdge)
+                val metadata = runCatching { input.inspection.metadata }.getOrNull()
+                PipelineInputMapper.map(proxy.image, proxy.info, orientation ?: proxy.info.orientation, metadata)
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
+            Log.w(TAG, "No analysis input for version $versionId", e)
+            null
+        }
+    }
+
     /** The embedded JPEG of a RAW (or a JPEG's own EXIF thumbnail is too small: never used). */
     private fun embeddedPreview(input: ImageInput): Bitmap? {
         val inspection = input.inspection
@@ -248,6 +281,9 @@ class ThumbnailRepository(
         /** Long edge of a thumbnail: a 3-column cell on a 1440 px wide phone is 480 px. */
         const val EDGE = 512
         const val DEFAULT_MAX_BYTES = 256L * 1024 * 1024
+
+        /** Long edge of the analysis input (the features need 576 px; lines are better with more). */
+        const val ANALYSIS_EDGE = 1200
         private const val PARALLELISM = 3
         private const val JPEG_QUALITY = 85
         private const val TRIM_EVERY = 50

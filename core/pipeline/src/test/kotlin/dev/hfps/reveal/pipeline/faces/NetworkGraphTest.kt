@@ -18,8 +18,12 @@ class NetworkGraphTest {
     fun `matches TensorFlow Lite on a synthetic input`() {
         val n = FaceDetector.SIZE
         val input = FloatArray(n * n * 3)
-        for (y in 0 until n) for (x in 0 until n) for (c in 0 until 3) {
-            input[(y * n + x) * 3 + c] = (sin(x * 0.07 + y * 0.11 + c * 1.3) * 0.9).toFloat()
+        for (y in 0 until n) {
+            for (x in 0 until n) {
+                for (c in 0 until 3) {
+                    input[(y * n + x) * 3 + c] = (sin(x * 0.07 + y * 0.11 + c * 1.3) * 0.9).toFloat()
+                }
+            }
         }
         val (reg, cls) = graph.run(input)
         assertThat(cls.size).isEqualTo(2304)

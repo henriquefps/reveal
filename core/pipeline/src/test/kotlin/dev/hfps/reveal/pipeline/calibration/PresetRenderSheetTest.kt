@@ -1,4 +1,4 @@
-@file:Suppress("MagicNumber", "LongMethod")
+@file:Suppress("MagicNumber", "LongMethod", "CyclomaticComplexMethod", "NestedBlockDepth", "MaxLineLength")
 
 package dev.hfps.reveal.pipeline.calibration
 
@@ -53,7 +53,10 @@ class PresetRenderSheetTest {
         val only = System.getenv("REVEAL_PRESET_ONLY")?.takeIf { it.isNotBlank() }?.split(',')?.toSet()
         val files = dir!!.listFiles()!!.filter {
             it.name.endsWith(".rdump") ||
-                (it.extension.lowercase() in setOf("jpg", "jpeg") && !File(it.parentFile, it.nameWithoutExtension + ".rdump").exists())
+                (
+                    it.extension.lowercase() in setOf("jpg", "jpeg") &&
+                        !File(it.parentFile, it.nameWithoutExtension + ".rdump").exists()
+                    )
         }.sortedBy { it.name }
         val step = max(1.0, files.size.toDouble() / limit)
         val chosen = (0 until minOf(limit, files.size)).map { files[(it * step).toInt()] }
@@ -75,13 +78,15 @@ class PresetRenderSheetTest {
             sheet(p.preset.name, tiles.map { it!! }, File(out, "preset-${p.key}.jpg"))
             overview += tiles.take(OVERVIEW_PHOTOS).map { it!!.second }
             val c = checks.map { it!! }
-            fun mean(k: Int) = c.map { it[k] }.filter { !it.isNaN() }.let { if (it.isEmpty()) Double.NaN else it.average() }
+            fun mean(k: Int) =
+                c.map { it[k] }.filter { !it.isNaN() }.let { if (it.isEmpty()) Double.NaN else it.average() }
             fun maxOf(k: Int) = c.map { it[k] }.filter { !it.isNaN() }.maxOrNull() ?: Double.NaN
             println(
                 String.format(
                     Locale.ROOT,
                     "PRESET-CHECK %-24s new clip %.2f %% (max %.2f)  skin hue %+.1f° (max |%.1f|)  skin L* %+.1f  median L* %+.1f",
-                    p.key, mean(0), maxOf(0), mean(1), c.map { abs(it[1]) }.filter { !it.isNaN() }.maxOrNull() ?: Double.NaN,
+                    p.key, mean(0), maxOf(0), mean(1),
+                    c.map { abs(it[1]) }.filter { !it.isNaN() }.maxOrNull() ?: Double.NaN,
                     mean(2), mean(3),
                 ),
             )
@@ -89,10 +94,71 @@ class PresetRenderSheetTest {
         overviewSheet(presets.map { it.preset.name }, overview, File(out, "overview.jpg"))
     }
 
+    /**
+     * Auto review (opt-in, `REVEAL_AUTO_COMPARE=1` with the same folders): per photo the camera JPEG, M1's Auto (no
+     * features) and M3's Auto (faces + subject + face WB), detected faces outlined on the last, three photos per sheet.
+     */
+    @Test
+    fun `render auto comparison sheets`() {
+        val dir = System.getenv("REVEAL_PRESET_DUMPS")?.takeIf { it.isNotBlank() }?.let(::File)
+        assumeTrue(
+            "REVEAL_PRESET_DUMPS not set",
+            dir?.isDirectory == true && System.getenv("REVEAL_AUTO_COMPARE") == "1",
+        )
+        val out = File(System.getenv("REVEAL_PRESET_OUT")!!).apply { mkdirs() }
+        val dumps = dir!!.listFiles()!!.filter { it.name.endsWith(".rdump") }.sortedBy { it.name }
+        dumps.chunked(3).forEachIndexed { sheetIndex, chunk ->
+            val rows = chunk.map { dump ->
+                val jpg = File(dump.parentFile, dump.name.removeSuffix(".rdump") + ".JPG")
+                val turns = UprightPairs.turns(UprightPairs.orientation(jpg))
+                val photo = photo(dump)
+                val auto = Recipe(colour = Colour(WhiteBalance(mode = WbMode.AUTO)))
+                val m1 = AutoRules.run(PhotoFeatures(photo.features.sample, photo.features.wb), auto, AutoScope.ALL)
+                val camera = UprightPairs.rotate(ImageIO.read(jpg), turns)
+                val m3 = image(photo.input, photo.before)
+                val g = m3.createGraphics()
+                g.color = Color(0x4f, 0xc3, 0xf7)
+                g.stroke = java.awt.BasicStroke(2f)
+                for (f in photo.features.faces) {
+                    g.drawRect(
+                        (f.left * m3.width).toInt(),
+                        (f.top * m3.height).toInt(),
+                        (f.width * m3.width).toInt(),
+                        (
+                            f.height *
+                                m3.height
+                            ).toInt(),
+                    )
+                }
+                g.dispose()
+                listOf(camera, image(photo.input, m1), m3)
+            }
+            val cell = TILE + GAP
+            val sheet = BufferedImage(3 * cell, HEADER + rows.size * cell, BufferedImage.TYPE_INT_RGB)
+            val g = sheet.createGraphics()
+            g.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON)
+            g.color = Color(0x1c, 0x1c, 0x1c)
+            g.fillRect(0, 0, sheet.width, sheet.height)
+            g.color = Color(0xe6, 0xe6, 0xe6)
+            g.font = Font(Font.SANS_SERIF, Font.BOLD, 20)
+            g.drawString("Camera JPEG  |  Auto M1  |  Auto M3 (faces outlined)", 12, 30)
+            rows.forEachIndexed { r, row ->
+                row.forEachIndexed { c, img ->
+                    val t = fit(img, TILE)
+                    g.drawImage(t, c * cell + (TILE - t.width) / 2, HEADER + r * cell + (TILE - t.height) / 2, null)
+                }
+            }
+            g.dispose()
+            ImageIO.write(sheet, "jpg", File(out, String.format(Locale.ROOT, "auto-%02d.jpg", sheetIndex + 1)))
+        }
+    }
+
     private fun photo(file: File): Photo {
         val input = if (file.name.endsWith(".rdump")) {
             val raw = RawDump.read(file)
-            val jpg = listOf("JPG", "jpg").map { File(file.parentFile, file.name.removeSuffix(".rdump") + ".$it") }.firstOrNull { it.exists() }
+            val jpg = listOf("JPG", "jpg").map {
+                File(file.parentFile, file.name.removeSuffix(".rdump") + ".$it")
+            }.firstOrNull { it.exists() }
             val turns = jpg?.let { UprightPairs.turns(UprightPairs.orientation(it)) } ?: 0
             UprightPairs.rotate(raw.pipelineInput(maxOf(1, maxOf(raw.width, raw.height) / SIDE)), turns)
         } else {
@@ -115,9 +181,11 @@ class PresetRenderSheetTest {
             dispose()
         }
         val rgb = FloatArray(w * h * 3)
-        for (y in 0 until h) for (x in 0 until w) {
-            val p = img.getRGB(x, y)
-            for (c in 0..2) rgb[(y * w + x) * 3 + c] = LIN[p shr (16 - 8 * c) and 0xff]
+        for (y in 0 until h) {
+            for (x in 0 until w) {
+                val p = img.getRGB(x, y)
+                for (c in 0..2) rgb[(y * w + x) * 3 + c] = LIN[p shr (16 - 8 * c) and 0xff]
+            }
         }
         return PipelineInput.linearSrgb(w, h, rgb)
     }
@@ -128,38 +196,51 @@ class PresetRenderSheetTest {
         val w = mapping.outputWidth
         val h = mapping.outputHeight
         val img = BufferedImage(w, h, BufferedImage.TYPE_INT_RGB)
-        for (y in 0 until h) for (x in 0 until w) {
-            val o = (y * w + x) * 4
-            img.setRGB(x, y, (rgba[o].toInt() and 0xff shl 16) or (rgba[o + 1].toInt() and 0xff shl 8) or (rgba[o + 2].toInt() and 0xff))
+        for (y in 0 until h) {
+            for (x in 0 until w) {
+                val o = (y * w + x) * 4
+                img.setRGB(
+                    x,
+                    y,
+                    (rgba[o].toInt() and 0xff shl 16) or (rgba[o + 1].toInt() and 0xff shl 8) or
+                        (rgba[o + 2].toInt() and 0xff),
+                )
+            }
         }
         return img
     }
 
     /** New clipping (%), the faces' skin hue and L* change, the median L* change (after minus before). */
     private fun check(before: BufferedImage, after: BufferedImage, photo: Photo): DoubleArray {
-        if (before.width != after.width || before.height != after.height) return doubleArrayOf(Double.NaN, Double.NaN, Double.NaN, Double.NaN)
+        if (before.width != after.width ||
+            before.height != after.height
+        ) {
+            return doubleArrayOf(Double.NaN, Double.NaN, Double.NaN, Double.NaN)
+        }
         var clip = 0
         val lab = FloatArray(3)
         val skin = Array(2) { DoubleArray(3) }
         var n = 0
         val lb = ArrayList<Double>()
         val la = ArrayList<Double>()
-        for (y in 0 until before.height) for (x in 0 until before.width) {
-            val p = before.getRGB(x, y)
-            val q = after.getRGB(x, y)
-            if (maxChannel(q) >= 254 && maxChannel(p) < 254) clip++
-            val u = (x + 0.5f) / before.width
-            val v = (y + 0.5f) / before.height
-            lb += lStar(p)
-            la += lStar(q)
-            if (photo.features.faces.any { AutoAnalyser.inSkin(it, u, v) }) {
-                for ((k, c) in listOf(p, q).withIndex()) {
-                    OkLab.fromRgb(LIN[c shr 16 and 0xff], LIN[c shr 8 and 0xff], LIN[c and 0xff], lab)
-                    skin[k][0] += lab[0].toDouble()
-                    skin[k][1] += lab[1].toDouble()
-                    skin[k][2] += lab[2].toDouble()
+        for (y in 0 until before.height) {
+            for (x in 0 until before.width) {
+                val p = before.getRGB(x, y)
+                val q = after.getRGB(x, y)
+                if (maxChannel(q) >= 254 && maxChannel(p) < 254) clip++
+                val u = (x + 0.5f) / before.width
+                val v = (y + 0.5f) / before.height
+                lb += lStar(p)
+                la += lStar(q)
+                if (photo.features.faces.any { AutoAnalyser.inSkin(it, u, v) }) {
+                    for ((k, c) in listOf(p, q).withIndex()) {
+                        OkLab.fromRgb(LIN[c shr 16 and 0xff], LIN[c shr 8 and 0xff], LIN[c and 0xff], lab)
+                        skin[k][0] += lab[0].toDouble()
+                        skin[k][1] += lab[1].toDouble()
+                        skin[k][2] += lab[2].toDouble()
+                    }
+                    n++
                 }
-                n++
             }
         }
         fun hue(s: DoubleArray) = Math.toDegrees(StrictMath.atan2(s[2], s[1]))
@@ -230,7 +311,12 @@ class PresetRenderSheetTest {
             g.drawString(names[r], 8, r * (SMALL + GAP) + SMALL / 2)
             row.forEachIndexed { c, img ->
                 val t = fit(img, SMALL)
-                g.drawImage(t, NAME_W + c * (SMALL + GAP) + (SMALL - t.width) / 2, r * (SMALL + GAP) + (SMALL - t.height) / 2, null)
+                g.drawImage(
+                    t,
+                    NAME_W + c * (SMALL + GAP) + (SMALL - t.width) / 2,
+                    r * (SMALL + GAP) + (SMALL - t.height) / 2,
+                    null,
+                )
             }
         }
         g.dispose()

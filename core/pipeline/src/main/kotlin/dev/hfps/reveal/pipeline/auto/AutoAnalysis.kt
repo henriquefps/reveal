@@ -219,6 +219,7 @@ object AutoAnalyser {
      * gives the same values). Pixels outside the recipe's crop are ignored. [faces] and [saliency] are the photo's
      * ([PhotoFeatures]): functions of the photo only, so they keep Auto idempotent too.
      */
+    @Suppress("LongMethod", "CyclomaticComplexMethod")
     fun analyse(
         sample: PipelineInput,
         recipe: Recipe,

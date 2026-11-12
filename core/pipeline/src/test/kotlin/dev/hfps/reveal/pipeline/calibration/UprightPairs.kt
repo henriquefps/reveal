@@ -90,7 +90,13 @@ object UprightPairs {
         if (t == 0) return image
         val w = image.width
         val h = image.height
-        val out = if (t == 2) BufferedImage(w, h, BufferedImage.TYPE_INT_RGB) else BufferedImage(h, w, BufferedImage.TYPE_INT_RGB)
+        val out = if (t ==
+            2
+        ) {
+            BufferedImage(w, h, BufferedImage.TYPE_INT_RGB)
+        } else {
+            BufferedImage(h, w, BufferedImage.TYPE_INT_RGB)
+        }
         for (y in 0 until h) {
             for (x in 0 until w) {
                 val p = image.getRGB(x, y)

@@ -16,7 +16,14 @@ class FaceDetectorTest {
         val scaled = if (scale == 1f) {
             input
         } else {
-            PipelineInput.linearSrgb(input.width, input.height, FloatArray(input.linearRgb.size) { input.linearRgb[it] * scale })
+            PipelineInput.linearSrgb(
+                input.width,
+                input.height,
+                FloatArray(input.linearRgb.size) {
+                    input.linearRgb[it] *
+                        scale
+                },
+            )
         }
         return detector.detect(FaceInput.from(scaled))
     }

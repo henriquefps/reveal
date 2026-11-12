@@ -1,4 +1,4 @@
-@file:Suppress("MagicNumber")
+@file:Suppress("MagicNumber", "NestedBlockDepth", "LoopWithTooManyJumpStatements")
 
 package dev.hfps.reveal.pipeline.faces
 
@@ -109,7 +109,18 @@ class FaceDetector(private val graph: NetworkGraph) {
         val tiles = ys.flatMapIndexed { j, y ->
             xs.mapIndexed { i, x ->
                 // left, top, right, bottom: true where a neighbour shares the edge.
-                Window(x, y, tile, tile = true, margins = booleanArrayOf(i > 0, j > 0, i < xs.lastIndex, j < ys.lastIndex))
+                Window(
+                    x,
+                    y,
+                    tile,
+                    tile = true,
+                    margins = booleanArrayOf(
+                        i > 0,
+                        j > 0,
+                        i < xs.lastIndex,
+                        j < ys.lastIndex,
+                    ),
+                )
             }
         }
         return listOf(whole) + tiles
@@ -252,7 +263,17 @@ class FaceDetector(private val graph: NetworkGraph) {
                 val total = cluster.sumOf { it.score.toDouble() }.toFloat()
                 fun mean(f: (Face) -> Float) = cluster.sumOf { (f(it) * it.score).toDouble() }.toFloat() / total
                 val keypoints = best.keypoints.indices.map { k -> mean { it.keypoints.getOrElse(k) { 0f } } }
-                out += Face(mean { it.left }, mean { it.top }, mean { it.right }, mean { it.bottom }, best.score, keypoints)
+                out +=
+                    Face(
+                        mean {
+                            it.left
+                        },
+                        mean { it.top },
+                        mean { it.right },
+                        mean { it.bottom },
+                        best.score,
+                        keypoints,
+                    )
             }
             return out
         }

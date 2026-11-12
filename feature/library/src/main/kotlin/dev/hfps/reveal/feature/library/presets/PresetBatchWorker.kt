@@ -19,12 +19,17 @@ import dagger.hilt.android.EntryPointAccessors
 import dagger.hilt.components.SingletonComponent
 import dev.hfps.reveal.data.edit.EditRepository
 import dev.hfps.reveal.data.preset.PresetRepository
+import dev.hfps.reveal.data.thumb.ThumbnailRepository
 import dev.hfps.reveal.feature.library.R
+import dev.hfps.reveal.pipeline.auto.PhotoFeatures
 import dev.hfps.reveal.pipeline.preset.Preset
 import dev.hfps.reveal.pipeline.preset.SmartCorrection
+import dev.hfps.reveal.pipeline.preset.SmartCorrector
 import dev.hfps.reveal.pipeline.recipe.HistoryAction
 import java.io.File
 import java.util.UUID
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
@@ -37,6 +42,8 @@ interface PresetBatchEntryPoint {
     fun edits(): EditRepository
 
     fun smartCorrection(): SmartCorrection
+
+    fun thumbnails(): ThumbnailRepository
 }
 
 /** One batch: the preset, its strength and the versions, and how many are done (resumable after a kill). */
@@ -87,7 +94,11 @@ class PresetBatchWorker(context: Context, params: WorkerParameters) : CoroutineW
         var changed = 0
         while (job.done < total && !isStopped) {
             val chunk = job.versionIds.subList(job.done, minOf(total, job.done + CHUNK))
-            changed += apply(graph.edits(), preset, job.strength, chunk, graph.smartCorrection())
+            changed += if (preset.smart == null) {
+                apply(graph.edits(), preset, job.strength, chunk, graph.smartCorrection())
+            } else {
+                applySmart(graph, preset, job.strength, chunk)
+            }
             job = job.copy(done = job.done + chunk.size)
             jobs.write(jobId, job)
             setProgress(workDataOf(KEY_DONE to job.done, KEY_TOTAL to total))
@@ -108,6 +119,31 @@ class PresetBatchWorker(context: Context, params: WorkerParameters) : CoroutineW
         smart: SmartCorrection,
     ): Int = edits.applyEach(versions, HistoryAction.PRESET, preset.name) { recipe ->
         preset.apply(recipe, strength, smartCorrection = smart)
+    }
+
+    /**
+     * A smart preset (docs/adr/0020): every photo gets its own correction from its own features (decoded and analysed
+     * here, off the database transaction), then the style. A photo whose file is offline gets the style only.
+     */
+    private suspend fun applySmart(
+        graph: PresetBatchEntryPoint,
+        preset: Preset,
+        strength: Float,
+        versions: List<Long>,
+    ): Int {
+        var changed = 0
+        for (versionId in versions) {
+            if (isStopped) break
+            val corrector = withContext(Dispatchers.Default) {
+                graph.thumbnails().analysisInput(versionId)?.let { input ->
+                    runCatching { SmartCorrector(PhotoFeatures.of(input, findLines = true)) }.getOrNull()
+                }
+            } ?: graph.smartCorrection()
+            changed += graph.edits().applyEach(listOf(versionId), HistoryAction.PRESET, preset.name) { recipe ->
+                preset.apply(recipe, strength, smartCorrection = corrector)
+            }
+        }
+        return changed
     }
 
     private fun foreground(done: Int, total: Int, name: String): ForegroundInfo = ForegroundInfo(

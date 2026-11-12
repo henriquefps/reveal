@@ -293,25 +293,26 @@ class LibraryRepository(
             val now = clock()
             if (!force && now - lastRecheck < RECHECK_MIN_MS) return@withContext -1
             lastRecheck = now
-            var stillUnreadable = 0
             val trees = HashMap<Long, DocumentTree?>()
-            for (file in photoDao.unreadableFiles()) {
-                if (photoIds != null && file.photoId !in photoIds) continue
+            photoDao.unreadableFiles().filter { photoIds == null || it.photoId in photoIds }.count { file ->
                 val tree = trees.getOrPut(file.sourceId) {
                     sourceDao.get(file.sourceId)?.let(this@LibraryRepository.trees::open)
-                } ?: continue
-                val readable = try {
-                    tree.openInput(file.documentId, file.name).close()
-                    true
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
-                    !isAccessError(e)
                 }
-                if (readable) photoDao.setReadable(file.documentId) else stillUnreadable++
+                val readable = tree != null && canRead(tree, file)
+                if (readable) photoDao.setReadable(file.documentId)
+                !readable
             }
-            stillUnreadable
         }
+
+    /** Opens [file] once; false when access is refused or it is gone. */
+    private fun canRead(tree: DocumentTree, file: PhotoFileEntity): Boolean = try {
+        tree.openInput(file.documentId, file.name).close()
+        true
+    } catch (e: CancellationException) {
+        throw e
+    } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
+        !isAccessError(e)
+    }
 
     @Volatile
     private var lastRecheck = 0L
@@ -327,7 +328,7 @@ class LibraryRepository(
         UnavailableDetail(photoId, photo.name, photo.hasEdit, source.kind, source.state, uri)
     }
 
-    /** Whether [photoId] is unavailable now (`PhotoAvailability`): the viewer shows the placeholder instead of an image. */
+    /** Whether [photoId] is unavailable now (`PhotoAvailability`): the viewer shows the placeholder, not an image. */
     suspend fun isUnavailable(photoId: Long): Boolean = withContext(Dispatchers.IO) {
         if (!photoDao.unavailableCandidate(photoId)) return@withContext false
         val print = photoDao.files(photoId).firstOrNull { it.unreadableAt != null }?.fingerprint

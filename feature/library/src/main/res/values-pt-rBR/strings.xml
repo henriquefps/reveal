@@ -231,16 +231,18 @@
     <string name="library_unavailable_gallery">Permitir acesso às fotos</string>
     <string name="library_unavailable_try_again">Tentar de novo</string>
     <string name="library_unavailable_remove">Remover do Reveal</string>
-    <string name="library_unavailable_checked">Verificado de novo: %1$d legíveis agora, %2$d ainda indisponíveis.</string>
+    <string name="library_unavailable_checked">Verificado de novo. Legíveis agora: %1$d. Ainda indisponíveis: %2$d.</string>
     <string name="library_forget_title">Remover do Reveal?</string>
     <string name="library_forget_body_edited">As edições também somem, e isso não pode ser desfeito.</string>
     <string name="library_forget_confirm">Remover</string>
     <plurals name="library_forget_question">
         <item quantity="one">Remover %1$d foto do Reveal?</item>
+        <item quantity="many">Remover %1$d fotos do Reveal?</item>
         <item quantity="other">Remover %1$d fotos do Reveal?</item>
     </plurals>
     <plurals name="library_forgotten">
         <item quantity="one">%1$d foto removida do Reveal.</item>
+        <item quantity="many">%1$d fotos removidas do Reveal.</item>
         <item quantity="other">%1$d fotos removidas do Reveal.</item>
     </plurals>
     <string name="viewer_unavailable_title">Esta foto está indisponível</string>

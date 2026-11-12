@@ -85,6 +85,7 @@ sealed interface LibraryMessage {
  * and query survive process death (SavedStateHandle).
  */
 @OptIn(ExperimentalCoroutinesApi::class, FlowPreview::class)
+@Suppress("LongParameterList")
 @HiltViewModel
 class LibraryViewModel @Inject constructor(
     private val savedState: SavedStateHandle,

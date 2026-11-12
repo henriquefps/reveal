@@ -82,7 +82,7 @@ import kotlinx.coroutines.withContext
  * The full-screen viewer (always dark, zero-chroma surround like the editor): swipe between photos (pairs are one
  * page), pinch or double-tap to 100 %, tap to hide the controls, rate and flag, info sheet, "Edit".
  */
-@Suppress("LongMethod")
+@Suppress("LongMethod", "CyclomaticComplexMethod")
 @Composable
 fun ViewerScreen(
     onBack: () -> Unit,

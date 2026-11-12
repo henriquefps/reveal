@@ -16,9 +16,12 @@ import dev.hfps.reveal.data.handoff.GalleryAccess
 import dev.hfps.reveal.data.library.AddSourceResult
 import dev.hfps.reveal.data.library.LibraryRepository
 import dev.hfps.reveal.data.library.SidecarOutcome
-import dev.hfps.reveal.data.model.PhotoFilter
+import dev.hfps.reveal.data.model.LibraryScope
+import dev.hfps.reveal.data.model.PhotoFilters
+import dev.hfps.reveal.data.model.PhotoListCodec
 import dev.hfps.reveal.data.model.PhotoQuery
 import dev.hfps.reveal.data.model.PickFlag
+import dev.hfps.reveal.data.model.SourceFilter
 import dev.hfps.reveal.data.preset.PresetLibrary
 import dev.hfps.reveal.data.preset.PresetRepository
 import dev.hfps.reveal.data.storage.StorageVolumes
@@ -44,7 +47,6 @@ import kotlinx.coroutines.flow.conflate
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.drop
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.receiveAsFlow
@@ -84,9 +86,9 @@ sealed interface LibraryMessage {
 }
 
 /**
- * The library screen (ADR 0006): sources with their state, the grid of the chosen source with filters, sort and
- * search (an observed Room query, so indexing results stream in), selection and its actions. The chosen source
- * and query survive process death (SavedStateHandle).
+ * The library screen (ADR 0006, FIX/L): one home grid of every photo with combinable filters, sort and search (an
+ * observed Room query, so indexing results stream in), the Recent view, "Manage folders", the sync status, selection
+ * and its actions. The filters survive process death (SavedStateHandle) and restarts (`meta`).
  */
 @OptIn(ExperimentalCoroutinesApi::class, FlowPreview::class)
 @Suppress("LongParameterList")
@@ -145,7 +147,13 @@ class LibraryViewModel @Inject constructor(
     /** True when the route asked to open on "Opened from other apps" (a hand-off of several photos, ADR 0011). */
     private val fromApps: Boolean = savedState.get<Boolean>(KEY_FROM_APPS) == true
 
-    private val _state = MutableStateFlow(LibraryUiState(selection = restoreSelection(), query = restoreQuery()))
+    private val _state = MutableStateFlow(
+        LibraryUiState(
+            query = restoreQuery(),
+            recent =
+                savedState[KEY_RECENT] ?: false,
+        ),
+    )
     val state: StateFlow<LibraryUiState> = _state.asStateFlow()
 
     private val messages = Channel<LibraryMessage>(Channel.BUFFERED)
@@ -157,56 +165,49 @@ class LibraryViewModel @Inject constructor(
 
     init {
         viewModelScope.launch {
-            // A fresh start reopens the folder the library showed last (the process-death state wins when present).
-            if (savedState.get<String>(KEY_SELECTION) == null && !fromApps) {
-                library.lastSelection()?.let(::decodeSelection)?.takeUnless { restored ->
-                    // The Server entry only exists while the server has photos here (ADR 0018).
-                    restored == LibrarySelection.Special(SpecialSource.SERVER) &&
-                        library.serverPhotoCount().first() == 0
-                }.let { restored ->
-                    // Nothing to reopen and no folder, but photos other apps handed over: start there.
-                    val start = startSelection(
-                        restored,
-                        folders = library.sources().first().size,
-                        fromApps = library.fromAppsCount().first(),
-                    ) ?: return@let
-                    savedState[KEY_SELECTION] = start.encode()
-                    _state.update { it.copy(selection = start) }
-                }
+            // A fresh start shows the filters the library had last (the process-death state wins when present); a
+            // hand-off of several photos opens on "Opened from other apps".
+            if (savedState.get<String>(KEY_QUERY) == null) {
+                val start = if (fromApps) PhotoFilters.FROM_APPS else library.lastFilters()
+                if (start != null) setFilters(start)
             }
+            var known: Set<Long>? = null
             library.sources().collect { sources ->
-                _state.update { s ->
-                    // A removed folder that was open falls back to the sources list.
-                    val selection = s.selection.takeUnless { sel ->
-                        sel is LibrarySelection.Folder && sources.none { it.id == sel.sourceId }
+                _state.update { it.copy(sources = sources, sourcesLoaded = true) }
+                // A removed folder leaves the filters: one that was listed and is gone, or, on the first list, one
+                // that no longer exists (never a folder just added whose row has not been listed yet).
+                val ids = sources.mapTo(HashSet()) { it.id }
+                val gone = known?.minus(ids)
+                val filters = _state.value.filters
+                val kept = if (gone ==
+                    null
+                ) {
+                    filters.withFolders(ids)
+                } else {
+                    filters.withFolders(filters.folderIds() - gone)
+                }
+                if (kept != filters) setFilters(kept)
+                known = ids
+            }
+        }
+        viewModelScope.launch {
+            combine(sync.account, sync.status) { account, status -> (account != null) to status }
+                .collect { (paired, status) ->
+                    _state.update { it.copy(paired = paired, syncBadge = SyncBadge.of(paired, status)) }
+                    // Unpaired: the Sync group goes (a later pairing starts without it).
+                    if (!paired && _state.value.filters.sync.isNotEmpty()) {
+                        setFilters(_state.value.filters.copy(sync = emptySet()))
                     }
-                    s.copy(sources = sources, sourcesLoaded = true, selection = selection)
                 }
-            }
         }
         viewModelScope.launch {
-            library.fromAppsCount().collect { count -> _state.update { it.copy(fromAppsPhotos = count) } }
+            library.filterCounts().collect { counts -> _state.update { it.copy(counts = counts) } }
         }
         viewModelScope.launch {
-            library.serverPhotoCount().collect { count ->
-                _state.update { s ->
-                    // Unpaired (or the server emptied): the Server entry is gone, back to the sources list.
-                    val gone = count == 0 && s.selection == LibrarySelection.Special(SpecialSource.SERVER)
-                    s.copy(serverPhotos = count, selection = if (gone) null else s.selection)
-                }
-            }
-        }
-        viewModelScope.launch {
-            _state.map { it.selection to it.query }.distinctUntilChanged().collectLatest { (selection, query) ->
-                val scope = selection?.scope()
-                if (scope == null) {
-                    _state.update { it.copy(entries = emptyList(), photoCount = 0, photosLoaded = true) }
-                    return@collectLatest
-                }
-                val full = query.copy(scope = scope)
+            _state.map { it.gridQuery }.distinctUntilChanged().collectLatest { query ->
                 // While indexing, rows arrive in batches: coalesce to a few updates per second.
-                library.photos(full).conflate().debounceAfterFirst(GRID_DEBOUNCE_MS)
-                    .map { rows -> rows to buildGridEntries(rows, full) }
+                library.photos(query).conflate().debounceAfterFirst(GRID_DEBOUNCE_MS)
+                    .map { rows -> rows to buildGridEntries(rows, query) }
                     .flowOn(Dispatchers.Default)
                     .collect { (rows, entries) ->
                         LibraryMetrics.firstRows(SystemClock.elapsedRealtime(), rows.size)
@@ -222,13 +223,10 @@ class LibraryViewModel @Inject constructor(
                     }
             }
         }
-        // Opening a scope re-checks the files marked unreadable (batch, in the background, rate-limited by the
-        // repository). There is no "Unavailable" filter any more (FIX/V): the placeholder marks this device's own
-        // unreadable photos in place, and the Server scope lists only photos that open.
+        // A new grid re-checks the files marked unreadable (batch, in the background, rate-limited by the
+        // repository): the placeholder marks this device's own unreadable photos in place (no filter, FIX/V).
         viewModelScope.launch {
-            _state.map { it.selection?.scope() }.distinctUntilChanged().collectLatest { scope ->
-                if (scope != null) library.recheckAccess()
-            }
+            _state.map { it.gridQuery }.distinctUntilChanged().collectLatest { library.recheckAccess() }
         }
         // Volumes coming and going (SD card, USB drive) re-check the sources and index what came back.
         viewModelScope.launch {
@@ -316,18 +314,44 @@ class LibraryViewModel @Inject constructor(
         }
     }
 
-    fun select(selection: LibrarySelection?) {
+    /** New filters for the home: remembered (`meta`) for the next start, and across process death. */
+    fun setFilters(filters: PhotoFilters) {
+        if (filters == _state.value.filters) return
         LibraryMetrics.selected(SystemClock.elapsedRealtime())
-        savedState[KEY_SELECTION] = selection?.encode()
-        viewModelScope.launch { library.setLastSelection(selection?.encode()) }
+        setQuery(_state.value.query.copy(filters = filters))
+        viewModelScope.launch { library.setLastFilters(filters) }
+    }
+
+    /** Sort and search (the filters go through [setFilters]). */
+    fun setQuery(query: PhotoQuery) {
+        savedState[KEY_QUERY] = PhotoListCodec.encode(query)
+        _state.update { it.copy(query = query) }
+    }
+
+    fun setFiltersOpen(open: Boolean) = _state.update { it.copy(filtersOpen = open) }
+
+    fun setFoldersOpen(open: Boolean) = _state.update { it.copy(foldersOpen = open) }
+
+    /** Opens or leaves the Recent view. */
+    fun setRecent(recent: Boolean) {
+        if (recent == _state.value.recent) return
+        LibraryMetrics.selected(SystemClock.elapsedRealtime())
+        savedState[KEY_RECENT] = recent
         _state.update {
-            it.copy(selection = selection, selected = emptySet(), searchOpen = false, photosLoaded = false)
+            it.copy(recent = recent, selected = emptySet(), searchOpen = false, photosLoaded = false)
         }
     }
 
-    fun setQuery(query: PhotoQuery) {
-        savedState[KEY_QUERY] = encodeQuery(query)
-        _state.update { it.copy(query = query) }
+    /** "Manage folders" → a folder: the home narrowed to it alone. */
+    fun showFolder(sourceId: Long) {
+        _state.update { it.copy(foldersOpen = false) }
+        setRecent(false)
+        setFilters(PhotoFilters.folder(sourceId))
+    }
+
+    /** A folder's backup mode (FIX/V): every photo, or only the photos you edit. */
+    fun setFolderBackup(sourceId: Long, everything: Boolean) {
+        viewModelScope.launch { library.setBackup(sourceId, everything) }
     }
 
     fun setSearchOpen(open: Boolean) {
@@ -361,10 +385,10 @@ class LibraryViewModel @Inject constructor(
     private fun add(treeUri: Uri, everything: Boolean) {
         viewModelScope.launch {
             when (val result = library.addSource(treeUri, backup = everything)) {
-                is AddSourceResult.Added -> select(LibrarySelection.Folder(result.sourceId))
+                is AddSourceResult.Added -> showFolder(result.sourceId)
 
                 is AddSourceResult.AlreadyAdded -> {
-                    select(LibrarySelection.Folder(result.sourceId))
+                    showFolder(result.sourceId)
                     messages.send(LibraryMessage.AlreadyAdded)
                 }
 
@@ -405,14 +429,14 @@ class LibraryViewModel @Inject constructor(
 
     /** "Delete from server" for the selected Server photos: asks first. */
     fun deleteFromServer() {
-        val count = _state.value.selected.size
-        if (count > 0 && _state.value.serverScope) _state.update { it.copy(deleteServerPrompt = count) }
+        val count = _state.value.selectedRemote.size
+        if (count > 0) _state.update { it.copy(deleteServerPrompt = count) }
     }
 
     fun dismissDeleteFromServer() = _state.update { it.copy(deleteServerPrompt = null) }
 
     fun confirmDeleteFromServer() {
-        val ids = _state.value.selected.toList()
+        val ids = _state.value.selectedRemote
         _state.update { it.copy(deleteServerPrompt = null) }
         if (ids.isEmpty()) return
         viewModelScope.launch {
@@ -473,9 +497,8 @@ class LibraryViewModel @Inject constructor(
         viewModelScope.launch {
             library.recheckAccess(ids, force = true)
             _state.update { it.copy(unavailableInfo = null) }
-            val scope = _state.value.selection?.scope() ?: return@launch
-            val still = library.photoList(PhotoQuery(scope = scope, filter = PhotoFilter.UNAVAILABLE))
-                .mapTo(HashSet()) { it.id }.count { it in ids }
+            val still = library.photoList(PhotoQuery(unavailableOnly = true)).mapTo(HashSet()) { it.id }
+                .count { it in ids }
             messages.send(LibraryMessage.Rechecked((ids.size - still).coerceAtLeast(0), still))
         }
     }
@@ -528,53 +551,19 @@ class LibraryViewModel @Inject constructor(
     /** First-frame and indexing measurements read by the instrumented test. */
     fun onGridDraw(count: Int) = LibraryMetrics.firstGridFrame(SystemClock.elapsedRealtime(), count)
 
-    private fun restoreSelection(): LibrarySelection? = savedState.get<String>(KEY_SELECTION)?.let(::decodeSelection)
-        ?: LibrarySelection.Special(SpecialSource.FROM_APPS).takeIf { fromApps }
+    private fun PhotoFilters.folderIds(): Set<Long> =
+        sources.filterIsInstance<SourceFilter.Folder>().mapTo(HashSet()) { it.sourceId }
 
-    private fun restoreQuery(): PhotoQuery = savedState.get<String>(KEY_QUERY)?.let(::decodeQuery) ?: PhotoQuery()
+    private fun restoreQuery(): PhotoQuery = savedState.get<String>(KEY_QUERY)?.let(PhotoListCodec::decode)
+        ?.takeIf { it.scope == LibraryScope.All } ?: PhotoQuery()
 
     companion object {
-        private const val KEY_SELECTION = "selection"
         private const val KEY_QUERY = "query"
+        private const val KEY_RECENT = "recent"
         private const val KEY_FROM_APPS = "fromApps"
-        private const val QUERY_PARTS = 4
         private const val GRID_DEBOUNCE_MS = 250L
         private const val VOLUME_DEBOUNCE_MS = 500L
-        private const val TAG = "RevealLibrary"
         private const val STOP_TIMEOUT = 5_000L
-
-        /**
-         * Where a fresh start opens: the [restored] last selection, else "Opened from other apps" when the library has
-         * no folder but photos other apps handed over (ADR 0011), else the sources list (null).
-         */
-        fun startSelection(restored: LibrarySelection?, folders: Int, fromApps: Int): LibrarySelection? = restored
-            ?: LibrarySelection.Special(SpecialSource.FROM_APPS).takeIf { folders == 0 && fromApps > 0 }
-
-        fun LibrarySelection.encode(): String = when (this) {
-            is LibrarySelection.Folder -> "f:$sourceId"
-            is LibrarySelection.Special -> "s:${which.name}"
-        }
-
-        fun decodeSelection(text: String): LibrarySelection? = runCatching {
-            when {
-                text.startsWith("f:") -> LibrarySelection.Folder(text.removePrefix("f:").toLong())
-                text.startsWith("s:") -> LibrarySelection.Special(SpecialSource.valueOf(text.removePrefix("s:")))
-                else -> null
-            }
-        }.onFailure { Log.w(TAG, "Bad saved selection $text", it) }.getOrNull()
-
-        fun encodeQuery(q: PhotoQuery): String =
-            listOf(q.filter.name, q.minRating, q.sort.name, q.search).joinToString("\u0001")
-
-        fun decodeQuery(text: String): PhotoQuery? = runCatching {
-            val (filter, minRating, sort) = text.split('\u0001', limit = QUERY_PARTS)
-            PhotoQuery(
-                filter = dev.hfps.reveal.data.model.PhotoFilter.valueOf(filter),
-                minRating = minRating.toInt(),
-                sort = dev.hfps.reveal.data.model.PhotoSort.valueOf(sort),
-                search = text.split('\u0001', limit = QUERY_PARTS).getOrElse(QUERY_PARTS - 1) { "" },
-            )
-        }.getOrNull()
     }
 }
 

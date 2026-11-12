@@ -8,6 +8,7 @@ import android.util.Log
 import androidx.core.net.toUri
 import dev.hfps.image.ImageInput
 import dev.hfps.image.format.PhotoMetadata
+import dev.hfps.reveal.data.db.FilterCounts
 import dev.hfps.reveal.data.db.MetaEntity
 import dev.hfps.reveal.data.db.PhotoEntity
 import dev.hfps.reveal.data.db.PhotoFileEntity
@@ -25,9 +26,9 @@ import dev.hfps.reveal.data.index.IndexProgress
 import dev.hfps.reveal.data.index.IndexReport
 import dev.hfps.reveal.data.index.LibraryIndexer
 import dev.hfps.reveal.data.model.FileRole
-import dev.hfps.reveal.data.model.LibraryScope
 import dev.hfps.reveal.data.model.PhotoAvailability
-import dev.hfps.reveal.data.model.PhotoFilter
+import dev.hfps.reveal.data.model.PhotoFilters
+import dev.hfps.reveal.data.model.PhotoListCodec
 import dev.hfps.reveal.data.model.PhotoQuery
 import dev.hfps.reveal.data.model.PickFlag
 import dev.hfps.reveal.data.model.SourceKind
@@ -249,6 +250,10 @@ class LibraryRepository(
     /** How many photos "Opened from other apps" lists (ADR 0011). */
     fun fromAppsCount(): Flow<Int> = photoDao.observeFromAppsCount()
 
+    /** Per-choice counts for the filter sheet (FIX/L). */
+    fun filterCounts(): Flow<FilterCounts> =
+        photoDao.observeFilterCounts().distinctUntilChanged().flowOn(Dispatchers.IO)
+
     fun photos(query: PhotoQuery): Flow<List<PhotoRow>> =
         photoDao.observeRows(PhotoQuerySql.toQuery(query)).map { withLocalPreviews(it, query) }.flowOn(Dispatchers.IO)
 
@@ -256,11 +261,10 @@ class LibraryRepository(
         withContext(Dispatchers.IO) { withLocalPreviews(photoDao.rows(PhotoQuerySql.toQuery(query)), query) }
 
     /**
-     * The photos of [scope] Reveal cannot show at all (`PhotoAvailability`); the grid offers the "Unavailable" filter
-     * while this is above zero.
+     * The photos [filters] shows that Reveal cannot show at all (`PhotoAvailability`).
      */
-    fun unavailableCount(scope: LibraryScope): Flow<Int> =
-        photos(PhotoQuery(scope = scope, filter = PhotoFilter.UNAVAILABLE)).map { rows ->
+    fun unavailableCount(filters: PhotoFilters = PhotoFilters.NONE): Flow<Int> =
+        photos(PhotoQuery(filters = filters, unavailableOnly = true)).map { rows ->
             rows.distinctBy { it.id }.size
         }
             .distinctUntilChanged()
@@ -281,7 +285,7 @@ class LibraryRepository(
                     }
             row.copy(unavailable = PhotoAvailability.isUnavailable(true, row.cloudOriginal, row.cloudPreview, hasLocal))
         }
-        return if (query.filter == PhotoFilter.UNAVAILABLE) checked.filter { it.unavailable } else checked
+        return if (query.unavailableOnly) checked.filter { it.unavailable } else checked
     }
 
     /**
@@ -558,11 +562,18 @@ class LibraryRepository(
         report
     }
 
-    /** What the library showed last (an opaque string of the UI), so a fresh start reopens it. */
-    suspend fun lastSelection(): String? = withContext(Dispatchers.IO) { db.metaDao().get(KEY_LAST_SELECTION) }
+    /**
+     * The library home's last filters (FIX/L, `meta`), so a fresh start shows the same photos; before FIX/L the
+     * library saved its last source instead, which maps to the equivalent filter once.
+     */
+    suspend fun lastFilters(): PhotoFilters? = withContext(Dispatchers.IO) {
+        val meta = db.metaDao()
+        meta.get(KEY_LAST_FILTERS)?.let { return@withContext PhotoListCodec.decodeFilters(it) }
+        meta.get(KEY_LAST_SELECTION)?.let(PhotoListCodec::legacySelection)
+    }
 
-    suspend fun setLastSelection(value: String?) = withContext(Dispatchers.IO) {
-        db.metaDao().put(MetaEntity(KEY_LAST_SELECTION, value.orEmpty()))
+    suspend fun setLastFilters(filters: PhotoFilters) = withContext(Dispatchers.IO) {
+        db.metaDao().put(MetaEntity(KEY_LAST_FILTERS, PhotoListCodec.encodeFilters(filters)))
     }
 
     // ------------------------------------------------------------------ photos
@@ -826,6 +837,7 @@ class LibraryRepository(
     companion object {
         private const val TAG = "RevealLibrary"
         private const val KEY_LAST_SELECTION = "library.lastSelection"
+        private const val KEY_LAST_FILTERS = "library.filters"
         private const val SQL_ARGS = 900
         private const val RECHECK_MIN_MS = 30_000L
         private const val MAX_RATING = 5

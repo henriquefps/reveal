@@ -45,6 +45,8 @@ import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 /**
@@ -76,6 +78,12 @@ class ThumbnailRepository(
     private val cache = db.cacheDao()
     private val photos = db.photoDao()
     private val io = Dispatchers.IO.limitedParallelism(PARALLELISM)
+
+    /**
+     * One smart preview decoded at a time (a full-size preview's planes are tens of MB): the home lists unreadable
+     * hand-offs among thousands of photos (FIX/L), and a fling must not decode three at once into the heap.
+     */
+    private val smartDecode = Mutex()
     private val memory = object : LruCache<String, Bitmap>(memoryBytes()) {
         override fun sizeOf(key: String, value: Bitmap): Int = value.allocationByteCount
     }
@@ -290,13 +298,17 @@ class ThumbnailRepository(
         return try {
             val preview = fallbacks.preview(target.main)
             val local = preview?.takeIf { it.scheme == "file" }?.path?.let(::File)
-            val decoded = when {
-                local != null -> local.inputStream().use(SmartPreviewCodec::decode)
-                preview != null -> resolver?.openInputStream(preview)?.use(SmartPreviewCodec::decode)
-                else -> null
-            }
-            if (decoded != null) {
-                return renderer.renderPreview(decoded.input, maxOf(decoded.fullWidth, decoded.fullHeight), recipe, EDGE)
+            if (local != null || preview != null) {
+                val rendered = smartDecode.withLock {
+                    val decoded = when {
+                        local != null -> local.inputStream().use(SmartPreviewCodec::decode)
+                        else -> resolver?.openInputStream(checkNotNull(preview))?.use(SmartPreviewCodec::decode)
+                    }
+                    decoded?.let {
+                        renderer.renderPreview(it.input, maxOf(it.fullWidth, it.fullHeight), recipe, EDGE)
+                    }
+                }
+                if (rendered != null) return rendered
             }
             val resolver = resolver ?: return null
             val original = fallbacks.original(target.main) ?: return null
@@ -305,6 +317,10 @@ class ThumbnailRepository(
             throw e
         } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
             Log.i(TAG, "No fallback render of version $versionId: ${e.javaClass.simpleName}")
+            null
+        } catch (e: OutOfMemoryError) {
+            // No thumbnail rather than a crash: the cell shows its placeholder, the viewer still opens the photo.
+            Log.w(TAG, "No memory for the fallback render of version $versionId", e)
             null
         }
     }

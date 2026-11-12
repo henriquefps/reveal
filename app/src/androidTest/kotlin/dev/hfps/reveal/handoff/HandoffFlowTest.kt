@@ -28,6 +28,7 @@ import dev.hfps.reveal.debug.DebugAccess
 import dev.hfps.reveal.editor.TestPhotos
 import dev.hfps.reveal.feature.editor.EditorTags
 import dev.hfps.reveal.feature.library.LibraryTags
+import dev.hfps.reveal.library.LibraryFilterSteps.activeTokens
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Rule
@@ -77,7 +78,7 @@ class HandoffFlowTest {
     )
 
     private fun photos() = runBlocking {
-        access.library().photoList(PhotoQuery(scope = LibraryScope.FromApps)).filter { it.name.startsWith(stem) }
+        access.library().photoList(PhotoQuery.FROM_APPS).filter { it.name.startsWith(stem) }
     }
 
     private fun editorShown() = hasTestTag(EditorTags.DEVELOPED) or hasTestTag(EditorTags.ERROR) or
@@ -123,6 +124,8 @@ class HandoffFlowTest {
             val files = runBlocking { access.library().detail(paired.id)!!.files }
             assertThat(files.map { it.name }).containsExactly("$stem.ARW", "${stem.lowercase()}.jpg")
             compose.waitUntilAtLeastOneExists(hasTestTag(LibraryTags.cell(paired.id)), TIMEOUT_MS)
+            // The home opens filtered to "Opened from other apps" (FIX/L): one removable chip.
+            compose.waitUntil(TIMEOUT_MS) { compose.activeTokens() == listOf("apps") }
             shot("handoff-library")
         }
     }

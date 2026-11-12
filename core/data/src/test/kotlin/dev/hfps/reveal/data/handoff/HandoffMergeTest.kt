@@ -16,8 +16,9 @@ import dev.hfps.reveal.data.edit.EditRepository
 import dev.hfps.reveal.data.index.LibraryIndexer
 import dev.hfps.reveal.data.library.LibraryRepository
 import dev.hfps.reveal.data.library.SidecarSync
+import dev.hfps.reveal.data.model.CullingFilter
 import dev.hfps.reveal.data.model.LibraryScope
-import dev.hfps.reveal.data.model.PhotoFilter
+import dev.hfps.reveal.data.model.PhotoFilters
 import dev.hfps.reveal.data.model.PhotoQuery
 import dev.hfps.reveal.data.model.PickFlag
 import dev.hfps.reveal.data.model.SourceKind
@@ -147,8 +148,7 @@ class HandoffMergeTest {
 
     private suspend fun allPhotos() = db.photoDao().rows(PhotoQuerySql.toQuery(PhotoQuery(scope = LibraryScope.All)))
 
-    private suspend fun fromApps() =
-        db.photoDao().rows(PhotoQuerySql.toQuery(PhotoQuery(scope = LibraryScope.FromApps)))
+    private suspend fun fromApps() = db.photoDao().rows(PhotoQuerySql.toQuery(PhotoQuery.FROM_APPS))
 
     private fun sidecarOf(stem: String): XmpFields = XmpReader.read(File(folderDir, "$stem.xmp").readBytes())
 
@@ -173,7 +173,7 @@ class HandoffMergeTest {
         assertThat(edits.history(photo.versionId).steps).hasSize(1)
         // The folder's "Picked" filter finds it, "Opened from other apps" still lists it with its batch.
         val picked = db.photoDao().rows(
-            PhotoQuerySql.toQuery(PhotoQuery(scope = LibraryScope.Source(folderId), filter = PhotoFilter.PICKED)),
+            PhotoQuerySql.toQuery(PhotoQuery(filters = PhotoFilters.folder(folderId).toggle(CullingFilter.PICKED))),
         )
         assertThat(picked.map { it.id }).containsExactly(photo.id)
         assertThat(fromApps().single().id).isEqualTo(photo.id)

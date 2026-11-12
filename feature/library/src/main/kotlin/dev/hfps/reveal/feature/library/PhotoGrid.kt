@@ -85,6 +85,30 @@ interface ThumbnailSource {
 object LibraryTags {
     const val GRID = "library-grid"
     const val SOURCES = "library-sources"
+
+    /** The home's top bar actions and filter bar (FIX/L). */
+    const val RECENT = "library-recent"
+    const val FOLDERS = "library-folders"
+    const val SYNC_STATUS = "library-sync-status"
+    const val SETTINGS = "library-settings"
+    const val FILTERS = "library-filters"
+    const val FILTERS_CLEAR = "library-filters-clear"
+    const val FILTER_SHEET = "library-filter-sheet"
+    const val FILTER_SHEET_DONE = "library-filter-sheet-done"
+    const val FOLDERS_SHEET = "library-folders-sheet"
+
+    /** A choice in the filter sheet, by its `PhotoListCodec` token (`c:PICKED`, `f:12`, `apps`, ...). */
+    fun filterChoice(token: String) = "library-filter-$token"
+
+    /** An active filter's chip above the grid (a tap removes it). */
+    fun activeFilter(token: String) = "library-active-$token"
+
+    /** A folder's menu in "Manage folders", and its items. */
+    fun folderMenu(id: Long) = "library-folder-menu-$id"
+    const val FOLDER_SHOW = "library-folder-show"
+    const val FOLDER_REMOVE = "library-folder-remove"
+    const val FOLDER_BACKUP_EVERYTHING = "library-folder-backup-everything"
+    const val FOLDER_BACKUP_EDITED = "library-folder-backup-edited"
     const val ADD_FOLDER = "library-add-folder"
     const val EXPORT = "library-export"
     const val APPLY_PRESET = "library-apply-preset"
@@ -542,6 +566,9 @@ internal enum class CloudState {
     /** On this device, and the server has the original too (NAS or backup). */
     BACKED_UP,
 
+    /** On this device, and its original (or smart preview) waits to go up: the pending badge (FIX/L). */
+    UPLOADING,
+
     /** Only the server has it; the original opens by range from there. */
     CLOUD,
 
@@ -578,12 +605,15 @@ internal fun cloudState(row: PhotoRow): CloudState = when {
 
     row.cloudOriginal -> CloudState.BACKED_UP
 
+    row.uploading -> CloudState.UPLOADING
+
     else -> CloudState.LOCAL
 }
 
 private fun cloudIcon(state: CloudState) = when (state) {
     CloudState.LOCAL -> null
     CloudState.BACKED_UP -> PhosphorRegular.CloudCheck
+    CloudState.UPLOADING -> PhosphorRegular.CloudArrowUp
     CloudState.CLOUD -> PhosphorRegular.Cloud
     CloudState.PREVIEW, CloudState.LOCAL_PREVIEW -> PhosphorRegular.Image
     CloudState.ELSEWHERE -> PhosphorRegular.DeviceMobile
@@ -643,6 +673,7 @@ internal fun cellDescription(row: PhotoRow): String {
 internal fun cloudDescription(state: CloudState): Int? = when (state) {
     CloudState.LOCAL -> null
     CloudState.BACKED_UP -> R.string.library_cloud_backed_up
+    CloudState.UPLOADING -> R.string.library_cloud_uploading
     CloudState.CLOUD -> R.string.library_cloud_only
     CloudState.PREVIEW -> R.string.library_cloud_preview
     CloudState.ELSEWHERE -> R.string.library_cloud_elsewhere

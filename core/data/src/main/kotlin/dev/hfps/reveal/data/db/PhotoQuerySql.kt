@@ -2,12 +2,20 @@ package dev.hfps.reveal.data.db
 
 import androidx.sqlite.db.SimpleSQLiteQuery
 import androidx.sqlite.db.SupportSQLiteQuery
+import dev.hfps.reveal.data.model.CullingFilter
+import dev.hfps.reveal.data.model.EditFilter
 import dev.hfps.reveal.data.model.LibraryScope
-import dev.hfps.reveal.data.model.PhotoFilter
+import dev.hfps.reveal.data.model.PhotoFilters
 import dev.hfps.reveal.data.model.PhotoQuery
 import dev.hfps.reveal.data.model.PhotoSort
+import dev.hfps.reveal.data.model.SourceFilter
+import dev.hfps.reveal.data.model.SyncFilter
+import dev.hfps.reveal.data.model.TypeFilter
 
-/** Turns a [PhotoQuery] into the grid's SQL (one statement, bound arguments, never string-concatenated input). */
+/**
+ * Turns a [PhotoQuery] into the grid's SQL (one statement, bound arguments, never string-concatenated input). The
+ * filters compose OR within a group and AND across groups (FIX/L, ADR 0006 "Filters").
+ */
 object PhotoQuerySql {
     /** How many photos "Recent" shows. */
     const val RECENT_LIMIT = 500
@@ -19,6 +27,23 @@ object PhotoQuerySql {
      */
     const val SERVER_OPENABLE_SQL = "(COALESCE(c.original_on_server, 0) = 1 OR c.preview_sha IS NOT NULL)"
 
+    /** The photo belongs to the Server source (no file on this device). */
+    const val SERVER_SOURCE_SQL = "p.source_id IN (SELECT id FROM sources WHERE kind = 'SERVER')"
+
+    /**
+     * "Synced" (the Sync filter): the server holds the original of any file of the shot (the photo's lookup, or a file
+     * the lookups or the NAS feed marked, FIX/V), or the photo is a Server photo.
+     */
+    const val SYNCED_SQL = "($SERVER_SOURCE_SQL OR COALESCE(c.original_on_server, 0) = 1 OR " +
+        "EXISTS (SELECT 1 FROM photo_files sf WHERE sf.photo_id = p.id AND sf.on_server = 1))"
+
+    /**
+     * An upload this device still owes for the photo (its original or smart preview): the grid's pending badge.
+     * `+su.state` keeps SQLite on the `photo_id` index (the `state` one would read every pending upload per row).
+     */
+    const val UPLOADING_SQL = "EXISTS (SELECT 1 FROM sync_uploads su WHERE su.photo_id = p.id " +
+        "AND +su.state = 'pending' AND su.kind IN ('original', 'preview'))"
+
     /**
      * "Unavailable", defined once (`PhotoAvailability` is its Kotlin mirror): a file of one of this device's photos is
      * unreadable AND the sync server has no original AND no smart preview (Server photos are listed only when they
@@ -28,7 +53,7 @@ object PhotoQuerySql {
     const val UNAVAILABLE_SQL =
         "EXISTS (SELECT 1 FROM photo_files uf WHERE uf.photo_id = p.id AND uf.unreadable_at IS NOT NULL) " +
             "AND COALESCE(c.original_on_server, 0) = 0 AND c.preview_sha IS NULL " +
-            "AND p.source_id NOT IN (SELECT id FROM sources WHERE kind = 'SERVER')"
+            "AND NOT $SERVER_SOURCE_SQL"
 
     /**
      * One row per version: the first version of every photo, then its other versions (sync conflict copies and
@@ -39,7 +64,7 @@ object PhotoQuerySql {
             "p.has_edit, v.id AS version_id, r.updated_at AS edit_time, p.handoff_at, p.handoff_title, " +
             "v.position AS version_position, v.copy_of IS NOT NULL AS conflict, v.copy_device, " +
             "COALESCE(c.original_on_server, 0) AS cloud_original, c.preview_sha IS NOT NULL AS cloud_preview, " +
-            "p.source_id IN (SELECT id FROM sources WHERE kind = 'SERVER') AS remote, " +
+            "$SERVER_SOURCE_SQL AS remote, ($UPLOADING_SQL) AS uploading, " +
             "EXISTS (SELECT 1 FROM photo_files uf WHERE uf.photo_id = p.id AND uf.unreadable_at IS NOT NULL) " +
             "AS unreadable, ($UNAVAILABLE_SQL) AS unavailable, (SELECT uf.fingerprint FROM photo_files uf WHERE " +
             "uf.photo_id = p.id AND uf.unreadable_at IS NOT NULL LIMIT 1) AS unreadable_fingerprint " +
@@ -49,56 +74,96 @@ object PhotoQuerySql {
 
     /** The statement text and its arguments, in order (exposed for tests). */
     fun build(query: PhotoQuery): Pair<String, List<Any>> {
-        val clauses = listOfNotNull(
-            Clause("p.hidden = 0"),
-            scopeClause(query.scope),
-            filterClause(query),
+        val clauses = buildList {
+            add(Clause("p.hidden = 0"))
+            if (!query.withUnopenable) add(Clause("(NOT $SERVER_SOURCE_SQL OR $SERVER_OPENABLE_SQL)"))
+            scopeClause(query.scope)?.let(::add)
+            addAll(filterClauses(query.filters))
+            if (query.unavailableOnly) add(Clause("($UNAVAILABLE_SQL)"))
             query.search.trim().takeIf { it.isNotEmpty() }?.let {
-                Clause("p.name LIKE ? ESCAPE '\\'", "%" + escapeLike(it) + "%")
-            },
-        )
+                add(Clause("p.name LIKE ? ESCAPE '\\'", listOf("%" + escapeLike(it) + "%")))
+            }
+        }
         val sql = buildString {
             append(SELECT)
             append(" WHERE ").append(clauses.joinToString(" AND ") { it.sql })
             append(" ORDER BY ").append(order(query))
             if (query.scope == LibraryScope.Recent) append(" LIMIT ").append(RECENT_LIMIT)
         }
-        return sql to clauses.mapNotNull { it.arg }
+        return sql to clauses.flatMap { it.args }
     }
 
-    private class Clause(val sql: String, val arg: Any? = null)
+    private class Clause(val sql: String, val args: List<Any> = emptyList())
 
+    /**
+     * Every view lists this device's photos and the Server photos that open (FIX/V): one row per photo, since a Server
+     * photo whose file shows up here is merged into this device's photo (ADR 0018 "Identity", FIX/V).
+     */
     private fun scopeClause(scope: LibraryScope): Clause? = when (scope) {
-        LibraryScope.All -> Clause("p.source_id NOT IN (SELECT id FROM sources WHERE kind = 'SERVER')")
-
-        LibraryScope.Server ->
-            Clause("p.source_id IN (SELECT id FROM sources WHERE kind = 'SERVER') AND $SERVER_OPENABLE_SQL")
-
+        LibraryScope.All -> null
         LibraryScope.Recent -> Clause("p.last_opened_at IS NOT NULL")
-
-        // Every photo another app handed over: hand-off photos, and folder photos a hand-off opened or merged into
-        // (ADR 0011 "One photo across sources"); the Server source never.
-        LibraryScope.FromApps -> Clause(
-            "p.handoff_at IS NOT NULL AND p.source_id NOT IN (SELECT id FROM sources WHERE kind = 'SERVER')",
-        )
-
-        is LibraryScope.Source -> Clause("p.source_id = ?", scope.sourceId)
     }
 
-    private fun filterClause(query: PhotoQuery): Clause? = when (query.filter) {
-        PhotoFilter.ALL -> null
-        PhotoFilter.EDITED -> Clause("p.has_edit = 1")
-        PhotoFilter.NOT_EDITED -> Clause("p.has_edit = 0")
-        PhotoFilter.PICKED -> Clause("p.flag = 'PICK'")
-        PhotoFilter.RATED -> Clause("p.rating >= ?", query.minRating.coerceIn(1, MAX_RATING))
-        PhotoFilter.RAW -> Clause("p.has_raw = 1")
-        PhotoFilter.JPEG -> Clause("p.has_raw = 0")
-        PhotoFilter.UNAVAILABLE -> Clause("($UNAVAILABLE_SQL)")
+    /** One clause per group that has choices: its choices joined by OR. */
+    private fun filterClauses(filters: PhotoFilters): List<Clause> = listOfNotNull(
+        group(sourceChoices(filters.sources)),
+        group(
+            filters.culling.sorted().map {
+                when (it) {
+                    CullingFilter.PICKED -> Clause("p.flag = 'PICK'")
+                    CullingFilter.STARRED -> Clause("p.rating >= 1")
+                    CullingFilter.REJECTED -> Clause("p.flag = 'REJECT'")
+                }
+            },
+        ),
+        group(
+            filters.edits.sorted().map {
+                when (it) {
+                    EditFilter.EDITED -> Clause("p.has_edit = 1")
+                    EditFilter.NOT_EDITED -> Clause("p.has_edit = 0")
+                }
+            },
+        ),
+        group(
+            filters.types.sorted().map {
+                when (it) {
+                    TypeFilter.RAW -> Clause("p.has_raw = 1")
+                    TypeFilter.JPEG -> Clause("p.has_raw = 0")
+                }
+            },
+        ),
+        group(
+            filters.sync.sorted().map {
+                when (it) {
+                    SyncFilter.SYNCED -> Clause(SYNCED_SQL)
+                    SyncFilter.NOT_SYNCED -> Clause("NOT $SYNCED_SQL")
+                }
+            },
+        ),
+    )
+
+    private fun sourceChoices(sources: Set<SourceFilter>): List<Clause> {
+        val folders = sources.filterIsInstance<SourceFilter.Folder>().map { it.sourceId }.sorted()
+        return listOfNotNull(
+            folders.takeIf { it.isNotEmpty() }?.let { ids ->
+                Clause("p.source_id IN (" + ids.joinToString(", ") { "?" } + ")", ids)
+            },
+            // Every photo another app handed over: hand-off photos, and folder photos a hand-off opened or merged
+            // into (ADR 0011 "One photo across sources"); the Server source never.
+            Clause("(p.handoff_at IS NOT NULL AND NOT $SERVER_SOURCE_SQL)").takeIf { SourceFilter.FromApps in sources },
+            Clause(SERVER_SOURCE_SQL).takeIf { SourceFilter.ServerOnly in sources },
+        )
+    }
+
+    private fun group(choices: List<Clause>): Clause? = when (choices.size) {
+        0 -> null
+        1 -> choices.single()
+        else -> Clause(choices.joinToString(" OR ", "(", ")") { it.sql }, choices.flatMap { it.args })
     }
 
     private fun order(query: PhotoQuery): String = when {
         query.scope == LibraryScope.Recent -> "p.last_opened_at DESC, p.id DESC"
-        query.scope == LibraryScope.FromApps -> "p.handoff_at DESC, p.name COLLATE NOCASE ASC, p.id ASC"
+        query.filters.onlyFromApps -> "p.handoff_at DESC, p.name COLLATE NOCASE ASC, p.id ASC"
         query.sort == PhotoSort.CAPTURE_NEWEST -> "p.sort_time DESC, p.name DESC, p.id DESC"
         query.sort == PhotoSort.CAPTURE_OLDEST -> "p.sort_time ASC, p.name ASC, p.id ASC"
         else -> "p.name COLLATE NOCASE ASC, p.id ASC"
@@ -116,6 +181,4 @@ object PhotoQuerySql {
             append(c)
         }
     }
-
-    private const val MAX_RATING = 5
 }

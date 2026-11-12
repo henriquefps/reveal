@@ -9,6 +9,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
@@ -24,25 +25,30 @@ import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.github.takahirom.roborazzi.captureRoboImage
 import dev.hfps.image.format.ExifTime
+import dev.hfps.reveal.data.db.FilterCounts
 import dev.hfps.reveal.data.db.PhotoRow
 import dev.hfps.reveal.data.index.IndexPhase
 import dev.hfps.reveal.data.index.IndexProgress
 import dev.hfps.reveal.data.library.SourceItem
-import dev.hfps.reveal.data.model.LibraryScope
-import dev.hfps.reveal.data.model.PhotoFilter
+import dev.hfps.reveal.data.model.CullingFilter
+import dev.hfps.reveal.data.model.PhotoFilters
 import dev.hfps.reveal.data.model.PhotoFormat
 import dev.hfps.reveal.data.model.PhotoQuery
 import dev.hfps.reveal.data.model.PickFlag
+import dev.hfps.reveal.data.model.SourceFilter
 import dev.hfps.reveal.data.model.SourceState
+import dev.hfps.reveal.data.model.SyncFilter
+import dev.hfps.reveal.data.model.TypeFilter
 import dev.hfps.reveal.designsystem.theme.RevealTheme
 import dev.hfps.reveal.feature.library.AddFolderBackupContent
+import dev.hfps.reveal.feature.library.FilterSheetContent
 import dev.hfps.reveal.feature.library.GalleryAccessContent
 import dev.hfps.reveal.feature.library.LibraryActions
 import dev.hfps.reveal.feature.library.LibraryContent
-import dev.hfps.reveal.feature.library.LibrarySelection
 import dev.hfps.reveal.feature.library.LibraryUiState
+import dev.hfps.reveal.feature.library.ManageFoldersContent
 import dev.hfps.reveal.feature.library.PasteEditsContent
-import dev.hfps.reveal.feature.library.SpecialSource
+import dev.hfps.reveal.feature.library.SyncBadge
 import dev.hfps.reveal.feature.library.ThumbnailSource
 import dev.hfps.reveal.feature.library.UnavailableContent
 import dev.hfps.reveal.feature.library.UnavailableInfo
@@ -145,11 +151,11 @@ internal object LibrarySamples {
                 editTime = if (i == 4) 1L else null,
             )
         }
-        val query = PhotoQuery(scope = LibraryScope.FromApps)
+        val query = PhotoQuery.FROM_APPS
         return LibraryUiState(
             sources = sources,
             sourcesLoaded = true,
-            selection = LibrarySelection.Special(SpecialSource.FROM_APPS),
+            counts = counts,
             query = query,
             entries = buildGridEntries(handed, query),
             photoCount = handed.size,
@@ -168,9 +174,9 @@ internal object LibrarySamples {
         return LibraryUiState(
             sources = sources,
             sourcesLoaded = true,
-            selection = LibrarySelection.Folder(1),
+            counts = counts,
             query = query,
-            entries = buildGridEntries(shown, query.copy(scope = LibraryScope.Source(1))),
+            entries = buildGridEntries(shown, query),
             photoCount = shown.size,
             photosLoaded = true,
             selected = selected,
@@ -186,20 +192,57 @@ internal object LibrarySamples {
         appLaunch = android.content.Intent(),
     )
 
-    fun grid(
-        selection: LibrarySelection = LibrarySelection.Folder(1),
-        query: PhotoQuery = PhotoQuery(),
-        selected: Set<Long> = emptySet(),
-    ) = LibraryUiState(
-        sources = sources,
-        sourcesLoaded = true,
-        selection = selection,
-        query = query,
-        entries = buildGridEntries(rows, query.copy(scope = LibraryScope.Source(1))),
-        photoCount = rows.size,
-        photosLoaded = true,
-        selected = selected,
+    /** Per-choice counts of the samples' library (the filter sheet). */
+    val counts = FilterCounts(
+        fromApps = 7,
+        serverOnly = 38,
+        picked = 4,
+        starred = 15,
+        rejected = 3,
+        edited = 5,
+        notEdited = 1831,
+        raw = 1402,
+        jpeg = 434,
+        synced = 610,
+        total = 1836,
     )
+
+    /** The home (FIX/L): every photo, newest first, with [query]'s filters; [paired] adds the Sync group. */
+    fun grid(query: PhotoQuery = PhotoQuery(), selected: Set<Long> = emptySet(), paired: Boolean = false) =
+        LibraryUiState(
+            sources = sources,
+            sourcesLoaded = true,
+            counts = counts,
+            paired = paired,
+            syncBadge = if (paired) SyncBadge.Synced else SyncBadge.NotPaired,
+            query = query,
+            entries = buildGridEntries(rows, query),
+            photoCount = rows.size,
+            photosLoaded = true,
+            selected = selected,
+        )
+
+    /** Several active filters across groups: chips above the grid. */
+    val combined = PhotoQuery(
+        filters = PhotoFilters.folder(1).toggle(SourceFilter.FromApps).toggle(CullingFilter.PICKED)
+            .toggle(CullingFilter.STARRED).toggle(TypeFilter.RAW).toggle(SyncFilter.NOT_SYNCED),
+    )
+
+    /** Paired and uploading: the bar's status, the pending badges and the server-only photos' cloud badges. */
+    fun syncing(): LibraryUiState {
+        val shown = rows.mapIndexed { i, row ->
+            when (i % 6) {
+                0 -> row.copy(uploading = true)
+                1 -> row.copy(cloudOriginal = true)
+                2 -> row.copy(remote = true, cloudOriginal = true)
+                else -> row
+            }
+        }
+        return grid(paired = true).copy(
+            syncBadge = SyncBadge.Uploading(12),
+            entries = buildGridEntries(shown, PhotoQuery()),
+        )
+    }
 }
 
 abstract class LibraryScreenshotBase(private val device: String) {
@@ -215,61 +258,109 @@ abstract class LibraryScreenshotBase(private val device: String) {
         composeRule.onRoot().captureRoboImage("src/test/screenshots/library/${device}_$name.png")
     }
 
+    /**
+     * A sheet's content as it shows: a bottom sheet on phones, a centred dialog ([wide], `RevealBottomSheet`) over the
+     * home grid.
+     */
+    protected fun sheet(name: String, dark: Boolean, wide: Boolean, content: @Composable () -> Unit) {
+        composeRule.setContent {
+            RevealTheme(darkTheme = dark) {
+                Box(Modifier.fillMaxSize()) {
+                    LibraryContent(LibrarySamples.grid(), LibraryActions(), LibrarySamples.thumbnails)
+                    Box(
+                        Modifier.fillMaxSize().background(RevealTheme.colors.background.copy(alpha = SCRIM)),
+                        if (wide) Alignment.Center else Alignment.BottomCenter,
+                    ) {
+                        Surface(
+                            color = RevealTheme.colors.card,
+                            shape = RevealTheme.shapes.sheet,
+                            modifier = if (wide) Modifier.widthIn(max = 560.dp).padding(24.dp) else Modifier,
+                        ) {
+                            Box(Modifier.padding(top = if (wide) 16.dp else 24.dp)) { content() }
+                        }
+                    }
+                }
+            }
+        }
+        composeRule.onRoot().captureRoboImage("src/test/screenshots/library/${device}_$name.png")
+    }
+
+    protected fun filterSheet(name: String, dark: Boolean, wide: Boolean, paired: Boolean = true) =
+        sheet(name, dark, wide) {
+            FilterSheetContent(LibrarySamples.grid(LibrarySamples.combined, paired = paired), LibraryActions())
+        }
+
+    protected fun manageFolders(name: String, dark: Boolean, wide: Boolean) = sheet(name, dark, wide) {
+        ManageFoldersContent(LibrarySamples.sources, paired = true, actions = LibraryActions())
+    }
+
     @Composable
     private fun Scaled(fontScale: Float, content: @Composable () -> Unit) {
         val density = LocalDensity.current
         CompositionLocalProvider(LocalDensity provides Density(density.density, fontScale), content = content)
     }
+
+    private companion object {
+        const val SCRIM = 0.6f
+    }
 }
 
 /**
- * Library goldens under `app/src/test/screenshots/library/` (phone 390x844, tablet 1280x800): sources, grid with
- * pairs/badges/date headers, selection, filters with no match, empty library, 200 % font. Record with
- * `./gradlew :app:recordRoborazziDebug`.
+ * Library goldens under `app/src/test/screenshots/library/` (phone 390x844, tablets): the home grid with pairs,
+ * badges and date headers, active filter chips, the filter sheet, "Manage folders", selection, no match, the empty
+ * library, Recent, 200 % font (FIX/L). Record with `./gradlew :app:recordRoborazziDebug`.
  */
 @RunWith(AndroidJUnit4::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 @Config(sdk = [35], qualifiers = "w390dp-h844dp-xhdpi")
 class PhoneLibraryScreenshotTest : LibraryScreenshotBase("phone") {
-    private val sourcesOnly = LibrarySamples.grid().copy(selection = null)
+    @Test fun homeLight() = shoot("home_light", dark = false, state = LibrarySamples.grid())
 
-    @Test fun sourcesLight() = shoot("sources_light", dark = false, state = sourcesOnly)
+    @Test fun homeDark() = shoot("home_dark", dark = true, state = LibrarySamples.grid())
 
-    @Test fun sourcesDark() = shoot("sources_dark", dark = true, state = sourcesOnly)
+    @Test fun homeSelecting() =
+        shoot("home_selecting_light", dark = false, state = LibrarySamples.grid(selected = setOf(2L, 3L, 4L, 7L)))
 
-    @Test fun gridLight() = shoot("grid_light", dark = false, state = LibrarySamples.grid())
-
-    @Test fun gridDark() = shoot("grid_dark", dark = true, state = LibrarySamples.grid())
-
-    @Test fun gridSelecting() =
-        shoot("grid_selecting_light", dark = false, state = LibrarySamples.grid(selected = setOf(2L, 3L, 4L, 7L)))
-
-    @Test fun gridFontScale200() = shoot(
-        "grid_light_font200",
+    @Test fun homeFontScale200() = shoot(
+        "home_light_font200",
         dark = false,
         state = LibrarySamples.grid(),
         fontScale = 2f,
     )
 
-    @Test fun sourcesFontScale200() = shoot("sources_dark_font200", dark = true, state = sourcesOnly, fontScale = 2f)
+    /** Filters across groups: removable chips and "Clear all" above the grid. */
+    @Test fun homeFiltered() = shoot(
+        "home_filtered_dark",
+        dark = true,
+        state = LibrarySamples.grid(LibrarySamples.combined, paired = true),
+    )
+
+    /** Paired, uploading: the bar's compact status and the pending badges. */
+    @Test fun homeSyncing() = shoot("home_syncing_light", dark = false, state = LibrarySamples.syncing())
+
+    @Test fun filterSheetLight() = filterSheet("filter_sheet_light", dark = false, wide = false)
+
+    @Test fun filterSheetDark() = filterSheet("filter_sheet_dark", dark = true, wide = false, paired = false)
+
+    @Test fun manageFolders() = manageFolders("manage_folders_light", dark = false, wide = false)
 
     @Test fun emptyLibraryLight() = shoot(
         "empty_light",
         dark = false,
-        state = LibraryUiState(sourcesLoaded = true, photosLoaded = true),
+        state = LibraryUiState(sourcesLoaded = true, photosLoaded = true, counts = FilterCounts()),
     )
 
-    /** No folder, but photos other apps handed over: the library list, not the empty state (ADR 0011). */
+    /** No folder, but photos other apps handed over: the home grid, not the empty state (ADR 0011). */
     @Test fun onlyHandOffs() = shoot(
-        "sources_only_handoffs_dark",
+        "only_handoffs_dark",
         dark = true,
-        state = LibraryUiState(sourcesLoaded = true, photosLoaded = true, fromAppsPhotos = 3),
+        state = LibrarySamples.fromApps().copy(sources = emptyList(), query = PhotoQuery()),
     )
 
     @Test fun emptyLibraryFontScale200() = shoot(
         "empty_dark_font200",
         dark = true,
-        state = LibraryUiState(sourcesLoaded = true, photosLoaded = true),
+        state = LibraryUiState(sourcesLoaded = true, photosLoaded = true, counts = FilterCounts()),
         fontScale = 2f,
     )
 
@@ -277,14 +368,21 @@ class PhoneLibraryScreenshotTest : LibraryScreenshotBase("phone") {
         "no_match_dark",
         dark = true,
         state = LibrarySamples.grid(
-            query = PhotoQuery(filter = PhotoFilter.PICKED, search = "zz"),
+            query = PhotoQuery(filters = PhotoFilters(culling = setOf(CullingFilter.PICKED)), search = "zz"),
         ).copy(entries = emptyList(), photoCount = 0),
     )
 
+    /** "Manage folders" → an unplugged folder: the home narrowed to it, with its banner. */
     @Test fun unplugged() = shoot(
         "unplugged_light",
         dark = false,
-        state = LibrarySamples.grid(selection = LibrarySelection.Folder(3)),
+        state = LibrarySamples.grid(query = PhotoQuery(filters = PhotoFilters.folder(3))),
+    )
+
+    @Test fun recentEmpty() = shoot(
+        "recent_empty_light",
+        dark = false,
+        state = LibrarySamples.grid().copy(recent = true, entries = emptyList(), photoCount = 0),
     )
 
     @Test fun pasteChooser() {
@@ -379,7 +477,8 @@ class PhoneLibraryScreenshotTest : LibraryScreenshotBase("phone") {
     @Test fun indexing() = shoot(
         "indexing_light",
         dark = false,
-        state = LibrarySamples.grid(selection = LibrarySelection.Folder(4)).copy(entries = emptyList(), photoCount = 0),
+        state = LibrarySamples.grid(query = PhotoQuery(filters = PhotoFilters.folder(4)))
+            .copy(entries = emptyList(), photoCount = 0),
     )
 }
 
@@ -387,61 +486,80 @@ class PhoneLibraryScreenshotTest : LibraryScreenshotBase("phone") {
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 @Config(sdk = [35], qualifiers = "w1280dp-h800dp-hdpi")
 class TabletLibraryScreenshotTest : LibraryScreenshotBase("tablet") {
-    @Test fun twoPaneLight() = shoot("two_pane_light", dark = false, state = LibrarySamples.grid())
+    @Test fun homeLight() = shoot("home_light", dark = false, state = LibrarySamples.grid())
 
-    @Test fun twoPaneDark() = shoot("two_pane_dark", dark = true, state = LibrarySamples.grid())
+    @Test fun homeDark() = shoot("home_dark", dark = true, state = LibrarySamples.syncing())
 
-    @Test fun unavailableTwoPane() = shoot("unavailable_light", dark = false, state = LibrarySamples.unavailable())
+    @Test fun homeFiltered() = shoot(
+        "home_filtered_light",
+        dark = false,
+        state = LibrarySamples.grid(LibrarySamples.combined, paired = true),
+    )
 
-    @Test fun unavailableTwoPaneSelecting() = shoot(
+    @Test fun filterSheet() = filterSheet("filter_sheet_dark", dark = true, wide = true)
+
+    @Test fun manageFolders() = manageFolders("manage_folders_light", dark = false, wide = true)
+
+    @Test fun unavailable() = shoot("unavailable_light", dark = false, state = LibrarySamples.unavailable())
+
+    @Test fun unavailableSelecting() = shoot(
         "unavailable_selecting_dark",
         dark = true,
         state = LibrarySamples.unavailable(selected = setOf(2L, 3L)),
     )
 
-    @Test fun twoPaneRecentEmpty() = shoot(
-        "two_pane_recent_empty_light",
+    @Test fun recentEmpty() = shoot(
+        "recent_empty_light",
         dark = false,
-        state = LibrarySamples.grid(
-            selection = LibrarySelection.Special(SpecialSource.RECENT),
-        ).copy(entries = emptyList(), photoCount = 0),
+        state = LibrarySamples.grid().copy(recent = true, entries = emptyList(), photoCount = 0),
     )
 }
 
-/** The two-pane library on a Galaxy Tab S9 (M2/E): selection with its actions inline, 200 % font. */
+/** The library on a Galaxy Tab S9 (M2/E): selection with its actions inline, 200 % font. */
 @RunWith(AndroidJUnit4::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 @Config(sdk = [35], qualifiers = "w1495dp-h934dp-mdpi")
 class TabletS9LibraryScreenshotTest : LibraryScreenshotBase("tablet_s9") {
-    @Test fun twoPaneDark() = shoot("two_pane_dark", dark = true, state = LibrarySamples.grid())
+    @Test fun homeDark() = shoot("home_dark", dark = true, state = LibrarySamples.grid(paired = true))
 
     @Test fun selecting() =
         shoot("selecting_light", dark = false, state = LibrarySamples.grid(selected = setOf(2L, 3L, 4L, 7L)))
 
     @Test fun fontScale200() = shoot(
-        "two_pane_light_font200",
+        "home_light_font200",
         dark = false,
-        state = LibrarySamples.grid(),
+        state = LibrarySamples.grid(LibrarySamples.combined, paired = true),
         fontScale = 2f,
     )
 }
 
-/** Tablet portrait (934 dp wide) and a foldable's inner screen (852 dp): still two panes. */
+/** Tablet portrait (934 dp wide). */
 @RunWith(AndroidJUnit4::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 @Config(sdk = [35], qualifiers = "w934dp-h1495dp-mdpi")
 class TabletPortraitLibraryScreenshotTest : LibraryScreenshotBase("tablet_portrait") {
-    @Test fun twoPaneLight() = shoot("two_pane_light", dark = false, state = LibrarySamples.grid())
+    @Test fun homeLight() = shoot("home_light", dark = false, state = LibrarySamples.grid())
+
+    @Test fun homeFiltered() = shoot(
+        "home_filtered_dark",
+        dark = true,
+        state = LibrarySamples.grid(LibrarySamples.combined, paired = true),
+    )
+
+    @Test fun filterSheet() = filterSheet("filter_sheet_light", dark = false, wide = true)
+
+    @Test fun manageFolders() = manageFolders("manage_folders_dark", dark = true, wide = true)
 }
 
+/** A foldable's inner screen (852 dp). */
 @RunWith(AndroidJUnit4::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 @Config(sdk = [35], qualifiers = "w852dp-h883dp-mdpi")
 class FoldableLibraryScreenshotTest : LibraryScreenshotBase("foldable") {
-    @Test fun twoPaneDark() = shoot("two_pane_dark", dark = true, state = LibrarySamples.grid())
+    @Test fun homeDark() = shoot("home_dark", dark = true, state = LibrarySamples.grid())
 
     @Test fun fontScale200() = shoot(
-        "two_pane_dark_font200",
+        "home_dark_font200",
         dark = true,
         state = LibrarySamples.grid(),
         fontScale = 2f,

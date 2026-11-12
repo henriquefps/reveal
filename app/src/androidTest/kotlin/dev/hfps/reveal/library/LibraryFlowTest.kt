@@ -23,6 +23,7 @@ import dev.hfps.reveal.feature.editor.EditorTags
 import dev.hfps.reveal.feature.library.LibraryTags
 import dev.hfps.reveal.feature.library.R
 import dev.hfps.reveal.feature.library.viewer.ViewerTags
+import dev.hfps.reveal.library.LibraryFilterSteps.openFolder
 import java.io.File
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
@@ -73,16 +74,14 @@ class LibraryFlowTest {
         val (sourceId, report) = folder.addAndIndex()
         assertThat(report.files).isEqualTo(5)
         assertThat(report.photosAdded).isEqualTo(3)
-        val rows = runBlocking { folder.library.photoList(PhotoQuery(scope = LibraryScope.Source(sourceId))) }
+        val rows = runBlocking { folder.library.photoList(PhotoQuery.ofSource(sourceId)) }
         val pair = rows.single { it.name == "DSC00001.ARW" }
         assertThat(pair.format).isEqualTo(PhotoFormat.RAW_PAIR)
         assertThat(pair.rating).isEqualTo(4)
         assertThat(pair.flag).isEqualTo(PickFlag.PICK)
 
         ActivityScenario.launch(MainActivity::class.java).use {
-            // Phones list the sources first; tablets show both panes. Either way the folder row is there.
-            compose.waitUntilAtLeastOneExists(hasTestTag(LibraryTags.source(sourceId)), TIMEOUT_MS)
-            compose.onNodeWithTag(LibraryTags.source(sourceId)).performClick()
+            compose.openFolder(sourceId, TIMEOUT_MS)
             compose.waitUntilAtLeastOneExists(hasTestTag(LibraryTags.cell(pair.id)), TIMEOUT_MS)
             val stars = context.resources.getQuantityString(R.plurals.library_stars, 4, 4)
             compose.onNodeWithTag(LibraryTags.cell(pair.id))
@@ -133,11 +132,10 @@ class LibraryFlowTest {
         sample.copyTo(File(folder.dir, "DSC00002.ARW"))
         folder.jpeg("IMG_0001.JPG", 1)
         val (sourceId, _) = folder.addAndIndex()
-        val raw = runBlocking { folder.library.photoList(PhotoQuery(scope = LibraryScope.Source(sourceId))) }
+        val raw = runBlocking { folder.library.photoList(PhotoQuery.ofSource(sourceId)) }
             .single { it.name == "DSC00002.ARW" }
         ActivityScenario.launch(MainActivity::class.java).use {
-            compose.waitUntilAtLeastOneExists(hasTestTag(LibraryTags.source(sourceId)), TIMEOUT_MS)
-            compose.onNodeWithTag(LibraryTags.source(sourceId)).performClick()
+            compose.openFolder(sourceId, TIMEOUT_MS)
             compose.waitUntilAtLeastOneExists(hasTestTag(LibraryTags.cell(raw.id)), TIMEOUT_MS)
             compose.onNodeWithTag(LibraryTags.cell(raw.id)).performClick()
             compose.waitUntilAtLeastOneExists(hasTestTag(ViewerTags.EDIT), TIMEOUT_MS)

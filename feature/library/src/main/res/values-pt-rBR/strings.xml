@@ -7,13 +7,9 @@
     <string name="library_menu_gallery">Design system</string>
     <string name="library_menu_about">Sobre</string>
 
-    <string name="library_section_library">Biblioteca</string>
     <string name="library_section_folders">Pastas</string>
-    <string name="library_all_photos">Todas as fotos</string>
     <string name="library_recent">Recentes</string>
-    <string name="library_recent_subtitle">Fotos que você abriu no editor</string>
     <string name="library_from_apps">Abertas de outros apps</string>
-    <string name="library_from_apps_subtitle">Fotos que o Hoard e outros apps enviam ao Reveal</string>
     <string name="library_add_folder">Adicionar pasta</string>
     <string name="library_source_unplugged">Desconectado</string>
     <string name="library_source_permission_lost">Acesso perdido: adicione a pasta de novo</string>
@@ -42,12 +38,9 @@
     <string name="library_sort_newest">Mais recentes primeiro</string>
     <string name="library_sort_oldest">Mais antigas primeiro</string>
     <string name="library_sort_name">Nome do arquivo</string>
-    <string name="library_filter_all">Todas</string>
     <string name="library_filter_edited">Editadas</string>
     <string name="library_filter_not_edited">Não editadas</string>
     <string name="library_filter_picked">Escolhidas</string>
-    <string name="library_filter_rated">%1$d★ ou mais</string>
-    <string name="library_filter_rated_short">Com estrelas</string>
     <string name="library_filter_raw">RAW</string>
     <string name="library_filter_jpeg">JPEG</string>
     <string name="library_indexing">Procurando fotos… %1$s encontradas</string>
@@ -111,7 +104,6 @@
     <string name="library_recent_empty_body">As fotos que você abre no editor aparecem aqui.</string>
     <string name="library_from_apps_empty_title">Nada recebido ainda</string>
     <string name="library_from_apps_empty_body">As fotos que o Hoard ou outro app envia ao Reveal aparecem aqui.</string>
-    <string name="library_pick_source">Escolha uma pasta à esquerda.</string>
 
     <string name="viewer_position">%1$d de %2$d</string>
     <string name="viewer_info_close">Fechar informações</string>
@@ -168,8 +160,6 @@
         <item quantity="other">Edições redefinidas em %1$d fotos</item>
     </plurals>
     <string name="library_menu_settings">Configurações</string>
-    <string name="library_server">Servidor</string>
-    <string name="library_server_subtitle">Fotos que só o seu servidor de sincronização tem</string>
     <string name="library_badge_conflict">Conflito</string>
     <string name="library_badge_copy">Cópia</string>
     <string name="library_conflict_copy_from">Cópia de conflito de %1$s</string>
@@ -279,4 +269,37 @@
     <string name="conflict_device_unknown">Aparelho desconhecido</string>
     <string name="conflict_keep">Manter esta</string>
     <string name="viewer_resolve_conflict">Resolver conflito</string>
+
+    <!-- FIX/L: one library home with combinable filters -->
+    <string name="library_manage_folders">Gerenciar pastas</string>
+    <string name="library_manage_folders_empty">Nenhuma pasta ainda. Adicione uma e as fotos dela entram na biblioteca.</string>
+    <string name="library_folder_show">Ver as fotos</string>
+    <string name="library_folder_backup">Backup no servidor</string>
+    <string name="library_home_empty_title">Nenhuma foto ainda</string>
+    <string name="library_home_empty_body">Suas pastas ainda não têm fotos JPEG, HEIF ou RAW.</string>
+    <string name="library_sync_status">Sincronização: %1$s</string>
+    <string name="library_sync_not_paired">Não pareado</string>
+    <string name="library_sync_synced">Sincronizado</string>
+    <string name="library_sync_syncing">Sincronizando…</string>
+    <string name="library_sync_uploading">Enviando %1$s…</string>
+    <string name="library_sync_waiting">%1$s aguardando</string>
+    <string name="library_sync_offline">Offline</string>
+    <string name="library_sync_problem">Problema na sincronização</string>
+    <string name="library_filters">Filtros</string>
+    <string name="library_filters_count">Filtros · %1$d</string>
+    <string name="library_filters_clear_all">Limpar tudo</string>
+    <string name="library_filters_done">Concluído</string>
+    <string name="library_filter_group_source">Origem</string>
+    <string name="library_filter_group_culling">Seleção</string>
+    <string name="library_filter_group_edits">Edições</string>
+    <string name="library_filter_group_type">Tipo</string>
+    <string name="library_filter_group_sync">Sincronização</string>
+    <string name="library_filter_server_only">Só no servidor</string>
+    <string name="library_filter_folder">Pasta</string>
+    <string name="library_filter_starred">Com estrelas</string>
+    <string name="library_filter_rejected">Rejeitadas</string>
+    <string name="library_filter_synced">Sincronizadas</string>
+    <string name="library_filter_not_synced">Não sincronizadas</string>
+    <string name="library_filter_with_count">%1$s · %2$s</string>
+    <string name="library_cloud_uploading">Aguardando envio ao servidor</string>
 </resources>

@@ -89,7 +89,7 @@ class HandoffRepositoryTest {
         edits.commit(versionId, to, RecipeDiff.between(edits.recipe(versionId), to))
     }
 
-    private suspend fun rows() = db.photoDao().rows(PhotoQuerySql.toQuery(PhotoQuery(scope = LibraryScope.FromApps)))
+    private suspend fun rows() = db.photoDao().rows(PhotoQuerySql.toQuery(PhotoQuery.FROM_APPS))
 
     @Test
     fun `a RAW and its JPEG arrive as one pair, case-insensitively, and several shots open the library`() = runTest {

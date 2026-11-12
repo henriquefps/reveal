@@ -103,7 +103,21 @@ slightly lighter than the surround, with the hfps hairline border and radius.
 
 - hfps shell (fixed top bar + one card). Grid of square thumbnails with 2dp gaps inside the card,
   3 columns on phones portrait, adaptive above (min 120dp cell), date section headers (eyebrow
-  style), badges in the corners (`RAW+JPG`, edited dot, stars/flag).
+  style), badges in the corners (`RAW+JPG`, edited dot, stars/flag, cloud state).
+- **One library home** (FIX/L, like Lightroom and Google Photos): the start screen is one grid of every photo,
+  newest first with date headers: this device's folders and hand-offs and the Server photos that open, one cell per
+  photo; photos not on this device keep a small cloud badge, uploads still waiting a pending one. Everything else is a
+  filter, not a place.
+- **Top bar:** the title "Library", then a compact sync status (an icon on phones, with the count while uploading;
+  icon and text on tablets: "Synced", "Uploading 12…", "Offline", "Not paired"; tap → the Sync screen), Recent,
+  Folders ("Manage folders": add, remove with the delete-from-server question, backup mode per folder, a folder → the
+  home filtered to it), Settings and ⋯ (search and sort on phones; add folder, open a photo, design system, About).
+  Tablets show search and sort in the bar. Recent is its own view (back returns to the home).
+- **Combinable filters:** a filter bar above the grid: the Filters button (with how many choices are on), a removable
+  chip (×) per active choice, "Clear all". The Filters sheet (a centred dialog on tablets) has the groups Source (each
+  folder, Opened from other apps, Only on the server), Culling (Picked, Starred, Rejected), Edits, Type (RAW, JPEG)
+  and, while paired, Sync (Synced, Not synced), each choice with its count. OR within a group, AND across groups. The
+  last combination is remembered. Unreadable photos keep their in-place "Unavailable" placeholder (no filter).
 - Empty states with a single clear action ("Add a folder", "Open from Hoard").
 - Settings: grouped list inside the card, same as Hoard's settings screen.
 - Export: a bottom sheet on phones (format, size, quality, metadata, destination, export preset) with

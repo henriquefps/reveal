@@ -29,6 +29,7 @@ import dagger.hilt.android.EntryPointAccessors
 import dev.hfps.reveal.MainActivity
 import dev.hfps.reveal.data.db.PhotoRow
 import dev.hfps.reveal.data.model.LibraryScope
+import dev.hfps.reveal.data.model.PhotoFilters
 import dev.hfps.reveal.data.model.PhotoQuery
 import dev.hfps.reveal.debug.DebugAccess
 import dev.hfps.reveal.designsystem.components.slider.NumericInputTags
@@ -273,9 +274,9 @@ class TabletEditorTest {
             File(folder.dir, "IMG_%04d.JPG".format(i)).appendBytes("\nreveal-test ${System.nanoTime()}\n".toByteArray())
         }
         val (sourceId, _) = folder.addAndIndex()
-        val rows = runBlocking { folder.library.photoList(PhotoQuery(scope = LibraryScope.Source(sourceId))) }
+        val rows = runBlocking { folder.library.photoList(PhotoQuery.ofSource(sourceId)) }
         check(rows.size == count) { "indexed ${rows.size} of $count" }
-        runBlocking { folder.library.setLastSelection("f:$sourceId") }
+        runBlocking { folder.library.setLastFilters(PhotoFilters.folder(sourceId)) }
         return rows
     }
 

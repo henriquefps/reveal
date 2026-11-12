@@ -153,8 +153,7 @@ class SyncEngineTest {
         phone.sync()
         tablet.sync()
         // Only described so far (its original has not reached the server): in the database, not in the Server scope.
-        fun serverScope() =
-            runBlocking { tablet.db.photoDao().rows(PhotoQuerySql.toQuery(PhotoQuery(scope = LibraryScope.Server))) }
+        fun serverScope() = runBlocking { tablet.db.photoDao().rows(PhotoQuerySql.toQuery(PhotoQuery.SERVER_ONLY)) }
         assertThat(tablet.photoByFingerprint(FileFingerprint.of(raw))).isNotNull()
         assertThat(serverScope()).isEmpty()
         // The phone's backup lands: it pushes the record again and the tablet asks about the shot at once.
@@ -171,7 +170,8 @@ class SyncEngineTest {
         assertThat(tablet.recipe(tablet.version(remote.id)).light.exposureEv).isEqualTo(0.4f)
         val all = runBlocking { tablet.db.photoDao().rows(PhotoQuerySql.toQuery(PhotoQuery(scope = LibraryScope.All))) }
         val onServer = serverScope()
-        assertThat(all).isEmpty()
+        // The library home lists it once, like the Server-only filter (FIX/L).
+        assertThat(all.map { it.id }).containsExactly(remote.id)
         assertThat(onServer.map { it.id }).containsExactly(remote.id)
         assertThat(onServer.single().remote).isTrue()
 
@@ -301,7 +301,7 @@ class SyncEngineTest {
         assertThat(ids).hasSize(1000)
         val server = runBlocking { checkNotNull(tablet.db.syncDao().serverSource()).id }
         val rows = runBlocking {
-            tablet.db.photoDao().rows(PhotoQuerySql.toQuery(PhotoQuery(scope = LibraryScope.Source(server))))
+            tablet.db.photoDao().rows(PhotoQuerySql.toQuery(PhotoQuery.ofSource(server).copy(withUnopenable = true)))
         }
         assertThat(rows).hasSize(1000)
         assertThat(rows.count { it.hasEdit }).isEqualTo(900)

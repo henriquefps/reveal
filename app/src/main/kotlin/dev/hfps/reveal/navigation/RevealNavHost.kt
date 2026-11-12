@@ -34,6 +34,7 @@ fun RevealNavHost(
             onGallery = { navController.navigate(GalleryRoute) },
             onAbout = { navController.navigate(AboutRoute) },
             onSettings = { navController.navigate(SettingsRoute) },
+            onSync = { navController.navigate(SyncSettingsRoute) },
         )
         composable<GalleryRoute> {
             DesignSystemGallery(

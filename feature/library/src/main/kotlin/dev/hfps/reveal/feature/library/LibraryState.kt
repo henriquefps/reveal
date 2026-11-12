@@ -1,22 +1,52 @@
 package dev.hfps.reveal.feature.library
 
 import androidx.compose.runtime.Immutable
+import dev.hfps.reveal.data.db.FilterCounts
 import dev.hfps.reveal.data.db.PhotoRow
 import dev.hfps.reveal.data.library.SourceItem
 import dev.hfps.reveal.data.model.LibraryScope
+import dev.hfps.reveal.data.model.PhotoFilters
 import dev.hfps.reveal.data.model.PhotoQuery
 import dev.hfps.reveal.data.model.PhotoSort
 import dev.hfps.reveal.pipeline.recipe.Recipe
 import dev.hfps.reveal.pipeline.recipe.RecipeGroup
+import dev.hfps.reveal.sync.SyncProblem
+import dev.hfps.reveal.sync.SyncStatus
 
-/** The pseudo-sources of the sources list besides the added folders. */
-enum class SpecialSource { ALL, RECENT, FROM_APPS, SERVER }
+/**
+ * The compact sync status of the library's top bar (FIX/L): tap opens the Sync screen. Derived from the paired account
+ * and `SyncStatus` by [SyncBadge.of].
+ */
+@Immutable
+sealed interface SyncBadge {
+    data object NotPaired : SyncBadge
 
-/** What the grid shows: an added folder, or one of the special entries. */
-sealed interface LibrarySelection {
-    data class Special(val which: SpecialSource) : LibrarySelection
+    data object Synced : SyncBadge
 
-    data class Folder(val sourceId: Long) : LibrarySelection
+    data object Syncing : SyncBadge
+
+    /** [count] originals or previews still to upload. */
+    data class Uploading(val count: Int) : SyncBadge
+
+    /** [count] changes wait for the next run (edits, ratings). */
+    data class Waiting(val count: Int) : SyncBadge
+
+    data object Offline : SyncBadge
+
+    /** The server answered with a problem (unauthorised, changed, no storage, error): the Sync screen says which. */
+    data object Problem : SyncBadge
+
+    companion object {
+        fun of(paired: Boolean, status: SyncStatus): SyncBadge = when {
+            !paired -> NotPaired
+            status.problem == SyncProblem.OFFLINE -> Offline
+            status.problem != null -> Problem
+            status.uploadsPending > 0 -> Uploading(status.uploadsPending)
+            status.running -> Syncing
+            status.pending > 0 -> Waiting(status.pending)
+            else -> Synced
+        }
+    }
 }
 
 /** One entry of the grid: a date header (spans the row) or a photo. */
@@ -43,24 +73,30 @@ sealed interface GridEntry {
 @Immutable
 data class LibraryUiState(
     val sources: List<SourceItem> = emptyList(),
-    /** Null until the sources are known (avoids flashing the empty state). */
+    /** False until the sources are known (avoids flashing the empty state). */
     val sourcesLoaded: Boolean = false,
-    /** Null = the sources list is shown on its own (phone). */
-    val selection: LibrarySelection? = null,
+    /** The home's filters, sort and search; [recent] shows the Recent view instead (no filters). */
     val query: PhotoQuery = PhotoQuery(),
+    /** The Recent view (its own list, newest opened first), over the home. */
+    val recent: Boolean = false,
     val entries: List<GridEntry> = emptyList(),
     val photoCount: Int = 0,
     val photosLoaded: Boolean = false,
     val selected: Set<Long> = emptySet(),
     val searchOpen: Boolean = false,
+    /** The filter sheet is open. */
+    val filtersOpen: Boolean = false,
+    /** "Manage folders" is open. */
+    val foldersOpen: Boolean = false,
+    /** Paired with a sync server: the Sync filter group shows. */
+    val paired: Boolean = false,
+    val syncBadge: SyncBadge = SyncBadge.NotPaired,
+    /** Per-choice counts for the filter sheet; null until known. */
+    val counts: FilterCounts? = null,
     /** The copied edit (from the editor or here), null when nothing was copied. */
     val clipboard: Recipe? = null,
     /** The paste chooser is open with these groups ticked; null = closed. */
     val pasteChooser: Set<RecipeGroup>? = null,
-    /** Photos only the sync server has (ADR 0018); the Server entry shows when there are any. */
-    val serverPhotos: Int = 0,
-    /** Photos in "Opened from other apps": with them, a library without folders is not empty (ADR 0011). */
-    val fromAppsPhotos: Int = 0,
     /** The explanation of a tapped unavailable photo; null = closed. */
     val unavailableInfo: UnavailableInfo? = null,
     /** Asking before "Remove from Reveal" forgets photos that have edits; null = not asking. */
@@ -74,40 +110,54 @@ data class LibraryUiState(
     /** The conflict chooser of a tapped conflict copy (ADR 0018 FIX/W); null = closed. */
     val conflictChoice: ConflictChoice? = null,
 ) {
-    /** The selected photos are Server photos ("Delete from server" applies to them). */
-    val serverScope: Boolean get() = selection == LibrarySelection.Special(SpecialSource.SERVER)
+    val filters: PhotoFilters get() = query.filters
+
+    /** What the grid asks Room for: the home with its filters, or Recent. */
+    val gridQuery: PhotoQuery
+        get() = if (recent) PhotoQuery(scope = LibraryScope.Recent) else query
 
     val selecting: Boolean get() = selected.isNotEmpty()
 
+    /** The folder the grid is narrowed to (its banner shows: indexing, unplugged, access lost). */
     val currentSource: SourceItem?
-        get() = (selection as? LibrarySelection.Folder)?.let { s -> sources.firstOrNull { it.id == s.sourceId } }
+        get() = if (recent) null else filters.singleFolder?.let { id -> sources.firstOrNull { it.id == id } }
 
-    /** True when any filter, rating or search narrows the grid. */
-    val filtered: Boolean
-        get() = query.filter != dev.hfps.reveal.data.model.PhotoFilter.ALL || query.search.isNotBlank()
+    /** True when any filter or search narrows the home. */
+    val filtered: Boolean get() = !recent && (!filters.isEmpty || query.search.isNotBlank())
+
+    /** Nothing at all yet: no folder and no photo (hand-offs and Server photos count). */
+    val libraryEmpty: Boolean get() = sourcesLoaded && sources.isEmpty() && counts?.total == 0
 
     val photoIds: List<Long> get() = entries.mapNotNull { (it as? GridEntry.Photo)?.row?.id }.distinct()
 
+    private fun selectedRows(): List<PhotoRow> =
+        entries.mapNotNull { entry -> (entry as? GridEntry.Photo)?.row?.takeIf { it.id in selected } }
+
     /** The selected photos Reveal cannot show at all: what "Try again" and "Remove from Reveal" act on. */
-    val selectedUnavailable: List<Long>
-        get() = entries.mapNotNull { entry ->
-            (entry as? GridEntry.Photo)?.row?.takeIf { it.unavailable && it.id in selected }?.id
-        }.distinct()
+    val selectedUnavailable: List<Long> get() = selectedRows().filter { it.unavailable }.map { it.id }.distinct()
+
+    /** Selected Server photos (only the server has them): what "Delete from server" acts on. */
+    val selectedRemote: List<Long> get() = selectedRows().filter { it.remote }.map { it.id }.distinct()
 
     /** Sync conflict copies among the selected photos (ADR 0018): what "Delete conflict copies" removes. */
-    val selectedConflictCopies: List<Long>
-        get() = entries.mapNotNull { entry ->
-            (entry as? GridEntry.Photo)?.row?.takeIf {
-                it.conflict &&
-                    it.id in selected
-            }?.versionId
-        }
+    val selectedConflictCopies: List<Long> get() = selectedRows().filter { it.conflict }.map { it.versionId }
 }
 
 /** Everything the library screen can ask for (stateless content for screenshots and tests). */
 @Immutable
 data class LibraryActions(
-    val onSelect: (LibrarySelection?) -> Unit = {},
+    /** New filters for the home (the sheet, a chip's ×, "Clear all"). */
+    val onFilters: (PhotoFilters) -> Unit = {},
+    val onFiltersOpen: (Boolean) -> Unit = {},
+    val onFoldersOpen: (Boolean) -> Unit = {},
+    /** Opens (true) or leaves (false) the Recent view. */
+    val onRecent: (Boolean) -> Unit = {},
+    /** The home narrowed to one folder ("Manage folders" → a folder). */
+    val onShowFolder: (Long) -> Unit = {},
+    /** A folder's backup mode: everything, or only the photos you edit (FIX/V). */
+    val onFolderBackup: (sourceId: Long, everything: Boolean) -> Unit = { _, _ -> },
+    /** The compact sync status: opens the Sync screen. */
+    val onSync: () -> Unit = {},
     val onAddFolder: () -> Unit = {},
     val onOpenPhoto: () -> Unit = {},
     val onRescan: (Long) -> Unit = {},
@@ -170,23 +220,14 @@ data class LibraryActions(
 @Immutable
 data class RemovePrompt(val sourceId: Long, val name: String, val server: Boolean, val edited: Int)
 
-/** Maps a selection to the query scope. */
-fun LibrarySelection.scope(): LibraryScope? = when (this) {
-    is LibrarySelection.Folder -> LibraryScope.Source(sourceId)
-
-    is LibrarySelection.Special -> when (which) {
-        SpecialSource.ALL -> LibraryScope.All
-        SpecialSource.RECENT -> LibraryScope.Recent
-        SpecialSource.FROM_APPS -> LibraryScope.FromApps
-        SpecialSource.SERVER -> LibraryScope.Server
-    }
-}
-
-/** The grid entries of [rows]: date headers (only in capture-time order) between the photos. */
+/**
+ * The grid entries of [rows]: date headers (only in capture-time order) between the photos; "Opened from other apps"
+ * alone groups them by hand-off instead.
+ */
 fun buildGridEntries(rows: List<PhotoRow>, query: PhotoQuery): List<GridEntry> {
     val dated = query.scope != LibraryScope.Recent && query.sort != PhotoSort.NAME
     return when {
-        query.scope == LibraryScope.FromApps -> buildGroupEntries(rows)
+        query.scope != LibraryScope.Recent && query.filters.onlyFromApps -> buildGroupEntries(rows)
         !dated -> rows.map { GridEntry.Photo(it) }
         else -> buildDateEntries(rows)
     }

@@ -6,6 +6,21 @@ All notable changes to Reveal are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+- One library: the start screen shows all your photos in one grid, newest first: this device's folders, photos opened
+  from other apps and the photos on your sync server, each once. Photos that are not on this device keep a small cloud
+  badge; photos waiting to upload show it too.
+- Filters you can combine: Source (each folder, Opened from other apps, Only on the server), Culling (Picked,
+  Starred, Rejected), Edits, Type (RAW, JPEG) and, while paired, Sync (Synced, Not synced). Choices in the same group
+  add up, groups narrow each other. Active filters show as chips above the grid (tap × to remove, or Clear all), and
+  the last combination is remembered. "Rated N★ or more" became "Starred" (any rating).
+- The top bar: Recent, Folders (add, remove, back up, or show one folder's photos), a compact sync status that opens
+  the Sync screen, and Settings. The list of places (All photos, Opened from other apps, Server, folders) is gone.
+
+### Fixed
+- Scrolling quickly past many photos from other apps that Reveal can only show from their preview no longer runs out
+  of memory: their thumbnails are made one at a time, and a thumbnail that cannot be made shows its placeholder.
+
 ## [0.5.4] - 2026-11-12
 
 ### Fixed

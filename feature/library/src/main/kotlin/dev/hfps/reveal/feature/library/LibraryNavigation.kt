@@ -2,24 +2,19 @@ package dev.hfps.reveal.feature.library
 
 import android.net.Uri
 import androidx.activity.compose.BackHandler
-import androidx.activity.compose.PredictiveBackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.ImageBitmap
-import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalResources
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
@@ -31,10 +26,10 @@ import androidx.navigation.NavGraphBuilder
 import androidx.navigation.compose.composable
 import dev.hfps.reveal.data.db.PhotoRow
 import dev.hfps.reveal.data.handoff.GalleryAccess
+import dev.hfps.reveal.data.model.PhotoListCodec
 import dev.hfps.reveal.data.thumb.ThumbnailRepository
 import dev.hfps.reveal.feature.export.ui.ExportRequest
 import dev.hfps.reveal.feature.export.ui.ExportSheetHost
-import dev.hfps.reveal.feature.library.LibraryViewModel.Companion.encode
 import dev.hfps.reveal.feature.library.presets.ApplyPresetSheet
 import dev.hfps.reveal.feature.library.viewer.ViewerScreen
 import kotlinx.coroutines.flow.Flow
@@ -49,11 +44,11 @@ import kotlinx.serialization.Serializable
 data class LibraryRoute(val fromApps: Boolean = false)
 
 /**
- * The full-screen viewer on [photoId], paging through the same photos as the grid it came from: [selection] and
- * [query] are the grid's, encoded (see `LibraryViewModel.encode` / `encodeQuery`).
+ * The full-screen viewer on [photoId], paging through the same photos as the grid it came from: [query] is the grid's
+ * (view and filters), encoded by `PhotoListCodec`.
  */
 @Serializable
-data class ViewerRoute(val photoId: Long, val selection: String, val query: String)
+data class ViewerRoute(val photoId: Long, val query: String)
 
 /**
  * MIME types of "Open a photo": every image (JPEG, HEIF, PNG, WebP and the `image/x-*` RAW types) plus
@@ -73,22 +68,18 @@ fun NavGraphBuilder.libraryScreens(
     onGallery: () -> Unit,
     onAbout: () -> Unit,
     onSettings: () -> Unit = {},
+    onSync: () -> Unit = {},
 ) {
     composable<LibraryRoute> {
         LibraryScreen(
             onOpen = { row, state ->
-                navController.navigate(
-                    ViewerRoute(
-                        photoId = row.id,
-                        selection = state.selection?.encode().orEmpty(),
-                        query = LibraryViewModel.encodeQuery(state.query),
-                    ),
-                )
+                navController.navigate(ViewerRoute(photoId = row.id, query = PhotoListCodec.encode(state.gridQuery)))
             },
             onOpenFile = onOpenFile,
             onGallery = onGallery,
             onAbout = onAbout,
             onSettings = onSettings,
+            onSync = onSync,
         )
     }
     composable<ViewerRoute> {
@@ -106,6 +97,7 @@ fun LibraryScreen(
     onAbout: () -> Unit,
     modifier: Modifier = Modifier,
     onSettings: () -> Unit = {},
+    onSync: () -> Unit = {},
     viewModel: LibraryViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -125,7 +117,13 @@ fun LibraryScreen(
     val scope = rememberCoroutineScope()
     val actions = remember(viewModel) {
         LibraryActions(
-            onSelect = viewModel::select,
+            onFilters = viewModel::setFilters,
+            onFiltersOpen = viewModel::setFiltersOpen,
+            onFoldersOpen = viewModel::setFoldersOpen,
+            onRecent = viewModel::setRecent,
+            onShowFolder = viewModel::showFolder,
+            onFolderBackup = viewModel::setFolderBackup,
+            onSync = onSync,
             onAddFolder = { folderPicker.launch(null) },
             onOpenPhoto = { filePicker.launch(OpenPhotoMimeTypes) },
             onRescan = viewModel::rescan,
@@ -222,39 +220,16 @@ fun LibraryScreen(
     }
     BackHandler(enabled = state.selecting) { viewModel.setSelected(emptySet()) }
     BackHandler(enabled = !state.selecting && state.searchOpen) { viewModel.setSearchOpen(false) }
-    BoxWithConstraints(modifier) {
-        val narrow = maxWidth < TwoPaneMinWidth
-        var backProgress by remember { mutableFloatStateOf(0f) }
-        // Predictive back from the grid to the sources list (phones): the screen follows the gesture, then leaves.
-        PredictiveBackHandler(
-            enabled = narrow && state.selection != null && !state.selecting && !state.searchOpen,
-        ) { events ->
-            // A cancelled gesture throws out of collect; only a completed one leaves the grid.
-            try {
-                events.collect { backProgress = it.progress }
-                viewModel.select(null)
-            } finally {
-                backProgress = 0f
-            }
-        }
-        LibraryContent(
-            state = state,
-            actions = actions,
-            thumbnails = thumbnails,
-            snackbar = snackbar,
-            onGridDraw = viewModel::onGridDraw,
-            modifier = Modifier.graphicsLayer {
-                val scale = 1f - BACK_SCALE * backProgress
-                scaleX = scale
-                scaleY = scale
-                transformOrigin = TransformOrigin(1f, BACK_PIVOT_Y)
-            },
-        )
-    }
+    BackHandler(enabled = !state.selecting && !state.searchOpen && state.recent) { viewModel.setRecent(false) }
+    LibraryContent(
+        state = state,
+        actions = actions,
+        thumbnails = thumbnails,
+        snackbar = snackbar,
+        onGridDraw = viewModel::onGridDraw,
+        modifier = modifier,
+    )
 }
-
-private const val BACK_SCALE = 0.08f
-private const val BACK_PIVOT_Y = 0.5f
 
 /** Shows the ViewModel's one-off messages in the snackbar. */
 @Composable

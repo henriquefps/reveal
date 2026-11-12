@@ -391,3 +391,16 @@ either side on both devices. `AppStorageTest` (LRU across areas, usage, what cle
 - The x86_64 emulator's host GL stack crashes on the editor's GPU tests (`RenderThread` SIGSEGV in
   `qemu-system-x86_64-headless` with `swiftshader_indirect`; with `-gpu host` the CPU threads hang and it segfaults
   later in the full suite). The same tests pass on the phone; GPU-heavy suites run on a device.
+
+## Amendment FIX/L (0.5.5): one library home
+
+The library no longer has a Server entry or scope: the home lists this device's photos and the Server photos that
+open (`SERVER_OPENABLE_SQL`), one cell per photo, and "Only on the server" is a choice of the Source filter (ADR 0006
+"Filters"). While paired, the Sync filter splits the photos by whether the server holds the original of any file of
+the shot (`photo_cloud.original_on_server` or a file's `photo_files.on_server`; Server photos count as synced) and the
+grid shows a pending badge (`CloudState.UPLOADING`, `PhotoQuerySql.UPLOADING_SQL`) on a photo whose original or smart
+preview upload still waits in `sync_uploads`. "Delete from server" applies to the selected Server photos of any
+filtered grid. The library's top bar carries a compact sync status (`SyncBadge.of(paired, SyncStatus)`: not paired,
+synced, syncing, uploading N, N waiting, offline, problem) that opens the Sync screen; "Manage folders" sets a
+folder's backup mode (FIX/V's choice) and removes it with FIX/V's delete-from-server question.
+

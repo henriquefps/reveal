@@ -21,6 +21,7 @@ import com.google.common.truth.Truth.assertThat
 import dagger.hilt.android.EntryPointAccessors
 import dev.hfps.reveal.MainActivity
 import dev.hfps.reveal.data.model.LibraryScope
+import dev.hfps.reveal.data.model.PhotoFilters
 import dev.hfps.reveal.data.model.PhotoQuery
 import dev.hfps.reveal.debug.DebugAccess
 import dev.hfps.reveal.feature.editor.EditorTags
@@ -34,6 +35,7 @@ import dev.hfps.reveal.feature.library.R as LibraryR
 import dev.hfps.reveal.feature.library.viewer.ViewerTags
 import dev.hfps.reveal.feature.settings.SettingsTags
 import dev.hfps.reveal.feature.settings.sync.SyncTags
+import dev.hfps.reveal.library.LibraryFilterSteps.showOnly
 import java.io.File
 import kotlinx.coroutines.runBlocking
 import org.junit.After
@@ -91,14 +93,9 @@ class SyncFlowTest {
         val link = checkNotNull(args.getString("syncLink"))
         val nasName = checkNotNull(args.getString("nasName"))
         ActivityScenario.launch(MainActivity::class.java).use {
-            compose.waitUntilAtLeastOneExists(
-                hasContentDescription(context.getString(LibraryR.string.library_menu)),
-                TIMEOUT_MS,
-            )
-            compose.onNode(hasContentDescription(context.getString(LibraryR.string.library_menu))).performClick()
-            compose.onNodeWithText(context.getString(LibraryR.string.library_menu_settings)).performClick()
-            compose.waitUntilAtLeastOneExists(hasTestTag(SettingsTags.SYNC), TIMEOUT_MS)
-            compose.onNodeWithTag(SettingsTags.SYNC).performClick()
+            // The library's compact sync status ("Not paired") opens the Sync screen (FIX/L).
+            compose.waitUntilAtLeastOneExists(hasTestTag(LibraryTags.SYNC_STATUS), TIMEOUT_MS)
+            compose.onNodeWithTag(LibraryTags.SYNC_STATUS).performClick()
             compose.waitUntilAtLeastOneExists(hasTestTag(SyncTags.LINK), TIMEOUT_MS)
             shot("sync-unpaired")
             compose.onNodeWithTag(SyncTags.LINK).performTextInput(link)
@@ -113,7 +110,7 @@ class SyncFlowTest {
             Espresso.pressBack()
             Espresso.pressBack()
             val library = EntryPointAccessors.fromApplication(context, DebugAccess::class.java).library()
-            val photo = runBlocking { library.photoList(PhotoQuery(scope = LibraryScope.Server)) }.single {
+            val photo = runBlocking { library.photoList(PhotoQuery.SERVER_ONLY) }.single {
                 it.name ==
                     nasName
             }
@@ -123,10 +120,9 @@ class SyncFlowTest {
             assertThat(photo.captureTime).isNotNull()
             assertThat(photo.sortTime).isEqualTo(photo.captureTime)
             exportServerPhotos(photo.versionId)
-            compose.waitUntilAtLeastOneExists(hasText(context.getString(LibraryR.string.library_server)), TIMEOUT_MS)
-            compose.onNodeWithText(context.getString(LibraryR.string.library_server)).performClick()
+            // The home filtered to "Only on the server" (FIX/L).
+            compose.showOnly(PhotoFilters.SERVER_ONLY)
             // The server may hold many photos (other devices'): bring this one into the lazy grid first.
-            // (The grid by its tag: on a tablet the sources list beside it scrolls by key too.)
             compose.waitUntilAtLeastOneExists(hasTestTag(LibraryTags.GRID), TIMEOUT_MS)
             compose.onNodeWithTag(LibraryTags.GRID).performScrollToKey(photo.id)
             compose.waitUntilAtLeastOneExists(hasTestTag(LibraryTags.cell(photo.id)), TIMEOUT_MS)
@@ -140,12 +136,9 @@ class SyncFlowTest {
             Espresso.pressBack()
         }
         ActivityScenario.launch(MainActivity::class.java).use {
-            compose.waitUntilAtLeastOneExists(
-                hasContentDescription(context.getString(LibraryR.string.library_menu)),
-                TIMEOUT_MS,
-            )
-            compose.onNode(hasContentDescription(context.getString(LibraryR.string.library_menu))).performClick()
-            compose.onNodeWithText(context.getString(LibraryR.string.library_menu_settings)).performClick()
+            compose.waitUntilAtLeastOneExists(hasTestTag(LibraryTags.SETTINGS), TIMEOUT_MS)
+            compose.onNodeWithTag(LibraryTags.SETTINGS).performClick()
+            compose.waitUntilAtLeastOneExists(hasTestTag(SettingsTags.SYNC), TIMEOUT_MS)
             compose.onNodeWithTag(SettingsTags.SYNC).performClick()
             compose.waitUntilAtLeastOneExists(hasTestTag(SyncTags.UNPAIR), TIMEOUT_MS)
             compose.onNodeWithTag(SyncTags.UNPAIR).performScrollTo().performClick()
@@ -156,7 +149,7 @@ class SyncFlowTest {
             // The account goes first (the screen shows Scan at once); forgetting the server's photos follows.
             val library = EntryPointAccessors.fromApplication(context, DebugAccess::class.java).library()
             compose.waitUntil(TIMEOUT_MS) {
-                runBlocking { library.photoList(PhotoQuery(scope = LibraryScope.Server)) }.isEmpty()
+                runBlocking { library.photoList(PhotoQuery.SERVER_ONLY) }.isEmpty()
             }
         }
     }
@@ -203,7 +196,7 @@ class SyncFlowTest {
         runBlocking { sync.syncMetadata() }
         val library = EntryPointAccessors.fromApplication(context, DebugAccess::class.java).library()
         // Only described (nothing on the server): not listed in the Server scope (FIX/V), still in the Server source.
-        assertThat(runBlocking { library.photoList(PhotoQuery(scope = LibraryScope.Server)) }.map { it.name })
+        assertThat(runBlocking { library.photoList(PhotoQuery.SERVER_ONLY) }.map { it.name })
             .doesNotContain(name)
         val serverSource = runBlocking {
             checkNotNull(
@@ -211,7 +204,7 @@ class SyncFlowTest {
                     .serverSource(),
             ).id
         }
-        val elsewhere = runBlocking { library.photoList(PhotoQuery(scope = LibraryScope.Source(serverSource))) }
+        val elsewhere = runBlocking { library.photoList(PhotoQuery.ofSource(serverSource).copy(withUnopenable = true)) }
             .single { it.name == name }
         val items = listOf(ExportJobItem(versionId = serverVersion), ExportJobItem(versionId = elsewhere.versionId))
         val jobId = ExportWorker.enqueue(context, items, ExportOptions(), 1)

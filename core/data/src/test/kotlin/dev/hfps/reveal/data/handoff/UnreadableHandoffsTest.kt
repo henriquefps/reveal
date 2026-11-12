@@ -125,7 +125,7 @@ class UnreadableHandoffsTest {
         return (outcome as HandoffOutcome.OpenEditor).versionId
     }
 
-    private suspend fun rows() = db.photoDao().rows(PhotoQuerySql.toQuery(PhotoQuery(scope = LibraryScope.FromApps)))
+    private suspend fun rows() = db.photoDao().rows(PhotoQuerySql.toQuery(PhotoQuery.FROM_APPS))
 
     @Test
     fun `a gallery hand-off gets its display image and smart preview, a re-share keeps them`() = runTest {

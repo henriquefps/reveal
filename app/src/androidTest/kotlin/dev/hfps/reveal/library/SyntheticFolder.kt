@@ -74,9 +74,12 @@ class SyntheticFolder(val name: String) {
         File(dir, "$stem.xmp").writeText(SyntheticShoot.sidecar(rating, creatorTool = creatorTool))
     }
 
-    /** Forgets every source of the library, adds this folder like the picker result would, waits for the index. */
-    fun addAndIndex(timeoutMs: Long = 120_000): Pair<Long, IndexReport> = runBlocking {
-        library.sources().first().forEach { library.removeSource(it.id) }
+    /**
+     * Forgets every source of the library (unless [alongside]: other test folders stay), adds this folder like the
+     * picker result would, waits for the index.
+     */
+    fun addAndIndex(timeoutMs: Long = 120_000, alongside: Boolean = false): Pair<Long, IndexReport> = runBlocking {
+        if (!alongside) library.sources().first().forEach { library.removeSource(it.id) }
         val result = library.addSource(treeUri)
         val id = (result as? AddSourceResult.Added)?.sourceId ?: error("add failed: $result")
         val report = withTimeout(timeoutMs) { library.indexReports.first { id in it } }.getValue(id)

@@ -65,7 +65,7 @@ class ServerViewTest {
 
     /** The Server scope as the library lists it. */
     private fun serverScope(device: TestDevice) = runBlocking {
-        device.db.photoDao().rows(PhotoQuerySql.toQuery(PhotoQuery(scope = LibraryScope.Server)))
+        device.db.photoDao().rows(PhotoQuerySql.toQuery(PhotoQuery.SERVER_ONLY))
     }
 
     private fun serverCount(device: TestDevice) = runBlocking { device.db.syncDao().observeServerPhotoCount().first() }

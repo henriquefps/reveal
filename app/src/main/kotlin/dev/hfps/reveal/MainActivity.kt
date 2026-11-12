@@ -23,7 +23,6 @@ import dagger.hilt.android.AndroidEntryPoint
 import dev.hfps.reveal.data.handoff.HandoffIntents
 import dev.hfps.reveal.data.handoff.HandoffOutcome
 import dev.hfps.reveal.data.handoff.HandoffRepository
-import dev.hfps.reveal.data.model.LibraryScope
 import dev.hfps.reveal.data.model.PhotoListCodec
 import dev.hfps.reveal.data.model.PhotoQuery
 import dev.hfps.reveal.data.preset.PresetFilesIo
@@ -127,7 +126,7 @@ class MainActivity : ComponentActivity() {
                 }
                 // Several photos handed over: the tablet filmstrip shows them ("Opened from other apps").
                 val strip = if (outcome.libraryBehind) {
-                    PhotoListCodec.encode(PhotoQuery(scope = LibraryScope.FromApps))
+                    PhotoListCodec.encode(PhotoQuery.FROM_APPS)
                 } else {
                     null
                 }

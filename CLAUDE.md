@@ -176,7 +176,7 @@ adb -s emulator-<port> logcat -d -s REVEAL_LIBRARY RevealLibrary
 ```
 
 The full suite excludes the measurement classes:
-`-e notClass dev.hfps.reveal.editor.EditorMeasurementsTest,dev.hfps.reveal.library.LibraryMeasurementsTest,dev.hfps.reveal.editor.FilmstripMeasurementsTest`.
+`-e notClass dev.hfps.reveal.editor.EditorMeasurementsTest,dev.hfps.reveal.library.LibraryMeasurementsTest,dev.hfps.reveal.editor.FilmstripMeasurementsTest,dev.hfps.reveal.sync.SyncPullMeasurementsTest`.
 Frame measurements must not use a Compose test rule (it holds frames while it synchronizes): launch with
 `ActivityScenario` and inject touches with `input swipe`.
 
@@ -510,6 +510,13 @@ adb -s emulator-<port> shell am instrument -w -e class dev.hfps.reveal.sync.Sync
 adb -s emulator-<port> logcat -d -s REVEAL_SYNC RevealSync RevealSyncFiles
 scripts/sync/local-server.sh stop <work dir>
 ```
+
+Measurement (skipped without links; exclude it from the full suite like the other measurement classes):
+`-e class dev.hfps.reveal.sync.SyncPullMeasurementsTest -e syncLinks "'$L1,$L2'"` logs `REVEAL_SYNC` library open and
+scroll frames before and during a 10,000-record first pull. Pulls apply 50 records per transaction (`SyncStore.APPLY_CHUNK`);
+keep it small. Exports of Server photos download the original first; preview-only ones wait (`OriginalPolicy`).
+Emulator: the x86_64 host GL stack segfaults on the editor's GPU tests (SwiftShader and `-gpu host`); run GPU-heavy
+suites on the phone.
 
 The `nasSeed`/`nasSize` file is the fingerprint-vector generator's bytes (`((i * 2654435761 + seed * 97) >> 13) & 0xff`).
 Both instrumented classes skip without their arguments, so the full suite stays green without a server. For the

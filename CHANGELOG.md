@@ -24,6 +24,9 @@ ships in the repository; the app side of sync comes in 0.4.0.
 - Smart previews: a developable copy (about 2560 px) of photos only this device has, so other devices can edit them;
   the editor opens it when the original is out of reach. Originals backup: photos only this device has are uploaded
   once (Wi-Fi only by default, per folder), resuming where they stopped; photos the server already has never are.
+- Exporting a photo whose original is on your sync server downloads it first (with progress and Cancel); a photo
+  whose original is only on another device waits instead of failing, and its export finishes by itself once that
+  device backs it up. The server's NAS photos sort by capture time like your own.
 - `reveal-sync`, the self-hosted sync server (`sync-server/`, ADR 0017): pairs devices by QR code (one revocable key
   per device), syncs edits, ratings and virtual copies with a change feed that never loses an edit in a conflict (the
   other edit becomes a virtual copy), backs up originals and smart previews with resumable uploads, and indexes NAS

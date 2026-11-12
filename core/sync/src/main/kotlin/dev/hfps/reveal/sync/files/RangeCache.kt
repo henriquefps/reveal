@@ -7,10 +7,14 @@ import java.io.RandomAccessFile
 /**
  * A block cache of remote files read by range (ADR 0018 "Server photos"): each [BLOCK] bytes of a file are one small
  * file under `dir/<key>/<block index>`, written whole (temp + rename) so a crash never leaves a short block. A miss
- * fetches up to [READ_AHEAD] blocks in one request (a RAW decoder reads forward). [trim] keeps the cache under a cap,
- * dropping the least recently used files whole.
+ * fetches one block, and while a file is read forward (a RAW decoder, an export) each miss right after the previous
+ * one doubles the read-ahead up to [READ_AHEAD] blocks per request; a header read (thumbnails, capture times) costs one
+ * block. [trim] keeps the cache under a cap, dropping the least recently used files whole.
  */
 class RangeCache(private val dir: File, private val maxBytes: Long = DEFAULT_MAX_BYTES) {
+    /** Per file: the block after the last one fetched, and the current read-ahead. */
+    private val streams = java.util.concurrent.ConcurrentHashMap<String, Pair<Long, Int>>()
+
     /** Reads [length] bytes at [offset] of the remote file [key] of [size] bytes; [fetch] reads one range remotely. */
     fun read(
         key: String,
@@ -28,7 +32,7 @@ class RangeCache(private val dir: File, private val maxBytes: Long = DEFAULT_MAX
         var written = 0
         while (position < end) {
             val index = position / BLOCK
-            val block = blockFile(folder, index) ?: fetchBlocks(folder, index, size, fetch)
+            val block = blockFile(folder, index) ?: fetchBlocks(key, folder, index, size, fetch)
             val blockStart = index * BLOCK
             val from = (position - blockStart).toInt()
             val n = minOf(end - position, BLOCK - from.toLong()).toInt()
@@ -45,10 +49,13 @@ class RangeCache(private val dir: File, private val maxBytes: Long = DEFAULT_MAX
     private fun blockFile(folder: File, index: Long): File? = File(folder, index.toString()).takeIf { it.exists() }
 
     /** Fetches [index] and the missing blocks after it (up to [READ_AHEAD]) in one range; returns the first. */
-    private fun fetchBlocks(folder: File, index: Long, size: Long, fetch: (Long, Int) -> ByteArray): File {
+    private fun fetchBlocks(key: String, folder: File, index: Long, size: Long, fetch: (Long, Int) -> ByteArray): File {
         val lastBlock = (size - 1) / BLOCK
+        val (next, previous) = streams[key] ?: (-1L to 0)
+        val ahead = if (index == next) (previous * 2).coerceIn(1, READ_AHEAD) else 1
         var count = 1
-        while (count < READ_AHEAD && index + count <= lastBlock && blockFile(folder, index + count) == null) count++
+        while (count < ahead && index + count <= lastBlock && blockFile(folder, index + count) == null) count++
+        streams[key] = (index + count) to ahead
         val start = index * BLOCK
         val length = minOf(size - start, count * BLOCK).toInt()
         val bytes = fetch(start, length)
@@ -79,6 +86,7 @@ class RangeCache(private val dir: File, private val maxBytes: Long = DEFAULT_MAX
     }
 
     fun clear() {
+        streams.clear()
         dir.deleteRecursively()
     }
 

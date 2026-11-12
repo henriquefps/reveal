@@ -19,7 +19,7 @@ adds: the server is the user's own (no host in the app), no feature locks.
 | Device key | AES-GCM with a key that never leaves the Android Keystore; the ciphertext in no-backup preferences (`allowBackup` is off). Never logged. |
 | Change tracking | SQLite triggers on `photos`, `photo_files`, `versions`, `recipes`, `history_cursor` mark a `sync_records` row dirty; silenced while a pull is applied (`meta` key `sync.applying`). Every write path is covered without touching it. |
 | Push | Dirty records, photos first, at most 500 per request and under 7 MiB of JSON; `baseRev` = the record's last known server rev. An unedited version nobody has seen is never pushed; a photo waits for its fingerprint. |
-| Pull | `GET /v1/changes` from the stored cursor, applied page by page in one transaction each, cursor saved after each page. `invalid_cursor` restarts from the empty cursor. |
+| Pull | `GET /v1/changes` from the stored cursor; each page applied in transactions of 50 records with a coroutine yield between them (a 10,000-record first pull never holds the database long; the library stays responsive), the cursor saved after each page. `invalid_cursor` restarts from the empty cursor. |
 | Conflicts | A record with unpushed local work is not overwritten: the server's state waits in `sync_inbox` and applies after our push if it is still the newest. A `copyOf` version becomes a local version with `versions.copy_of` / `copy_device`: a second cell with a "Conflict" badge until M5's versions UI. |
 | Identity | A pulled photo is found by uuid, then by alias, then by its main file's fingerprint. A local photo never pushed adopts the server's uuid; one already pushed under another uuid keeps it and the server's id becomes an alias (`sync_aliases`). A local version nobody edited adopts an incoming version at the same position. |
 | Server photos | One `sources.kind = SERVER` source holds photos only the server has (NAS files, other devices' photos). Their document id is `<fingerprint>/<name>`; `ServerFilesProvider` serves them by range, so thumbnails, viewer, editor and export need no change. "All photos" excludes them; the library has a "Server" entry. |
@@ -74,8 +74,10 @@ local photos and edits stay.
 `ServerFilesProvider` (`<applicationId>.sync`, not exported):
 
 - `original/<fingerprint>/<name>`: the original, through `StorageManager.openProxyFileDescriptor` (seekable, so LibRaw's
-  `pread` and `BitmapFactory` work unchanged) backed by `RangeCache`: 256 KiB blocks under `cache/sync-originals`, a
-  miss fetches up to 16 blocks in one `Range` request, LRU by file to 1 GiB. Sizes come from the library, so cached
+  `pread` and `BitmapFactory` work unchanged) backed by `RangeCache`: 256 KiB blocks under `cache/sync-originals`. A
+  miss fetches one block; while a file is read forward (a RAW decode, an export download) each next miss doubles the
+  read-ahead up to 16 blocks per `Range` request, so a header read costs one block and a whole file a few requests.
+  LRU by file to 1 GiB. Sizes come from the library, so cached
   blocks read offline. The cache is a directory LRU, not `cache_entries` rows: that table is the thumbnail cache's index
   and its trim would count and delete these blocks.
 - `display/<fingerprint>/<name>`: the same, or, when the server cannot serve the original, the display JPEG inside the
@@ -85,6 +87,12 @@ local photos and edits stay.
 `ServerTree.uri` is the strict original (the editor, the export); `ServerTree.openInput` is `display`. The NAS feed
 files each NAS file under the Server source (folder = the NAS folder's name and directory, paired by stem); a NAS file
 whose fingerprint a local photo has only marks that photo `original_on_server`.
+
+**Capture times.** The server keeps no EXIF, so a NAS photo starts with the file's time and `metadata_state =
+PENDING` (so does another device's photo whose record has no `captureTime`). After every metadata sync,
+`LibraryIndexer.readServerMetadata` reads up to 300 of those headers through the provider (one 256 KiB block each, the
+library's own header reader: capture time with sub-seconds, offset, size, orientation, embedded rating) and sorts them
+like local photos. It writes with the triggers quiet: a capture time read from a file is not a change to push.
 
 ## Smart previews
 
@@ -97,8 +105,23 @@ that keeps preview storage to the photos people work on, and a backed-up origina
 
 `LibraryRepository.editTarget` opens the smart preview when the original is out of reach (a Server photo the server
 cannot serve, an unplugged folder); `PhotoOpener` recognises the magic and builds the editor's input from it (no full
-resolution behind it, so zoom stops at the preview). An export of such a photo fails with "source missing" until the
-original is reachable (from the device that has it, or after its backup).
+resolution behind it, so zoom stops at the preview).
+
+## Export
+
+`LibraryRepository.exportTarget` says where the original can be read (`OriginalReach`): on the device, on the server
+(a Server photo the server serves, or an unplugged folder's photo whose backup the server holds: the target's URI is
+then the server original), or only on another device. `ExportWorker` (`OriginalPolicy`, JVM-tested):
+
+- **Server:** the original is downloaded first, read once from start to end through the provider into the range cache,
+  with its own notification ("Downloading the original from your sync server", progress, Cancel); the export then
+  decodes the cached copy. A cancel leaves the item pending.
+- **Only on another device:** the item is `WAITING`, not failed. The run finishes its other items, the notification
+  and the export sheet say the photos wait for their originals and that the export finishes by itself, and the job
+  runs again every 30 minutes with a network (its own unique work, so other exports never queue behind it). Each run
+  first tries the original again (the provider asks the server), and the daily fingerprint lookups include Server
+  photos, so another device's backup unblocks it. After 7 days of waiting the item fails with "the original is only on
+  another device and never reached your sync server".
 
 ## Originals backup
 
@@ -131,7 +154,11 @@ TalkBack; "Delete conflict copies" in the selection menu deletes them here and p
   in one run. Uploads: chunks, an interrupted chunk, a run killed mid-way resuming from `HEAD` in a new uploader, an
   existing blob not sent again. Pairing links, pairing, unpairing, error codes.
 - JVM, `:core:data`: the 5 → 6 migration, every trigger, the quiet flag. `:core:pipeline`: `SmartPreviewCodecTest`.
-- Instrumented, `:app` `SyncFlowTest` against the real `reveal-sync` run locally (see CLAUDE.md "Sync (app)").
+- Instrumented, `:app` `SyncFlowTest` against the real `reveal-sync` run locally (see CLAUDE.md "Sync (app)"): pair,
+  the NAS RAW's capture time read by range, its export (downloaded first) and a preview-only photo's export waiting;
+  `TwoDevicePassTest` (two real devices); `SyncPullMeasurementsTest` (library open and scroll frames during a
+  10,000-record first pull, against a baseline).
+- JVM: `OriginalPolicyTest`, `RangeCacheTest` (one block for a header, a growing read-ahead for a whole file).
 
 ## Consequences
 
@@ -140,3 +167,6 @@ TalkBack; "Delete conflict copies" in the selection menu deletes them here and p
   turns it into a copy.
 - Previews and originals are never garbage collected on the server (ADR 0017); the app never deletes a backup.
 - Encryption of originals at rest is still the backup volume's job.
+- The x86_64 emulator's host GL stack crashes on the editor's GPU tests (`RenderThread` SIGSEGV in
+  `qemu-system-x86_64-headless` with `swiftshader_indirect`; with `-gpu host` the CPU threads hang and it segfaults
+  later in the full suite). The same tests pass on the phone; GPU-heavy suites run on a device.

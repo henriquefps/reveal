@@ -34,6 +34,7 @@ import dev.hfps.reveal.sync.api.NasFile
 import dev.hfps.reveal.sync.api.PushChange
 import dev.hfps.reveal.sync.api.PushResult
 import dev.hfps.reveal.sync.api.SyncApi
+import kotlinx.coroutines.yield
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 
@@ -251,8 +252,13 @@ class SyncStore(
      */
     suspend fun apply(records: List<FeedRecord>, deviceName: (String) -> String?): ApplyStats {
         val stats = ApplyStats()
-        quietly {
-            for (record in records) applyOne(record, deviceName, stats)
+        // Small transactions with a yield between them: a 10,000-record first pull never holds the database for
+        // long, so the library's queries (grid, counts, thumbnails) keep answering while it lands (ADR 0018).
+        for (chunk in records.chunked(APPLY_CHUNK)) {
+            quietly {
+                for (record in chunk) applyOne(record, deviceName, stats)
+            }
+            yield()
         }
         announce(stats)
         return stats
@@ -410,7 +416,8 @@ class SyncStore(
             captureTime = data.captureTime,
             width = data.width,
             height = data.height,
-            metadataState = MetadataState.READ,
+            // Without a capture time from the other device, the header is read by range like a NAS photo's.
+            metadataState = if (data.captureTime == null) MetadataState.PENDING else MetadataState.READ,
             addedAt = now,
         )
         val id = photos.insertPhoto(entity)
@@ -544,10 +551,13 @@ class SyncStore(
     // ------------------------------------------------------------------ NAS files and lookups
 
     /** Files the server indexes on its NAS (ADR 0017 "NAS folders"): the Server source's photos. */
-    suspend fun applyNas(files: List<NasFile>) = quietly {
-        val source = serverSource()
-        for (file in files) applyNasFile(source, file)
-        sync.deleteEmptyServerPhotos(source.id)
+    suspend fun applyNas(files: List<NasFile>) {
+        val source = quietly { serverSource() }
+        for (chunk in files.chunked(APPLY_CHUNK)) {
+            quietly { for (file in chunk) applyNasFile(source, file) }
+            yield()
+        }
+        quietly { sync.deleteEmptyServerPhotos(source.id) }
     }
 
     @Suppress("CyclomaticComplexMethod", "ComplexCondition")
@@ -620,7 +630,8 @@ class SyncStore(
                 format = formatOf(
                     listOf(name),
                 ),
-                hasRaw = raw, sortTime = file.modifiedAt, metadataState = MetadataState.READ,
+                // The capture time comes from the header, read by range after the feed (`readServerHeaders`).
+                hasRaw = raw, sortTime = file.modifiedAt, metadataState = MetadataState.PENDING,
                 addedAt = now,
             ),
         )
@@ -687,6 +698,9 @@ class SyncStore(
         const val WINNER_INCOMING = "incoming"
         const val SOURCE_NAS = "nas"
         const val SOURCE_BACKUP = "backup"
+
+        /** Records applied per transaction (a few milliseconds each on a phone). */
+        const val APPLY_CHUNK = 50
 
         /** `sources.tree_uri` of the Server source (unique, never a real URI). */
         const val SERVER_TREE = "reveal-sync:server"

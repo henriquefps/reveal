@@ -64,6 +64,8 @@ data class ExportRun(
     /** File names (or originals) with their failure. */
     val failures: List<Pair<String, ExportFailure>> = emptyList(),
     val exported: Int = 0,
+    /** Photos waiting for their original (only on another device); the job resumes by itself (ADR 0018). */
+    val waiting: Int = 0,
     /**
      * The files just saved (MediaStore or SAF document URIs), offered by "Share" on the result. Empty when the
      * destination was the share sheet itself: those cache copies are gone once it returns.
@@ -232,6 +234,7 @@ class ExportViewModel @Inject constructor(
                                 cancelled = info.state == WorkInfo.State.CANCELLED,
                                 failures = failures,
                                 exported = uris.size,
+                                waiting = states.count { it.status == ItemStatus.WAITING },
                                 results = if (share) emptyList() else uris,
                             ),
                             share = if (share && info.state == WorkInfo.State.SUCCEEDED) uris else emptyList(),

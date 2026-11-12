@@ -2,6 +2,8 @@ package dev.hfps.reveal.sync
 
 import android.util.Log
 import dev.hfps.reveal.data.db.RevealDatabase
+import dev.hfps.reveal.data.index.LibraryIndexer
+import dev.hfps.reveal.data.library.DocumentTreeFactory
 import dev.hfps.reveal.sync.account.PairingLink
 import dev.hfps.reveal.sync.account.SyncAccount
 import dev.hfps.reveal.sync.account.SyncAccountStore
@@ -75,6 +77,8 @@ class SyncRepository(
     private val uploader: BlobUploader,
     private val files: ServerFiles,
     private val clientInfo: ClientInfo,
+    /** The library's trees: the Server source's headers are read through the server-files provider. */
+    private val trees: DocumentTreeFactory? = null,
     private val newApi: (url: String, key: String?) -> SyncApi = { url, key -> SyncApi(url, key) },
 ) {
     /** The device's name, platform and app version, sent when pairing. */
@@ -172,7 +176,8 @@ class SyncRepository(
             runtime.update { it.copy(running = true) }
             try {
                 val report = engine.sync(api, account.serverId)
-                Log.i(TAG, "sync: $report")
+                val headers = readServerHeaders()
+                Log.i(TAG, "sync: $report, $headers server headers")
                 runtime.update { it.copy(running = false, problem = null, lastSyncAt = engine.lastSync()) }
                 report
             } catch (@Suppress("SwallowedException") e: ServerChangedException) {
@@ -213,6 +218,19 @@ class SyncRepository(
         }
     }
 
+    /**
+     * Capture times of the Server source's photos (NAS files, other devices' photos without one): their headers read by
+     * range, [HEADERS_PER_RUN] per sync, so they sort like local photos (ADR 0018 "Server photos").
+     */
+    @Suppress("ReturnCount")
+    private suspend fun readServerHeaders(): Int {
+        val factory = trees ?: return 0
+        val source = db.syncDao().serverSource() ?: return 0
+        return runCatching {
+            LibraryIndexer(db).readServerMetadata(source.id, factory.open(source), HEADERS_PER_RUN)
+        }.onFailure { Log.w(TAG, "server headers: ${it.javaClass.simpleName}") }.getOrDefault(0)
+    }
+
     /** Deletes a version (a conflict copy) here and on the other devices. */
     suspend fun deleteVersion(versionId: Long) = withContext(Dispatchers.IO) { store.deleteVersion(versionId) }
 
@@ -226,5 +244,6 @@ class SyncRepository(
         const val TAG = "RevealSync"
         const val PREVIEWS_PER_RUN = 20
         const val ORIGINALS_PER_RUN = 10
+        const val HEADERS_PER_RUN = 300
     }
 }

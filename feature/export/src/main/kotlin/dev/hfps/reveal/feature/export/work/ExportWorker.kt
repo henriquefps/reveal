@@ -21,7 +21,9 @@ import dagger.hilt.android.EntryPointAccessors
 import dagger.hilt.components.SingletonComponent
 import dev.hfps.reveal.data.edit.EditRepository
 import dev.hfps.reveal.data.export.ExportPreferences
+import dev.hfps.reveal.data.library.ExportTarget
 import dev.hfps.reveal.data.library.LibraryRepository
+import dev.hfps.reveal.data.library.OriginalReach
 import dev.hfps.reveal.feature.export.R
 import dev.hfps.reveal.feature.export.destination.Destinations
 import dev.hfps.reveal.feature.export.engine.ExportEngine
@@ -79,6 +81,10 @@ class ExportWorker(context: Context, params: WorkerParameters) : CoroutineWorker
         val jobId = tags.firstOrNull { it.startsWith(JOB_TAG) }?.removePrefix(JOB_TAG) ?: inputData.getString(KEY_JOB)
         val job = jobId?.let(jobs::job) ?: return Result.failure()
         val total = job.items.size
+        // Items that waited for their original get another chance in this run.
+        jobs.states(jobId).forEachIndexed { i, state ->
+            if (state.status == ItemStatus.WAITING) jobs.update(jobId, i) { it.copy(status = ItemStatus.PENDING) }
+        }
         Log.i(TAG, "job $jobId: $total items, states ${jobs.states(jobId).map { it.status }}")
         report(jobs.states(jobId), total)
         val renderer = try {
@@ -112,9 +118,13 @@ class ExportWorker(context: Context, params: WorkerParameters) : CoroutineWorker
         if (state.status != ItemStatus.PENDING) return true
         // A previous run was killed while writing this item: remove its partial file first.
         state.partialUri?.let { run.destinations.deletePartial(it.toUri()) }
-        val item = resolve(run.graph, run.job.items[index], run.job.firstSequence + index)
+        val target = run.job.items[index].versionId?.let { run.graph.library().exportTarget(it) }
+        val item = resolve(run.graph, run.job.items[index], run.job.firstSequence + index, target)
         try {
             if (item == null) throw ExportException(ExportFailure.SOURCE_MISSING)
+            if (target != null && !original(run, index, target.reach, item.uri, state.waitingSince)) {
+                return !isStopped
+            }
             val result = runInterruptible(Dispatchers.IO) {
                 run.engine.export(
                     item,
@@ -144,6 +154,69 @@ class ExportWorker(context: Context, params: WorkerParameters) : CoroutineWorker
         return true
     }
 
+    /**
+     * Makes the original readable before the export (ADR 0018 "Export"): a server original is downloaded first (into
+     * the range cache, with progress, cancellable); one only another device has makes the item wait. False when the
+     * item does not export in this run.
+     */
+    private suspend fun original(run: Run, index: Int, reach: OriginalReach, uri: Uri, since: Long?): Boolean {
+        val now = System.currentTimeMillis()
+        // A preview-only photo may have become reachable since the library last asked (its backup arrived).
+        val effective = if (reach == OriginalReach.ELSEWHERE && readable(uri)) OriginalReach.SERVER else reach
+        return when (OriginalPolicy.step(effective, since, now)) {
+            OriginalStep.EXPORT -> true
+
+            OriginalStep.DOWNLOAD_FIRST -> download(run, index, uri)
+
+            OriginalStep.WAIT -> {
+                jobs.update(run.jobId, index) { it.copy(status = ItemStatus.WAITING, waitingSince = since ?: now) }
+                Log.i(TAG, "item ${index + 1}/${run.total} waits for its original")
+                false
+            }
+
+            OriginalStep.GIVE_UP -> {
+                jobs.update(run.jobId, index) {
+                    it.copy(status = ItemStatus.FAILED, failure = ExportFailure.ORIGINAL_ELSEWHERE.name)
+                }
+                false
+            }
+        }
+    }
+
+    private suspend fun readable(uri: Uri): Boolean = runInterruptible(Dispatchers.IO) {
+        runCatching { applicationContext.contentResolver.openFileDescriptor(uri, "r")?.use { true } ?: false }
+            .getOrDefault(false)
+    }
+
+    /** Reads the server original once from start to end (it lands in the range cache); false when cancelled. */
+    private suspend fun download(run: Run, index: Int, uri: Uri): Boolean = runInterruptible(Dispatchers.IO) {
+        val start = System.nanoTime()
+        val descriptor = applicationContext.contentResolver.openFileDescriptor(uri, "r")
+            ?: throw ExportException(ExportFailure.SOURCE_MISSING)
+        descriptor.use { pfd ->
+            val size = pfd.statSize.coerceAtLeast(1)
+            java.io.FileInputStream(pfd.fileDescriptor).use { input ->
+                val buffer = ByteArray(DOWNLOAD_BUFFER)
+                var read = 0L
+                var last = 0L
+                while (true) {
+                    if (isStopped) return@runInterruptible false
+                    val n = input.read(buffer)
+                    if (n < 0) break
+                    read += n
+                    val now = System.currentTimeMillis()
+                    if (now - last >= REPORT_INTERVAL_MS) {
+                        last = now
+                        notifications.downloading(id, (read.toFloat() / size).coerceIn(0f, 1f))
+                    }
+                }
+                val ms = (System.nanoTime() - start) / NANOS_PER_MS
+                Log.i(TAG, "item ${index + 1}/${run.total}: original downloaded, $read bytes in $ms ms")
+            }
+        }
+        true
+    }
+
     private fun fail(run: Run, index: Int, failure: ExportFailure, cause: Throwable) {
         cleanPartial(run.jobId, index, run.destinations)
         jobs.update(run.jobId, index) { it.copy(status = ItemStatus.FAILED, failure = failure.name) }
@@ -154,7 +227,13 @@ class ExportWorker(context: Context, params: WorkerParameters) : CoroutineWorker
         val states = jobs.states(jobId)
         val done = states.count { it.status == ItemStatus.DONE }
         val failed = states.count { it.status == ItemStatus.FAILED }
-        notifications.finished(done, failed, total)
+        val waiting = states.count { it.status == ItemStatus.WAITING }
+        if (waiting > 0) {
+            notifications.waiting(waiting)
+            retryLater(applicationContext, jobId)
+        } else {
+            notifications.finished(done, failed, total)
+        }
         return Result.success()
     }
 
@@ -171,10 +250,14 @@ class ExportWorker(context: Context, params: WorkerParameters) : CoroutineWorker
     }
 
     /** The file and recipe of a job item; null when its version or URI is gone. */
-    private suspend fun resolve(graph: ExportEntryPoint, item: ExportJobItem, sequence: Int): ExportItem? {
+    private suspend fun resolve(
+        graph: ExportEntryPoint,
+        item: ExportJobItem,
+        sequence: Int,
+        target: ExportTarget?,
+    ): ExportItem? {
         val recipe = item.recipeJson?.let { runCatching { RecipeCodec.Default.decode(it) }.getOrNull() }
         val versionId = item.versionId
-        val target = versionId?.let { graph.library().exportTarget(it) }
         return when {
             target != null -> ExportItem(
                 uri = target.uri,
@@ -230,6 +313,27 @@ class ExportWorker(context: Context, params: WorkerParameters) : CoroutineWorker
         private const val JOB_TAG = "reveal-export-job:"
         private const val TAG = "RevealExport"
         private const val REPORT_INTERVAL_MS = 250L
+        private const val DOWNLOAD_BUFFER = 1 shl 20
+        private const val NANOS_PER_MS = 1_000_000L
+        private const val WAIT_PREFIX = "reveal-export-wait-"
+
+        /**
+         * Runs [jobId] again in [OriginalPolicy.RETRY_MINUTES] minutes with a network (its items wait for originals
+         * on another device). Its own unique name, so other exports never queue behind it; tagged with the job tag
+         * only, so an open export sheet (which follows the plain job id) shows this run as finished with waiting items.
+         */
+        fun retryLater(context: Context, jobId: String) {
+            val request = OneTimeWorkRequestBuilder<ExportWorker>()
+                .setInputData(workDataOf(KEY_JOB to jobId))
+                .addTag(JOB_TAG + jobId)
+                .setInitialDelay(OriginalPolicy.RETRY_MINUTES, java.util.concurrent.TimeUnit.MINUTES)
+                .setConstraints(
+                    androidx.work.Constraints.Builder().setRequiredNetworkType(androidx.work.NetworkType.CONNECTED)
+                        .build(),
+                )
+                .build()
+            WorkManager.getInstance(context).enqueueUniqueWork(WAIT_PREFIX + jobId, ExistingWorkPolicy.REPLACE, request)
+        }
 
         private fun progressData(done: Int, total: Int, fraction: Float) =
             workDataOf(KEY_DONE to done, KEY_TOTAL to total, KEY_FRACTION to fraction)
@@ -302,6 +406,27 @@ class ExportNotifications(private val context: Context) {
     }
 
     fun cancelled() = notifyEnd(context.getString(R.string.export_notification_cancelled))
+
+    /** The original of the current photo is downloading from the sync server. */
+    fun downloading(workId: UUID, fraction: Float) {
+        val notification = NotificationCompat.Builder(context, CHANNEL)
+            .setSmallIcon(android.R.drawable.stat_sys_download)
+            .setContentTitle(context.getString(R.string.export_notification_downloading))
+            .setProgress(PROGRESS_MAX, (fraction * PROGRESS_MAX).toInt(), false)
+            .setOngoing(true)
+            .setOnlyAlertOnce(true)
+            .addAction(
+                0,
+                context.getString(R.string.export_cancel),
+                WorkManager.getInstance(context).createCancelPendingIntent(workId),
+            )
+            .build()
+        runCatching { manager.notify(PROGRESS_ID, notification) }
+    }
+
+    /** Photos wait for their originals (on another device): the export resumes by itself. */
+    fun waiting(count: Int) =
+        notifyEnd(context.resources.getQuantityString(R.plurals.export_notification_waiting, count, count))
 
     private fun notifyEnd(title: String) {
         val notification = NotificationCompat.Builder(context, CHANNEL)

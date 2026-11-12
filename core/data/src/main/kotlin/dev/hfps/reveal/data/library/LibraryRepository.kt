@@ -78,7 +78,27 @@ data class DetailFile(val name: String, val size: Long, val role: FileRole, val 
  * What an export develops for a version: the RAW of a pair (else the rendering), its name, the photo's rating, and the
  * rendering (its EXIF fills gaps of the RAW's).
  */
-data class ExportTarget(val versionId: Long, val uri: Uri, val name: String, val rating: Int, val renderedUri: Uri?)
+data class ExportTarget(
+    val versionId: Long,
+    val uri: Uri,
+    val name: String,
+    val rating: Int,
+    val renderedUri: Uri?,
+    /** Where [uri] reads the original from (ADR 0018 "Export"). */
+    val reach: OriginalReach = OriginalReach.DEVICE,
+)
+
+/** Where a photo's original can be read now. */
+enum class OriginalReach {
+    /** A file on this device (a folder, a hand-off). */
+    DEVICE,
+
+    /** The sync server serves it ([ExportTarget.uri] reads it by range): download it before decoding. */
+    SERVER,
+
+    /** Only another device has it (this one has its smart preview): wait until its backup reaches the server. */
+    ELSEWHERE,
+}
 
 /** What the editor opens for a version: the RAW of a pair (else the rendering), and the rendering for the preview. */
 data class EditTarget(val photoId: Long, val versionId: Long, val uri: Uri, val name: String, val renderedUri: Uri?)
@@ -387,7 +407,31 @@ class LibraryRepository(
         val detail = detail(photoId) ?: return@withContext null
         val main = detail.raw ?: detail.rendered ?: return@withContext null
         val pair = detail.rendered?.uri?.takeIf { detail.raw != null }
-        ExportTarget(versionId, main.uri, main.name, detail.photo.rating, pair)
+        val target = ExportTarget(versionId, main.uri, main.name, detail.photo.rating, pair)
+        val source = sourceDao.get(detail.photo.sourceId) ?: return@withContext target
+        val onServer = db.syncDao().cloud(photoId)?.originalOnServer == true
+        when {
+            source.kind == SourceKind.SERVER ->
+                target.copy(renderedUri = null, reach = if (onServer) OriginalReach.SERVER else OriginalReach.ELSEWHERE)
+
+            source.kind == SourceKind.FOLDER && source.state != SourceState.AVAILABLE && onServer -> {
+                // An unplugged folder whose original the server holds (a backup): export from the server copy.
+                val fingerprint = photoDao.files(photoId).firstOrNull { it.name == main.name }?.fingerprint
+                val authority = serverAuthority
+                if (fingerprint == null || authority == null) {
+                    target
+                } else {
+                    val uri = ServerTree.uri(
+                        authority,
+                        ServerTree.ORIGINAL,
+                        ServerTree.documentId(fingerprint, main.name),
+                    )
+                    target.copy(uri = uri, renderedUri = null, reach = OriginalReach.SERVER)
+                }
+            }
+
+            else -> target
+        }
     }
 
     private fun PhotoFileEntity.detail(tree: DocumentTree) =

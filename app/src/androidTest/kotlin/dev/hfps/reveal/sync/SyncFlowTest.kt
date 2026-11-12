@@ -17,6 +17,7 @@ import androidx.test.core.app.ActivityScenario
 import androidx.test.espresso.Espresso
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import androidx.work.WorkManager
 import com.google.common.truth.Truth.assertThat
 import dagger.hilt.android.EntryPointAccessors
 import dev.hfps.reveal.MainActivity
@@ -24,6 +25,11 @@ import dev.hfps.reveal.data.model.LibraryScope
 import dev.hfps.reveal.data.model.PhotoQuery
 import dev.hfps.reveal.debug.DebugAccess
 import dev.hfps.reveal.feature.editor.EditorTags
+import dev.hfps.reveal.feature.export.model.ExportOptions
+import dev.hfps.reveal.feature.export.work.ExportJobItem
+import dev.hfps.reveal.feature.export.work.ExportJobStore
+import dev.hfps.reveal.feature.export.work.ExportWorker
+import dev.hfps.reveal.feature.export.work.ItemStatus
 import dev.hfps.reveal.feature.library.LibraryTags
 import dev.hfps.reveal.feature.library.R as LibraryR
 import dev.hfps.reveal.feature.library.viewer.ViewerTags
@@ -114,6 +120,10 @@ class SyncFlowTest {
             }
             assertThat(photo.remote).isTrue()
             assertThat(photo.cloudOriginal).isTrue()
+            // Its capture time comes from its header, read by range (it sorts like a local photo).
+            assertThat(photo.captureTime).isNotNull()
+            assertThat(photo.sortTime).isEqualTo(photo.captureTime)
+            exportServerPhotos(photo.versionId)
             compose.waitUntilAtLeastOneExists(hasText(context.getString(LibraryR.string.library_server)), TIMEOUT_MS)
             compose.onNodeWithText(context.getString(LibraryR.string.library_server)).performClick()
             // The server may hold many photos (other devices'): bring this one into the lazy grid first.
@@ -149,6 +159,53 @@ class SyncFlowTest {
                 runBlocking { library.photoList(PhotoQuery(scope = LibraryScope.Server)) }.isEmpty()
             }
         }
+    }
+
+    /**
+     * A server original exports (downloaded first); a photo only another device has waits instead of failing
+     * (ADR 0018 "Export"). The second photo is a record pushed with this device's key for a file nobody uploaded.
+     */
+    private fun exportServerPhotos(serverVersion: Long) {
+        val sync = this.sync
+        val api = checkNotNull(sync.api())
+        val photo = java.util.UUID.randomUUID().toString()
+        val fingerprint = "v1:" + java.security.MessageDigest.getInstance("SHA-256").digest(photo.toByteArray())
+            .joinToString("") { "%02x".format(it) }
+        api.push(
+            listOf(
+                dev.hfps.reveal.sync.api.PushChange(
+                    "photo",
+                    photo,
+                    0,
+                    System.currentTimeMillis(),
+                    data = kotlinx.serialization.json.buildJsonObject {
+                        put("fingerprint", kotlinx.serialization.json.JsonPrimitive(fingerprint))
+                        put("name", kotlinx.serialization.json.JsonPrimitive("ELSEWHERE.JPG"))
+                    },
+                ),
+            ),
+        )
+        runBlocking { sync.syncMetadata() }
+        val library = EntryPointAccessors.fromApplication(context, DebugAccess::class.java).library()
+        val elsewhere = runBlocking { library.photoList(PhotoQuery(scope = LibraryScope.Server)) }
+            .single { it.name == "ELSEWHERE.JPG" }
+        val items = listOf(ExportJobItem(versionId = serverVersion), ExportJobItem(versionId = elsewhere.versionId))
+        val jobId = ExportWorker.enqueue(context, items, ExportOptions(), 1)
+        val work = WorkManager.getInstance(context)
+        val end = System.currentTimeMillis() + EDITOR_TIMEOUT_MS * 2
+        while (work.getWorkInfosByTag(jobId).get().firstOrNull()?.state?.isFinished != true) {
+            check(System.currentTimeMillis() < end) { "export timed out" }
+            Thread.sleep(SETTLE_MS)
+        }
+        val store = ExportJobStore(context)
+        val states = store.states(jobId)
+        assertThat(states.map { it.status }).containsExactly(ItemStatus.DONE, ItemStatus.WAITING).inOrder()
+        assertThat(states[1].waitingSince).isNotNull()
+        states.mapNotNull {
+            it.resultUri
+        }.forEach { context.contentResolver.delete(android.net.Uri.parse(it), null, null) }
+        work.cancelUniqueWork("reveal-export-wait-$jobId")
+        store.delete(jobId)
     }
 
     private companion object {

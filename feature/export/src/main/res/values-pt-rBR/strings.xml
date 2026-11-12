@@ -79,4 +79,16 @@
     </plurals>
     <string name="export_notification_failed">Algumas fotos não puderam ser exportadas: %1$d/%2$d</string>
     <string name="export_notification_cancelled">Exportação cancelada</string>
+    <string name="export_failure_elsewhere">o original está só em outro aparelho e nunca chegou ao seu servidor de sincronização</string>
+    <string name="export_notification_downloading">Baixando o original do seu servidor de sincronização</string>
+    <plurals name="export_notification_waiting">
+        <item quantity="one">%d foto espera o original</item>
+        <item quantity="many">%d fotos esperam os originais</item>
+        <item quantity="other">%d fotos esperam os originais</item>
+    </plurals>
+    <plurals name="export_result_waiting">
+        <item quantity="one">%d foto espera o original: ele está só em outro aparelho. A exportação termina sozinha quando aquele aparelho fizer o backup no seu servidor de sincronização.</item>
+        <item quantity="many">%d fotos esperam os originais: eles estão só em outro aparelho. A exportação termina sozinha quando aquele aparelho fizer o backup no seu servidor de sincronização.</item>
+        <item quantity="other">%d fotos esperam os originais: eles estão só em outro aparelho. A exportação termina sozinha quando aquele aparelho fizer o backup no seu servidor de sincronização.</item>
+    </plurals>
 </resources>

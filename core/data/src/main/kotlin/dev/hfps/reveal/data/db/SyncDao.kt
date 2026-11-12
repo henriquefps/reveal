@@ -157,7 +157,7 @@ interface SyncDao {
     suspend fun deleteEmptyServerPhotos(sourceId: Long): Int
 
     /** Files a Server-source photo under its NAS folder (kept when another photo there has the same stem). */
-    @Query("UPDATE OR IGNORE photos SET folder = :folder, metadata_state = 'READ' WHERE id = :id")
+    @Query("UPDATE OR IGNORE photos SET folder = :folder WHERE id = :id")
     suspend fun setServerFolder(id: Long, folder: String)
 
     @Query("SELECT * FROM photo_files WHERE source_id = :sourceId AND relative_path = :path")
@@ -173,12 +173,13 @@ interface SyncDao {
 
     /**
      * Photos with a printed main file that the server was not asked about since [before] (or never): the next
-     * fingerprint lookup. Server-source photos are answered by the NAS listing.
+     * fingerprint lookup. Server-source photos are included: another device's backup can make a preview-only photo's
+     * original reachable (a waiting export then goes on).
      */
     @Query(
         "SELECT p.id AS photo_id, p.source_id, f.id AS file_id, f.document_id, f.name, f.size, f.fingerprint, " +
             "s.backup FROM photos p JOIN sources s ON s.id = p.source_id JOIN photo_files f ON f.photo_id = p.id " +
-            "LEFT JOIN photo_cloud c ON c.photo_id = p.id WHERE s.kind != 'SERVER' AND f.fingerprint IS NOT NULL " +
+            "LEFT JOIN photo_cloud c ON c.photo_id = p.id WHERE f.fingerprint IS NOT NULL " +
             "AND (f.role = 'RAW' OR NOT EXISTS (SELECT 1 FROM photo_files o WHERE o.photo_id = p.id AND " +
             "o.role = 'RAW')) AND COALESCE(c.original_on_server, 0) = 0 AND COALESCE(c.checked_at, 0) < :before " +
             "ORDER BY p.sort_time DESC LIMIT :limit",

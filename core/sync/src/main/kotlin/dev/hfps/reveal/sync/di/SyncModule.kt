@@ -103,6 +103,7 @@ object SyncModule {
         engine: SyncEngine,
         uploader: BlobUploader,
         files: ServerFiles,
+        trees: DocumentTreeFactory,
     ): SyncRepository {
         val version = runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }
             .getOrNull().orEmpty()
@@ -116,6 +117,7 @@ object SyncModule {
             uploader = uploader,
             files = files,
             clientInfo = SyncRepository.ClientInfo(name.take(MAX_NAME), "android", version.take(MAX_VERSION)),
+            trees = trees,
         )
     }
 

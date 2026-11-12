@@ -75,6 +75,28 @@ data class SmartRules(
         }
     }
 
+    /** The corrections a user can switch on for a preset ("Smart corrections", docs/adr/0020). */
+    enum class Kind { EXPOSURE, TONE, WHITE_BALANCE, VIBRANCE, STRAIGHTEN }
+
+    /** The rules that run. */
+    val kinds: Set<Kind>
+        get() = buildSet {
+            if (exposure != null) add(Kind.EXPOSURE)
+            if (tone != null) add(Kind.TONE)
+            if (whiteBalance != null) add(Kind.WHITE_BALANCE)
+            if (vibrance != null) add(Kind.VIBRANCE)
+            if (straighten != null) add(Kind.STRAIGHTEN)
+        }
+
+    /** These rules with exactly [kinds] running: a kept rule keeps its targets, a new one starts at Auto's. */
+    fun withKinds(kinds: Set<Kind>): SmartRules = SmartRules(
+        exposure = if (Kind.EXPOSURE in kinds) exposure ?: ExposureRule() else null,
+        tone = if (Kind.TONE in kinds) tone ?: ToneRule() else null,
+        whiteBalance = if (Kind.WHITE_BALANCE in kinds) whiteBalance ?: WhiteBalanceRule() else null,
+        vibrance = if (Kind.VIBRANCE in kinds) vibrance ?: VibranceRule() else null,
+        straighten = if (Kind.STRAIGHTEN in kinds) straighten ?: StraightenRule() else null,
+    )
+
     /** True when no rule runs (the preset then only has its style). */
     val isEmpty: Boolean get() = exposure == null && tone == null && whiteBalance == null && vibrance == null &&
         straighten == null
@@ -289,6 +311,9 @@ class SmartCorrector(private val features: PhotoFeatures) : SmartCorrection {
         const val MIN_ANGLE = 0.1
     }
 }
+
+/** This preset's rules (`null` when it is not smart, or its `smart` object is from a newer app). */
+val Preset.smartRules: SmartRules? get() = smart?.let { SmartRules.fromJson(it.rules) }
 
 /** A smart preset made from [preset]: its [rules] run first, its style without the fields they own. */
 fun Preset.smart(rules: SmartRules): Preset {

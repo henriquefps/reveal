@@ -5,21 +5,33 @@ import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.junit4.v2.createEmptyComposeRule
+import androidx.compose.ui.test.longClick
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performTouchInput
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.google.common.truth.Truth.assertThat
+import dagger.hilt.android.EntryPointAccessors
+import dev.hfps.reveal.debug.DebugAccess
 import dev.hfps.reveal.feature.editor.EditorMetrics
 import dev.hfps.reveal.feature.editor.EditorTags
 import dev.hfps.reveal.feature.editor.tools.ToolId
 import dev.hfps.reveal.pipeline.preset.BuiltInPresetNames
 import dev.hfps.reveal.pipeline.preset.BuiltInPresets
+import dev.hfps.reveal.pipeline.preset.PresetPatch
+import dev.hfps.reveal.pipeline.preset.PresetSection
+import dev.hfps.reveal.pipeline.preset.SmartRules
+import dev.hfps.reveal.pipeline.preset.smartRules
 import dev.hfps.reveal.pipeline.recipe.ControlId
 import dev.hfps.reveal.pipeline.recipe.EditHistory
 import dev.hfps.reveal.pipeline.recipe.HistoryAction
+import dev.hfps.reveal.pipeline.recipe.Light
+import dev.hfps.reveal.pipeline.recipe.Recipe
 import dev.hfps.reveal.pipeline.recipe.WbMode
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.runBlocking
 import org.junit.Test
 import org.junit.runner.RunWith
 
@@ -40,12 +52,13 @@ class SmartPresetsFlowTest {
     private fun portrait(): ByteArray =
         InstrumentationRegistry.getInstrumentation().context.assets.open("faces/studio-trio.jpg").use { it.readBytes() }
 
+    private val context = InstrumentationRegistry.getInstrumentation().targetContext
+
     @Test
     fun aSmartPresetIsOneStepOfPlainSliderValues() {
         val uri = TestPhotos.insert(TestPhotos.uniqueName("reveal-smart.jpg"), "image/jpeg", portrait())
         val preset = checkNotNull(BuiltInPresets.all.firstOrNull { it.key == "smart_natural_portrait" })
         val group = BuiltInPresets.idOf("group_${BuiltInPresets.Group.SMART.key}")
-        val context = InstrumentationRegistry.getInstrumentation().targetContext
         try {
             open(uri) {
                 // The background analysis finds the three faces.
@@ -88,6 +101,47 @@ class SmartPresetsFlowTest {
             }
         } finally {
             TestPhotos.delete(uri)
+        }
+    }
+
+    @Test
+    fun anyUserPresetCanBeMadeSmart() {
+        val presets = EntryPointAccessors.fromApplication(context, DebugAccess::class.java).presets()
+        val style = PresetPatch.fromSections(
+            Recipe(light = Light(exposureEv = 1.5f, contrast = 30f)),
+            PresetSection.entries,
+        )
+        val (groupId, uuid) = runBlocking {
+            val g = presets.createGroup("Smart test ${System.nanoTime()}")
+            g to presets.create("Mine ${System.nanoTime()}", style, g)
+        }
+        val groupUuid = runBlocking { presets.library().first() }.groups.first { it.rowId == groupId }.uuid
+        val uri = TestPhotos.insert(TestPhotos.uniqueName("reveal-make-smart.jpg"), "image/jpeg", portrait())
+        try {
+            open(uri) {
+                compose.waitUntil(TIMEOUT_MS) { EditorMetrics.faces != null }
+                click(EditorTags.tool(ToolId.PRESETS))
+                click(EditorTags.presetChip(groupUuid))
+                compose.waitUntilAtLeastOneExists(hasTestTag(EditorTags.preset(uuid)), TIMEOUT_MS)
+                compose.onNodeWithTag(EditorTags.preset(uuid)).performTouchInput { longClick() }
+                click(EditorTags.presetOption("smart"))
+                // The default choice (every correction but straighten), saved.
+                click("${EditorTags.PRESET_SMART}-confirm")
+                compose.waitUntil(TIMEOUT_MS) { runBlocking { presets.preset(uuid) }?.smart != null }
+                val smart = checkNotNull(runBlocking { presets.preset(uuid) })
+                assertThat(checkNotNull(smart.smartRules).kinds).doesNotContain(SmartRules.Kind.STRAIGHTEN)
+                // The style no longer sets what the corrections set.
+                assertThat(smart.patch.paths).containsNoneOf("light.exposure", "light.contrast")
+                compose.waitUntilAtLeastOneExists(hasTestTag(EditorTags.preset(uuid)), TIMEOUT_MS)
+                click(EditorTags.preset(uuid))
+                compose.waitUntil(TIMEOUT_MS) { history.entries.size == 1 }
+                val r = history.current
+                assertThat(r.colour.whiteBalance.mode).isEqualTo(WbMode.AUTO)
+                assertThat(r.light.exposureEv).isNotEqualTo(1.5f)
+            }
+        } finally {
+            TestPhotos.delete(uri)
+            runBlocking { presets.deleteGroup(groupId) }
         }
     }
 

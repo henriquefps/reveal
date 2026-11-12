@@ -16,6 +16,7 @@ import dev.hfps.reveal.pipeline.gl.Histogram
 import dev.hfps.reveal.pipeline.optics.LensProfile
 import dev.hfps.reveal.pipeline.preset.Preset
 import dev.hfps.reveal.pipeline.preset.PresetSection
+import dev.hfps.reveal.pipeline.preset.SmartRules
 import dev.hfps.reveal.pipeline.recipe.BaseLook
 import dev.hfps.reveal.pipeline.recipe.ColourBand
 import dev.hfps.reveal.pipeline.recipe.ControlId
@@ -259,6 +260,7 @@ class EditorActions(
         { _, _, _, _ -> },
     val onPresetFavourite: (String, Boolean) -> Unit = { _, _ -> },
     val onRenamePreset: (String, String) -> Unit = { _, _ -> },
+    val onSetPresetSmart: (String, Set<SmartRules.Kind>) -> Unit = { _, _ -> },
     val onDuplicatePreset: (String, String) -> Unit = { _, _ -> },
     val onDeletePreset: (String) -> Unit = {},
     val onMovePreset: (String, Long) -> Unit = { _, _ -> },

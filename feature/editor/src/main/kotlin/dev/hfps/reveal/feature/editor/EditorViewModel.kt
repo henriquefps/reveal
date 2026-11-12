@@ -61,6 +61,8 @@ import dev.hfps.reveal.pipeline.preset.PresetPatch
 import dev.hfps.reveal.pipeline.preset.PresetSection
 import dev.hfps.reveal.pipeline.preset.SmartCorrection
 import dev.hfps.reveal.pipeline.preset.SmartCorrector
+import dev.hfps.reveal.pipeline.preset.SmartRules
+import dev.hfps.reveal.pipeline.preset.smartRules
 import dev.hfps.reveal.pipeline.recipe.BaseLook
 import dev.hfps.reveal.pipeline.recipe.ColourBand
 import dev.hfps.reveal.pipeline.recipe.ColourToolControls
@@ -1049,6 +1051,14 @@ class EditorViewModel @Inject constructor(
 
     fun setPresetFavourite(uuid: String, favourite: Boolean) {
         viewModelScope.launch { presets.setFavourite(uuid, favourite) }
+    }
+
+    /** "Smart corrections": [kinds] run on each photo before the style (empty: a plain preset again). */
+    fun setPresetSmart(uuid: String, kinds: Set<SmartRules.Kind>) {
+        viewModelScope.launch {
+            val current = presets.preset(uuid)?.smartRules ?: SmartRules()
+            presets.setSmart(uuid, if (kinds.isEmpty()) null else current.withKinds(kinds))
+        }
     }
 
     fun renamePreset(uuid: String, name: String) {

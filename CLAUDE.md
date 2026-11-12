@@ -487,10 +487,12 @@ The model asset is generated: `python3 scripts/faces/convert_blazeface.py` (`--c
 
 Smart presets: `preset/SmartPresets.kt` (`SmartRules` = the preset file's `smart` object, `SmartCorrector(features)`
 implements ADR 0019's `SmartCorrection`, memoised for strength drags; `Preset.smart(rules)` drops the style fields a rule
-owns). Built-ins: `preset/BuiltInPresets.kt` (patches as JSON, ids from `idOf(key)`: never rename a key) and
+owns; the options sheet's "Smart corrections…" = `PresetRepository.setSmart` with `SmartRules.withKinds`). Built-ins: `preset/BuiltInPresets.kt` (patches as JSON, ids from `idOf(key)`: never rename a key) and
 `BuiltInPresetNames` (`preset_<key>` / `preset_group_<group>` strings, both languages), served to the library by
-`:core:data` `AppBuiltInPresets`. The batch (`PresetBatchWorker.applySmart`) analyses each photo
-(`ThumbnailRepository.analysisInput`) before applying.
+`:core:data` `AppBuiltInPresets`. Smart correction is per photo: the editor's `SmartCorrector` from the open photo's
+features (`EditorViewModel.photoSmart`), the batch's per photo (`PresetBatchWorker.applySmart`,
+`ThumbnailRepository.analysisInput`); the injected `SmartCorrection` (`DataModule`) is only the `NONE` fallback.
+Instrumented: `dev.hfps.reveal.editor.SmartPresetsFlowTest` (public-domain portrait in `app/src/androidTest/assets/faces`).
 
 ```sh
 ./gradlew :core:pipeline:testDebugUnitTest --tests '*faces*' --tests '*AutoFacesTest*' --tests '*preset*'

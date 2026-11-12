@@ -101,9 +101,12 @@ strength): the format stays simple and an author can do it on purpose.
 
 ## Making any preset smart
 
-The presets panel's "Make smart" on a user preset opens a chooser of the corrections (Exposure with its two
-brightness targets, Tone with the two limits, White balance, Vibrance, Straighten) and stores `preset.smart(rules)`
-as a new version of the preset (the same id). "Auto as a preset" is `SmartRules.AUTO`.
+A user preset's options (long-press in the presets panel) have **Smart corrections…**: a checklist of the
+corrections (`SmartRules.Kind`: exposure, highlights and shadows, white balance, vibrance, straighten; it starts
+with all but straighten, or the preset's current ones). Saving stores `preset.smart(rules.withKinds(kinds))` as a
+new version of the same preset (`PresetRepository.setSmart`): kept rules keep their targets, new ones start at
+Auto's. **Remove smart corrections** makes it plain again (the style fields dropped earlier stay dropped). The
+targets themselves are set in files (and by the built-ins); "Auto as a preset" is `SmartRules.AUTO`.
 
 ## Built-in presets
 

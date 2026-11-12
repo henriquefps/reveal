@@ -370,4 +370,13 @@
         <item quantity="one">Delete the group “%1$s” and its %2$d preset?</item>
         <item quantity="other">Delete the group “%1$s” and its %2$d presets?</item>
     </plurals>
+    <string name="presets_smart">Smart corrections…</string>
+    <string name="presets_smart_detail">Correct each photo before the style</string>
+    <string name="presets_smart_remove">Remove smart corrections</string>
+    <string name="presets_smart_title">Correct each photo first</string>
+    <string name="presets_smart_exposure">Exposure (faces and subject)</string>
+    <string name="presets_smart_tone">Highlights and shadows</string>
+    <string name="presets_smart_white_balance">White balance (keeps skin natural)</string>
+    <string name="presets_smart_vibrance">Vibrance</string>
+    <string name="presets_smart_straighten">Straighten</string>
 </resources>

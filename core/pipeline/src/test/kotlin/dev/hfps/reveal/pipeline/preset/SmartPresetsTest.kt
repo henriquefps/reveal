@@ -73,6 +73,17 @@ class SmartPresetsTest {
     }
 
     @Test
+    fun `choosing the corrections keeps the targets of the kept ones`() {
+        val custom = SmartRules(exposure = SmartRules.ExposureRule(0.2, 0.15), tone = SmartRules.ToneRule(30, 10))
+        val next = custom.withKinds(setOf(SmartRules.Kind.EXPOSURE, SmartRules.Kind.WHITE_BALANCE))
+        assertThat(next.exposure).isEqualTo(custom.exposure)
+        assertThat(next.tone).isNull()
+        assertThat(next.whiteBalance).isEqualTo(SmartRules.WhiteBalanceRule())
+        assertThat(next.kinds).containsExactly(SmartRules.Kind.EXPOSURE, SmartRules.Kind.WHITE_BALANCE)
+        assertThat(preset.smartRules).isEqualTo(rules)
+    }
+
+    @Test
     fun `making a preset smart drops the style fields the correction owns`() {
         val withExposure = PresetPatch.fromJson(
             Json.parseToJsonElement(

@@ -15,6 +15,8 @@ import dev.hfps.reveal.pipeline.preset.PresetPack
 import dev.hfps.reveal.pipeline.preset.PresetPacks
 import dev.hfps.reveal.pipeline.preset.PresetPatch
 import dev.hfps.reveal.pipeline.preset.SmartPart
+import dev.hfps.reveal.pipeline.preset.SmartRules
+import dev.hfps.reveal.pipeline.preset.smart
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.InputStream
@@ -177,6 +179,17 @@ class PresetRepository(
     suspend fun rename(uuid: String, name: String) = db.withTransaction {
         val row = dao.presetByUuid(uuid) ?: return@withTransaction
         dao.updatePreset(row.copy(name = cleanName(name), updatedAt = clock()))
+    }
+
+    /**
+     * Makes a user preset smart with [rules] (docs/adr/0020: its style drops the fields the rules set), or plain again
+     * with `null` (its style is kept as it is). A new version of the same preset (same id).
+     */
+    suspend fun setSmart(uuid: String, rules: SmartRules?) = db.withTransaction {
+        val row = dao.presetByUuid(uuid) ?: return@withTransaction
+        val preset = decode(row) ?: return@withTransaction
+        val next = if (rules == null || rules.isEmpty) preset.copy(smart = null) else preset.smart(rules)
+        dao.updatePreset(updated(row, next.copy(version = preset.version + 1)))
     }
 
     /** Moves a preset to the end of the user group [groupId]; its old group is removed if it is left empty. */

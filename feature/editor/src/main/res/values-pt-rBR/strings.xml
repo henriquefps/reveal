@@ -368,4 +368,13 @@
         <item quantity="many">Excluir o grupo “%1$s” e suas %2$d predefinições?</item>
         <item quantity="other">Excluir o grupo “%1$s” e suas %2$d predefinições?</item>
     </plurals>
+    <string name="presets_smart">Correções inteligentes…</string>
+    <string name="presets_smart_detail">Corrige cada foto antes do estilo</string>
+    <string name="presets_smart_remove">Remover correções inteligentes</string>
+    <string name="presets_smart_title">Corrigir cada foto antes</string>
+    <string name="presets_smart_exposure">Exposição (rostos e assunto)</string>
+    <string name="presets_smart_tone">Realces e sombras</string>
+    <string name="presets_smart_white_balance">Balanço de branco (pele natural)</string>
+    <string name="presets_smart_vibrance">Vibração</string>
+    <string name="presets_smart_straighten">Endireitar</string>
 </resources>

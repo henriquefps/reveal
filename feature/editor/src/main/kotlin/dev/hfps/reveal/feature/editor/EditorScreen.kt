@@ -173,6 +173,7 @@ fun EditorScreen(
             onSavePreset = viewModel::savePreset,
             onPresetFavourite = viewModel::setPresetFavourite,
             onRenamePreset = viewModel::renamePreset,
+            onSetPresetSmart = viewModel::setPresetSmart,
             onDuplicatePreset = viewModel::duplicatePreset,
             onDeletePreset = viewModel::deletePreset,
             onMovePreset = viewModel::movePreset,

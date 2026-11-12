@@ -18,6 +18,7 @@ object EditorTags {
     // Presets (docs/adr/0019)
     const val PRESET_GRID = "editor-preset-grid"
     const val PRESET_STRENGTH = "editor-preset-strength"
+    const val PRESET_SMART = "editor-preset-smart"
     const val PRESET_CREATE = "editor-preset-create"
     const val PRESET_MENU = "editor-preset-menu"
     const val PRESET_EMPTY = "editor-preset-empty"

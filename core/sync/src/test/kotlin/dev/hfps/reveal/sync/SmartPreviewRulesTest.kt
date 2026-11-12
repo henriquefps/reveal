@@ -160,6 +160,10 @@ class SmartPreviewRulesTest {
         assertThat(ratedRow.remote).isTrue()
         assertThat(ratedRow.cloudPreview).isFalse()
         assertThat(ratedRow.cloudOriginal).isFalse()
+        // No preview because it is not edited is not "unavailable" (FIX/U): only an unreadable file can be.
+        assertThat(ratedRow.unavailable).isFalse()
+        val phoneRows = runBlocking { phone.db.photoDao().rows(PhotoQuerySql.toQuery(PhotoQuery())) }
+        assertThat(phoneRows.none { it.unavailable }).isTrue()
         assertThat(remoteRow(picked).flag).isEqualTo(PickFlag.PICK)
         assertThat(remoteRow(picked).cloudPreview).isFalse()
         assertThat(remoteRow(plain).cloudPreview).isFalse()
@@ -188,6 +192,17 @@ class SmartPreviewRulesTest {
             assertThat(runBlocking { phone.db.syncDao().previewCandidates(off, 10) }.map { it.photoId })
                 .containsExactly(photo)
         }
+        // Unreadable and nothing on the server yet: "unavailable" until its preview is up (FIX/U).
+        val row = runBlocking {
+            phone.db.photoDao().rows(PhotoQuerySql.toQuery(PhotoQuery()))
+        }.single { it.id == photo }
+        assertThat(row.unavailable).isTrue()
+        previews(originalsOff = false)
+        val after = runBlocking { phone.db.photoDao().rows(PhotoQuerySql.toQuery(PhotoQuery())) }.single {
+            it.id ==
+                photo
+        }
+        assertThat(after.unavailable).isFalse()
         // Once its original reaches the server it no longer qualifies.
         runBlocking { phone.store.lookedUp(photo, dev.hfps.reveal.sync.engine.SyncStore.SOURCE_BACKUP) }
         assertThat(runBlocking { phone.db.syncDao().previewCandidates(true, 10) }).isEmpty()

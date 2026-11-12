@@ -165,6 +165,7 @@ class SyncFlowTest {
      * A server original exports (downloaded first); a photo only another device has waits instead of failing
      * (ADR 0018 "Export"). The second photo is a record pushed with this device's key for a file nobody uploaded.
      */
+    @Suppress("LongMethod")
     private fun exportServerPhotos(serverVersion: Long) {
         val sync = this.sync
         val api = checkNotNull(sync.api())
@@ -201,7 +202,16 @@ class SyncFlowTest {
         )
         runBlocking { sync.syncMetadata() }
         val library = EntryPointAccessors.fromApplication(context, DebugAccess::class.java).library()
-        val elsewhere = runBlocking { library.photoList(PhotoQuery(scope = LibraryScope.Server)) }
+        // Only described (nothing on the server): not listed in the Server scope (FIX/V), still in the Server source.
+        assertThat(runBlocking { library.photoList(PhotoQuery(scope = LibraryScope.Server)) }.map { it.name })
+            .doesNotContain(name)
+        val serverSource = runBlocking {
+            checkNotNull(
+                EntryPointAccessors.fromApplication(context, DebugAccess::class.java).database().syncDao()
+                    .serverSource(),
+            ).id
+        }
+        val elsewhere = runBlocking { library.photoList(PhotoQuery(scope = LibraryScope.Source(serverSource))) }
             .single { it.name == name }
         val items = listOf(ExportJobItem(versionId = serverVersion), ExportJobItem(versionId = elsewhere.versionId))
         val jobId = ExportWorker.enqueue(context, items, ExportOptions(), 1)

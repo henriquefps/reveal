@@ -6,6 +6,8 @@ All notable changes to Reveal are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-11-12
+
 ### Fixed
 - A photo another app handed over (Hoard's picks, a share) that is also in one of your folders (the SD card, the camera
   folder) is now one photo, the folder's, whichever came first: the picks, ratings and labels show in the folder (its

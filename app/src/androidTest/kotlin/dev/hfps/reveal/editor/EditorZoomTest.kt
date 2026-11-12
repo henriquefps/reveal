@@ -121,46 +121,63 @@ class EditorZoomTest {
         )
         source.close()
         val cpu = CpuDevelop.render(input, recipe, OutputSettings(dither = false))
-        var worst = 0
-        var sum = 0L
-        var bad = 0
-        var badBox = intArrayOf(Int.MAX_VALUE, Int.MAX_VALUE, Int.MIN_VALUE, Int.MIN_VALUE)
-        val badInTile = HashMap<Pair<Int, Int>, Int>()
+        val diff = Mismatches()
         for (y in 0 until AREA) {
             for (x in 0 until AREA) {
                 val (ix, iy) = imagePixel(x0 + x, y0 + y)
                 val s = ((y0 + y) * shown.width + x0 + x) * 4
                 val c = ((iy - region.y) * region.width + ix - region.x) * 4
-                var px = 0
-                for (k in 0 until 3) {
-                    val d = abs((shown.rgba[s + k].toInt() and BYTE) - (cpu[c + k].toInt() and BYTE))
-                    worst = maxOf(worst, d)
-                    px = maxOf(px, d)
-                    sum += d
-                }
-                if (px > MAX_LEVELS) {
-                    if (bad < DIAGNOSTIC_PIXELS) {
-                        Log.i(
-                            TAG,
-                            "bad pixel window ${x0 + x},${y0 + y} image $ix,$iy (in tile ${ix % ZoomGrid.TILE}," +
-                                "${iy % ZoomGrid.TILE}) gpu ${(0 until 3).map { shown.rgba[s + it].toInt() and BYTE }} " +
-                                "cpu ${(0 until 3).map { cpu[c + it].toInt() and BYTE }}",
-                        )
-                    }
-                    bad++
-                    badBox = intArrayOf(
-                        minOf(badBox[0], ix), minOf(badBox[1], iy), maxOf(badBox[2], ix), maxOf(badBox[3], iy),
-                    )
-                    val tileKey = ix / ZoomGrid.TILE to iy / ZoomGrid.TILE
-                    badInTile[tileKey] = (badInTile[tileKey] ?: 0) + 1
-                }
+                diff.add(
+                    ix,
+                    iy,
+                    IntArray(3) { shown.rgba[s + it].toInt() and BYTE },
+                    IntArray(3) {
+                        cpu[c + it].toInt() and
+                            BYTE
+                    },
+                )
             }
         }
-        val mean = sum.toDouble() / (AREA * AREA * 3)
-        if (bad > 0) Log.i(TAG, "pixels over $MAX_LEVELS: $bad in image box ${badBox.toList()}, per tile $badInTile")
+        val worst = diff.worst
+        val mean = diff.sum.toDouble() / (AREA * AREA * 3)
+        diff.log()
         Log.i(TAG, "100 % in the editor vs CPU: max $worst levels, mean $mean (image $ix0,$iy0 .. $ix1,$iy1)")
         assertThat(worst).isAtMost(MAX_LEVELS)
         assertThat(mean).isAtMost(MEAN_LEVELS)
+    }
+
+    /** Differences between the frame and the CPU, with where the ones over [MAX_LEVELS] are (image, tile, slot). */
+    private class Mismatches {
+        var worst = 0
+        var sum = 0L
+        private var bad = 0
+        private val box = intArrayOf(Int.MAX_VALUE, Int.MAX_VALUE, Int.MIN_VALUE, Int.MIN_VALUE)
+        private val perTile = HashMap<Pair<Int, Int>, Int>()
+
+        fun add(ix: Int, iy: Int, gpu: IntArray, cpu: IntArray) {
+            val d = IntArray(3) { abs(gpu[it] - cpu[it]) }
+            worst = maxOf(worst, d.max())
+            sum += d.sum()
+            if (d.max() <= MAX_LEVELS) return
+            if (bad < DIAGNOSTIC_PIXELS) {
+                Log.i(
+                    TAG,
+                    "over at image $ix,$iy (in tile ${ix % ZoomGrid.TILE},${iy % ZoomGrid.TILE}): " +
+                        "gpu ${gpu.toList()} cpu ${cpu.toList()}",
+                )
+            }
+            bad++
+            box[0] = minOf(box[0], ix)
+            box[1] = minOf(box[1], iy)
+            box[2] = maxOf(box[2], ix)
+            box[3] = maxOf(box[3], iy)
+            val tile = ix / ZoomGrid.TILE to iy / ZoomGrid.TILE
+            perTile[tile] = (perTile[tile] ?: 0) + 1
+        }
+
+        fun log() {
+            if (bad > 0) Log.i(TAG, "pixels over $MAX_LEVELS: $bad in image box ${box.toList()}, per tile $perTile")
+        }
     }
 
     /**

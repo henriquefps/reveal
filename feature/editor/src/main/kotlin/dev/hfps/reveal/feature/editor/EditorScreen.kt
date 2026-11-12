@@ -184,6 +184,7 @@ fun EditorScreen(
  * bar) or tablet. The photo surface fills the screen behind the chrome; the chrome leaves a photo slot whose bounds
  * become the photo frame. Public for screenshot tests, which also pick the [initialTool] and [initialSnap].
  */
+@Suppress("LongMethod")
 @Composable
 fun EditorContent(
     state: EditorUiState,

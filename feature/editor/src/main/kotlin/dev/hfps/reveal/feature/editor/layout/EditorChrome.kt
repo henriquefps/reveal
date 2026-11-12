@@ -168,7 +168,8 @@ class EditorChrome(initialTool: ToolId, initialImmersive: Boolean, val sheet: An
 
 /**
  * An [EditorChrome] that keeps the active tool and mode, immersive mode, the sheet's snap, the side panel, the open
- * sub-panels and the tablet panel's width and the docked panel's height across configuration changes (rotation, fold/unfold).
+ * sub-panels, the tablet panel's width and the docked panel's height across configuration changes (rotation,
+ * fold/unfold).
  */
 @Composable
 fun rememberEditorChrome(

@@ -18,8 +18,8 @@ data class EditorLayout(
 
 /**
  * Small persistent layout choices of the tablet editor (docs/plan/ux.md "Landscape and tablets"): the panel width (and
- * the docked panel's height) the user dragged and the filmstrip's shown/hidden state. SharedPreferences, like `ExportPreferences`: two keys read
- * when the editor opens.
+ * the docked panel's height) the user dragged and the filmstrip's shown/hidden state. SharedPreferences, like
+ * `ExportPreferences`: three keys read when the editor opens.
  */
 class EditorLayoutPreferences(context: Context) {
     private val prefs: SharedPreferences = context.getSharedPreferences(FILE, Context.MODE_PRIVATE)

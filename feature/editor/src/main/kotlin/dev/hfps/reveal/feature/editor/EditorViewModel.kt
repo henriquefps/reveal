@@ -103,7 +103,7 @@ import kotlinx.coroutines.withContext
  * and the view options, pushing both to the renderer. Survives configuration changes; leaving the screen cancels the
  * decode and closes the renderer.
  */
-@Suppress("LargeClass") // the editor's single owner of the edit state; presets live in presets/ helpers
+@Suppress("LargeClass")
 @HiltViewModel
 class EditorViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,

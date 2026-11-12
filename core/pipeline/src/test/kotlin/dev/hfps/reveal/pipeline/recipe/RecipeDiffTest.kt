@@ -182,4 +182,31 @@ class RecipeDiffTest {
         ).inOrder()
         assertThat(steps.map { it.field.group }.toSet()).containsExactly(RecipeGroup.DETAIL)
     }
+
+    @Test
+    fun `mask steps name the mask`() {
+        val sky = Mask("a", name = "Sky", components = listOf(MaskComponent.Linear()))
+        val face = Mask("b", name = "Face")
+        val one = Recipe(masks = listOf(sky, face))
+        fun steps(after: Recipe) = RecipeDiff.between(one, after)
+
+        assertThat(RecipeDiff.between(Recipe(), one)).containsExactly(
+            HistoryStep(HistoryField.MASK_ADD, "Sky"),
+            HistoryStep(HistoryField.MASK_ADD, "Face"),
+        ).inOrder()
+        assertThat(steps(one.copy(masks = listOf(face)))).containsExactly(HistoryStep(HistoryField.MASK_REMOVE, "Sky"))
+        assertThat(steps(one.copy(masks = listOf(sky.copy(name = "Clouds"), face))))
+            .containsExactly(HistoryStep(HistoryField.MASK_RENAME, "Clouds"))
+        assertThat(steps(one.copy(masks = listOf(sky.copy(enabled = false), face))))
+            .containsExactly(HistoryStep(HistoryField.MASK_HIDE, "Sky"))
+        assertThat(steps(one.copy(masks = listOf(sky, face.copy(components = listOf(MaskComponent.Radial()))))))
+            .containsExactly(HistoryStep(HistoryField.MASK_SHAPE, "Face"))
+        assertThat(steps(one.copy(masks = listOf(sky.copy(adjustments = LocalAdjustments(exposure = 1f)), face))))
+            .containsExactly(HistoryStep(HistoryField.MASK_ADJUST, "Sky"))
+        assertThat(steps(one.copy(masks = listOf(sky.copy(amount = 50f), face))))
+            .containsExactly(HistoryStep(HistoryField.MASK_ADJUST, "Sky"))
+        assertThat(steps(one.copy(masks = listOf(face, sky)))).containsExactly(HistoryStep(HistoryField.MASK_ORDER, null))
+        val hidden = one.copy(masks = listOf(sky.copy(enabled = false), face))
+        assertThat(RecipeDiff.between(hidden, one)).containsExactly(HistoryStep(HistoryField.MASK_SHOW, "Sky"))
+    }
 }

@@ -2,6 +2,7 @@ package dev.hfps.reveal.pipeline.cpu
 
 import dev.hfps.reveal.pipeline.InputKind
 import dev.hfps.reveal.pipeline.PipelineInput
+import dev.hfps.reveal.pipeline.mask.MaskParams
 import dev.hfps.reveal.pipeline.optics.VignetteTable
 import dev.hfps.reveal.pipeline.recipe.Detail
 import dev.hfps.reveal.pipeline.recipe.Effects
@@ -29,6 +30,7 @@ import kotlin.math.max
  * @property effects texture, clarity, dehaze (slot 12) and the post-crop vignette and grain ([EffectsParams]).
  * @property vignette the lens profile's vignetting correction (slot 3, [VignetteOp]), `null` when off.
  * @property defringe defringe (slot 10b, [DefringeOp]) at this render's pixel scale.
+ * @property masks the masks' local adjustments (docs/adr/0022); [MaskParams.NONE] without masks.
  */
 class DevelopParams(
     val wbMultipliers: FloatArray,
@@ -44,6 +46,7 @@ class DevelopParams(
     val effects: EffectsParams = EffectsParams.NONE,
     val vignette: VignetteTable? = null,
     val defringe: DefringeParams = DefringeParams.NONE,
+    val masks: MaskParams = MaskParams.NONE,
 ) {
 
     override fun equals(other: Any?): Boolean = other is DevelopParams &&
@@ -59,7 +62,8 @@ class DevelopParams(
         detail == other.detail &&
         effects == other.effects &&
         vignette == other.vignette &&
-        defringe == other.defringe
+        defringe == other.defringe &&
+        masks == other.masks
 
     /**
      * The same parameters without Detail and Effects: what the stages before slot 11 (and the Effects grid, which is
@@ -67,8 +71,18 @@ class DevelopParams(
      */
     fun withoutDetail(): DevelopParams = DevelopParams(
         wbMultipliers, cameraToWorking, exposureGain, profile, highlights, tone, colour, curve, tools,
-        vignette = vignette, defringe = defringe,
+        vignette = vignette, defringe = defringe, masks = masks,
     )
+
+    /** The same parameters without masks: what the masks' pre-local image depends on (docs/adr/0022). */
+    fun withoutMasks(): DevelopParams = if (!masks.active) {
+        this
+    } else {
+        DevelopParams(
+            wbMultipliers, cameraToWorking, exposureGain, profile, highlights, tone, colour, curve, tools, detail,
+            effects, vignette, defringe,
+        )
+    }
 
     /**
      * The same parameters without the post-crop vignette and grain: what the working texture depends on (they are
@@ -84,17 +98,21 @@ class DevelopParams(
     }
 
     /**
-     * These parameters with [recipe]'s Detail and Effects (slots 11 and 12) for [input] at [pixelScale]; every other
-     * field is kept, so the result equals `from(input, recipe, pixelScale)` when the rest of [recipe] resolved to
-     * these parameters (`from(input, recipe.withoutLocal(), pixelScale)`).
+     * These parameters with [recipe]'s Detail and Effects (slots 11 and 12) and masks for [input] at [pixelScale];
+     * every other field is kept, so the result equals `from(input, recipe, pixelScale)` when the rest of [recipe]
+     * resolved to these parameters (`from(input, recipe.withoutLocal(), pixelScale)`).
      */
-    fun withLocal(input: PipelineInput, recipe: Recipe, pixelScale: Float): DevelopParams = DevelopParams(
-        wbMultipliers, cameraToWorking, exposureGain, profile, highlights, tone, colour, curve, tools,
-        detail = localDetail(input, recipe, pixelScale),
-        effects = EffectsParams.from(recipe.effects, pixelScale),
-        vignette = vignette,
-        defringe = defringe,
-    )
+    fun withLocal(input: PipelineInput, recipe: Recipe, pixelScale: Float): DevelopParams {
+        val masks = MaskParams.from(recipe)
+        return DevelopParams(
+            wbMultipliers, cameraToWorking, exposureGain, profile, highlights, tone, colour, curve, tools,
+            detail = localDetail(input, recipe, pixelScale, masks.needs),
+            effects = EffectsParams.from(recipe.effects, pixelScale, masks.needs),
+            vignette = vignette,
+            defringe = defringe,
+            masks = masks,
+        )
+    }
 
     /** True when slot 11 or 12 runs: the develop stage writes OkLab for them. */
     val localActive: Boolean get() = detail.active || effects.localActive
@@ -118,6 +136,7 @@ class DevelopParams(
         h = h * HASH + effects.hashCode()
         h = h * HASH + vignette.hashCode()
         h = h * HASH + defringe.hashCode()
+        h = h * HASH + masks.hashCode()
         return h * HASH + detail.hashCode()
     }
 
@@ -136,6 +155,7 @@ class DevelopParams(
             val scene = input.kind == InputKind.SCENE_REFERRED
             val colour = recipe.colour
             val blackWhite = recipe.profile.treatment == Treatment.BLACK_WHITE
+            val masks = MaskParams.from(recipe)
             return DevelopParams(
                 wbMultipliers = multipliers,
                 cameraToWorking = wb.balancedToWorking.toFloatArray(),
@@ -158,23 +178,26 @@ class DevelopParams(
                     grey = if (blackWhite) GreyParams.from(colour.greyMixer) else null,
                     grading = GradingParams.from(colour.grading),
                 ),
-                detail = localDetail(input, recipe, pixelScale),
-                effects = EffectsParams.from(recipe.effects, pixelScale),
+                detail = localDetail(input, recipe, pixelScale, masks.needs),
+                effects = EffectsParams.from(recipe.effects, pixelScale, masks.needs),
                 vignette = VignetteTable.of(input.lens, recipe.optics),
                 defringe = DefringeParams.from(recipe.optics, pixelScale),
+                masks = masks,
             )
         }
 
-        private fun localDetail(input: PipelineInput, recipe: Recipe, pixelScale: Float): DetailParams =
-            DetailParams.from(recipe.detail, pixelScale, NoiseModel.factor(input.kind, input.noise))
+        private fun localDetail(input: PipelineInput, recipe: Recipe, pixelScale: Float, needs: Int): DetailParams =
+            DetailParams.from(recipe.detail, pixelScale, NoiseModel.factor(input.kind, input.noise), needs)
 
         /**
          * The apron of [recipe] at full resolution ([reach] does not depend on the input): for export plans and zoom
          * tiles (`ExportPlan.of(..., reach)`).
          */
         fun reach(recipe: Recipe, pixelScale: Float = 1f): Int {
-            val detail = DetailParams.from(recipe.detail, pixelScale)
-            val effects = EffectsParams.from(recipe.effects, pixelScale)
+            // Local sharpness, noise and texture switch Detail's neighbourhoods on (docs/adr/0022).
+            val needs = MaskParams.from(recipe).needs
+            val detail = DetailParams.from(recipe.detail, pixelScale, needs = needs)
+            val effects = EffectsParams.from(recipe.effects, pixelScale, needs)
             // Defringe (slot 10b, docs/adr/0015) runs before Detail: its neighbourhood adds to the apron.
             return DefringeParams.from(recipe.optics, pixelScale).reach +
                 detail.reach(max(detail.sharpenReach, effects.textureReach))
@@ -182,5 +205,8 @@ class DevelopParams(
     }
 }
 
-/** [this] without Detail and Effects (slots 11 and 12): the part of a recipe the stages before slot 11 resolve. */
-fun Recipe.withoutLocal(): Recipe = copy(detail = Detail(), effects = Effects())
+/**
+ * [this] without Detail, Effects (slots 11 and 12) and masks: the part of a recipe [DevelopParams.withLocal] does not
+ * resolve (a drag of those keeps the rest of the parameters).
+ */
+fun Recipe.withoutLocal(): Recipe = copy(detail = Detail(), effects = Effects(), masks = emptyList())

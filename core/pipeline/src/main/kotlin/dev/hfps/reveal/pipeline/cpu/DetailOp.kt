@@ -2,6 +2,7 @@
 
 package dev.hfps.reveal.pipeline.cpu
 
+import dev.hfps.reveal.pipeline.mask.MaskParams
 import dev.hfps.reveal.pipeline.recipe.Detail
 import dev.hfps.reveal.pipeline.recipe.RecipeRanges
 import kotlin.math.abs
@@ -45,6 +46,11 @@ import kotlin.math.sqrt
  * @property maskLow masking ramp start (gradient of L per full-resolution pixel); [maskHigh] 0 = no mask.
  * @property gradientScale full-resolution pixels per rendered pixel, inverted (the masking gradient's unit).
  * @property noiseFactor the noise model's factor the thresholds were scaled by.
+ * @property lumUnit each level's threshold at amount 100 (times the noise factor): a mask's local noise reduction uses
+ *   `lumUnit * (N/100)^1.5` with its per-pixel total `N` (docs/adr/0022).
+ * @property sharpenAtt the sharpening attenuation of this render's radius (a mask's local sharpness uses it).
+ * @property localNoise a mask reduces noise somewhere: the luminance levels run even with the global amount at 0.
+ * @property localSharpen a mask sharpens or softens somewhere: the sharpening blur runs.
  */
 data class DetailParams(
     val lumStep: List<Int>,
@@ -63,6 +69,10 @@ data class DetailParams(
     val maskHigh: Float,
     val gradientScale: Float,
     val noiseFactor: Float = 1f,
+    val lumUnit: List<Float> = emptyList(),
+    val sharpenAtt: Float = 1f,
+    val localNoise: Boolean = false,
+    val localSharpen: Boolean = false,
 ) {
     /** True when luminance noise reduction runs (at least one level). */
     val lumActive: Boolean get() = lumStep.indices.any { lumLevelActive(it) }
@@ -73,14 +83,14 @@ data class DetailParams(
     /** True when a noise reduction runs. */
     val nrActive: Boolean get() = lumActive || chromaActive
 
-    /** True when sharpening runs. */
-    val sharpenActive: Boolean get() = sharpenGain != 0f
+    /** True when sharpening runs (or a mask sharpens or softens somewhere). */
+    val sharpenActive: Boolean get() = sharpenGain != 0f || localSharpen
 
     /** True when the operator changes anything; otherwise it is skipped (bit-exact identity). */
     val active: Boolean get() = nrActive || sharpenActive
 
     /** True when luminance level [i] runs. */
-    fun lumLevelActive(i: Int): Boolean = lumStep[i] > 0 && lumTau[i] > 0f
+    fun lumLevelActive(i: Int): Boolean = lumStep[i] > 0 && (lumTau[i] > 0f || localNoise)
 
     /** True when colour level [i] runs. */
     fun chromaLevelActive(i: Int): Boolean = chromaActive && chromaStep[i] > 0 && chromaMix[i] > 0f
@@ -179,7 +189,7 @@ data class DetailParams(
          * noise model's [noiseFactor] ([NoiseModel.factor]).
          */
         @Suppress("LongMethod")
-        fun from(detail: Detail, pixelScale: Float, noiseFactor: Float = 1f): DetailParams {
+        fun from(detail: Detail, pixelScale: Float, noiseFactor: Float = 1f, needs: Int = 0): DetailParams {
             val r = RecipeRanges
             val ps = max(1f, pixelScale)
             // The threshold grows as amount^1.5: the low half of the slider stays gentle for the moderate noise of
@@ -194,6 +204,7 @@ data class DetailParams(
             val steps = ArrayList<Int>(LEVELS)
             val taus = ArrayList<Float>(LEVELS)
             val edges = ArrayList<Float>(LEVELS)
+            val units = ArrayList<Float>(LEVELS)
             val chromaSteps = ArrayList<Int>(LEVELS)
             val mixes = ArrayList<Float>(LEVELS)
             val sigmaC = col * noiseFactor * CHROMA_SIGMA_MAX * mix(1.6f, 0.6f, colDetail)
@@ -205,6 +216,7 @@ data class DetailParams(
                 val shape = if (i < FINE_LEVELS) mix(1.5f, 0.3f, lumDetail) else 1f - 0.85f * lumContrast
                 val tau = lum * LUM_TAU_MAX * LUM_LEVEL[i] * shape
                 taus += tau
+                units += noiseFactor * LUM_TAU_MAX * LUM_LEVEL[i] * shape
                 // The edge stop follows the expected noise, never the sliders: the smoothing chain is the same for
                 // every amount, detail and contrast (only the shrinkage changes), so a drag of them re-runs one pass.
                 val sigmaE = max(EDGE_SIGMA * LUM_TAU_MAX * LUM_LEVEL[i] * noiseFactor, 1e-4f)
@@ -242,6 +254,10 @@ data class DetailParams(
                 maskHigh = maskHigh,
                 gradientScale = 1f / ps,
                 noiseFactor = noiseFactor,
+                lumUnit = units,
+                sharpenAtt = attenuation,
+                localNoise = needs and MaskParams.NEED_NOISE != 0,
+                localSharpen = needs and MaskParams.NEED_SHARPEN != 0,
             )
         }
 
@@ -290,6 +306,9 @@ data class DetailParams(
 object DetailOp {
     private val H = floatArrayOf(0.0625f, 0.25f, 0.375f, 0.25f, 0.0625f)
     private const val TAPS = 5
+
+    /** Floor of the shrinkage's denominator: a level with threshold 0 keeps a zero detail without dividing 0 by 0. */
+    const val KEEP_FLOOR: Float = 1e-30f
     private const val LAB = 4
 
     /**
@@ -303,9 +322,10 @@ object DetailOp {
         d: DetailParams,
         e: EffectsParams = EffectsParams.NONE,
         grid: LowResGrid? = null,
+        local: LocalField? = null,
     ) {
         if (!d.active && !e.localActive) return
-        render(rgb, width, height, d, e, grid ?: LowResGrid(width, height), showMask = false)
+        render(rgb, width, height, d, e, grid ?: LowResGrid(width, height), showMask = false, local = local)
     }
 
     /** The masking overlay: the sharpening mask as grey (white = sharpened), what the editor shows while dragging. */
@@ -335,20 +355,31 @@ object DetailOp {
         e: EffectsParams,
         lowRes: LowResGrid,
         showMask: Boolean,
+        local: LocalField? = null,
     ) {
         val n = width * height
         val lab = toLab(rgb, n)
         val grid = if (e.gridActive) EffectsGrid.build(lab, lowRes) else null
+        // Masks (docs/adr/0022): each pixel's totals; the global constants where no mask covers it.
+        val totals = local?.let { field ->
+            val s = FloatArray(MaskParams.VECTOR)
+            Array(n) { i -> LocalDevelop.DetailTotals().also { LocalDevelop.detail(field, i, p, e, s, it) } }
+        }
         // 1. Luminance: (L_i, acc) through the levels; denoised L = L + acc.
         val lumL = FloatArray(n) { lab[it * LAB] }
         val acc = FloatArray(n)
         if (p.lumActive) {
             val lh = FloatArray(n)
+            val scale = totals?.let { t -> FloatArray(n) { t[it].noiseScale } }
             for (i in 0 until DetailParams.LEVELS) {
-                if (p.lumLevelActive(i)) lumLevel(lumL, acc, lh, width, height, p.lumStep[i], p.lumTau[i], p.lumEdge[i])
+                if (p.lumLevelActive(i)) {
+                    val unit = p.lumUnit.getOrElse(i) { 0f }
+                    lumLevel(lumL, acc, lh, width, height, p.lumStep[i], p.lumTau[i], p.lumEdge[i], scale, unit)
+                }
             }
         }
-        val l0 = FloatArray(n) { lumL[it] + acc[it] }
+        // A pixel whose total noise reduction is 0 keeps its lightness exactly (a mask's -100, or a local amount only).
+        val l0 = FloatArray(n) { if (totals != null && totals[it].noNoise) lab[it * LAB] else lumL[it] + acc[it] }
         // 2. Colour on the half-resolution copy.
         val chroma = if (p.chromaActive) Chroma.run(lab, width, height, p) else null
         // 3. The blurs of the denoised L: sharpening (x) and texture (y).
@@ -366,6 +397,8 @@ object DetailOp {
                 val lnr = l0[i]
                 var l = lnr
                 var mask = 1f
+                val t = totals?.get(i)
+                val sharpenGain = t?.sharpenGain ?: p.sharpenGain
                 if (sharpen) {
                     val b = checkNotNull(blurs)
                     val g = b[i * 2]
@@ -376,7 +409,9 @@ object DetailOp {
                         val grad = 0.5f * sqrt(gx * gx + gy * gy) * p.gradientScale
                         mask = LowResGrid.smoothstep(p.maskLow, p.maskHigh, grad)
                     }
-                    if (p.sharpenActive) l += p.sharpenGain * shape(h, p) * mask
+                    if (p.sharpenActive && (t == null || sharpenGain != 0f)) l += sharpenGain * shape(h, p) * mask
+                    // A negative total sharpness softens towards the sharpening Gaussian (docs/adr/0022).
+                    if (t != null && t.soften > 0f) l += (g - l) * t.soften
                 }
                 if (showMask) {
                     OkLab.toRgb(mask, 0f, 0f, tmp)
@@ -385,10 +420,16 @@ object DetailOp {
                     rgb[i * 3 + 2] = tmp[2]
                     continue
                 }
-                if (e.textureActive) l += e.textureDelta(lnr - checkNotNull(blurs)[i * 2 + 1])
+                val textureGain = t?.textureGain ?: e.textureGain
+                if (e.textureActive && (t == null || textureGain != 0f)) {
+                    l += e.textureDelta(lnr - checkNotNull(blurs)[i * 2 + 1], textureGain)
+                }
+                val clarityGain = t?.clarityGain ?: e.clarityGain
                 if (grid != null) {
                     grid.sample(x, y, lnr, coef)
-                    if (e.clarityActive) l = e.clarity(l, coef[0] * lnr + coef[1])
+                    if (e.clarityActive && (t == null || clarityGain != 0f)) {
+                        l = e.clarity(l, coef[0] * lnr + coef[1], clarityGain)
+                    }
                 }
                 var a = lab[i * LAB + 1]
                 var b = lab[i * LAB + 2]
@@ -397,8 +438,10 @@ object DetailOp {
                     b = chroma[i * 2 + 1]
                 }
                 OkLab.toRgb(l, a, b, tmp)
-                if (grid != null && e.dehazeActive) {
-                    e.dehaze(tmp, coef[2] * lnr + coef[3], grid.air)
+                val omega = t?.dehazeOmega ?: e.dehazeOmega
+                val beta = t?.dehazeBeta ?: e.dehazeBeta
+                if (grid != null && e.dehazeActive && (t == null || omega != 0f || beta != 0f)) {
+                    e.dehaze(tmp, coef[2] * lnr + coef[3], grid.air, omega, beta)
                 }
                 rgb[i * 3] = tmp[0]
                 rgb[i * 3 + 1] = tmp[1]
@@ -428,6 +471,8 @@ object DetailOp {
         step: Int,
         tau: Float,
         edge: Float,
+        scale: FloatArray? = null,
+        unit: Float = 0f,
     ) {
         for (y in 0 until height) {
             for (x in 0 until width) {
@@ -460,7 +505,10 @@ object DetailOp {
                 // The detail against the stored smooth value: the levels telescope exactly.
                 val l1 = Half.round(sum / ws)
                 val d = l[i] - l1
-                val keep = d * d / (d * d + tau * tau)
+                // A mask's local noise reduction: this pixel's own threshold (docs/adr/0022).
+                val st = scale?.get(i)
+                val tp = if (st == null || st.isNaN()) tau else unit * st
+                val keep = d * d / max(d * d + tp * tp, KEEP_FLOOR)
                 acc[i] = Half.round(acc[i] + d * keep * keep)
                 // In place is safe: the vertical pass reads only lh.
                 l[i] = l1

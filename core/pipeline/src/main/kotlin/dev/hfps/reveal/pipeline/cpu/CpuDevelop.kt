@@ -2,6 +2,8 @@ package dev.hfps.reveal.pipeline.cpu
 
 import dev.hfps.reveal.pipeline.PipelineInput
 import dev.hfps.reveal.pipeline.geometry.GeometryMapping
+import dev.hfps.reveal.pipeline.mask.MaskContext
+import dev.hfps.reveal.pipeline.mask.MaskParams
 import dev.hfps.reveal.pipeline.recipe.Recipe
 
 /**
@@ -19,7 +21,12 @@ object CpuDevelop {
      * [input] is not modified. [pixelScale]: full-resolution pixels per pixel of [input] (a proxy's downscale; the
      * Detail operator's scale).
      */
-    fun renderLinear(input: PipelineInput, recipe: Recipe, pixelScale: Float = 1f): FloatArray {
+    fun renderLinear(
+        input: PipelineInput,
+        recipe: Recipe,
+        pixelScale: Float = 1f,
+        masks: MaskContext = MaskContext.NONE,
+    ): FloatArray {
         val params = DevelopParams.from(input, recipe, pixelScale)
         val grid = LowResGrid(input.width, input.height)
         val rgb = input.linearRgb.copyOf()
@@ -32,9 +39,33 @@ object CpuDevelop {
         CameraMatrixOp.apply(rgb, params.cameraToWorking)
         params.vignette?.let { VignetteOp.apply(rgb, input.width, input.height, it) }
         ExposureOp.apply(rgb, params.exposureGain)
+        if (!params.masks.active) {
+            developGlobal(rgb, params, grid, null, null)
+            DefringeOp.apply(rgb, input.width, input.height, params.defringe)
+            DetailOp.apply(rgb, input.width, input.height, params.detail, params.effects, grid)
+            return rgb
+        }
+        // Masks (docs/adr/0022): the guide of the scene-linear image (never of a mask), the masks' coverage, then the
+        // develop stages with the local adjustments at their slots.
+        val guided = params.tone.localActive || params.masks.needs(MaskParams.NEED_TONE_LOCAL)
+        val moments = if (guided) LocalToneOp.moments(rgb, grid) else null
+        val coef = moments?.let { LocalToneOp.guide(it, grid) }
+        val field = LocalDevelop.field(input, params, rgb, grid, moments, coef, masks)
+        LocalDevelop.develop(rgb, input.width, params, grid, moments, coef, field)
+        DefringeOp.apply(rgb, input.width, input.height, params.defringe)
+        DetailOp.apply(rgb, input.width, input.height, params.detail, params.effects, grid, field)
+        return rgb
+    }
+
+    /**
+     * Slots 5b-9 without masks on scene-linear [rgb] in place: highlights/shadows (with the guide [moments] / [coef]
+     * when given, else built here), the profile, contrast/whites/blacks, the tone curve and the colour stage. Also the
+     * masks' pre-local image (docs/adr/0022).
+     */
+    fun developGlobal(rgb: FloatArray, params: DevelopParams, grid: LowResGrid, moments: FloatArray?, coef: FloatArray?) {
         if (params.tone.localActive) {
-            val moments = LocalToneOp.moments(rgb, grid)
-            LocalToneOp.apply(rgb, grid, moments, LocalToneOp.guide(moments, grid), params.tone)
+            val m = moments ?: LocalToneOp.moments(rgb, grid)
+            LocalToneOp.apply(rgb, grid, m, coef ?: LocalToneOp.guide(m, grid), params.tone)
         }
         ProfileOp.apply(rgb, params.profile)
         if (params.tone.globalActive) GlobalToneOp.apply(rgb, params.tone)
@@ -44,9 +75,6 @@ object CpuDevelop {
         } else {
             VibranceSaturationOp.apply(rgb, params.colour)
         }
-        DefringeOp.apply(rgb, input.width, input.height, params.defringe)
-        DetailOp.apply(rgb, input.width, input.height, params.detail, params.effects, grid)
-        return rgb
     }
 
     /**
@@ -59,8 +87,9 @@ object CpuDevelop {
         recipe: Recipe,
         mapping: GeometryMapping = mapping(input, recipe),
         pixelScale: Float = 1f,
+        masks: MaskContext = MaskContext.NONE,
     ): FloatArray {
-        val linear = renderLinear(input, recipe, pixelScale)
+        val linear = renderLinear(input, recipe, pixelScale, masks)
         val out = if (mapping.isIdentity) linear else GeometryOp.apply(linear, mapping)
         PostCropOp.apply(out, mapping.outputWidth, mapping.outputHeight, PostParams.from(recipe.effects))
         return out
@@ -79,10 +108,11 @@ object CpuDevelop {
         recipe: Recipe,
         output: OutputSettings = OutputSettings(),
         pixelScale: Float = 1f,
+        masks: MaskContext = MaskContext.NONE,
     ): ByteArray {
         val mapping = mapping(input, recipe)
         return OutputTransformOp.apply(
-            renderGeometry(input, recipe, mapping, pixelScale),
+            renderGeometry(input, recipe, mapping, pixelScale, masks),
             mapping.outputWidth,
             mapping.outputHeight,
             output,

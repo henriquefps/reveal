@@ -244,6 +244,34 @@ object LocalToneOp {
         }
     }
 
+    /**
+     * The masked form of [apply] for one pixel (docs/adr/0022): the guide is sampled with [l], the log luminance of the
+     * pixel **before** the local white balance and exposure (what the guide was built from), the base is shifted by
+     * [shift] (the log-luminance change of that local gain) and the curve uses the per-pixel stops of [p]; the gain
+     * multiplies the pixel at offset [i] of [rgb] (already through the local gain). [ab] is scratch.
+     */
+    @Suppress("LongParameterList")
+    fun applyShifted(
+        rgb: FloatArray,
+        i: Int,
+        grid: LowResGrid,
+        moments: FloatArray,
+        coef: FloatArray,
+        x: Int,
+        y: Int,
+        l: Float,
+        shift: Float,
+        p: ToneParams,
+        ab: FloatArray,
+    ) {
+        sampleCoef(coef, moments, grid, x, y, l, ab)
+        val base = ab[0] * l + ab[1] + shift
+        val gain = StrictMath.pow(2.0, delta(base, p).toDouble()).toFloat()
+        rgb[i] *= gain
+        rgb[i + 1] *= gain
+        rgb[i + 2] *= gain
+    }
+
     /** Range sigma of the coefficient upsampling, in stops. */
     const val RANGE_SIGMA: Float = 0.5f
 
@@ -330,18 +358,23 @@ object GlobalToneOp {
     fun apply(rgb: FloatArray, t: ToneParams) {
         var i = 0
         while (i < rgb.size) {
-            val y = Luma.of(rgb[i], rgb[i + 1], rgb[i + 2])
-            val yc = max(y, 0f)
-            val p = pow(yc, THIRD.toFloat())
-            val q = max(curve(p, t), 0f)
-            val y2 = q * q * q
-            val gain = min(y2 / max(yc, YMIN), GMAX)
-            val add = max(y2 - yc * gain, 0f)
-            rgb[i] = rgb[i] * gain + add
-            rgb[i + 1] = rgb[i + 1] * gain + add
-            rgb[i + 2] = rgb[i + 2] * gain + add
+            pixel(rgb, i, t)
             i += CHANNELS
         }
+    }
+
+    /** Applies [t] to the pixel at float offset [i] of [rgb] (masks call it with their per-pixel constants). */
+    fun pixel(rgb: FloatArray, i: Int, t: ToneParams) {
+        val y = Luma.of(rgb[i], rgb[i + 1], rgb[i + 2])
+        val yc = max(y, 0f)
+        val p = pow(yc, THIRD.toFloat())
+        val q = max(curve(p, t), 0f)
+        val y2 = q * q * q
+        val gain = min(y2 / max(yc, YMIN), GMAX)
+        val add = max(y2 - yc * gain, 0f)
+        rgb[i] = rgb[i] * gain + add
+        rgb[i + 1] = rgb[i + 1] * gain + add
+        rgb[i + 2] = rgb[i + 2] * gain + add
     }
 
     private fun pow(x: Float, e: Float): Float = StrictMath.pow(x.toDouble(), e.toDouble()).toFloat()

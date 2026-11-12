@@ -89,7 +89,7 @@ class RecipeGroupsTest {
         // The group is a constructor property, so "exactly one" holds by construction; check coverage.
         val used = HistoryField.entries.map { it.group }.toSet()
         val reserved =
-            setOf(RecipeGroup.MASKS, RecipeGroup.HEALS)
+            setOf(RecipeGroup.HEALS)
         assertThat(used + reserved).containsExactlyElementsIn(RecipeGroup.entries)
     }
 
@@ -114,6 +114,8 @@ class RecipeGroupsTest {
     @Test
     fun `every history field is produced by a diff of the fully edited recipe`() {
         val fields = RecipeDiff.between(Recipe(), edited).map { it.field }.toSet()
-        assertThat(fields).containsExactlyElementsIn(HistoryField.entries)
+        // A mask's other steps need a mask on both sides (RecipeDiffTest covers them).
+        val maskEdits = HistoryField.entries.filter { it.group == RecipeGroup.MASKS && it != HistoryField.MASK_ADD }
+        assertThat(fields + maskEdits).containsExactlyElementsIn(HistoryField.entries)
     }
 }

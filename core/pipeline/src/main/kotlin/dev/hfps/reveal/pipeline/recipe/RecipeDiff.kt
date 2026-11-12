@@ -70,6 +70,16 @@ enum class HistoryField(val group: RecipeGroup) {
     TRANSFORM_OFFSET_X(RecipeGroup.GEOMETRY),
     TRANSFORM_OFFSET_Y(RecipeGroup.GEOMETRY),
 
+    // Masks (docs/adr/0022): the value is the mask's name.
+    MASK_ADD(RecipeGroup.MASKS),
+    MASK_REMOVE(RecipeGroup.MASKS),
+    MASK_RENAME(RecipeGroup.MASKS),
+    MASK_SHOW(RecipeGroup.MASKS),
+    MASK_HIDE(RecipeGroup.MASKS),
+    MASK_SHAPE(RecipeGroup.MASKS),
+    MASK_ADJUST(RecipeGroup.MASKS),
+    MASK_ORDER(RecipeGroup.MASKS),
+
     // Colour tools (docs/adr/0013). Scalar fields share their ControlId's name.
     TREATMENT(RecipeGroup.PROFILE),
     CURVE_SHADOWS(RecipeGroup.LIGHT),
@@ -154,6 +164,32 @@ object RecipeDiff {
         effects(before.effects, after.effects)
         optics(before.optics, after.optics)
         geometry(before.geometry, after.geometry)
+        masks(before.masks, after.masks)
+    }
+
+    /**
+     * Masks matched by id (docs/adr/0022): removed, added, then per kept mask its name, visibility, shape and
+     * adjustments (amount included), then whether the kept masks changed order.
+     */
+    private fun MutableList<HistoryStep>.masks(before: List<Mask>, after: List<Mask>) {
+        val old = before.associateBy { it.id }
+        val new = after.associateBy { it.id }
+        before.filter { it.id !in new }.forEach { add(HistoryStep(HistoryField.MASK_REMOVE, it.name)) }
+        after.filter { it.id !in old }.forEach { add(HistoryStep(HistoryField.MASK_ADD, it.name)) }
+        for (mask in after) {
+            val was = old[mask.id] ?: continue
+            if (was.name != mask.name) add(HistoryStep(HistoryField.MASK_RENAME, mask.name))
+            if (was.enabled != mask.enabled) {
+                add(HistoryStep(if (mask.enabled) HistoryField.MASK_SHOW else HistoryField.MASK_HIDE, mask.name))
+            }
+            if (was.components != mask.components) add(HistoryStep(HistoryField.MASK_SHAPE, mask.name))
+            if (was.adjustments != mask.adjustments || changed(was.amount, mask.amount)) {
+                add(HistoryStep(HistoryField.MASK_ADJUST, mask.name))
+            }
+        }
+        val keptBefore = before.map { it.id }.filter { it in new }
+        val keptAfter = after.map { it.id }.filter { it in old }
+        if (keptBefore != keptAfter) add(HistoryStep(HistoryField.MASK_ORDER, null))
     }
 
     private fun MutableList<HistoryStep>.profile(before: Profile, after: Profile) {

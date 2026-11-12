@@ -156,6 +156,14 @@
     <string name="history_transform_scale">Escala na transformação %1$s</string>
     <string name="history_transform_offset_x">Deslocamento X %1$s</string>
     <string name="history_transform_offset_y">Deslocamento Y %1$s</string>
+    <string name="history_mask_add">Adicionar máscara %1$s</string>
+    <string name="history_mask_remove">Excluir máscara %1$s</string>
+    <string name="history_mask_rename">Renomear máscara para %1$s</string>
+    <string name="history_mask_show">Mostrar máscara %1$s</string>
+    <string name="history_mask_hide">Ocultar máscara %1$s</string>
+    <string name="history_mask_shape">Editar máscara %1$s</string>
+    <string name="history_mask_adjust">Ajustar máscara %1$s</string>
+    <string name="history_mask_order">Reordenar máscaras</string>
     <string name="upright_off">Desligado</string>
     <string name="upright_auto">Auto</string>
     <string name="upright_level">Nivelar</string>

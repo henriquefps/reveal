@@ -93,14 +93,9 @@ class SyncFlowTest {
         val link = checkNotNull(args.getString("syncLink"))
         val nasName = checkNotNull(args.getString("nasName"))
         ActivityScenario.launch(MainActivity::class.java).use {
-            compose.waitUntilAtLeastOneExists(
-                hasContentDescription(context.getString(LibraryR.string.library_menu)),
-                TIMEOUT_MS,
-            )
-            compose.onNode(hasContentDescription(context.getString(LibraryR.string.library_menu))).performClick()
-            compose.onNodeWithText(context.getString(LibraryR.string.library_menu_settings)).performClick()
-            compose.waitUntilAtLeastOneExists(hasTestTag(SettingsTags.SYNC), TIMEOUT_MS)
-            compose.onNodeWithTag(SettingsTags.SYNC).performClick()
+            // The library's compact sync status ("Not paired") opens the Sync screen (FIX/L).
+            compose.waitUntilAtLeastOneExists(hasTestTag(LibraryTags.SYNC_STATUS), TIMEOUT_MS)
+            compose.onNodeWithTag(LibraryTags.SYNC_STATUS).performClick()
             compose.waitUntilAtLeastOneExists(hasTestTag(SyncTags.LINK), TIMEOUT_MS)
             shot("sync-unpaired")
             compose.onNodeWithTag(SyncTags.LINK).performTextInput(link)
@@ -141,12 +136,9 @@ class SyncFlowTest {
             Espresso.pressBack()
         }
         ActivityScenario.launch(MainActivity::class.java).use {
-            compose.waitUntilAtLeastOneExists(
-                hasContentDescription(context.getString(LibraryR.string.library_menu)),
-                TIMEOUT_MS,
-            )
-            compose.onNode(hasContentDescription(context.getString(LibraryR.string.library_menu))).performClick()
-            compose.onNodeWithText(context.getString(LibraryR.string.library_menu_settings)).performClick()
+            compose.waitUntilAtLeastOneExists(hasTestTag(LibraryTags.SETTINGS), TIMEOUT_MS)
+            compose.onNodeWithTag(LibraryTags.SETTINGS).performClick()
+            compose.waitUntilAtLeastOneExists(hasTestTag(SettingsTags.SYNC), TIMEOUT_MS)
             compose.onNodeWithTag(SettingsTags.SYNC).performClick()
             compose.waitUntilAtLeastOneExists(hasTestTag(SyncTags.UNPAIR), TIMEOUT_MS)
             compose.onNodeWithTag(SyncTags.UNPAIR).performScrollTo().performClick()

@@ -11,8 +11,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.relocation.BringIntoViewRequester
-import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -28,6 +26,8 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
@@ -38,6 +38,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -73,15 +74,9 @@ import dev.hfps.reveal.feature.editor.EditorTags
 import dev.hfps.reveal.feature.editor.R
 import dev.hfps.reveal.feature.editor.panels.PanelHost
 import dev.hfps.reveal.pipeline.recipe.Recipe
+import kotlin.math.roundToInt
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import kotlin.math.roundToInt
-
-/** The chip keys that are not groups. */
-internal object PresetChips {
-    const val FAVOURITES = "favourites"
-    const val RECENT = "recent"
-}
 
 /** The presets a chip shows. */
 internal fun PresetLibrary.presetsOf(key: String): List<LibraryPreset> = when (key) {
@@ -257,7 +252,7 @@ fun PresetsPanel(host: PanelHost, modifier: Modifier = Modifier) {
             actions = actions,
             canCreate = state.ready && !state.edit.committed.isUnedited(),
             onImport = { importer.launch(arrayOf("*/*")) },
-            onGroupGone = { chip = null },
+            onGroupRemove = { chip = null },
             onDismiss = { menu = false },
         )
     }
@@ -282,15 +277,18 @@ fun PresetsPanel(host: PanelHost, modifier: Modifier = Modifier) {
 
 /** A group's display name: the default user group is "My presets". */
 @Composable
-internal fun groupName(group: LibraryGroup): String =
-    if (group.kind == GroupKind.USER && group.name.isEmpty()) stringResource(R.string.presets_group_default) else group.name
+internal fun groupName(group: LibraryGroup): String = if (group.kind == GroupKind.USER && group.name.isEmpty()) {
+    stringResource(R.string.presets_group_default)
+} else {
+    group.name
+}
 
 /**
  * One preset: its live preview on the photo (square, centre-cropped), the name under it, a star when it is a
  * favourite, an outline when it is the applied one. Tap applies, long-press opens its options.
  */
 @OptIn(ExperimentalFoundationApi::class)
-@Suppress("LongParameterList")
+@Suppress("LongParameterList", "LongMethod")
 @Composable
 private fun PresetCell(
     preset: LibraryPreset,
@@ -310,9 +308,10 @@ private fun PresetCell(
         preset.preset.version,
         preset.preset.patch.hashCode(),
     )
+    val currentPreview by rememberUpdatedState(preview)
     val image by produceState(thumbnails?.cached(key), key, ready, thumbnails) {
         if (value != null || !ready || thumbnails == null) return@produceState
-        val recipe = withContext(Dispatchers.Default) { preview(preset.preset, base) }
+        val recipe = withContext(Dispatchers.Default) { currentPreview(preset.preset, base) }
         value = thumbnails.render(key, recipe)
     }
     val appliedLabel = stringResource(R.string.presets_applied)

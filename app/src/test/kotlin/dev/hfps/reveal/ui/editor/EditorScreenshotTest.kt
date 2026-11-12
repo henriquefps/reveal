@@ -34,6 +34,12 @@ import dev.hfps.reveal.data.db.PhotoRow
 import dev.hfps.reveal.data.editor.EditorLayout
 import dev.hfps.reveal.data.model.PhotoFormat
 import dev.hfps.reveal.data.model.PickFlag
+import dev.hfps.reveal.data.preset.GroupKind
+import dev.hfps.reveal.data.preset.LibraryGroup
+import dev.hfps.reveal.data.preset.LibraryPreset
+import dev.hfps.reveal.data.preset.PackInfo
+import dev.hfps.reveal.data.preset.PresetLibrary
+import dev.hfps.reveal.data.preset.PresetOrigin
 import dev.hfps.reveal.designsystem.components.RevealBottomSheet
 import dev.hfps.reveal.designsystem.components.slider.NumericInputContent
 import dev.hfps.reveal.designsystem.theme.EditorTheme
@@ -56,16 +62,6 @@ import dev.hfps.reveal.feature.editor.presets.CreatePresetDraft
 import dev.hfps.reveal.feature.editor.presets.PresetSession
 import dev.hfps.reveal.feature.editor.presets.PresetThumbnailSource
 import dev.hfps.reveal.feature.editor.presets.PresetsState
-import dev.hfps.reveal.data.preset.GroupKind
-import dev.hfps.reveal.data.preset.LibraryGroup
-import dev.hfps.reveal.data.preset.LibraryPreset
-import dev.hfps.reveal.data.preset.PackInfo
-import dev.hfps.reveal.data.preset.PresetLibrary
-import dev.hfps.reveal.data.preset.PresetOrigin
-import dev.hfps.reveal.pipeline.preset.Preset
-import dev.hfps.reveal.pipeline.preset.PresetPatch
-import dev.hfps.reveal.pipeline.preset.PresetSection
-import dev.hfps.reveal.pipeline.recipe.BaseLook
 import dev.hfps.reveal.feature.editor.tools.ToolId
 import dev.hfps.reveal.feature.export.encode.EncoderSupport
 import dev.hfps.reveal.feature.export.model.ExportColour
@@ -84,9 +80,13 @@ import dev.hfps.reveal.pipeline.gl.CompareMode
 import dev.hfps.reveal.pipeline.gl.Histogram
 import dev.hfps.reveal.pipeline.optics.LensProfile
 import dev.hfps.reveal.pipeline.optics.SonyLensProfile
+import dev.hfps.reveal.pipeline.preset.Preset
+import dev.hfps.reveal.pipeline.preset.PresetPatch
+import dev.hfps.reveal.pipeline.preset.PresetSection
 import dev.hfps.reveal.pipeline.recipe.Aspect
 import dev.hfps.reveal.pipeline.recipe.AspectPreset
 import dev.hfps.reveal.pipeline.recipe.BandValues
+import dev.hfps.reveal.pipeline.recipe.BaseLook
 import dev.hfps.reveal.pipeline.recipe.Colour
 import dev.hfps.reveal.pipeline.recipe.ColourGrading
 import dev.hfps.reveal.pipeline.recipe.ColourMixer
@@ -825,40 +825,135 @@ private object TestPresets {
         Preset(id(i), name, PresetPatch.fromSections(recipe, sections.toList()))
 
     private val looks = listOf(
-        preset(1, "Warm", Recipe(colour = Colour(WhiteBalance(6500f, 10f, WbMode.CUSTOM), vibrance = 15f)), PresetSection.WHITE_BALANCE, PresetSection.VIBRANCE),
-        preset(2, "Cool", Recipe(colour = Colour(WhiteBalance(4300f, -5f, WbMode.CUSTOM))), PresetSection.WHITE_BALANCE),
-        preset(3, "Matte", Recipe(light = Light(contrast = -25f, curve = Curves(rgb = listOf(CurvePoint(0f, 0.08f), CurvePoint(1f, 0.95f))))), PresetSection.CONTRAST, PresetSection.TONE_CURVE),
-        preset(4, "Punchy", Recipe(light = Light(contrast = 35f), colour = Colour(vibrance = 30f)), PresetSection.CONTRAST, PresetSection.VIBRANCE),
-        preset(5, "Black & white with a longer name", Recipe(profile = Profile(treatment = Treatment.BLACK_WHITE)), PresetSection.TREATMENT),
-        preset(6, "Faded", Recipe(colour = Colour(saturation = -40f), light = Light(blacks = 30f)), PresetSection.SATURATION, PresetSection.BLACKS),
+        preset(
+            1,
+            "Warm",
+            Recipe(colour = Colour(WhiteBalance(6500f, 10f, WbMode.CUSTOM), vibrance = 15f)),
+            PresetSection.WHITE_BALANCE,
+            PresetSection.VIBRANCE,
+        ),
+        preset(
+            2,
+            "Cool",
+            Recipe(colour = Colour(WhiteBalance(4300f, -5f, WbMode.CUSTOM))),
+            PresetSection.WHITE_BALANCE,
+        ),
+        preset(
+            3,
+            "Matte",
+            Recipe(
+                light = Light(
+                    contrast = -25f,
+                    curve = Curves(rgb = listOf(CurvePoint(0f, 0.08f), CurvePoint(1f, 0.95f))),
+                ),
+            ),
+            PresetSection.CONTRAST,
+            PresetSection.TONE_CURVE,
+        ),
+        preset(
+            4,
+            "Punchy",
+            Recipe(light = Light(contrast = 35f), colour = Colour(vibrance = 30f)),
+            PresetSection.CONTRAST,
+            PresetSection.VIBRANCE,
+        ),
+        preset(
+            5,
+            "Black & white with a longer name",
+            Recipe(profile = Profile(treatment = Treatment.BLACK_WHITE)),
+            PresetSection.TREATMENT,
+        ),
+        preset(
+            6,
+            "Faded",
+            Recipe(colour = Colour(saturation = -40f), light = Light(blacks = 30f)),
+            PresetSection.SATURATION,
+            PresetSection.BLACKS,
+        ),
         preset(7, "Vivid", Recipe(profile = Profile(BaseLook.VIVID)), PresetSection.PROFILE),
-        preset(8, "Teal & orange", Recipe(colour = Colour(grading = ColourGrading(shadows = GradeWheel(200f, 35f), highlights = GradeWheel(40f, 30f)))), PresetSection.COLOUR_GRADING),
+        preset(
+            8,
+            "Teal & orange",
+            Recipe(
+                colour = Colour(
+                    grading = ColourGrading(shadows = GradeWheel(200f, 35f), highlights = GradeWheel(40f, 30f)),
+                ),
+            ),
+            PresetSection.COLOUR_GRADING,
+        ),
     )
     private val mine = listOf(
         preset(11, "Evening walk", Photos.recipeForPresets, PresetSection.CONTRAST, PresetSection.SHADOWS),
-        preset(12, "Soft portrait", Recipe(profile = Profile(BaseLook.PORTRAIT), effects = Effects(clarity = -15f)), PresetSection.PROFILE, PresetSection.CLARITY),
+        preset(
+            12,
+            "Soft portrait",
+            Recipe(profile = Profile(BaseLook.PORTRAIT), effects = Effects(clarity = -15f)),
+            PresetSection.PROFILE,
+            PresetSection.CLARITY,
+        ),
     )
     private val pack = listOf(
-        preset(21, "Golden", Recipe(colour = Colour(WhiteBalance(7000f, 12f, WbMode.CUSTOM), saturation = 10f)), PresetSection.WHITE_BALANCE, PresetSection.SATURATION),
-        preset(22, "Dusk", Recipe(light = Light(exposureEv = -0.4f, highlights = -40f)), PresetSection.EXPOSURE, PresetSection.HIGHLIGHTS),
+        preset(
+            21,
+            "Golden",
+            Recipe(colour = Colour(WhiteBalance(7000f, 12f, WbMode.CUSTOM), saturation = 10f)),
+            PresetSection.WHITE_BALANCE,
+            PresetSection.SATURATION,
+        ),
+        preset(
+            22,
+            "Dusk",
+            Recipe(light = Light(exposureEv = -0.4f, highlights = -40f)),
+            PresetSection.EXPOSURE,
+            PresetSection.HIGHLIGHTS,
+        ),
     )
 
     val library = PresetLibrary(
         listOf(
             LibraryGroup(
-                "aa0e8400-e29b-41d4-a716-446655440000", null, "Looks", GroupKind.BUILT_IN,
+                "aa0e8400-e29b-41d4-a716-446655440000",
+                null,
+                "Looks",
+                GroupKind.BUILT_IN,
                 looks.mapIndexed { i, p ->
-                    LibraryPreset(p, null, "aa0e8400-e29b-41d4-a716-446655440000", PresetOrigin.BUILT_IN, favourite = i == 2)
+                    LibraryPreset(
+                        p,
+                        null,
+                        "aa0e8400-e29b-41d4-a716-446655440000",
+                        PresetOrigin.BUILT_IN,
+                        favourite =
+                            i == 2,
+                    )
                 },
             ),
             LibraryGroup(
-                "bb0e8400-e29b-41d4-a716-446655440000", 1L, "", GroupKind.USER,
-                mine.mapIndexed { i, p -> LibraryPreset(p, 10L + i, "bb0e8400-e29b-41d4-a716-446655440000", PresetOrigin.USER) },
+                "bb0e8400-e29b-41d4-a716-446655440000",
+                1L,
+                "",
+                GroupKind.USER,
+                mine.mapIndexed { i, p ->
+                    LibraryPreset(p, 10L + i, "bb0e8400-e29b-41d4-a716-446655440000", PresetOrigin.USER)
+                },
             ),
             LibraryGroup(
-                PACK_GROUP, 2L, "Golden hour", GroupKind.PACK,
+                PACK_GROUP,
+                2L,
+                "Golden hour",
+                GroupKind.PACK,
                 pack.mapIndexed { i, p -> LibraryPreset(p, 20L + i, PACK_GROUP, PresetOrigin.PACK) },
-                PackInfo(1L, "6a5b4c3d-2e1f-4a0b-8c9d-0e1f2a3b4c5d", "Golden hour", "Ana Example", 1, "Personal use", "", null, null, trial = true),
+                PackInfo(
+                    1L,
+                    "6a5b4c3d-2e1f-4a0b-8c9d-0e1f2a3b4c5d",
+                    "Golden hour",
+                    "Ana Example",
+                    1,
+                    "Personal use",
+                    "",
+                    null,
+                    null,
+                    trial = true,
+                ),
             ),
         ),
     )

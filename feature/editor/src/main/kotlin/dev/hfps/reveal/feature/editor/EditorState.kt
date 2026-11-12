@@ -7,8 +7,6 @@ import dev.hfps.reveal.feature.editor.edit.AsShot
 import dev.hfps.reveal.feature.editor.open.OpenError
 import dev.hfps.reveal.feature.editor.presets.PresetThumbnailSource
 import dev.hfps.reveal.feature.editor.presets.PresetsState
-import dev.hfps.reveal.pipeline.preset.Preset
-import dev.hfps.reveal.pipeline.preset.PresetSection
 import dev.hfps.reveal.feature.editor.tools.ToolId
 import dev.hfps.reveal.pipeline.auto.AutoScope
 import dev.hfps.reveal.pipeline.gl.ClippingWarnings
@@ -16,6 +14,8 @@ import dev.hfps.reveal.pipeline.gl.CompareMode
 import dev.hfps.reveal.pipeline.gl.GpuDevelopRenderer
 import dev.hfps.reveal.pipeline.gl.Histogram
 import dev.hfps.reveal.pipeline.optics.LensProfile
+import dev.hfps.reveal.pipeline.preset.Preset
+import dev.hfps.reveal.pipeline.preset.PresetSection
 import dev.hfps.reveal.pipeline.recipe.BaseLook
 import dev.hfps.reveal.pipeline.recipe.ColourBand
 import dev.hfps.reveal.pipeline.recipe.ControlId

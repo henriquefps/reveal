@@ -79,6 +79,7 @@ object PresetSteps {
 object PreviewInput {
     const val SIDE: Int = 360
 
+    @Suppress("NestedBlockDepth")
     fun of(input: PipelineInput, maxSide: Int = SIDE): PipelineInput {
         val long = max(input.width, input.height)
         if (long <= maxSide) return input
@@ -96,12 +97,11 @@ object PreviewInput {
                 var g = 0.0
                 var b = 0.0
                 for (sy in y0 until y1) {
-                    var s = (sy * input.width + x0) * c
-                    for (sx in x0 until x1) {
-                        r += input.linearRgb[s]
-                        g += input.linearRgb[s + 1]
-                        b += input.linearRgb[s + 2]
-                        s += c
+                    val row = sy * input.width
+                    for (i in (row + x0) * c until (row + x1) * c step c) {
+                        r += input.linearRgb[i]
+                        g += input.linearRgb[i + 1]
+                        b += input.linearRgb[i + 2]
                     }
                 }
                 val n = ((y1 - y0) * (x1 - x0)).toDouble()
@@ -123,4 +123,10 @@ object PreviewInput {
             input.lens,
         )
     }
+}
+
+/** The chip keys that are not groups. */
+internal object PresetChips {
+    const val FAVOURITES = "favourites"
+    const val RECENT = "recent"
 }

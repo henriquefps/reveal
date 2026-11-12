@@ -20,10 +20,10 @@ import dev.hfps.reveal.pipeline.recipe.Colour
 import dev.hfps.reveal.pipeline.recipe.Light
 import dev.hfps.reveal.pipeline.recipe.Recipe
 import dev.hfps.reveal.sync.api.SyncApi
-import kotlinx.coroutines.flow.first
 import dev.hfps.reveal.sync.engine.AuthorshipData
 import dev.hfps.reveal.sync.engine.SyncedSetting
 import kotlin.random.Random
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.JsonElement
 import org.junit.After
@@ -350,7 +350,9 @@ class SyncEngineTest {
             presets = listOf(preset), groupOf = mapOf(preset.id to group.id), cover = null,
         )
         val bytes = java.io.ByteArrayOutputStream().also { PresetPacks.write(pack, it) }.toByteArray()
-        val added = runBlocking { phone.presets.importPack(java.io.ByteArrayInputStream(bytes)) } as ImportResult.PackAdded
+        val added = runBlocking {
+            phone.presets.importPack(java.io.ByteArrayInputStream(bytes))
+        } as ImportResult.PackAdded
         phone.sync()
         assertThat(server.record("preset", preset.id)).isNull()
         runBlocking { phone.presets.keepPack(added.packRowId) }

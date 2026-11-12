@@ -2,13 +2,14 @@ package dev.hfps.reveal.data.preset
 
 import android.content.ContentResolver
 import android.net.Uri
+import android.util.Log
 import dev.hfps.reveal.pipeline.preset.PresetError
 import dev.hfps.reveal.pipeline.preset.PresetFormatException
 import dev.hfps.reveal.pipeline.preset.PresetLimits
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 import java.io.BufferedInputStream
 import java.io.IOException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 /** What an import or export did, for a short message (docs/adr/0019 "Import and export"). */
 sealed interface PresetEvent {
@@ -49,8 +50,10 @@ class PresetFilesIo(private val resolver: ContentResolver, private val presets: 
         } catch (e: PresetFormatException) {
             PresetEvent.Refused(e.error)
         } catch (e: IOException) {
+            Log.w(TAG, "preset import unreadable", e)
             PresetEvent.Refused(null)
         } catch (e: SecurityException) {
+            Log.w(TAG, "preset import not allowed", e)
             PresetEvent.Refused(null)
         }
     }
@@ -67,8 +70,10 @@ class PresetFilesIo(private val resolver: ContentResolver, private val presets: 
             out.use { it.write(data) }
             PresetEvent.Exported
         } catch (e: IOException) {
+            Log.w(TAG, "preset export failed", e)
             PresetEvent.ExportFailed
         } catch (e: SecurityException) {
+            Log.w(TAG, "preset export not allowed", e)
             PresetEvent.ExportFailed
         }
     }
@@ -85,6 +90,7 @@ class PresetFilesIo(private val resolver: ContentResolver, private val presets: 
     }
 
     private companion object {
+        const val TAG = "RevealPresets"
         val ZIP_MAGIC = byteArrayOf('P'.code.toByte(), 'K'.code.toByte(), 3, 4)
         const val BUFFER = 16 * 1024
     }

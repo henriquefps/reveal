@@ -59,6 +59,7 @@ import dev.hfps.reveal.pipeline.preset.PresetSection
 import dev.hfps.reveal.pipeline.recipe.Recipe
 
 /** The string resource of a chooser section. */
+@Suppress("CyclomaticComplexMethod")
 internal fun sectionName(section: PresetSection): Int = when (section) {
     PresetSection.PROFILE -> R.string.presets_section_profile
     PresetSection.TREATMENT -> R.string.presets_section_treatment
@@ -174,7 +175,12 @@ internal fun CreatePresetSheet(
             )
         }
         newGroup?.let { value ->
-            PresetTextField(stringResource(R.string.presets_new_group_name), value, { newGroup = it }, "${EditorTags.PRESET_NEW_GROUP}-name")
+            PresetTextField(
+                stringResource(R.string.presets_new_group_name),
+                value,
+                { newGroup = it },
+                "${EditorTags.PRESET_NEW_GROUP}-name",
+            )
         }
         RevealChecklist(
             title = stringResource(R.string.presets_include),
@@ -207,7 +213,7 @@ internal fun PresetsMenuSheet(
     actions: EditorActions,
     canCreate: Boolean,
     onImport: () -> Unit,
-    onGroupGone: () -> Unit,
+    onGroupRemove: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     var renaming by remember { mutableStateOf(false) }
@@ -241,7 +247,7 @@ internal fun PresetsMenuSheet(
                     confirm = stringResource(R.string.presets_delete),
                     onConfirm = {
                         actions.onDeletePresetGroup(rowId)
-                        onGroupGone()
+                        onGroupRemove()
                         onDismiss()
                     },
                     onCancel = { confirmDelete = false },
@@ -309,7 +315,9 @@ internal fun PresetsMenuSheet(
                         pack?.let { pack ->
                             RevealListRow(
                                 title = stringResource(R.string.presets_pack_info),
-                                subtitle = listOf(pack.name, pack.author).filter { it.isNotBlank() }.joinToString(" · "),
+                                subtitle = listOf(pack.name, pack.author)
+                                    .filter { it.isNotBlank() }
+                                    .joinToString(" · "),
                                 icon = PhosphorRegular.Info,
                                 onClick = { about = true },
                             )
@@ -318,7 +326,7 @@ internal fun PresetsMenuSheet(
                                 icon = PhosphorRegular.Trash,
                                 onClick = {
                                     actions.onRemovePack(pack.rowId)
-                                    onGroupGone()
+                                    onGroupRemove()
                                     onDismiss()
                                 },
                                 modifier = Modifier.testTag(EditorTags.PRESET_REMOVE_PACK),
@@ -383,7 +391,9 @@ internal fun PresetOptionsSheet(
                 else -> {
                     Eyebrow(preset.name, Modifier.padding(horizontal = 24.dp, vertical = 8.dp))
                     RevealListRow(
-                        title = stringResource(if (preset.favourite) R.string.presets_unfavourite else R.string.presets_favourite),
+                        title = stringResource(
+                            if (preset.favourite) R.string.presets_unfavourite else R.string.presets_favourite,
+                        ),
                         icon = PhosphorRegular.Star,
                         onClick = {
                             actions.onPresetFavourite(preset.uuid, !preset.favourite)
@@ -457,60 +467,77 @@ internal fun PresetOptionsSheet(
 /** Exporting a user group as a pack: the author and the licence shown to importers, then the file. */
 @Composable
 private fun ExportGroup(group: LibraryGroup, actions: EditorActions, onDismiss: () -> Unit) {
-    var author by rememberSaveable { mutableStateOf("") }
-    val defaultLicence = stringResource(R.string.presets_export_licence_default)
-    var licence by rememberSaveable { mutableStateOf(defaultLicence) }
-    val rowId = checkNotNull(group.rowId)
-    val exporter = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument(PresetPacks.MIME)) { uri ->
-        uri?.let { actions.onExportPresetGroup(rowId, it, author, licence.ifBlank { defaultLicence }) }
-        onDismiss()
+    Column {
+        var author by rememberSaveable { mutableStateOf("") }
+        val defaultLicence = stringResource(R.string.presets_export_licence_default)
+        var licence by rememberSaveable { mutableStateOf(defaultLicence) }
+        val rowId = checkNotNull(group.rowId)
+        val exporter =
+            rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument(PresetPacks.MIME)) { uri ->
+                uri?.let { actions.onExportPresetGroup(rowId, it, author, licence.ifBlank { defaultLicence }) }
+                onDismiss()
+            }
+        val name = groupName(group)
+        Eyebrow(stringResource(R.string.presets_export_group), Modifier.padding(horizontal = 24.dp, vertical = 8.dp))
+        PresetTextField(stringResource(R.string.presets_export_author), author, { author = it }, "preset-export-author")
+        PresetTextField(stringResource(R.string.presets_export_licence), licence, {
+            licence = it
+        }, "preset-export-licence")
+        Buttons(
+            confirm = stringResource(R.string.presets_export),
+            onConfirm = { exporter.launch("$name.${PresetPacks.EXTENSION}") },
+            onCancel = onDismiss,
+        )
     }
-    val name = groupName(group)
-    Eyebrow(stringResource(R.string.presets_export_group), Modifier.padding(horizontal = 24.dp, vertical = 8.dp))
-    PresetTextField(stringResource(R.string.presets_export_author), author, { author = it }, "preset-export-author")
-    PresetTextField(stringResource(R.string.presets_export_licence), licence, { licence = it }, "preset-export-licence")
-    Buttons(
-        confirm = stringResource(R.string.presets_export),
-        onConfirm = { exporter.launch("$name.${PresetPacks.EXTENSION}") },
-        onCancel = onDismiss,
-    )
 }
 
 /** A pack's details: name, author, version, licence text and its link. */
 @Composable
 private fun PackAbout(pack: PackInfo) {
-    val context = LocalContext.current
-    val c = RevealTheme.colors
-    Eyebrow(stringResource(R.string.presets_pack_info), Modifier.padding(horizontal = 24.dp, vertical = 8.dp))
-    Column(Modifier.padding(horizontal = 24.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        Text(pack.name, style = RevealTheme.typography.title, color = c.foreground)
-        if (pack.author.isNotBlank()) {
-            Text(stringResource(R.string.presets_pack_by, pack.author), style = RevealTheme.typography.body, color = c.mutedForeground)
-        }
-        Text(stringResource(R.string.presets_pack_licence, pack.licenceName), style = RevealTheme.typography.body, color = c.foreground)
-        if (pack.licenceText.isNotBlank()) {
+    Column {
+        val context = LocalContext.current
+        val c = RevealTheme.colors
+        Eyebrow(stringResource(R.string.presets_pack_info), Modifier.padding(horizontal = 24.dp, vertical = 8.dp))
+        Column(Modifier.padding(horizontal = 24.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text(pack.name, style = RevealTheme.typography.title, color = c.foreground)
+            if (pack.author.isNotBlank()) {
+                Text(
+                    stringResource(R.string.presets_pack_by, pack.author),
+                    style = RevealTheme.typography.body,
+                    color = c.mutedForeground,
+                )
+            }
             Text(
-                pack.licenceText,
-                style = RevealTheme.typography.mono,
-                color = c.mutedForeground,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(c.muted, RoundedCornerShape(8.dp))
-                    .padding(12.dp),
+                stringResource(R.string.presets_pack_licence, pack.licenceName),
+                style = RevealTheme.typography.body,
+                color = c.foreground,
+            )
+            if (pack.licenceText.isNotBlank()) {
+                Text(
+                    pack.licenceText,
+                    style = RevealTheme.typography.mono,
+                    color = c.mutedForeground,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(c.muted, RoundedCornerShape(8.dp))
+                        .padding(12.dp),
+                )
+            }
+        }
+        pack.link?.let { link ->
+            RevealListRow(
+                title = stringResource(R.string.presets_pack_link),
+                subtitle = link,
+                icon = PhosphorRegular.LinkSimple,
+                onClick = {
+                    runCatching {
+                        context.startActivity(
+                            Intent(Intent.ACTION_VIEW, link.toUri()).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                        )
+                    }
+                },
             )
         }
-    }
-    pack.link?.let { link ->
-        RevealListRow(
-            title = stringResource(R.string.presets_pack_link),
-            subtitle = link,
-            icon = PhosphorRegular.LinkSimple,
-            onClick = {
-                runCatching {
-                    context.startActivity(Intent(Intent.ACTION_VIEW, link.toUri()).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-                }
-            },
-        )
     }
 }
 
@@ -525,7 +552,11 @@ internal fun TrialPackBanner(pack: PackInfo, onKeep: () -> Unit, onRemove: () ->
             .background(c.muted, RoundedCornerShape(12.dp))
             .padding(horizontal = 12.dp, vertical = 8.dp),
     ) {
-        Text(stringResource(R.string.presets_pack_trial, pack.name), style = RevealTheme.typography.uiMedium, color = c.foreground)
+        Text(
+            stringResource(R.string.presets_pack_trial, pack.name),
+            style = RevealTheme.typography.uiMedium,
+            color = c.foreground,
+        )
         val detail = listOfNotNull(
             pack.author.takeIf { it.isNotBlank() }?.let { stringResource(R.string.presets_pack_by, it) },
             stringResource(R.string.presets_pack_licence, pack.licenceName),
@@ -535,44 +566,62 @@ internal fun TrialPackBanner(pack: PackInfo, onKeep: () -> Unit, onRemove: () ->
             Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
         ) {
-            GhostButton(stringResource(R.string.presets_pack_remove), onRemove, Modifier.testTag(EditorTags.PRESET_REMOVE_PACK))
-            PrimaryButton(stringResource(R.string.presets_pack_keep), onKeep, Modifier.testTag(EditorTags.PRESET_KEEP_PACK))
+            GhostButton(
+                stringResource(R.string.presets_pack_remove),
+                onRemove,
+                Modifier.testTag(EditorTags.PRESET_REMOVE_PACK),
+            )
+            PrimaryButton(
+                stringResource(R.string.presets_pack_keep),
+                onKeep,
+                Modifier.testTag(EditorTags.PRESET_KEEP_PACK),
+            )
         }
     }
 }
 
 @Composable
 private fun NameEditor(title: String, initial: String, onDone: (String) -> Unit, onCancel: () -> Unit) {
-    var name by rememberSaveable { mutableStateOf(initial) }
-    Eyebrow(title, Modifier.padding(horizontal = 24.dp, vertical = 8.dp))
-    PresetTextField(stringResource(R.string.presets_name), name, { name = it }, EditorTags.PRESET_NAME)
-    Buttons(
-        confirm = stringResource(R.string.presets_save),
-        onConfirm = { if (name.isNotBlank()) onDone(name) },
-        onCancel = onCancel,
-    )
+    Column {
+        var name by rememberSaveable { mutableStateOf(initial) }
+        Eyebrow(title, Modifier.padding(horizontal = 24.dp, vertical = 8.dp))
+        PresetTextField(stringResource(R.string.presets_name), name, { name = it }, EditorTags.PRESET_NAME)
+        Buttons(
+            confirm = stringResource(R.string.presets_save),
+            onConfirm = { if (name.isNotBlank()) onDone(name) },
+            onCancel = onCancel,
+        )
+    }
 }
 
 @Composable
 private fun Confirm(text: String, confirm: String, onConfirm: () -> Unit, onCancel: () -> Unit) {
-    Text(
-        text,
-        style = RevealTheme.typography.body,
-        color = RevealTheme.colors.foreground,
-        modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp),
-    )
-    Buttons(confirm, onConfirm, onCancel, Modifier.testTag(EditorTags.presetOption("confirm")))
+    Column {
+        Text(
+            text,
+            style = RevealTheme.typography.body,
+            color = RevealTheme.colors.foreground,
+            modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp),
+        )
+        Buttons(confirm, onConfirm, onCancel, confirmModifier = Modifier.testTag(EditorTags.presetOption("confirm")))
+    }
 }
 
 @Composable
-private fun Buttons(confirm: String, onConfirm: () -> Unit, onCancel: () -> Unit, modifier: Modifier = Modifier) {
+private fun Buttons(
+    confirm: String,
+    onConfirm: () -> Unit,
+    onCancel: () -> Unit,
+    modifier: Modifier = Modifier,
+    confirmModifier: Modifier = Modifier,
+) {
     Row(
-        Modifier
+        modifier
             .fillMaxWidth()
             .padding(horizontal = 16.dp, vertical = 12.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
     ) {
         GhostButton(stringResource(R.string.presets_cancel), onCancel)
-        PrimaryButton(confirm, onConfirm, modifier)
+        PrimaryButton(confirm, onConfirm, confirmModifier)
     }
 }

@@ -11,6 +11,7 @@ import dev.hfps.reveal.pipeline.PipelineInput
 import dev.hfps.reveal.pipeline.cpu.CpuDevelop
 import dev.hfps.reveal.pipeline.gl.GpuDevelopRenderer
 import dev.hfps.reveal.pipeline.recipe.Recipe
+import java.nio.ByteBuffer
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -19,7 +20,6 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
-import java.nio.ByteBuffer
 
 /** Renders a recipe on the open photo's small preview copy (the presets' live thumbnails). */
 interface PresetThumbnailSource {
@@ -66,6 +66,7 @@ class PresetThumbnails(private val input: PipelineInput, private val pixelScale:
 
     override fun cached(key: String): ImageBitmap? = cache.get(key)
 
+    @Suppress("ReturnCount")
     override suspend fun render(key: String, recipe: Recipe): ImageBitmap? {
         cache.get(key)?.let { return it }
         if (closed) return null
@@ -144,7 +145,6 @@ class PresetThumbnails(private val input: PipelineInput, private val pixelScale:
             presetVersion: Int,
             patchHash: Int,
             strength: Float = 1f,
-        ): String =
-            "$photoKey|${base.hashCode()}|$presetId|$presetVersion|$patchHash|$strength"
+        ): String = "$photoKey|${base.hashCode()}|$presetId|$presetVersion|$patchHash|$strength"
     }
 }

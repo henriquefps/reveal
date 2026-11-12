@@ -15,14 +15,14 @@ import dev.hfps.reveal.pipeline.preset.PresetPack
 import dev.hfps.reveal.pipeline.preset.PresetPacks
 import dev.hfps.reveal.pipeline.preset.PresetPatch
 import dev.hfps.reveal.pipeline.preset.SmartPart
+import java.io.ByteArrayOutputStream
+import java.io.File
+import java.io.InputStream
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
-import java.io.ByteArrayOutputStream
-import java.io.File
-import java.io.InputStream
 
 /** What an import did. */
 sealed interface ImportResult {
@@ -90,7 +90,14 @@ class PresetRepository(
                 kind = GroupKind.BUILT_IN,
                 presets = group.presets.map { preset ->
                     val mark = markOf[preset.id]
-                    LibraryPreset(preset, null, group.uuid, PresetOrigin.BUILT_IN, mark?.favourite == true, mark?.lastUsedAt)
+                    LibraryPreset(
+                        preset,
+                        null,
+                        group.uuid,
+                        PresetOrigin.BUILT_IN,
+                        mark?.favourite == true,
+                        mark?.lastUsedAt,
+                    )
                 },
             )
         }
@@ -307,7 +314,9 @@ class PresetRepository(
             val existing = dao.packByUuid(pack.id)
             if (existing != null && existing.version >= pack.version) {
                 return@withTransaction ImportResult.PackAdded(
-                    existing.id, existing.name, dao.groups().filter { it.packId == existing.id }
+                    existing.id,
+                    existing.name,
+                    dao.groups().filter { it.packId == existing.id }
                         .sumOf { dao.countIn(it.id) },
                     updated = false,
                     ignored = pack.ignored,
@@ -351,6 +360,7 @@ class PresetRepository(
      * A user group as a `.revealpack` (for sharing a set of one's own presets): [licenceName] is shown to whoever
      * imports it; [author] fills the pack's author.
      */
+    @Suppress("ReturnCount")
     suspend fun exportGroup(groupId: Long, author: String, licenceName: String): ByteArray? {
         val group = dao.group(groupId) ?: return null
         val presets = dao.presetsIn(groupId).mapNotNull(::decode)
@@ -487,6 +497,7 @@ class PresetRepository(
             )
         }.getOrNull()
 
-        fun origin(name: String): PresetOrigin = PresetOrigin.entries.firstOrNull { it.name == name } ?: PresetOrigin.USER
+        fun origin(name: String): PresetOrigin =
+            PresetOrigin.entries.firstOrNull { it.name == name } ?: PresetOrigin.USER
     }
 }

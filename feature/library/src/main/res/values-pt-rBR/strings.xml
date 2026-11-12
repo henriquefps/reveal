@@ -177,7 +177,11 @@
     <string name="presets_batch_cancel">Cancelar</string>
     <string name="presets_batch_empty">Nenhuma predefinição ainda: crie uma no painel Predefinições do editor ou importe um arquivo por lá.</string>
     <string name="presets_batch_channel">Predefinições</string>
-    <string name="presets_batch_progress">%1$s: %2$d de %3$d fotos</string>
+    <plurals name="presets_batch_progress">
+        <item quantity="one">%1$s: %2$d de %3$d foto</item>
+        <item quantity="many">%1$s: %2$d de %3$d fotos</item>
+        <item quantity="other">%1$s: %2$d de %3$d fotos</item>
+    </plurals>
     <string name="presets_batch_default_group">Minhas predefinições</string>
     <string name="presets_batch_favourites">Favoritas</string>
     <plurals name="presets_batch_for">

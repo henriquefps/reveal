@@ -51,11 +51,12 @@ fun ApplyPresetSheet(
     count: Int,
     onApply: (uuid: String, strength: Float) -> Unit,
     onDismiss: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     var chosen by rememberSaveable { mutableStateOf<String?>(null) }
     var strength by rememberSaveable { mutableFloatStateOf(FULL) }
     val c = RevealTheme.colors
-    RevealBottomSheet(onDismissRequest = onDismiss) {
+    RevealBottomSheet(onDismissRequest = onDismiss, modifier = modifier) {
         Eyebrow(stringResource(R.string.presets_batch_title), Modifier.padding(horizontal = 24.dp))
         Text(
             pluralStringResource(R.plurals.presets_batch_for, count, count),

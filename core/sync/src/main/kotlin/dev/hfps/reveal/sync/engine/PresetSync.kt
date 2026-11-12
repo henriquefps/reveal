@@ -55,6 +55,7 @@ class PresetSync(private val db: RevealDatabase, private val clock: () -> Long) 
      * The change to push for [record], or null when nothing is to be pushed (a preset gone before it ever reached the
      * server, or one of a pack still on trial: keeping the pack marks it again).
      */
+    @Suppress("ReturnCount")
     suspend fun change(record: SyncRecordEntity): PushChange? {
         if (record.deleted) {
             return if (record.rev == 0L) {
@@ -90,6 +91,7 @@ class PresetSync(private val db: RevealDatabase, private val clock: () -> Long) 
     }
 
     /** Applies a pulled preset (or its tombstone). Always placed: a preset depends on nothing else. */
+    @Suppress("ReturnCount", "CyclomaticComplexMethod")
     suspend fun apply(record: FeedRecord): Boolean {
         if (record.deleted) {
             delete(record.id)
@@ -100,7 +102,7 @@ class PresetSync(private val db: RevealDatabase, private val clock: () -> Long) 
         } ?: return true
         val preset = try {
             (data.preset as? JsonObject)?.let { PresetFiles.fromJson(it).preset } ?: return true
-        } catch (e: PresetFormatException) {
+        } catch (@Suppress("SwallowedException") e: PresetFormatException) {
             // A preset this app cannot read (a newer format) is left for a newer app; never a crash.
             return true
         }

@@ -23,10 +23,10 @@ import dev.hfps.reveal.feature.library.R
 import dev.hfps.reveal.pipeline.preset.Preset
 import dev.hfps.reveal.pipeline.preset.SmartCorrection
 import dev.hfps.reveal.pipeline.recipe.HistoryAction
-import kotlinx.serialization.Serializable
-import kotlinx.serialization.json.Json
 import java.io.File
 import java.util.UUID
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.Json
 
 /** What the batch needs from the app graph (a Hilt entry point, as the export worker). */
 @EntryPoint
@@ -142,14 +142,20 @@ class PresetBatchNotifications(private val context: Context) {
 
     init {
         manager.createNotificationChannel(
-            NotificationChannel(CHANNEL, context.getString(R.string.presets_batch_channel), NotificationManager.IMPORTANCE_LOW),
+            NotificationChannel(
+                CHANNEL,
+                context.getString(R.string.presets_batch_channel),
+                NotificationManager.IMPORTANCE_LOW,
+            ),
         )
     }
 
     fun progressNotification(workId: UUID, done: Int, total: Int, name: String) =
         NotificationCompat.Builder(context, CHANNEL)
             .setSmallIcon(android.R.drawable.ic_menu_edit)
-            .setContentTitle(context.getString(R.string.presets_batch_progress, name, done, total))
+            .setContentTitle(
+                context.resources.getQuantityString(R.plurals.presets_batch_progress, total, name, done, total),
+            )
             .setProgress(total, done, false)
             .setOngoing(true)
             .setOnlyAlertOnce(true)

@@ -1,10 +1,5 @@
 package dev.hfps.reveal.feature.library
 
-import dev.hfps.reveal.data.preset.PresetLibrary
-import dev.hfps.reveal.data.preset.PresetRepository
-import dev.hfps.reveal.feature.library.presets.PresetBatchWorker
-import kotlinx.coroutines.flow.SharingStarted
-import kotlinx.coroutines.flow.stateIn
 import android.net.Uri
 import android.os.SystemClock
 import android.util.Log
@@ -20,8 +15,11 @@ import dev.hfps.reveal.data.library.LibraryRepository
 import dev.hfps.reveal.data.library.SidecarOutcome
 import dev.hfps.reveal.data.model.PhotoQuery
 import dev.hfps.reveal.data.model.PickFlag
+import dev.hfps.reveal.data.preset.PresetLibrary
+import dev.hfps.reveal.data.preset.PresetRepository
 import dev.hfps.reveal.data.storage.StorageVolumes
 import dev.hfps.reveal.data.thumb.ThumbnailRepository
+import dev.hfps.reveal.feature.library.presets.PresetBatchWorker
 import dev.hfps.reveal.pipeline.recipe.HistoryAction
 import dev.hfps.reveal.pipeline.recipe.Recipe
 import dev.hfps.reveal.pipeline.recipe.RecipeGroup
@@ -33,6 +31,7 @@ import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
@@ -44,6 +43,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.receiveAsFlow
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
@@ -101,6 +101,7 @@ class LibraryViewModel @Inject constructor(
             setSelected(emptySet())
         }
     }
+
     /** True when the route asked to open on "Opened from other apps" (a hand-off of several photos, ADR 0011). */
     private val fromApps: Boolean = savedState.get<Boolean>(KEY_FROM_APPS) == true
 

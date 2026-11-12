@@ -26,6 +26,8 @@ import dev.hfps.reveal.pipeline.recipe.Effects
 import dev.hfps.reveal.pipeline.recipe.HistoryAction
 import dev.hfps.reveal.pipeline.recipe.Light
 import dev.hfps.reveal.pipeline.recipe.Recipe
+import java.io.ByteArrayInputStream
+import java.io.ByteArrayOutputStream
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
 import org.junit.After
@@ -35,8 +37,6 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import org.junit.runner.RunWith
-import java.io.ByteArrayInputStream
-import java.io.ByteArrayOutputStream
 
 /** The preset library (docs/adr/0019 "Library", "Import and export"). */
 @RunWith(AndroidJUnit4::class)
@@ -54,7 +54,10 @@ class PresetRepositoryTest {
         patch = PresetPatch.fromSections(Recipe(light = Light(contrast = 10f)), listOf(PresetSection.CONTRAST)),
     )
 
-    private val clarity = PresetPatch.fromSections(Recipe(effects = Effects(clarity = 30f)), listOf(PresetSection.CLARITY))
+    private val clarity = PresetPatch.fromSections(
+        Recipe(effects = Effects(clarity = 30f)),
+        listOf(PresetSection.CLARITY),
+    )
 
     @Before
     fun setUp() {
@@ -149,7 +152,10 @@ class PresetRepositoryTest {
         library = repo.library().first()
         assertThat(library[preset.id]!!.name).isEqualTo("Imported v3")
         // A broken file changes nothing.
-        val error = assertThrows(PresetFormatException::class.java) { kotlinx.coroutines.runBlocking { repo.importPreset("{}".toByteArray()) } }
+        val error =
+            assertThrows(PresetFormatException::class.java) {
+                kotlinx.coroutines.runBlocking { repo.importPreset("{}".toByteArray()) }
+            }
         assertThat(error.error).isEqualTo(PresetError.MALFORMED)
     }
 
@@ -184,8 +190,12 @@ class PresetRepositoryTest {
         assertThat(repo.library().first().trialPacks).isEmpty()
 
         // The same version again changes nothing; a newer one replaces the presets and stays kept.
-        assertThat((repo.importPack(ByteArrayInputStream(pack(1, listOf("X")))) as ImportResult.PackAdded).updated).isFalse()
-        val update = repo.importPack(ByteArrayInputStream(pack(2, listOf("Warm", "Warmer", "Warmest")))) as ImportResult.PackAdded
+        assertThat(
+            (repo.importPack(ByteArrayInputStream(pack(1, listOf("X")))) as ImportResult.PackAdded).updated,
+        ).isFalse()
+        val update = repo.importPack(
+            ByteArrayInputStream(pack(2, listOf("Warm", "Warmer", "Warmest"))),
+        ) as ImportResult.PackAdded
         assertThat(update.updated).isTrue()
         library = repo.library().first()
         assertThat(library.groups.last().presets.map { it.name }).containsExactly("Warm", "Warmer", "Warmest")

@@ -18,6 +18,7 @@ object PresetIntents {
     private val EXTENSIONS = listOf(".${PresetFiles.EXTENSION}", ".${PresetPacks.EXTENSION}")
 
     /** The preset or pack document of [intent], or null when it carries none. */
+    @Suppress("ReturnCount")
     fun presetFile(intent: Intent?, resolver: ContentResolver): Uri? {
         if (intent == null) return null
         val uri = when (intent.action) {

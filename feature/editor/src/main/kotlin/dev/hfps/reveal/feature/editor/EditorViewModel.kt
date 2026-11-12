@@ -20,6 +20,8 @@ import dev.hfps.reveal.data.edit.EditRepository
 import dev.hfps.reveal.data.edit.HistoryOp
 import dev.hfps.reveal.data.edit.HistoryWriter
 import dev.hfps.reveal.data.library.LibraryRepository
+import dev.hfps.reveal.data.preset.PresetEvent
+import dev.hfps.reveal.data.preset.PresetFilesIo
 import dev.hfps.reveal.data.preset.PresetRepository
 import dev.hfps.reveal.data.sync.RemoteEdits
 import dev.hfps.reveal.feature.editor.edit.AsShot
@@ -30,8 +32,6 @@ import dev.hfps.reveal.feature.editor.open.OpenEvent
 import dev.hfps.reveal.feature.editor.open.OpenException
 import dev.hfps.reveal.feature.editor.open.PhotoOpener
 import dev.hfps.reveal.feature.editor.presets.CreatePresetDraft
-import dev.hfps.reveal.data.preset.PresetEvent
-import dev.hfps.reveal.data.preset.PresetFilesIo
 import dev.hfps.reveal.feature.editor.presets.PresetSession
 import dev.hfps.reveal.feature.editor.presets.PresetSteps
 import dev.hfps.reveal.feature.editor.presets.PresetThumbnails
@@ -87,8 +87,8 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
-import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.update
@@ -102,6 +102,7 @@ import kotlinx.coroutines.withContext
  * and the view options, pushing both to the renderer. Survives configuration changes; leaving the screen cancels the
  * decode and closes the renderer.
  */
+@Suppress("LargeClass") // the editor's single owner of the edit state; presets live in presets/ helpers
 @HiltViewModel
 class EditorViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
@@ -950,6 +951,7 @@ class EditorViewModel @Inject constructor(
     }
 
     /** Strength released: the applied preset's step is replaced by the new strength (removed at 0). */
+    @Suppress("ReturnCount")
     fun commitPresetStrength() {
         val state = _state.value
         val session = state.presets.session ?: return
@@ -962,7 +964,10 @@ class EditorViewModel @Inject constructor(
     private fun commitPreset(history: EditHistory, below: EditHistory, preset: Preset, recipe: Recipe, s: Float) {
         val (next, session) = PresetSteps.commit(below, preset, recipe, s)
         _state.update {
-            it.copy(edit = it.edit.copy(recipe = next.current, history = next), presets = it.presets.copy(session = session))
+            it.copy(
+                edit = it.edit.copy(recipe = next.current, history = next),
+                presets = it.presets.copy(session = session),
+            )
         }
         renderer()?.setRecipe(next.current)
         val version = versionId ?: return

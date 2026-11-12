@@ -177,7 +177,10 @@
     <string name="presets_batch_cancel">Cancel</string>
     <string name="presets_batch_empty">No presets yet: create one in the editor’s Presets panel, or import a file there.</string>
     <string name="presets_batch_channel">Presets</string>
-    <string name="presets_batch_progress">%1$s: %2$d of %3$d photos</string>
+    <plurals name="presets_batch_progress">
+        <item quantity="one">%1$s: %2$d of %3$d photo</item>
+        <item quantity="other">%1$s: %2$d of %3$d photos</item>
+    </plurals>
     <string name="presets_batch_default_group">My presets</string>
     <string name="presets_batch_favourites">Favourites</string>
     <plurals name="presets_batch_for">

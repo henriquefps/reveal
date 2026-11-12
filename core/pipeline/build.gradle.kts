@@ -24,6 +24,10 @@ tasks.withType<Test>().configureEach {
     environment("REVEAL_RENDER_OUT", System.getenv("REVEAL_RENDER_OUT") ?: "")
     environment("REVEAL_AUTO_FIT", System.getenv("REVEAL_AUTO_FIT") ?: "")
     environment("REVEAL_AUTO_SHEET_DIR", System.getenv("REVEAL_AUTO_SHEET_DIR") ?: "")
+    // Opt-in preset contact sheets (docs/adr/0020).
+    for (name in listOf("REVEAL_PRESET_DUMPS", "REVEAL_PRESET_OUT", "REVEAL_PRESET_PHOTOS", "REVEAL_PRESET_ONLY")) {
+        environment(name, System.getenv(name) ?: "")
+    }
     // Opt-in Detail 100 % crops on public CC0 RAWs (docs/adr/0012).
     for (name in listOf(
         "REVEAL_DETAIL_DUMP",

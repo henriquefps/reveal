@@ -160,6 +160,16 @@ object EditorMetrics {
         Log.i(TAG, "auto $scope: $millis ms")
     }
 
+    /** Faces found by the background photo analysis of the last open (-1: failed, `null`: not finished). */
+    @Volatile
+    var faces: Int? = null
+
+    /** The photo analysis (faces, subject map) finished: [count] faces (-1: failed) in [millis]. */
+    fun features(count: Int, millis: Long) {
+        faces = count
+        Log.i(TAG, "features: $count faces, $millis ms")
+    }
+
     /** Samples the Java heap in use and the native heap. Also called by tests while they drive the UI. */
     fun sampleMemory() {
         val runtime = Runtime.getRuntime()

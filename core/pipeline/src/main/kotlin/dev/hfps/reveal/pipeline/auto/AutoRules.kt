@@ -73,10 +73,10 @@ data class AutoParams(
     val vibranceTarget: Double = 0.11,
     val vibranceGain: Double = 400.0,
     val maxVibrance: Int = 20,
-    val faceTarget: Double = 0.30,
-    val faceTolerance: Double = 0.35,
-    val faceWeight: Double = 0.8,
-    val faceAreaFull: Double = 0.01,
+    val faceTarget: Double = 0.12,
+    val faceTolerance: Double = 0.8,
+    val faceWeight: Double = 1.0,
+    val faceAreaFull: Double = 0.001,
     val maxFaceShift: Double = 1.5,
 )
 

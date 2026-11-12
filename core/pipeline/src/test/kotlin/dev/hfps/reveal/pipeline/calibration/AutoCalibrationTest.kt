@@ -238,10 +238,10 @@ class AutoCalibrationTest {
             } / faced.size
         }
         val axes: List<kotlin.Pair<String, kotlin.Pair<List<Double>, (AutoParams, Double) -> AutoParams>>> = listOf(
-            "faceTarget" to ((0..20).map { 0.10 + it * 0.015 } to { p, v -> p.copy(faceTarget = v) }),
-            "faceTolerance" to ((0..8).map { it * 0.1 } to { p, v -> p.copy(faceTolerance = v) }),
+            "faceTarget" to ((0..20).map { 0.06 + it * 0.01 } to { p, v -> p.copy(faceTarget = v) }),
+            "faceTolerance" to ((0..15).map { it * 0.1 } to { p, v -> p.copy(faceTolerance = v) }),
             "faceWeight" to ((0..10).map { it * 0.1 } to { p, v -> p.copy(faceWeight = v) }),
-            "faceAreaFull" to (listOf(0.002, 0.005, 0.01, 0.02, 0.04) to { p, v -> p.copy(faceAreaFull = v) }),
+            "faceAreaFull" to (listOf(0.0005, 0.001, 0.002, 0.005, 0.01, 0.02) to { p, v -> p.copy(faceAreaFull = v) }),
         )
         var params = start
         repeat(ROUNDS) { round ->
@@ -297,6 +297,14 @@ class AutoCalibrationTest {
                 ),
             )
         }
+        val guardHues = pairs.mapNotNull { pair ->
+            val wb = pair.features?.wb ?: return@mapNotNull null
+            if (pair.faces.isEmpty()) return@mapNotNull null
+            AutoWhiteBalance.faceSkinHue(wb, pair.faces, WhiteBalanceModel.asShot(pair.input))
+        }.sorted()
+        val cameraHues = pairs.map { it.camera.faceHue }.filter { !it.isNaN() }.sorted()
+        println("AUTO-WB skin hue (guard measure) at the camera's as shot: " + guardHues.joinToString(" ") { String.format(Locale.ROOT, "%.0f", it) })
+        println("AUTO-WB skin hue of the camera JPEGs: " + cameraHues.joinToString(" ") { String.format(Locale.ROOT, "%.0f", it) })
         line("all", rows)
         line("faces", rows.filter { it[7] > 0 })
         line("no faces", rows.filter { it[7] == 0.0 })

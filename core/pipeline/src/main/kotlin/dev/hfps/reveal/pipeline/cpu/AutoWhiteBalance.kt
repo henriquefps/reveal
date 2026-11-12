@@ -225,6 +225,10 @@ object AutoWhiteBalance {
         return DoubleArray(3) { sum[it] / weight }
     }
 
+    /** The faces' skin hue (the guard's measure, degrees) under the light [cct]; `null` without usable skin. */
+    fun faceSkinHue(analysis: WbAnalysis, faces: List<Face>, cct: WhiteBalanceModel.Cct): Double? =
+        faceSkin(analysis, faces)?.let { skinHue(analysis, it, cct) }
+
     /** OkLab hue (degrees) of raw [rgb] balanced for the light [cct], judged at the skin luminance as [isSkin]. */
     private fun skinHue(a: WbAnalysis, rgb: DoubleArray, cct: WhiteBalanceModel.Cct): Double {
         val m = a.colour.cameraToXyz
@@ -342,8 +346,8 @@ object AutoWhiteBalance {
     private const val HALF = 0.5f
     private const val FACE_BOX_MARGIN = 0.3f
     private const val FACE_MIN_REST = 0.2
-    private const val FACE_HUE_MIN = 35.0
-    private const val FACE_HUE_MAX = 70.0
+    private const val FACE_HUE_MIN = 22.0
+    private const val FACE_HUE_MAX = 52.0
     private const val FACE_MAX_MIRED = 40
     private const val FACE_MIRED_STEP = 2
     private const val FACE_MAX_TINT = 10

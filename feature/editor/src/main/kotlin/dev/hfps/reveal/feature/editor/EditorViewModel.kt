@@ -43,6 +43,10 @@ import dev.hfps.reveal.pipeline.auto.AutoAnalyser
 import dev.hfps.reveal.pipeline.auto.AutoBlackWhite
 import dev.hfps.reveal.pipeline.auto.AutoRules
 import dev.hfps.reveal.pipeline.auto.AutoScope
+import dev.hfps.reveal.pipeline.auto.PhotoFeatures
+import dev.hfps.reveal.pipeline.geometry.ImageLines
+import dev.hfps.reveal.pipeline.preset.SmartCorrection
+import dev.hfps.reveal.pipeline.preset.SmartCorrector
 import dev.hfps.reveal.pipeline.auto.SourceColours
 import dev.hfps.reveal.pipeline.auto.TargetedAdjust
 import dev.hfps.reveal.pipeline.cpu.AutoWhiteBalance
@@ -434,9 +438,10 @@ class EditorViewModel @Inject constructor(
         if (autoJob?.isActive == true) return
         val base = _state.value.edit.recipe
         autoJob = viewModelScope.launch {
+            val features = photoFeatures(inputs)
             val next = withContext(Dispatchers.Default) {
                 val start = SystemClock.elapsedRealtime()
-                AutoRules.run(inputs.sample, base, scope, inputs.wb).also {
+                AutoRules.run(features, base, scope).also {
                     EditorMetrics.auto(scope.name, SystemClock.elapsedRealtime() - start)
                 }
             }
@@ -874,12 +879,48 @@ class EditorViewModel @Inject constructor(
         val (wbAnalysis, sample) = withContext(Dispatchers.Default) {
             runCatching { AutoWhiteBalance.analyse(input) }.getOrNull() to AutoAnalyser.sample(input)
         }
-        autoInputs = AutoInputs(sample, wbAnalysis)
+        // Faces and the subject map (docs/adr/0010) take a few hundred ms: found in the background, so the open is
+        // never slower; Auto waits for them, and the Auto WB chip value is refined with the faces once they are in.
+        val features = viewModelScope.async(Dispatchers.Default) {
+            val start = SystemClock.elapsedRealtime()
+            runCatching { PhotoFeatures.of(input) }.getOrNull()?.let {
+                PhotoFeatures(sample, wbAnalysis, it.faces, it.saliency, lens = input.lens)
+            }.also { EditorMetrics.features(it?.faces?.size ?: -1, SystemClock.elapsedRealtime() - start) }
+        }
+        autoInputs = AutoInputs(sample, wbAnalysis, features)
+        viewModelScope.launch {
+            val f = features.await() ?: return@launch
+            if (f.faces.isEmpty() || wbAnalysis == null) return@launch
+            val wb = withContext(Dispatchers.Default) {
+                runCatching { AutoRules.whiteBalance(wbAnalysis, f.faces) }.getOrNull()
+            } ?: return@launch
+            _state.update { it.copy(edit = it.edit.copy(autoWb = wb)) }
+        }
         return wbAnalysis?.let { runCatching { AutoRules.whiteBalance(it) }.getOrNull() }
     }
 
-    /** What Auto needs once the proxy is gone: the analysis sample and the Auto WB analysis (null if it failed). */
-    private class AutoInputs(val sample: PipelineInput, val wb: WbAnalysis?)
+    /**
+     * The photo's features for Auto and smart presets: the background analysis when it succeeded (with the lines of
+     * the Optics analysis for auto-straighten), else the sample and the white balance alone.
+     */
+    private suspend fun photoFeatures(inputs: AutoInputs): PhotoFeatures {
+        val found = inputs.features.await()
+        val lines = opticsAnalysis?.await()?.let { ImageLines(it.width, it.height, it.segments) }
+        return PhotoFeatures(
+            inputs.sample,
+            inputs.wb,
+            found?.faces.orEmpty(),
+            found?.saliency,
+            lines,
+            found?.lens,
+        )
+    }
+
+    /** The smart presets' correction on this photo (docs/adr/0020); `null` before the photo is open. */
+    suspend fun smartCorrection(): SmartCorrection? = autoInputs?.let { SmartCorrector(photoFeatures(it)) }
+
+    /** What Auto needs once the proxy is gone: the analysis sample, the Auto WB analysis and the photo's features. */
+    private class AutoInputs(val sample: PipelineInput, val wb: WbAnalysis?, val features: Deferred<PhotoFeatures?>)
 
     @Volatile
     private var autoInputs: AutoInputs? = null

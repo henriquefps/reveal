@@ -5,7 +5,7 @@ package dev.hfps.reveal.feature.editor.edit
 
 import dev.hfps.reveal.pipeline.PipelineInput
 import dev.hfps.reveal.pipeline.geometry.CropEditing
-import dev.hfps.reveal.pipeline.geometry.LineDetector
+import dev.hfps.reveal.pipeline.geometry.ImageLines
 import dev.hfps.reveal.pipeline.geometry.Segment
 import dev.hfps.reveal.pipeline.geometry.Upright
 import dev.hfps.reveal.pipeline.optics.CaEstimator
@@ -16,8 +16,6 @@ import dev.hfps.reveal.pipeline.recipe.GuideLine
 import dev.hfps.reveal.pipeline.recipe.Optics
 import dev.hfps.reveal.pipeline.recipe.Transform
 import dev.hfps.reveal.pipeline.recipe.UprightMode
-import kotlin.math.max
-import kotlin.math.sqrt
 
 /**
  * What the Optics panel and the Transform tools need from the proxy, taken at open while its pixels are on the heap
@@ -54,46 +52,11 @@ class OpticsAnalysis(val width: Int, val height: Int, val segments: List<Segment
     }
 
     companion object {
-        /** Long edge of the luminance copy the lines are found on. */
-        const val LINE_EDGE: Int = 1200
-
         /** Analyses [input] (the upright linear proxy); [estimateCa] runs the CA estimate too. */
         fun of(input: PipelineInput, estimateCa: Boolean): OpticsAnalysis {
-            val w = input.width
-            val h = input.height
-            val step = max(1, (max(w, h) + LINE_EDGE - 1) / LINE_EDGE)
-            val gw = w / step
-            val gh = h / step
-            val rgb = input.linearRgb
-            val gray = FloatArray(gw * gh)
-            var peak = 1e-6f
-            for (y in 0 until gh) {
-                for (x in 0 until gw) {
-                    var sum = 0f
-                    for (j in 0 until step) {
-                        for (i in 0 until step) {
-                            val k = ((y * step + j) * w + x * step + i) * 3
-                            sum += rgb[k] + 2 * rgb[k + 1] + rgb[k + 2]
-                        }
-                    }
-                    val v = sum / (4 * step * step)
-                    gray[y * gw + x] = v
-                    if (v > peak) peak = v
-                }
-            }
-            // Perceptual-ish (a square root) and normalised, as the detector's gradient threshold expects.
-            for (i in gray.indices) gray[i] = sqrt(max(0f, gray[i]) / peak)
-            val found = LineDetector.detect(gray, gw, gh).map {
-                Segment(
-                    it.x0 * step,
-                    it.y0 * step,
-                    it.x1 * step,
-                    it.y1 * step,
-                    it.weight,
-                )
-            }
-            val ca = if (estimateCa) runCatching { CaEstimator.estimate(rgb, w, h) }.getOrNull() else null
-            return OpticsAnalysis(w, h, found, ca)
+            val lines = ImageLines.of(input)
+            val ca = if (estimateCa) runCatching { CaEstimator.estimate(input.linearRgb, input.width, input.height) }.getOrNull() else null
+            return OpticsAnalysis(lines.width, lines.height, lines.segments, ca)
         }
 
         /** Guides drawn so far plus [line], at most [Transform.MAX_GUIDES] (the oldest drops). */

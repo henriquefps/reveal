@@ -153,7 +153,14 @@ object Upright {
      * applies; `null` without usable lines. A weighted median, refined by the weighted mean of the lines within
      * [INLIER] of it.
      */
-    fun straightenAngle(lines: List<Segment>, transform: Transform): Double? {
+    fun straightenAngle(lines: List<Segment>, transform: Transform): Double? = straightenEstimate(lines, transform)?.angle
+
+    /**
+     * [straightenAngle] with how much the lines agree: [StraightenEstimate.support] is the share of the axis-aligned
+     * line length within [INLIER] of the median, [StraightenEstimate.length] that length (normalised units). Smart
+     * presets straighten only on a clear consensus (docs/adr/0010, "Auto-straighten").
+     */
+    fun straightenEstimate(lines: List<Segment>, transform: Transform): StraightenEstimate? {
         val f = Perspective.forward(transform)
         val devs = ArrayList<Pair<Double, Double>>()
         for (s in lines.take(MAX_LINES)) {
@@ -167,9 +174,13 @@ object Upright {
         if (devs.isEmpty()) return null
         val median = weightedMedian(devs)
         val near = devs.filter { abs(it.first - median) <= INLIER }
-        val mean = near.sumOf { it.first * it.second } / near.sumOf { it.second }
-        return -mean
+        val nearWeight = near.sumOf { it.second }
+        val mean = near.sumOf { it.first * it.second } / nearWeight
+        return StraightenEstimate(-mean, nearWeight / devs.sumOf { it.second }, nearWeight)
     }
+
+    /** A straighten angle (degrees) with the share ([support], 0..1) and [length] of the lines that agree on it. */
+    data class StraightenEstimate(val angle: Double, val support: Double, val length: Double)
 
     /** Deviation of a line at [angle] (degrees, (-90, 90]) from its nearest axis, or `null` for diagonals. */
     private fun axisDeviation(angle: Double): Double? = when {

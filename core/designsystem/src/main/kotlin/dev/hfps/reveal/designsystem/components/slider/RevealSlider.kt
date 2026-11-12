@@ -104,6 +104,7 @@ fun RevealSlider(
     var dragging by remember { mutableStateOf(false) }
     var showInput by rememberSaveable { mutableStateOf(false) }
     val geometry = remember { RowGeometry() }
+    val valueSlop = with(density) { VALUE_SLOP.toPx() }
     val drag = remember(spec, trackWidth, density) {
         with(density) {
             SliderDrag(
@@ -225,7 +226,7 @@ fun RevealSlider(
                 softWrap = false,
                 textAlign = TextAlign.End,
                 modifier = Modifier
-                    .onGloballyPositioned { geometry.valueBounds = it.boundsInRow(geometry) }
+                    .onGloballyPositioned { geometry.valueBounds = it.boundsInRow(geometry, valueSlop) }
                     .clearAndSetSemantics { testTag?.let { this.testTag = it + RevealSliderTags.VALUE_SUFFIX } },
             )
         }
@@ -261,15 +262,19 @@ private class RowGeometry {
     var valueBounds: Rect? = null
 }
 
-private fun LayoutCoordinates.boundsInRow(geometry: RowGeometry): Rect? {
+/**
+ * The value's tap target in the row: its text grown by [slop] px ([VALUE_SLOP], in dp, so the target ends at the same
+ * place on every density: as raw pixels it reached the track's end on a 1.75x tablet, where a tap there opened the
+ * numeric input).
+ */
+private fun LayoutCoordinates.boundsInRow(geometry: RowGeometry, slop: Float): Rect? {
     val row = geometry.row ?: return null
     val local = row.localBoundingBoxOf(this, clipBounds = false)
-    // Tapping near the value counts: grow the target by the row's padding.
     return Rect(
-        left = local.left - VALUE_SLOP_PX,
-        top = local.top - VALUE_SLOP_PX,
+        left = local.left - slop,
+        top = local.top - slop,
         right = row.size.width.toFloat(),
-        bottom = local.bottom + VALUE_SLOP_PX,
+        bottom = local.bottom + slop,
     )
 }
 
@@ -325,7 +330,9 @@ private fun DrawScope.drawCentreTick(x: Float, cy: Float, color: Color) {
 }
 
 private const val DISABLED_ALPHA = 0.4f
-private const val VALUE_SLOP_PX = 24f
+
+/** How far around the value text a tap still opens the numeric input (what 24 px were on the phone, ~2.8x). */
+private val VALUE_SLOP = 8.dp
 private val MIN_HEIGHT = 48.dp
 private val TRACK_AREA = 24.dp
 private val TRACK_HEIGHT = 4.dp

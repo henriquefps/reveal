@@ -25,7 +25,9 @@ import dev.hfps.reveal.pipeline.input.TileSource
 import dev.hfps.reveal.pipeline.input.colourOnly
 import dev.hfps.reveal.pipeline.recipe.Geometry
 import dev.hfps.reveal.pipeline.recipe.Recipe
+import dev.hfps.reveal.pipeline.zoom.PixelAlignment
 import dev.hfps.reveal.pipeline.zoom.ZoomGrid
+import dev.hfps.reveal.pipeline.zoom.ZoomView
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.FloatBuffer
@@ -287,17 +289,8 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         ensureReadTarget(width, height)
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, readFbo)
         GLES30.glViewport(0, 0, width, height)
-        drawOutput(
-            image,
-            pane.view,
-            width,
-            height,
-            settings,
-            surround,
-            mapping = mapping,
-            tiles = if (tilesShown(req)) zoom.uniforms(pane.view, mapping) else null,
-            post = shownPost(req),
-        )
+        val tiles = if (tilesShown(req)) zoom.uniforms(pane.view, mapping) else null
+        drawOutput(image, pane.view, width, height, settings, surround, mapping = mapping, tiles = tiles, post = shownPost(req))
         val pixels = ByteBuffer.allocateDirect(width * height * RGBA)
         GLES30.glReadPixels(0, 0, width, height, GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, pixels)
         GlSupport.checkError("shown readback")
@@ -306,7 +299,9 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
             pixels.position((height - 1 - row) * width * RGBA)
             pixels.get(flipped, row * width * RGBA, width * RGBA)
         }
-        ShownView(flipped, width, height, frame, pane.view, image.pixelScale, mapping.outputWidth, mapping.outputHeight)
+        // The view as drawn (pixel-aligned at 1:1), so a caller maps window pixels exactly like the pass did.
+        val drawn = alignedView(pane.view, width, height, mapping, tiles)
+        ShownView(flipped, width, height, frame, drawn, image.pixelScale, mapping.outputWidth, mapping.outputHeight)
     }
 
     /** Sets the recipe to render. Coalesced. */
@@ -907,7 +902,7 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
     @Suppress("LongParameterList")
     private fun drawOutput(
         image: UploadedImage,
-        view: ViewTransform,
+        paneView: ViewTransform,
         width: Int,
         height: Int,
         settings: OutputSettings,
@@ -918,6 +913,7 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         tiles: TileUniforms? = null,
         post: PostParams = PostParams.NONE,
     ) {
+        val view = alignedView(paneView, width, height, mapping, tiles)
         val aligned = mapping.axisAligned
         val readsLevel0 = tiles != null || OutputSampling.readsLevel0(view.scale, aligned)
         if (texture == stageTex && stageHalf && readsLevel0) ensureStageLevel0()
@@ -956,6 +952,31 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
     }
 
     /** The output pass at 1:1 into the RGBA8 read target sized to [mapping]'s output. */
+    /**
+     * [view] moved by less than half a pixel so that, at exactly 1:1 on an axis-aligned mapping, screen pixel centres
+     * land on pixel centres of what the pass reads with `texelFetch`: the full-resolution tiles at 100 %, else the
+     * proxy at scale 1 (`PixelAlignment`, docs/adr/0012). Other views are unchanged.
+     */
+    private fun alignedView(
+        view: ViewTransform,
+        width: Int,
+        height: Int,
+        mapping: GeometryMapping,
+        tiles: TileUniforms?,
+    ): ViewTransform = when {
+        tiles != null && tiles.mode == OutputSampling.MODE_TEXEL_FETCH -> PixelAlignment.tiles(
+            view,
+            width,
+            height,
+            ZoomView(tiles.k, tiles.proxyOutputWidth, tiles.proxyOutputHeight, tiles.full),
+        )
+
+        OutputSampling.stageMode(view.scale, mapping.axisAligned) == OutputSampling.MODE_TEXEL_FETCH ->
+            PixelAlignment.proxy(view, width, height, mapping)
+
+        else -> view
+    }
+
     private fun drawOutputOffscreen(
         settings: OutputSettings,
         clipping: ClippingWarnings = ClippingWarnings.NONE,
@@ -1269,7 +1290,7 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
             GLES30.glScissor(rect[0], height - (rect[1] + rect[3]), rect[2], rect[3])
             drawOutput(
                 image = image,
-                view = pane.view,
+                paneView = pane.view,
                 width = width,
                 height = height,
                 settings = settings,

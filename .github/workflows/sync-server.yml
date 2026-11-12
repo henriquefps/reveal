@@ -1,0 +1,60 @@
+name: Sync server
+
+on:
+  pull_request:
+    paths:
+      - "sync-server/**"
+      - "core/image/src/test/kotlin/dev/hfps/image/FileFingerprintVectorsTest.kt"
+      - ".github/workflows/sync-server*.yml"
+  push:
+    branches: [main]
+    paths:
+      - "sync-server/**"
+      - ".github/workflows/sync-server*.yml"
+
+concurrency:
+  group: sync-server-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: sync-server
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: sync-server/go.mod
+          cache-dependency-path: sync-server/go.sum
+
+      - name: gofmt
+        run: test -z "$(gofmt -l .)" || (gofmt -l . && exit 1)
+
+      - name: go mod tidy is clean
+        run: go mod tidy && git diff --exit-code go.mod go.sum
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: golangci-lint (staticcheck, gosec, errcheck, …)
+        run: go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.15.0 run ./...
+
+      - name: go test -race (unit + end-to-end)
+        run: go test -race -count=1 ./...
+
+      - name: Static binaries (linux amd64 + arm64)
+        run: |
+          for arch in amd64 arm64; do
+            CGO_ENABLED=0 GOOS=linux GOARCH=$arch go build -trimpath -ldflags "-s -w" -o /tmp/reveal-sync-$arch .
+          done
+          file /tmp/reveal-sync-* || true
+
+      - name: Docker image builds
+        run: docker build -t reveal-sync:ci .

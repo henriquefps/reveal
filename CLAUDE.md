@@ -421,3 +421,36 @@ Opt-in tests on the owner's photos (COPIES only, aggregates only, delete the cop
 screenshot): JVM `REVEAL_ARW_DIR=<dir of copies> ./gradlew :core:image:testDebugUnitTest -i` (prints `REALSHOOT ...`);
 device: push the copies to `files/private` with `run-as`, run with `-e dir /data/user/0/dev.hfps.image.test/files/private
 -e anonymize true` (logs `file#N`), then `run-as dev.hfps.image.test rm -rf files/private`.
+
+## Sync server (`sync-server/`, MS/1, ADR 0017)
+
+Go module `github.com/henriquefps/reveal/sync-server`, binary `reveal-sync`; it is not part of the Gradle build.
+Protocol = ADR 0017 (change it there first) + `sync-server/api/openapi.yaml` (`TestOpenAPIListsEveryRoute` keeps the
+routes and the YAML in step). Layout: `internal/server` (`api.go` = `/v1`, `admin.go` = `/admin` + setup page in
+`internal/server/web`, plain HTML/CSS/JS with strings in `assets/i18n.js`, English + pt-BR together), `internal/store`
+(SQLite via `modernc.org/sqlite`; schema change = a new numbered `migrations/NNNN_*.sql`, never edit a shipped one),
+`internal/blobstore` (`<backup>/reveal-sync/blobs/aa/bb/<sha256>`, `os.Root`), `internal/nas` (indexer),
+`internal/mounts` (every path from a request or the database goes through `Roots.Resolve`), `internal/fingerprint`.
+The `v1:` fingerprint has golden vectors shared with the app: `sync-server/testdata/fingerprint-vectors.txt`, checked
+by the Go test and `:core:image` `FileFingerprintVectorsTest` (regenerate only if the generator changes:
+`REVEAL_WRITE_VECTORS=1 go test ./internal/fingerprint/`). Logs: route patterns and device ids only, never keys,
+tokens, file names or photo paths (`TestLogsHoldNoSecretsOrNames`).
+
+```sh
+cd sync-server
+go test -race ./...                      # unit + end-to-end (builds and runs the binary)
+go vet ./... && golangci-lint run ./...  # CI: .github/workflows/sync-server.yml
+go run . --data-dir /tmp/rs --mounts /tmp/rs-mnt --log-format text   # first run logs the setupCode; /admin/ from the LAN
+```
+
+Local Docker test on cachyos-fps (no buildx there: legacy builder args), on a free loopback port, removed afterwards;
+never deploy it on the owner's machines or open a tunnel from a worker:
+
+```sh
+docker build -t reveal-sync:test --build-arg BUILDPLATFORM=linux/amd64 --build-arg TARGETOS=linux --build-arg TARGETARCH=amd64 .
+# compose with an override: image reveal-sync:test, ports ["127.0.0.1:<free port>:3071"]; then
+docker compose -p reveal-test down -v && docker rmi reveal-sync:test
+```
+
+Release: tag `sync-server-v<x.y.z>` (`.github/workflows/sync-server-release.yml`: linux amd64/arm64 archives +
+`ghcr.io/henriquefps/reveal-sync`). App tags stay `v*`.

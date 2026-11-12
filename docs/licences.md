@@ -28,6 +28,18 @@ with its licence; add a row in the same change that adds the dependency, and mir
 The shipped list was checked against `./gradlew :app:dependencies --configuration releaseRuntimeClasspath` for 0.1.0
 (every group on that classpath is covered by a row above).
 
+## Shipped in the sync server (`sync-server/`, a separate program)
+
+| Component | Version source | Licence |
+| --- | --- | --- |
+| Go standard library and runtime | `sync-server/go.mod` (`go`) | BSD-3-Clause |
+| modernc.org/sqlite and its modernc.org/libc, mathutil, memory (a C-to-Go translation of SQLite, which is public domain) | `sync-server/go.mod` | BSD-3-Clause (SQLite: public domain) |
+| golang.org/x/crypto (argon2), golang.org/x/sys | `sync-server/go.mod` | BSD-3-Clause |
+| rsc.io/qr (QR codes on the setup page) | `sync-server/go.mod` | BSD-3-Clause |
+| github.com/google/uuid, github.com/dustin/go-humanize, github.com/mattn/go-isatty, github.com/ncruces/go-strftime, github.com/remyoudompheng/bigfft (via modernc.org/sqlite) | `sync-server/go.sum` | BSD-3-Clause / MIT |
+| Phosphor Icons 2.1.1 (path data in `sync-server/internal/server/web/assets/icons.js`) | npm `@phosphor-icons/core` | MIT |
+| Distroless static base image (`gcr.io/distroless/static-debian13`) | `sync-server/Dockerfile` | Apache-2.0 (Debian packages under their own licences) |
+
 ## Build, test and analysis tooling (not shipped)
 
 | Component | Licence |
@@ -38,6 +50,7 @@ The shipped list was checked against `./gradlew :app:dependencies --configuratio
 | Robolectric | MIT |
 | Roborazzi | Apache-2.0 |
 | ktlint, ktlint-gradle | MIT |
+| golangci-lint (sync server CI, includes staticcheck and gosec) | GPL-3.0 (tool only, not linked) |
 | detekt | Apache-2.0 |
 | Compose Rules (nlopez) | Apache-2.0 |
 | AndroidX Test, Espresso | Apache-2.0 |

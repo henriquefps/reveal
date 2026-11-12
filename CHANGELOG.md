@@ -6,6 +6,12 @@ All notable changes to Reveal are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-12
+
+MS: sync with your own server. Pair phone and tablet with the reveal-sync server by QR code; edits, ratings and
+versions follow you between devices (a conflict keeps both edits), NAS photos appear under Server, and photos that
+only live on a device are backed up.
+
 ### Added
 - Sync with your own `reveal-sync` server (Settings → Sync): pair by scanning the server's QR code or pasting its
   link (the device key stays in the Android Keystore). Edits with their history, virtual copies, ratings, flags,

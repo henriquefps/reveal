@@ -73,7 +73,7 @@ class ViewerViewModel @Inject constructor(
             val ids = if (scope == null) {
                 listOf(route.photoId)
             } else {
-                library.photoList(query.copy(scope = scope)).map { it.id }.ifEmpty { listOf(route.photoId) }
+                library.photoList(query.copy(scope = scope)).map { it.id }.distinct().ifEmpty { listOf(route.photoId) }
             }
             _state.update { ViewerUiState(ids, ids.indexOf(route.photoId).coerceAtLeast(0), true) }
         }

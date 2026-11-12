@@ -82,6 +82,9 @@ class FakeSyncServer : Dispatcher() {
     val patchCount = AtomicInteger()
     var chunkSize = 1024L
 
+    /** Answer the next N authenticated requests with `429` + `Retry-After: 1`. */
+    var rateLimitNext = 0
+
     private val server = MockWebServer().also { it.dispatcher = this }
 
     fun start(): String {
@@ -119,6 +122,10 @@ class FakeSyncServer : Dispatcher() {
         }
         val device = request.headers["Authorization"]?.removePrefix("Bearer ")?.let { devices[it] }
             ?: return error(401, "unauthorized")
+        if (rateLimitNext > 0) {
+            rateLimitNext--
+            return error(429, "rate_limited")
+        }
         return when {
             path == "/v1/server" -> ok(
                 buildJsonObject {

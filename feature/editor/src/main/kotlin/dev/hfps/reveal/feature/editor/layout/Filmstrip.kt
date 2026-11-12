@@ -98,7 +98,7 @@ fun Filmstrip(ui: FilmstripUi, onOpen: (PhotoRow) -> Unit, modifier: Modifier = 
         horizontalArrangement = Arrangement.spacedBy(4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        items(ui.photos, key = { it.id }, contentType = { CELL }) { row ->
+        items(ui.photos, key = { it.gridKey }, contentType = { CELL }) { row ->
             FilmstripCell(row, row.versionId == ui.currentVersionId, ui.thumbs) { onOpen(row) }
         }
     }

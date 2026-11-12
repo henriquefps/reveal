@@ -149,10 +149,14 @@ interface SyncDao {
     @Query("DELETE FROM sources WHERE kind = 'SERVER'")
     suspend fun deleteServerSource()
 
-    /** Server-source photos without files and without an edit: nothing left to show. */
+    /**
+     * NAS photos without files and without an edit (their files left the NAS): nothing left to show. A photo another
+     * device described (it has a sync record) stays: its record decides.
+     */
     @Query(
         "DELETE FROM photos WHERE source_id = :sourceId AND has_edit = 0 AND id NOT IN " +
-            "(SELECT photo_id FROM photo_files)",
+            "(SELECT photo_id FROM photo_files) AND uuid NOT IN " +
+            "(SELECT record_id FROM sync_records WHERE kind = 'photo')",
     )
     suspend fun deleteEmptyServerPhotos(sourceId: Long): Int
 
@@ -162,6 +166,13 @@ interface SyncDao {
 
     @Query("SELECT * FROM photo_files WHERE source_id = :sourceId AND relative_path = :path")
     suspend fun serverFileByPath(sourceId: Long, path: String): PhotoFileEntity?
+
+    /** Server-source photos still `PENDING` whose original the server serves: the next header reads, newest first. */
+    @Query(
+        "SELECT p.id FROM photos p JOIN photo_cloud c ON c.photo_id = p.id WHERE p.source_id = :sourceId AND " +
+            "p.metadata_state = 'PENDING' AND c.original_on_server = 1 ORDER BY p.sort_time DESC LIMIT :limit",
+    )
+    suspend fun serverHeaderCandidates(sourceId: Long, limit: Int): List<Long>
 
     // ---- cloud state
 

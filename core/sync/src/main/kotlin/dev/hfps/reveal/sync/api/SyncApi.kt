@@ -241,8 +241,39 @@ class SyncApi(baseUrl: String, private val apiKey: String?, private val client: 
             encodeDefaults = true
         }
 
+        /** Longest `Retry-After` the client waits out by itself; longer answers go back to the job's backoff. */
+        private const val MAX_RETRY_AFTER_S = 30L
+        private const val RETRIES = 3
+        private const val MILLIS = 1000L
+
+        /**
+         * `429 rate_limited` and `503` carry `Retry-After` (ADR 0017 "Errors"): wait it out and send again, a few
+         * times. Not for `PATCH`: an upload chunk's body is a stream read once (the uploader resumes from `HEAD`).
+         */
+        private val retryAfter = okhttp3.Interceptor { chain ->
+            var response = chain.proceed(chain.request())
+            repeat(RETRIES) {
+                val wait = retryWait(response, chain.request().method) ?: return@Interceptor response
+                response.close()
+                Thread.sleep(wait * MILLIS)
+                response = chain.proceed(chain.request())
+            }
+            response
+        }
+
+        /** Seconds to wait before sending again, or null when [response] is final. */
+        private fun retryWait(response: Response, method: String): Long? {
+            val busy = response.code == HTTP_TOO_MANY || response.code == HTTP_UNAVAILABLE
+            if (!busy || method == "PATCH") return null
+            return response.header("Retry-After")?.toLongOrNull()?.takeIf { it <= MAX_RETRY_AFTER_S }?.coerceAtLeast(1)
+        }
+
+        private const val HTTP_TOO_MANY = 429
+        private const val HTTP_UNAVAILABLE = 503
+
         val defaultClient: OkHttpClient by lazy {
             OkHttpClient.Builder()
+                .addInterceptor(retryAfter)
                 .connectTimeout(TIMEOUT_S, TimeUnit.SECONDS)
                 .readTimeout(TIMEOUT_S, TimeUnit.SECONDS)
                 .writeTimeout(TIMEOUT_S, TimeUnit.SECONDS)

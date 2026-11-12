@@ -111,8 +111,12 @@ class LibraryIndexer(private val db: RevealDatabase, private val clock: () -> Lo
      * The Server source's headers (ADR 0018 "Server photos"), read by range: at most [limit] photos per call, and
      * written without marking the photos for sync (the capture time is the file's, not a user's change).
      */
-    suspend fun readServerMetadata(sourceId: Long, tree: DocumentTree, limit: Int): Int =
-        readHeaders(sourceId, tree, limit = limit, untracked = true) {}
+    suspend fun readServerMetadata(sourceId: Long, tree: DocumentTree, limit: Int): Int {
+        // Only photos whose original the server serves: another device's preview-only photo has no header to read.
+        val readable = db.syncDao().serverHeaderCandidates(sourceId, limit).toSet()
+        if (readable.isEmpty()) return 0
+        return readHeaders(sourceId, tree, only = readable, untracked = true) {}
+    }
 
     /**
      * Computes the content fingerprint (ADR 0006 "Identity") of every file of [sourceId] that has none yet: new or
@@ -379,12 +383,12 @@ class LibraryIndexer(private val db: RevealDatabase, private val clock: () -> Lo
     private suspend fun readHeaders(
         sourceId: Long,
         tree: DocumentTree,
-        limit: Int = Int.MAX_VALUE,
+        only: Set<Long>? = null,
         untracked: Boolean = false,
         onProgress: (IndexProgress) -> Unit,
     ): Int {
-        val pending = photos.pendingMetadataFiles(sourceId).groupBy { it.photoId }.entries.take(limit)
-            .associate { it.key to it.value }
+        val pending = photos.pendingMetadataFiles(sourceId).filter { only == null || it.photoId in only }
+            .groupBy { it.photoId }
         val total = pending.size
         var done = 0
         val gate = Semaphore(HEADER_PARALLELISM)

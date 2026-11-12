@@ -6,12 +6,6 @@ All notable changes to Reveal are documented here. The format follows
 
 ## [Unreleased]
 
-## [0.3.0] - 2026-11-12
-
-M2: the full global toolset (tone curve, colour mixer, grading, B&W, effects, Detail at 100 %, optics,
-transform and Upright), every drag at the display rate on the phone, and a real tablet editor. The sync server
-ships in the repository; the app side of sync comes in 0.4.0.
-
 ### Added
 - Sync with your own `reveal-sync` server (Settings → Sync): pair by scanning the server's QR code or pasting its
   link (the device key stays in the Android Keystore). Edits with their history, virtual copies, ratings, flags,
@@ -27,6 +21,15 @@ ships in the repository; the app side of sync comes in 0.4.0.
 - Exporting a photo whose original is on your sync server downloads it first (with progress and Cancel); a photo
   whose original is only on another device waits instead of failing, and its export finishes by itself once that
   device backs it up. The server's NAS photos sort by capture time like your own.
+- `reveal-sync`: `GET /v1/devices` names the paired devices (for "Conflict copy from <device>").
+
+## [0.3.0] - 2026-11-12
+
+M2: the full global toolset (tone curve, colour mixer, grading, B&W, effects, Detail at 100 %, optics,
+transform and Upright), every drag at the display rate on the phone, and a real tablet editor. The sync server
+ships in the repository; the app side of sync comes in 0.4.0.
+
+### Added
 - `reveal-sync`, the self-hosted sync server (`sync-server/`, ADR 0017): pairs devices by QR code (one revocable key
   per device), syncs edits, ratings and virtual copies with a change feed that never loses an edit in a conflict (the
   other edit becomes a virtual copy), backs up originals and smart previews with resumable uploads, and indexes NAS

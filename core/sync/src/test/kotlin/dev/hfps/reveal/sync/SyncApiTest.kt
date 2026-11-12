@@ -74,6 +74,15 @@ class SyncApiTest {
     }
 
     @Test
+    fun `a rate-limited request is sent again after Retry-After`() {
+        val key = server.addDevice("Phone")
+        server.rateLimitNext = 2
+        val info = SyncApi(url, key).server()
+        assertThat(info.serverId).isEqualTo(server.serverId)
+        assertThat(server.rateLimitNext).isEqualTo(0)
+    }
+
+    @Test
     fun `pairing stores the key, a used token is refused, and unpairing forgets the server`() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val db = RevealDatabase.configure(Room.inMemoryDatabaseBuilder(context, RevealDatabase::class.java)).build()

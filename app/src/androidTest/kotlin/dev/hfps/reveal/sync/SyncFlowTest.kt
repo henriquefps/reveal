@@ -3,7 +3,6 @@ package dev.hfps.reveal.sync
 import android.graphics.Bitmap
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.hasContentDescription
-import androidx.compose.ui.test.hasScrollToKeyAction
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.v2.createEmptyComposeRule
@@ -127,8 +126,9 @@ class SyncFlowTest {
             compose.waitUntilAtLeastOneExists(hasText(context.getString(LibraryR.string.library_server)), TIMEOUT_MS)
             compose.onNodeWithText(context.getString(LibraryR.string.library_server)).performClick()
             // The server may hold many photos (other devices'): bring this one into the lazy grid first.
-            compose.waitUntilAtLeastOneExists(hasScrollToKeyAction(), TIMEOUT_MS)
-            compose.onNode(hasScrollToKeyAction()).performScrollToKey(photo.id)
+            // (The grid by its tag: on a tablet the sources list beside it scrolls by key too.)
+            compose.waitUntilAtLeastOneExists(hasTestTag(LibraryTags.GRID), TIMEOUT_MS)
+            compose.onNodeWithTag(LibraryTags.GRID).performScrollToKey(photo.id)
             compose.waitUntilAtLeastOneExists(hasTestTag(LibraryTags.cell(photo.id)), TIMEOUT_MS)
             shot("library-server")
             compose.onNodeWithTag(LibraryTags.cell(photo.id)).performClick()
@@ -169,6 +169,7 @@ class SyncFlowTest {
         val sync = this.sync
         val api = checkNotNull(sync.api())
         val photo = java.util.UUID.randomUUID().toString()
+        val name = "ELSEWHERE-${photo.take(8)}.JPG"
         val fingerprint = "v1:" + java.security.MessageDigest.getInstance("SHA-256").digest(photo.toByteArray())
             .joinToString("") { "%02x".format(it) }
         api.push(
@@ -180,7 +181,20 @@ class SyncFlowTest {
                     System.currentTimeMillis(),
                     data = kotlinx.serialization.json.buildJsonObject {
                         put("fingerprint", kotlinx.serialization.json.JsonPrimitive(fingerprint))
-                        put("name", kotlinx.serialization.json.JsonPrimitive("ELSEWHERE.JPG"))
+                        put("name", kotlinx.serialization.json.JsonPrimitive(name))
+                        put(
+                            "files",
+                            kotlinx.serialization.json.JsonArray(
+                                listOf(
+                                    kotlinx.serialization.json.buildJsonObject {
+                                        put("fingerprint", kotlinx.serialization.json.JsonPrimitive(fingerprint))
+                                        put("role", kotlinx.serialization.json.JsonPrimitive("RENDERED"))
+                                        put("name", kotlinx.serialization.json.JsonPrimitive(name))
+                                        put("size", kotlinx.serialization.json.JsonPrimitive(4_000_000))
+                                    },
+                                ),
+                            ),
+                        )
                     },
                 ),
             ),
@@ -188,7 +202,7 @@ class SyncFlowTest {
         runBlocking { sync.syncMetadata() }
         val library = EntryPointAccessors.fromApplication(context, DebugAccess::class.java).library()
         val elsewhere = runBlocking { library.photoList(PhotoQuery(scope = LibraryScope.Server)) }
-            .single { it.name == "ELSEWHERE.JPG" }
+            .single { it.name == name }
         val items = listOf(ExportJobItem(versionId = serverVersion), ExportJobItem(versionId = elsewhere.versionId))
         val jobId = ExportWorker.enqueue(context, items, ExportOptions(), 1)
         val work = WorkManager.getInstance(context)

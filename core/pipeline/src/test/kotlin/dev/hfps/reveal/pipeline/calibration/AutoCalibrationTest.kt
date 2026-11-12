@@ -1,4 +1,4 @@
-@file:Suppress("MagicNumber", "MaxLineLength", "LongMethod")
+@file:Suppress("MagicNumber", "MaxLineLength", "LongMethod", "CyclomaticComplexMethod")
 
 package dev.hfps.reveal.pipeline.calibration
 
@@ -8,10 +8,17 @@ import dev.hfps.reveal.pipeline.auto.AutoAnalysis
 import dev.hfps.reveal.pipeline.auto.AutoParams
 import dev.hfps.reveal.pipeline.auto.AutoRules
 import dev.hfps.reveal.pipeline.auto.AutoScope
+import dev.hfps.reveal.pipeline.auto.PhotoFeatures
+import dev.hfps.reveal.pipeline.cpu.AutoWhiteBalance
 import dev.hfps.reveal.pipeline.cpu.ColorSpaces
 import dev.hfps.reveal.pipeline.cpu.CpuDevelop
 import dev.hfps.reveal.pipeline.cpu.OkLab
+import dev.hfps.reveal.pipeline.cpu.WhiteBalanceModel
+import dev.hfps.reveal.pipeline.faces.Face
+import dev.hfps.reveal.pipeline.recipe.Colour
 import dev.hfps.reveal.pipeline.recipe.Recipe
+import dev.hfps.reveal.pipeline.recipe.WbMode
+import dev.hfps.reveal.pipeline.recipe.WhiteBalance
 import java.io.File
 import java.util.Locale
 import java.util.stream.IntStream
@@ -31,14 +38,34 @@ import org.junit.Test
  * percentiles of luminance and the median OkLab chroma of mid-tones. The camera's own exposure, DRO and colour engine
  * are the reference for "natural"; the owner's taste is "bright", which [BRIGHT_BIAS] adds on top afterwards.
  * Prints only aggregates (`AUTO-CALIB` lines) and the fitted constants (`AUTO-CONST`), never names or pixels.
+ *
+ * Faces (M3, docs/adr/0010 "Faces"): both images are turned upright (EXIF orientation), the photo's features
+ * ([PhotoFeatures]: faces, subject map) are found on the RAW, and the faces' skin L* (median inside the skin
+ * ellipses) is compared too: the ZV-E10 meters on faces, so its JPEG is the reference for face brightness. Rows are
+ * reported for all pairs and for the pairs with and without faces; `AUTO-WB` lines compare the Auto white balance
+ * with and without the face rules against the camera's own (as-shot) white balance and the faces' skin hue.
  */
 class AutoCalibrationTest {
     private val dir: File? = System.getenv("REVEAL_CALIBRATION_DIR")?.takeIf { it.isNotBlank() }?.let(::File)
         ?.takeIf { it.isDirectory }
 
-    private class Stats(val lStar: DoubleArray, val chroma: Double)
+    private class Stats(
+        val lStar: DoubleArray,
+        val chroma: Double,
+        val faceL: Double = Double.NaN,
+        val faceHue: Double = Double.NaN,
+    )
 
-    private class Pair(val input: PipelineInput, val analysis: AutoAnalysis, val camera: Stats, val asShot: Stats)
+    private class Pair(
+        val input: PipelineInput,
+        val analysis: AutoAnalysis,
+        val camera: Stats,
+        val asShot: Stats,
+        val features: PhotoFeatures? = null,
+        val plain: AutoAnalysis = analysis,
+    ) {
+        val faces: List<Face> get() = features?.faces.orEmpty()
+    }
 
     @Test
     fun `calibrate auto against the camera JPEGs`() {
@@ -47,10 +74,26 @@ class AutoCalibrationTest {
         val files = CalibrationPairs.pairs(folder!!)
         val pairs = files.map { (dump, jpg) ->
             val raw = RawDump.read(dump)
-            val input = raw.pipelineInput(maxOf(1, raw.width / SIDE))
-            val analysis = AutoAnalyser.analyse(AutoAnalyser.sample(input), Recipe())
-            Pair(input, analysis, jpegStats(jpg), renderStats(input, Recipe()))
+            val turns = UprightPairs.turns(UprightPairs.orientation(jpg))
+            val input = UprightPairs.rotate(raw.pipelineInput(maxOf(1, raw.width / SIDE)), turns)
+            val features = PhotoFeatures.of(input)
+            val sample = features.sample
+            val plain = AutoAnalyser.analyse(sample, Recipe())
+            val analysis = AutoAnalyser.analyse(sample, Recipe(), features.faces, features.saliency)
+            Pair(
+                input,
+                analysis,
+                jpegStats(jpg, turns, features.faces),
+                renderStats(input, Recipe(), features.faces),
+                features,
+                plain,
+            )
         }
+        val withFaces = pairs.count { it.faces.isNotEmpty() }
+        println(
+            "AUTO-CALIB faces: $withFaces of ${pairs.size} pairs; faces per pair " +
+                pairs.map { it.faces.size }.sorted().joinToString(","),
+        )
         val split = SESSION_SPLIT.coerceAtMost(pairs.size - 1)
         report("as shot (no Auto)", pairs, pairs.map { it.asShot })
         // Taste limits (not fitted): a small contrast rule, at least a little shadow lift, vibrance at most +20.
@@ -168,6 +211,129 @@ class AutoCalibrationTest {
             values(name, pairs, candidate)
         }
         report("-1.5 EV, auto (shipped)", dark, evaluate(dark, shipped))
+
+        // M3: the shipped constants without the photo's features (= M1's Auto) against the face-aware Auto.
+        val m1 = evaluate(pairs, shipped, features = false)
+        val m3 = evaluate(pairs, shipped)
+        for ((name, subset) in listOf(
+            "all" to pairs.indices.toList(),
+            "faces" to pairs.indices.filter { pairs[it].faces.isNotEmpty() },
+            "no faces" to pairs.indices.filter { pairs[it].faces.isEmpty() },
+        )) {
+            if (subset.isEmpty()) continue
+            report("as shot, $name", subset.map { pairs[it] }, subset.map { pairs[it].asShot })
+            report("M1 auto (no features), $name", subset.map { pairs[it] }, subset.map { m1[it] })
+            report("M3 auto (faces + subject), $name", subset.map { pairs[it] }, subset.map { m3[it] })
+        }
+        values("M3 auto", pairs, shipped)
+        if (System.getenv("REVEAL_AUTO_FIT").orEmpty() in setOf("1", "faces")) fitFaces(pairs, shipped)
+        whiteBalance(pairs)
+    }
+
+    /** Stage 3 (opt-in): the face constants on the pairs with faces (face L* and median L*). */
+    private fun fitFaces(pairs: List<Pair>, start: AutoParams) {
+        val faced = pairs.filter { it.faces.isNotEmpty() }
+        if (faced.isEmpty()) return
+        fun loss(p: AutoParams): Double {
+            val stats = evaluate(faced, p)
+            return faced.indices.sumOf { i ->
+                val f = stats[i].faceL - faced[i].camera.faceL
+                val m = stats[i].lStar[2] - faced[i].camera.lStar[2]
+                (if (f.isNaN()) 0.0 else f * f) + 0.5 * m * m
+            } / faced.size
+        }
+        val axes: List<kotlin.Pair<String, kotlin.Pair<List<Double>, (AutoParams, Double) -> AutoParams>>> = listOf(
+            "faceTarget" to ((0..20).map { 0.06 + it * 0.01 } to { p, v -> p.copy(faceTarget = v) }),
+            "faceTolerance" to ((0..15).map { it * 0.1 } to { p, v -> p.copy(faceTolerance = v) }),
+            "faceWeight" to ((0..10).map { it * 0.1 } to { p, v -> p.copy(faceWeight = v) }),
+            "faceAreaFull" to (listOf(0.0005, 0.001, 0.002, 0.005, 0.01, 0.02) to { p, v -> p.copy(faceAreaFull = v) }),
+        )
+        var params = start
+        repeat(ROUNDS) { round ->
+            for ((_, axis) in axes) {
+                val (grid, set) = axis
+                params = (grid.map { set(params, it) } + params).minBy(::loss)
+            }
+            println(String.format(Locale.ROOT, "AUTO-CALIB faces stage round %d loss %.3f", round + 1, loss(params)))
+        }
+        println(
+            "AUTO-CONST faces faceTarget ${params.faceTarget} faceTolerance ${params.faceTolerance} " +
+                "faceWeight ${params.faceWeight} faceAreaFull ${params.faceAreaFull}",
+        )
+        report("M3 auto, fitted face constants, faces", faced, evaluate(faced, params))
+    }
+
+    /**
+     * The Auto white balance with and without the face rules against the camera's as-shot white balance (its own
+     * auto WB: a reference, not the truth) and, on the pairs with faces, the skin hue against the camera JPEG's.
+     */
+    private fun whiteBalance(pairs: List<Pair>) {
+        val rows = pairs.mapNotNull { pair ->
+            val wb = pair.features?.wb ?: return@mapNotNull null
+            val asShot = WhiteBalanceModel.asShot(pair.input)
+            val plain = AutoWhiteBalance.estimate(wb)
+            val guarded = AutoWhiteBalance.estimate(wb, faces = pair.faces)
+            fun hue(cct: WhiteBalanceModel.Cct): Double {
+                if (pair.faces.isEmpty()) return Double.NaN
+                val w =
+                    WhiteBalance(
+                        mode = WbMode.CUSTOM,
+                        temperatureK = cct.temperatureK.toFloat(),
+                        tint = cct.tint.toFloat(),
+                    )
+                return renderStats(pair.input, Recipe(colour = Colour(whiteBalance = w)), pair.faces).faceHue
+            }
+            arrayOf(
+                MIRED / plain.temperatureK - MIRED / asShot.temperatureK,
+                plain.tint - asShot.tint,
+                MIRED / guarded.temperatureK - MIRED / asShot.temperatureK,
+                guarded.tint - asShot.tint,
+                hueDiff(hue(plain), pair.camera.faceHue),
+                hueDiff(hue(guarded), pair.camera.faceHue),
+                hueDiff(pair.asShot.faceHue, pair.camera.faceHue),
+                if (pair.faces.isEmpty()) 0.0 else 1.0,
+            )
+        }
+        fun line(name: String, r: List<Array<Double>>) {
+            if (r.isEmpty()) return
+            fun mean(i: Int) =
+                r.map { it[i] }.filter { !it.isNaN() }.let { if (it.isEmpty()) Double.NaN else it.average() }
+            fun meanAbs(i: Int) =
+                r.map { abs(it[i]) }.filter { !it.isNaN() }.let { if (it.isEmpty()) Double.NaN else it.average() }
+            println(
+                String.format(
+                    Locale.ROOT,
+                    "AUTO-WB %s (%d): vs camera as shot: plain Δmired %+.1f / %.1f Δtint %+.1f / %.1f; with faces Δmired %+.1f / %.1f Δtint %+.1f / %.1f; skin hue vs camera JPEG |Δ| as shot %.1f°, plain %.1f°, with faces %.1f° (mean %+.1f / %+.1f / %+.1f)",
+                    name, r.size, mean(0), meanAbs(0), mean(1), meanAbs(1), mean(2), meanAbs(2), mean(3), meanAbs(3),
+                    meanAbs(6), meanAbs(4), meanAbs(5), mean(6), mean(4), mean(5),
+                ),
+            )
+        }
+        val guardHues = pairs.mapNotNull { pair ->
+            val wb = pair.features?.wb ?: return@mapNotNull null
+            if (pair.faces.isEmpty()) return@mapNotNull null
+            AutoWhiteBalance.faceSkinHue(wb, pair.faces, WhiteBalanceModel.asShot(pair.input))
+        }.sorted()
+        val cameraHues = pairs.map { it.camera.faceHue }.filter { !it.isNaN() }.sorted()
+        println(
+            "AUTO-WB skin hue (guard measure) at the camera's as shot: " +
+                guardHues.joinToString(" ") { String.format(Locale.ROOT, "%.0f", it) },
+        )
+        println(
+            "AUTO-WB skin hue of the camera JPEGs: " +
+                cameraHues.joinToString(" ") { String.format(Locale.ROOT, "%.0f", it) },
+        )
+        line("all", rows)
+        line("faces", rows.filter { it[7] > 0 })
+        line("no faces", rows.filter { it[7] == 0.0 })
+    }
+
+    private fun hueDiff(a: Double, b: Double): Double {
+        if (a.isNaN() || b.isNaN()) return Double.NaN
+        var d = a - b
+        while (d > 180) d -= 360
+        while (d < -180) d += 360
+        return d
     }
 
     private fun values(name: String, pairs: List<Pair>, p: AutoParams) {
@@ -188,11 +354,12 @@ class AutoCalibrationTest {
         )
     }
 
-    private fun evaluate(pairs: List<Pair>, p: AutoParams): List<Stats> {
+    private fun evaluate(pairs: List<Pair>, p: AutoParams, features: Boolean = true): List<Stats> {
         val out = arrayOfNulls<Stats>(pairs.size)
         IntStream.range(0, pairs.size).parallel().forEach { i ->
-            val recipe = AutoRules.applyTo(Recipe(), AutoRules.compute(pairs[i].analysis, p), AutoScope.ALL)
-            out[i] = renderStats(pairs[i].input, recipe)
+            val analysis = if (features) pairs[i].analysis else pairs[i].plain
+            val recipe = AutoRules.applyTo(Recipe(), AutoRules.compute(analysis, p), AutoScope.ALL)
+            out[i] = renderStats(pairs[i].input, recipe, pairs[i].faces)
         }
         return out.map { it!! }
     }
@@ -236,14 +403,28 @@ class AutoCalibrationTest {
         sb.append(
             String.format(Locale.ROOT, "  |ΔL* p50| median %.2f max %.2f", medianL[medianL.size / 2], medianL.last()),
         )
+        val face = pairs.indices.map { stats[it].faceL - pairs[it].camera.faceL }.filter { !it.isNaN() }
+        if (face.isNotEmpty()) {
+            sb.append(
+                String.format(
+                    Locale.ROOT,
+                    "  face ΔL* %+.2f / %.2f (max %.2f, %d)",
+                    face.average(),
+                    face.map(::abs).average(),
+                    face.maxOf(::abs),
+                    face.size,
+                ),
+            )
+        }
         println(sb)
     }
 
-    private fun renderStats(input: PipelineInput, recipe: Recipe): Stats {
+    private fun renderStats(input: PipelineInput, recipe: Recipe, faces: List<Face> = emptyList()): Stats {
         val rgb = CpuDevelop.renderLinear(input, recipe)
         val n = input.width * input.height
         val y = DoubleArray(n)
         val chroma = ArrayList<Double>()
+        val skin = SkinStats()
         val lab = FloatArray(3)
         for (i in 0 until n) {
             val r = rgb[i * 3].coerceIn(0f, 1f)
@@ -254,16 +435,38 @@ class AutoCalibrationTest {
                 OkLab.fromRgb(r, g, b, lab)
                 chroma += sqrt((lab[1] * lab[1] + lab[2] * lab[2]).toDouble())
             }
+            skin.add(faces, (i % input.width + 0.5f) / input.width, (i / input.width + 0.5f) / input.height, r, g, b)
         }
-        return Stats(lStarPercentiles(y), median(chroma))
+        return Stats(lStarPercentiles(y), median(chroma), skin.lStar(), skin.hue())
     }
 
-    private fun jpegStats(file: File): Stats {
-        val image = ImageIO.read(file)
-        val step = maxOf(1, image.width / SIDE)
+    /** Median L* and mean OkLab hue of the pixels on the faces' skin. */
+    private class SkinStats {
+        private val y = ArrayList<Double>()
+        private var a = 0.0
+        private var b = 0.0
+        private val lab = FloatArray(3)
+
+        fun add(faces: List<Face>, u: Float, v: Float, r: Float, g: Float, bl: Float) {
+            if (faces.none { AutoAnalyser.inSkin(it, u, v) }) return
+            y += 0.2627 * r + 0.6780 * g + 0.0593 * bl
+            OkLab.fromRgb(r, g, bl, lab)
+            a += lab[1]
+            b += lab[2]
+        }
+
+        fun lStar(): Double = if (y.isEmpty()) Double.NaN else lStarOf(y.sorted()[y.size / 2])
+
+        fun hue(): Double = if (y.isEmpty()) Double.NaN else Math.toDegrees(StrictMath.atan2(b, a))
+    }
+
+    private fun jpegStats(file: File, turns: Int = 0, faces: List<Face> = emptyList()): Stats {
+        val image = UprightPairs.rotate(ImageIO.read(file), turns)
+        val step = maxOf(1, maxOf(image.width, image.height) / SIDE)
         val toRec2020 = ColorSpaces.REC2020.fromXyz * ColorSpaces.SRGB.toXyz
         val y = ArrayList<Double>()
         val chroma = ArrayList<Double>()
+        val skin = SkinStats()
         val lab = FloatArray(3)
         var yy = step / 2
         while (yy < image.height) {
@@ -278,11 +481,19 @@ class AutoCalibrationTest {
                     OkLab.fromRgb(rec[0].toFloat(), rec[1].toFloat(), rec[2].toFloat(), lab)
                     chroma += sqrt((lab[1] * lab[1] + lab[2] * lab[2]).toDouble())
                 }
+                skin.add(
+                    faces,
+                    (xx + 0.5f) / image.width,
+                    (yy + 0.5f) / image.height,
+                    rec[0].toFloat(),
+                    rec[1].toFloat(),
+                    rec[2].toFloat(),
+                )
                 xx += step
             }
             yy += step
         }
-        return Stats(lStarPercentiles(y.toDoubleArray()), median(chroma))
+        return Stats(lStarPercentiles(y.toDoubleArray()), median(chroma), skin.lStar(), skin.hue())
     }
 
     private fun lStarPercentiles(y: DoubleArray): DoubleArray {
@@ -290,14 +501,17 @@ class AutoCalibrationTest {
         return DoubleArray(QUANTILES.size) { lStar(sorted[((sorted.size - 1) * QUANTILES[it]).toInt()]) }
     }
 
-    private fun lStar(y: Double): Double {
-        val t = y.coerceIn(0.0, 1.0)
-        return if (t > 216.0 / 24389) 116 * StrictMath.cbrt(t) - 16 else t * 24389.0 / 27
-    }
+    private fun lStar(y: Double): Double = lStarOf(y)
 
     private fun median(v: List<Double>) = if (v.isEmpty()) 0.0 else v.sorted()[v.size / 2]
 
     private companion object {
+        fun lStarOf(y: Double): Double {
+            val t = y.coerceIn(0.0, 1.0)
+            return if (t > 216.0 / 24389) 116 * StrictMath.cbrt(t) - 16 else t * 24389.0 / 27
+        }
+
+        const val MIRED = 1e6
         const val SIDE = 640
         const val SESSION_SPLIT = 17
         const val ROUNDS = 2

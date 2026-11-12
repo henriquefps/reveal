@@ -3,6 +3,7 @@
 package dev.hfps.reveal.pipeline.cpu
 
 import dev.hfps.reveal.pipeline.PipelineInput
+import dev.hfps.reveal.pipeline.faces.Face
 import dev.hfps.reveal.pipeline.recipe.WbMode
 import dev.hfps.reveal.pipeline.recipe.WhiteBalance
 import kotlin.math.max
@@ -49,6 +50,14 @@ class WbAnalysis(
  *    cast on neutral surfaces than skin).
  * 6. **Constraint:** the result is limited to 2000-15000 K and tint ±30: real lights (daylight, tungsten, flash,
  *    fluorescent, LED) lie inside, so a scene dominated by one colour cannot produce a light that does not exist.
+ *
+ * **With detected faces** (docs/adr/0010, "Faces"): the blocks under the faces (the box enlarged by
+ * [FACE_BOX_MARGIN]: skin and hair) never take part in steps 2-4; step 5 drops its upper bound (people are known to
+ * be there, a close-up may be mostly skin); and a final **skin guard** checks the faces' own colour: their skin
+ * (the blocks inside [AutoAnalyser.inSkin][dev.hfps.reveal.pipeline.auto.AutoAnalyser.inSkin]'s ellipse, score
+ * weighted) balanced by the estimate must have an OkLab hue in [FACE_HUE_MIN]..[FACE_HUE_MAX]° (natural skin of any
+ * tone; outside it the faces look green, magenta or blue). If not, the estimate moves by the smallest step on a grid
+ * of ±[FACE_MAX_MIRED] mired and ±[FACE_MAX_TINT] tint that brings the hue inside (or nearest to it).
  *
  * The result is plain slider values ([estimate] / [whiteBalance]): temperature/tint for a RAW, the relative pair
  * for display-referred input, `mode = AUTO` (product principle: Auto proposes values the user can change).
@@ -126,10 +135,23 @@ object AutoWhiteBalance {
         return clip
     }
 
-    /** The estimated light as temperature and tint (steps 1-6). */
-    fun estimate(analysis: WbAnalysis, skinGuard: Boolean = true): WhiteBalanceModel.Cct {
-        val usable = usableBlocks(analysis)
-        require(usable.isNotEmpty()) { "no usable pixels for auto white balance" }
+    /** The estimated light as temperature and tint (steps 1-6, and the face rules for [faces]). */
+    fun estimate(
+        analysis: WbAnalysis,
+        skinGuard: Boolean = true,
+        faces: List<Face> = emptyList(),
+    ): WhiteBalanceModel.Cct {
+        val all = usableBlocks(analysis)
+        require(all.isNotEmpty()) { "no usable pixels for auto white balance" }
+        val underFaces = all.filter { i -> faces.any { underFace(analysis, i, it) } }.toHashSet()
+        // Keep the faces' blocks when they are nearly everything (a tight close-up): better than nothing.
+        val usable = if (all.size - underFaces.size >=
+            FACE_MIN_REST * all.size
+        ) {
+            all.filter { it !in underFaces }
+        } else {
+            all
+        }
         val m = analysis.colour.cameraToXyz
         val asLight = HashMap<Int, WhiteBalanceModel.Cct>()
         for (i in usable) {
@@ -148,13 +170,93 @@ object AutoWhiteBalance {
                 val xyz = WhiteBalanceModel.illuminantXyz(result.temperatureK, result.tint)
                 val light = m.inverse().times(xyz)
                 val found = usable.filter { isSkin(analysis, it, light) }
-                if (found.size >= SKIN_MIN_FRACTION * usable.size && found.size <= SKIN_MAX_FRACTION * usable.size) {
+                val upper = if (faces.isEmpty()) SKIN_MAX_FRACTION else 1.0
+                if (found.size >= SKIN_MIN_FRACTION * usable.size && found.size < upper * usable.size) {
                     skin = found.toHashSet()
                     result = combine(analysis, usable.filter { it !in skin }, asLight)
                 }
             }
         }
-        return result
+        return if (faces.isEmpty()) result else skinGuard(analysis, result, faces)
+    }
+
+    /** The face skin guard: the smallest move of [estimate] that gives the faces' skin a natural hue. */
+    private fun skinGuard(
+        analysis: WbAnalysis,
+        estimate: WhiteBalanceModel.Cct,
+        faces: List<Face>,
+    ): WhiteBalanceModel.Cct {
+        val skin = faceSkin(analysis, faces) ?: return estimate
+        val mired = MIRED_PER_K / estimate.temperatureK
+        var best = estimate
+        var bestCost = Double.MAX_VALUE
+        var bestMiss = Double.MAX_VALUE
+        for (dm in -FACE_MAX_MIRED..FACE_MAX_MIRED step FACE_MIRED_STEP) {
+            for (dt in -FACE_MAX_TINT..FACE_MAX_TINT) {
+                val cct = constrain(WhiteBalanceModel.Cct(MIRED_PER_K / (mired + dm), estimate.tint + dt))
+                val hue = skinHue(analysis, skin, cct)
+                val miss = when {
+                    hue < FACE_HUE_MIN -> FACE_HUE_MIN - hue
+                    hue > FACE_HUE_MAX -> hue - FACE_HUE_MAX
+                    else -> 0.0
+                }
+                val nm = dm.toDouble() / FACE_MAX_MIRED
+                val nt = dt.toDouble() / FACE_MAX_TINT
+                val cost = nm * nm + nt * nt
+                // Inside the range first, then the smallest move; outside it everywhere: the nearest hue.
+                if (miss < bestMiss - HUE_EPSILON ||
+                    (kotlin.math.abs(miss - bestMiss) <= HUE_EPSILON && cost < bestCost)
+                ) {
+                    best = cct
+                    bestCost = cost
+                    bestMiss = miss
+                }
+            }
+        }
+        return best
+    }
+
+    /** Score-weighted mean raw colour of the unclipped blocks on the faces' skin; `null` when none. */
+    @Suppress("NestedBlockDepth")
+    private fun faceSkin(a: WbAnalysis, faces: List<Face>): DoubleArray? {
+        val sum = DoubleArray(3)
+        var weight = 0.0
+        for (y in 0 until a.height) {
+            for (x in 0 until a.width) {
+                val i = y * a.width + x
+                if (a.clipped[i]) continue
+                val u = (x + HALF) / a.width
+                val v = (y + HALF) / a.height
+                for (f in faces) {
+                    if (!dev.hfps.reveal.pipeline.auto.AutoAnalyser.inSkin(f, u, v)) continue
+                    for (c in 0..2) sum[c] += a.rgb[i * 3 + c] * f.score.toDouble()
+                    weight += f.score
+                }
+            }
+        }
+        if (weight <= 0.0 || sum.any { it <= 0.0 }) return null
+        return DoubleArray(3) { sum[it] / weight }
+    }
+
+    /** The faces' skin hue (the guard's measure, degrees) under the light [cct]; `null` without usable skin. */
+    fun faceSkinHue(analysis: WbAnalysis, faces: List<Face>, cct: WhiteBalanceModel.Cct): Double? =
+        faceSkin(analysis, faces)?.let { skinHue(analysis, it, cct) }
+
+    /** OkLab hue (degrees) of raw [rgb] balanced for the light [cct], judged at the skin luminance as [isSkin]. */
+    private fun skinHue(a: WbAnalysis, rgb: DoubleArray, cct: WhiteBalanceModel.Cct): Double {
+        val m = a.colour.cameraToXyz
+        val light = m.inverse().times(WhiteBalanceModel.illuminantXyz(cct.temperatureK, cct.tint))
+        val lab = skinLab(a, rgb, light)
+        return Math.toDegrees(StrictMath.atan2(lab[2].toDouble(), lab[1].toDouble()))
+    }
+
+    /** True when block [i]'s centre lies in a face's box enlarged by [FACE_BOX_MARGIN]. */
+    private fun underFace(a: WbAnalysis, i: Int, f: Face): Boolean {
+        val u = ((i % a.width) + HALF) / a.width
+        val v = ((i / a.width) + HALF) / a.height
+        val mx = f.width * FACE_BOX_MARGIN / 2
+        val my = f.height * FACE_BOX_MARGIN / 2
+        return u >= f.left - mx && u <= f.right + mx && v >= f.top - my && v <= f.bottom + my
     }
 
     /** Steps 2-3 (norms) and 5 (grey pixels) over [blocks], combined and constrained (step 6). */
@@ -179,8 +281,8 @@ object AutoWhiteBalance {
     }
 
     /** [estimate] as the recipe white balance (`mode = AUTO`). */
-    fun whiteBalance(analysis: WbAnalysis): WhiteBalance {
-        val cct = estimate(analysis)
+    fun whiteBalance(analysis: WbAnalysis, faces: List<Face> = emptyList()): WhiteBalance {
+        val cct = estimate(analysis, faces = faces)
         val xyz = WhiteBalanceModel.illuminantXyz(cct.temperatureK, cct.tint)
         return WhiteBalanceModel.fromIlluminant(analysis.colour, xyz, WbMode.AUTO)
     }
@@ -221,20 +323,27 @@ object AutoWhiteBalance {
     }
 
     private fun isSkin(a: WbAnalysis, i: Int, light: DoubleArray): Boolean {
+        val raw = doubleArrayOf(a.rgb[i * 3].toDouble(), a.rgb[i * 3 + 1].toDouble(), a.rgb[i * 3 + 2].toDouble())
+        if (a.colour.cameraToXyz.times(raw)[1] <= MIN_SIGNAL) return false
+        val lab = skinLab(a, raw, light)
+        val c = sqrt(lab[1] * lab[1] + lab[2] * lab[2])
+        val hue = Math.toDegrees(StrictMath.atan2(lab[2].toDouble(), lab[1].toDouble()))
+        return c in SKIN_C_MIN..SKIN_C_MAX && hue in SKIN_HUE_MIN..SKIN_HUE_MAX
+    }
+
+    /**
+     * OkLab of raw [raw] as the develop path shows it when the light is [light] (XYZ = M raw, adapted from M light to
+     * D65), judged by chromaticity: scaled to the luminance of typical skin (Y 0.35, OkLab L about 0.7).
+     */
+    private fun skinLab(a: WbAnalysis, raw: DoubleArray, light: DoubleArray): FloatArray {
         val m = a.colour.cameraToXyz
-        // As the develop path sees the block when the light is `light`: XYZ = M raw, adapted from M light to D65.
         val adapt = ColorSpaces.bradfordAdaptation(m.times(light), ColorSpaces.D65_XYZ)
-        val xyz = adapt.times(
-            m.times(a.rgb[i * 3].toDouble(), a.rgb[i * 3 + 1].toDouble(), a.rgb[i * 3 + 2].toDouble()),
-        )
-        // Judged by chromaticity: the block is scaled to the luminance of typical skin (Y 0.35, OkLab L about 0.7).
+        val xyz = adapt.times(m.times(raw))
         val rgb = ColorSpaces.REC2020.fromXyz.times(xyz)
         val k = SKIN_Y / xyz[1].coerceAtLeast(MIN_SIGNAL)
         val lab = FloatArray(3)
         OkLab.fromRgb((rgb[0] * k).toFloat(), (rgb[1] * k).toFloat(), (rgb[2] * k).toFloat(), lab)
-        val c = sqrt(lab[1] * lab[1] + lab[2] * lab[2])
-        val hue = Math.toDegrees(StrictMath.atan2(lab[2].toDouble(), lab[1].toDouble()))
-        return xyz[1] > MIN_SIGNAL && c in SKIN_C_MIN..SKIN_C_MAX && hue in SKIN_HUE_MIN..SKIN_HUE_MAX
+        return lab
     }
 
     private fun constrain(cct: WhiteBalanceModel.Cct) = WhiteBalanceModel.Cct(
@@ -247,4 +356,13 @@ object AutoWhiteBalance {
     private const val SKIN_C_MAX = 0.15f
     private const val SKIN_HUE_MIN = 30.0
     private const val SKIN_HUE_MAX = 75.0
+    private const val HALF = 0.5f
+    private const val FACE_BOX_MARGIN = 0.3f
+    private const val FACE_MIN_REST = 0.2
+    private const val FACE_HUE_MIN = 22.0
+    private const val FACE_HUE_MAX = 52.0
+    private const val FACE_MAX_MIRED = 40
+    private const val FACE_MIRED_STEP = 2
+    private const val FACE_MAX_TINT = 10
+    private const val HUE_EPSILON = 1e-9
 }

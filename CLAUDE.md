@@ -474,6 +474,36 @@ REVEAL_AUTO_SHEET_DIR=$PWD/build/calibration REVEAL_RENDER_OUT=$PWD/docs/screens
   ./gradlew :core:pipeline:testDebugUnitTest --tests '*AutoRenderSheetTest*' --rerun   # CC0 before/after sheets
 ```
 
+## Faces, subject and smart presets (`:core:pipeline`, M3/B, ADR 0010 "Features", ADR 0020)
+
+`auto/PhotoFeatures` = what the rules know about a photo independently of its recipe: Auto's `sample`, the `WbAnalysis`,
+`faces` (`faces/FaceDetector`: MediaPipe BlazeFace full-range, Apache-2.0, run by `faces/NetworkGraph` in pure Kotlin,
+deterministic, JVM-testable; input `faces/FaceInput` = 576 px sRGB render; whole frame + 192 px tiles), `saliency`
+(`auto/SaliencyMap`), `lines` (`geometry/ImageLines`, also behind `OpticsAnalysis`) and `lens`. The editor computes it in the
+background at open (`EditorViewModel.prepareAuto`, `EditorMetrics.faces`, log `features: N faces, T ms`); Auto
+(`AutoRules.run(features, …)`) waits for it. Faces steer exposure (`AutoParams.faceTarget/faceTolerance/faceWeight/
+faceAreaFull/maxFaceShift`) and Auto WB (`AutoWhiteBalance.estimate(…, faces)`: face blocks out, skin hue guard 22-52°).
+The model asset is generated: `python3 scripts/faces/convert_blazeface.py` (`--check`); never hand-edit it.
+
+Smart presets: `preset/SmartPresets.kt` (`SmartRules` = the preset file's `smart` object, `SmartCorrector(features)`
+implements ADR 0019's `SmartCorrection`, memoised for strength drags; `Preset.smart(rules)` drops the style fields a rule
+owns; the options sheet's "Smart corrections…" = `PresetRepository.setSmart` with `SmartRules.withKinds`). Built-ins: `preset/BuiltInPresets.kt` (patches as JSON, ids from `idOf(key)`: never rename a key) and
+`BuiltInPresetNames` (`preset_<key>` / `preset_group_<group>` strings, both languages), served to the library by
+`:core:data` `AppBuiltInPresets`. Smart correction is per photo: the editor's `SmartCorrector` from the open photo's
+features (`EditorViewModel.photoSmart`), the batch's per photo (`PresetBatchWorker.applySmart`,
+`ThumbnailRepository.analysisInput`); the injected `SmartCorrection` (`DataModule`) is only the `NONE` fallback.
+Instrumented: `dev.hfps.reveal.editor.SmartPresetsFlowTest` (public-domain portrait in `app/src/androidTest/assets/faces`).
+
+```sh
+./gradlew :core:pipeline:testDebugUnitTest --tests '*faces*' --tests '*AutoFacesTest*' --tests '*preset*'
+# owner's calibration (copies, aggregates only; RAW dumps + JPGs in one folder; REVEAL_AUTO_FIT=faces refits the face constants):
+REVEAL_CALIBRATION_DIR=<work dir> ./gradlew --no-configuration-cache :core:pipeline:testDebugUnitTest --tests '*AutoCalibrationTest*' --rerun -i
+# preset contact sheets (+ REVEAL_AUTO_COMPARE=1: camera JPEG | M1 Auto | M3 Auto); owner's photos -> private review folder only:
+REVEAL_PRESET_DUMPS=<dumps and/or JPEGs> REVEAL_PRESET_OUT=<dir> ./gradlew --no-configuration-cache :core:pipeline:testDebugUnitTest --tests '*PresetRenderSheetTest*' --rerun -i
+```
+
+Env-driven opt-in tests need `--no-configuration-cache` (the cached configuration keeps the old environment).
+
 ## `:core:image` harness (ADR 0004)
 
 ```sh

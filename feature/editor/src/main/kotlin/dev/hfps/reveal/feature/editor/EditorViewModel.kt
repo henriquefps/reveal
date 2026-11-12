@@ -43,12 +43,14 @@ import dev.hfps.reveal.pipeline.auto.AutoAnalyser
 import dev.hfps.reveal.pipeline.auto.AutoBlackWhite
 import dev.hfps.reveal.pipeline.auto.AutoRules
 import dev.hfps.reveal.pipeline.auto.AutoScope
+import dev.hfps.reveal.pipeline.auto.PhotoFeatures
 import dev.hfps.reveal.pipeline.auto.SourceColours
 import dev.hfps.reveal.pipeline.auto.TargetedAdjust
 import dev.hfps.reveal.pipeline.cpu.AutoWhiteBalance
 import dev.hfps.reveal.pipeline.cpu.WbAnalysis
 import dev.hfps.reveal.pipeline.cpu.WhiteBalanceModel
 import dev.hfps.reveal.pipeline.cpu.WhiteBalancePicker
+import dev.hfps.reveal.pipeline.geometry.ImageLines
 import dev.hfps.reveal.pipeline.gl.ClippingWarnings
 import dev.hfps.reveal.pipeline.gl.CompareMode
 import dev.hfps.reveal.pipeline.gl.GpuDevelopRenderer
@@ -58,6 +60,9 @@ import dev.hfps.reveal.pipeline.preset.Preset
 import dev.hfps.reveal.pipeline.preset.PresetPatch
 import dev.hfps.reveal.pipeline.preset.PresetSection
 import dev.hfps.reveal.pipeline.preset.SmartCorrection
+import dev.hfps.reveal.pipeline.preset.SmartCorrector
+import dev.hfps.reveal.pipeline.preset.SmartRules
+import dev.hfps.reveal.pipeline.preset.smartRules
 import dev.hfps.reveal.pipeline.recipe.BaseLook
 import dev.hfps.reveal.pipeline.recipe.ColourBand
 import dev.hfps.reveal.pipeline.recipe.ColourToolControls
@@ -434,9 +439,10 @@ class EditorViewModel @Inject constructor(
         if (autoJob?.isActive == true) return
         val base = _state.value.edit.recipe
         autoJob = viewModelScope.launch {
+            val features = photoFeatures(inputs)
             val next = withContext(Dispatchers.Default) {
                 val start = SystemClock.elapsedRealtime()
-                AutoRules.run(inputs.sample, base, scope, inputs.wb).also {
+                AutoRules.run(features, base, scope).also {
                     EditorMetrics.auto(scope.name, SystemClock.elapsedRealtime() - start)
                 }
             }
@@ -874,12 +880,57 @@ class EditorViewModel @Inject constructor(
         val (wbAnalysis, sample) = withContext(Dispatchers.Default) {
             runCatching { AutoWhiteBalance.analyse(input) }.getOrNull() to AutoAnalyser.sample(input)
         }
-        autoInputs = AutoInputs(sample, wbAnalysis)
+        // Faces and the subject map (docs/adr/0010) take a few hundred ms: found in the background, so the open is
+        // never slower; Auto waits for them, and the Auto WB chip value is refined with the faces once they are in.
+        val features = viewModelScope.async(Dispatchers.Default) {
+            val start = SystemClock.elapsedRealtime()
+            runCatching { PhotoFeatures.of(input) }.getOrNull()?.let {
+                PhotoFeatures(sample, wbAnalysis, it.faces, it.saliency, lens = input.lens)
+            }.also { EditorMetrics.features(it?.faces?.size ?: -1, SystemClock.elapsedRealtime() - start) }
+        }
+        autoInputs = AutoInputs(sample, wbAnalysis, features)
+        viewModelScope.launch {
+            val f = features.await() ?: return@launch
+            if (f.faces.isEmpty() || wbAnalysis == null) return@launch
+            val wb = withContext(Dispatchers.Default) {
+                runCatching { AutoRules.whiteBalance(wbAnalysis, f.faces) }.getOrNull()
+            } ?: return@launch
+            _state.update { it.copy(edit = it.edit.copy(autoWb = wb)) }
+        }
         return wbAnalysis?.let { runCatching { AutoRules.whiteBalance(it) }.getOrNull() }
     }
 
-    /** What Auto needs once the proxy is gone: the analysis sample and the Auto WB analysis (null if it failed). */
-    private class AutoInputs(val sample: PipelineInput, val wb: WbAnalysis?)
+    /**
+     * The photo's features for Auto and smart presets: the background analysis when it succeeded (with the lines of
+     * the Optics analysis for auto-straighten), else the sample and the white balance alone.
+     */
+    private suspend fun photoFeatures(inputs: AutoInputs): PhotoFeatures {
+        val found = inputs.features.await()
+        val lines = opticsAnalysis?.await()?.let { ImageLines(it.width, it.height, it.segments) }
+        return PhotoFeatures(
+            inputs.sample,
+            inputs.wb,
+            found?.faces.orEmpty(),
+            found?.saliency,
+            lines,
+            found?.lens,
+        )
+    }
+
+    /** The smart presets' correction on this photo (docs/adr/0020); `null` before the photo is open. */
+    suspend fun smartCorrection(): SmartCorrection? = autoInputs?.let { SmartCorrector(photoFeatures(it)) }.also {
+        if (it != null) smart = it
+    }
+
+    /** [smartCorrection], kept once made (the photo's features do not change). */
+    @Volatile
+    private var smart: SmartCorrection? = null
+
+    /** This photo's correction once known, else the app's fallback (the style only). */
+    private val photoSmart: SmartCorrection get() = smart ?: smartCorrection
+
+    /** What Auto needs once the proxy is gone: the analysis sample, the Auto WB analysis and the photo's features. */
+    private class AutoInputs(val sample: PipelineInput, val wb: WbAnalysis?, val features: Deferred<PhotoFeatures?>)
 
     @Volatile
     private var autoInputs: AutoInputs? = null
@@ -922,7 +973,7 @@ class EditorViewModel @Inject constructor(
     fun presetBase(): Recipe = currentSession()?.before ?: _state.value.edit.committed
 
     /** [preset] at full strength on [base], as the panel previews it. */
-    fun presetPreview(preset: Preset, base: Recipe): Recipe = preset.apply(base, 1f, applyContext(), smartCorrection)
+    fun presetPreview(preset: Preset, base: Recipe): Recipe = preset.apply(base, 1f, applyContext(), photoSmart)
 
     /**
      * Applies a preset as one history step (docs/adr/0019). While the last applied preset is still current, a tap on
@@ -933,7 +984,8 @@ class EditorViewModel @Inject constructor(
             val preset = presets.preset(uuid) ?: return@launch
             val history = _state.value.edit.history
             val below = currentSession()?.below(history) ?: history
-            val next = preset.apply(below.current, 1f, applyContext(), smartCorrection)
+            if (preset.smart != null) smart = smart ?: smartCorrection()
+            val next = withContext(Dispatchers.Default) { preset.apply(below.current, 1f, applyContext(), photoSmart) }
             commitPreset(history, below, preset, next, 1f)
             presets.markUsed(uuid)
         }
@@ -942,7 +994,7 @@ class EditorViewModel @Inject constructor(
     /** Per drag frame: the applied preset at [strength] (0..2) on its base; nothing is committed. */
     fun setPresetStrength(strength: Float) {
         val session = currentSession() ?: return
-        val recipe = session.preset.apply(session.before, strength, applyContext(), smartCorrection)
+        val recipe = session.preset.apply(session.before, strength, applyContext(), photoSmart)
         val next = _state.updateAndGet {
             it.copy(
                 edit = it.edit.copy(recipe = recipe),
@@ -999,6 +1051,14 @@ class EditorViewModel @Inject constructor(
 
     fun setPresetFavourite(uuid: String, favourite: Boolean) {
         viewModelScope.launch { presets.setFavourite(uuid, favourite) }
+    }
+
+    /** "Smart corrections": [kinds] run on each photo before the style (empty: a plain preset again). */
+    fun setPresetSmart(uuid: String, kinds: Set<SmartRules.Kind>) {
+        viewModelScope.launch {
+            val current = presets.preset(uuid)?.smartRules ?: SmartRules()
+            presets.setSmart(uuid, if (kinds.isEmpty()) null else current.withKinds(kinds))
+        }
     }
 
     fun renamePreset(uuid: String, name: String) {

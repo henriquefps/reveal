@@ -56,6 +56,8 @@ import dev.hfps.reveal.pipeline.preset.PresetFiles
 import dev.hfps.reveal.pipeline.preset.PresetLimits
 import dev.hfps.reveal.pipeline.preset.PresetPacks
 import dev.hfps.reveal.pipeline.preset.PresetSection
+import dev.hfps.reveal.pipeline.preset.SmartRules
+import dev.hfps.reveal.pipeline.preset.smartRules
 import dev.hfps.reveal.pipeline.recipe.Recipe
 
 /** The string resource of a chooser section. */
@@ -358,6 +360,7 @@ internal fun PresetOptionsSheet(
 ) {
     var renaming by remember { mutableStateOf(false) }
     var confirmDelete by remember { mutableStateOf(false) }
+    var smartEditing by remember { mutableStateOf(false) }
     val group = library.groups.firstOrNull { it.uuid == preset.groupUuid }
     val index = group?.presets?.indexOfFirst { it.uuid == preset.uuid } ?: -1
     val copyName = stringResource(R.string.presets_duplicate_name, preset.name)
@@ -376,6 +379,15 @@ internal fun PresetOptionsSheet(
                         onDismiss()
                     },
                     onCancel = { renaming = false },
+                )
+
+                smartEditing -> SmartChooser(
+                    initial = preset.preset.smartRules?.kinds.orEmpty(),
+                    onSave = {
+                        actions.onSetPresetSmart(preset.uuid, it)
+                        onDismiss()
+                    },
+                    onCancel = { smartEditing = false },
                 )
 
                 confirmDelete -> Confirm(
@@ -402,6 +414,24 @@ internal fun PresetOptionsSheet(
                         modifier = Modifier.testTag(EditorTags.presetOption("favourite")),
                     )
                     if (preset.origin.editable) {
+                        RevealListRow(
+                            title = stringResource(R.string.presets_smart),
+                            subtitle = stringResource(R.string.presets_smart_detail),
+                            icon = PhosphorRegular.MagicWand,
+                            onClick = { smartEditing = true },
+                            modifier = Modifier.testTag(EditorTags.presetOption("smart")),
+                        )
+                        if (preset.preset.smart != null) {
+                            RevealListRow(
+                                title = stringResource(R.string.presets_smart_remove),
+                                icon = PhosphorRegular.MagicWand,
+                                onClick = {
+                                    actions.onSetPresetSmart(preset.uuid, emptySet())
+                                    onDismiss()
+                                },
+                                modifier = Modifier.testTag(EditorTags.presetOption("smart-remove")),
+                            )
+                        }
                         RevealListRow(
                             title = stringResource(R.string.presets_rename),
                             icon = PhosphorRegular.PencilSimple,
@@ -462,6 +492,38 @@ internal fun PresetOptionsSheet(
             }
         }
     }
+}
+
+/**
+ * "Smart corrections" (docs/adr/0020): which of Auto's rules run on each photo before the preset's style. Saving
+ * drops the style's own values for what the corrections set (exposure, tone, white balance, vibrance).
+ */
+@Composable
+private fun SmartChooser(initial: Set<SmartRules.Kind>, onSave: (Set<SmartRules.Kind>) -> Unit, onCancel: () -> Unit) {
+    var checked by remember { mutableStateOf(initial.ifEmpty { DEFAULT_SMART }) }
+    RevealChecklist(
+        title = stringResource(R.string.presets_smart_title),
+        allLabel = stringResource(R.string.presets_include_all),
+        items = SmartRules.Kind.entries.map { ChecklistItem(it, stringResource(smartName(it))) },
+        checked = checked,
+        onCheckedChange = { checked = it },
+        confirm = stringResource(R.string.presets_save),
+        cancel = stringResource(R.string.presets_cancel),
+        onConfirm = { onSave(checked) },
+        onCancel = onCancel,
+        tagPrefix = EditorTags.PRESET_SMART,
+    )
+}
+
+/** Every correction but straighten (a tilt may be wanted): what "Smart corrections" starts with. */
+private val DEFAULT_SMART = SmartRules.Kind.entries.toSet() - SmartRules.Kind.STRAIGHTEN
+
+private fun smartName(kind: SmartRules.Kind): Int = when (kind) {
+    SmartRules.Kind.EXPOSURE -> R.string.presets_smart_exposure
+    SmartRules.Kind.TONE -> R.string.presets_smart_tone
+    SmartRules.Kind.WHITE_BALANCE -> R.string.presets_smart_white_balance
+    SmartRules.Kind.VIBRANCE -> R.string.presets_smart_vibrance
+    SmartRules.Kind.STRAIGHTEN -> R.string.presets_smart_straighten
 }
 
 /** Exporting a user group as a pack: the author and the licence shown to importers, then the file. */

@@ -12,6 +12,7 @@ import dev.hfps.reveal.pipeline.cpu.Luma
 import dev.hfps.reveal.pipeline.cpu.OkLab
 import dev.hfps.reveal.pipeline.cpu.ProfileOp
 import dev.hfps.reveal.pipeline.cpu.RawWhiteBalanceOp
+import dev.hfps.reveal.pipeline.faces.Face
 import dev.hfps.reveal.pipeline.recipe.Colour
 import dev.hfps.reveal.pipeline.recipe.Recipe
 import kotlin.math.exp
@@ -31,8 +32,7 @@ import kotlin.math.sqrt
  *
  * @property histogram fraction of pixels per bin.
  * @property centreHistogram the same, centre-weighted (weight `1 + 2 exp(-r^2 / (2 * 0.2^2))`, `r` the distance
- *   from the centre in units of the frame's width/height): the subject is more often near the centre. A
- *   face/subject-weighted histogram replaces it in M3/M4 (masks); faces are deferred (ADR 0010).
+ *   from the centre in units of the frame's width/height): the subject is more often near the centre.
  * @property toneTable display-referred luminance of a neutral grey of luminance `2^s` at each bin centre through
  *   the photo's profile (amount included): the profile's tone curve as the rules see it. The identity `2^s` for
  *   display-referred input (the profile does not apply there).
@@ -40,6 +40,12 @@ import kotlin.math.sqrt
  * @property medianChroma median OkLab chroma of the display-referred render over mid-tone pixels (display `Y` in
  *   0.05..0.8; 0 when there are none).
  * @property sceneReferred false for JPEG/HEIF input (already rendered: its whites are not recoverable).
+ * @property subjectHistogram the histogram weighted towards the probable subject (weight `1 + 2 saliency`,
+ *   [SaliencyMap]; docs/adr/0010, "Subject"); the centre-weighted one when no map is known.
+ * @property faceHistogram the histogram of the faces' skin (an ellipse inside each detected face, weighted by the
+ *   detector's score), `null` without faces in the crop (docs/adr/0010, "Faces").
+ * @property faceArea the faces' boxes as a fraction of the crop's area (summed, at most 1).
+ * @property faceCount faces whose centre is inside the crop.
  */
 class AutoAnalysis(
     val histogram: DoubleArray,
@@ -48,12 +54,22 @@ class AutoAnalysis(
     val clippedFraction: Double,
     val medianChroma: Double,
     val sceneReferred: Boolean,
+    val subjectHistogram: DoubleArray = centreHistogram,
+    val faceHistogram: DoubleArray? = null,
+    val faceArea: Double = 0.0,
+    val faceCount: Int = 0,
 ) {
     init {
-        require(histogram.size == BINS && centreHistogram.size == BINS && toneTable.size == BINS) {
+        require(
+            histogram.size == BINS && centreHistogram.size == BINS && toneTable.size == BINS &&
+                subjectHistogram.size == BINS && (faceHistogram == null || faceHistogram.size == BINS),
+        ) {
             "analysis tables must have $BINS bins"
         }
     }
+
+    /** The faces' skin key: the median stop of [faceHistogram], `null` without faces. */
+    val faceKey: Double? get() = faceHistogram?.let { percentile(HALF, it) }
 
     /** The [q]-quantile (0..1) of [hist] in stops, linear inside a bin. */
     fun percentile(q: Double, hist: DoubleArray = histogram): Double {
@@ -151,6 +167,10 @@ object AutoAnalyser {
     const val ANALYSIS_SIDE: Int = 512
 
     private const val CENTRE_BOOST = 2.0
+    private const val SUBJECT_BOOST = 2.0
+    private const val SKIN_RX = 0.6f
+    private const val SKIN_RY = 0.6f
+    private const val SKIN_DY = 0.08f
     private const val CENTRE_SIGMA = 0.2
     private const val CLIP_LEVEL = 0.99f
     private const val CHROMA_Y_MIN = 0.05f
@@ -196,9 +216,16 @@ object AutoAnalyser {
     /**
      * Analyses [sample] as [recipe]'s profile and white balance render it, with every Light and colour slider at
      * "no change" (so the analysis, and Auto's result, does not depend on the values Auto sets: tapping Auto twice
-     * gives the same values). Pixels outside the recipe's crop are ignored.
+     * gives the same values). Pixels outside the recipe's crop are ignored. [faces] and [saliency] are the photo's
+     * ([PhotoFeatures]): functions of the photo only, so they keep Auto idempotent too.
      */
-    fun analyse(sample: PipelineInput, recipe: Recipe): AutoAnalysis {
+    @Suppress("LongMethod", "CyclomaticComplexMethod")
+    fun analyse(
+        sample: PipelineInput,
+        recipe: Recipe,
+        faces: List<Face> = emptyList(),
+        saliency: SaliencyMap? = null,
+    ): AutoAnalysis {
         val base = Recipe(
             profile = recipe.profile,
             colour = Colour(whiteBalance = recipe.colour.whiteBalance),
@@ -217,6 +244,12 @@ object AutoAnalyser {
 
         val hist = DoubleArray(AutoAnalysis.BINS)
         val centre = DoubleArray(AutoAnalysis.BINS)
+        val subject = DoubleArray(AutoAnalysis.BINS)
+        val skin = DoubleArray(AutoAnalysis.BINS)
+        val crop = recipe.geometry.crop
+        val inCrop = faces.filter { f ->
+            crop == null || (f.centreX in crop.left..crop.right && f.centreY in crop.top..crop.bottom)
+        }
         var clipped = 0
         var count = 0
         val clipLevel = saturation?.let { it * CLIP_LEVEL } ?: Float.MAX_VALUE
@@ -231,7 +264,12 @@ object AutoAnalyser {
                 val dx = (x + HALF) / sample.width - HALF
                 val b = AutoAnalysis.bin(s)
                 hist[b] += 1.0
-                centre[b] += 1.0 + CENTRE_BOOST * exp(-(dx * dx + dy * dy) / (2 * CENTRE_SIGMA * CENTRE_SIGMA))
+                val centreWeight = 1.0 + CENTRE_BOOST * exp(-(dx * dx + dy * dy) / (2 * CENTRE_SIGMA * CENTRE_SIGMA))
+                centre[b] += centreWeight
+                val u = ((x + HALF) / sample.width).toFloat()
+                val v = ((y + HALF) / sample.height).toFloat()
+                subject[b] += saliency?.let { 1.0 + SUBJECT_BOOST * it.at(u, v) } ?: centreWeight
+                for (f in inCrop) if (inSkin(f, u, v)) skin[b] += f.score.toDouble()
                 count++
                 val raw = sample.linearRgb
                 if (raw[i] >= clipLevel || raw[i + 1] >= clipLevel || raw[i + 2] >= clipLevel) clipped++
@@ -239,6 +277,9 @@ object AutoAnalyser {
         }
         normalise(hist)
         normalise(centre)
+        normalise(subject)
+        val hasSkin = skin.sum() > 0.0
+        normalise(skin)
 
         ProfileOp.apply(rgb, params.profile)
         val chroma = medianChroma(rgb, sample, inside)
@@ -256,7 +297,28 @@ object AutoAnalyser {
             clippedFraction = if (count == 0) 0.0 else clipped.toDouble() / count,
             medianChroma = chroma,
             sceneReferred = sample.kind == InputKind.SCENE_REFERRED,
+            subjectHistogram = subject,
+            faceHistogram = if (hasSkin) skin else null,
+            faceArea = faceArea(inCrop, recipe),
+            faceCount = inCrop.size,
         )
+    }
+
+    /**
+     * True when normalised ([u], [v]) lies on [face]'s skin: an ellipse centred a little below the box centre (the
+     * box runs from the brows to the chin), [SKIN_RX] x [SKIN_RY] of the box's half-size, so hair, eyes and the
+     * background around a tilted face stay out.
+     */
+    fun inSkin(face: Face, u: Float, v: Float): Boolean {
+        val dx = (u - face.centreX) / (face.width * HALF_F * SKIN_RX)
+        val dy = (v - face.centreY - face.height * SKIN_DY) / (face.height * HALF_F * SKIN_RY)
+        return dx * dx + dy * dy <= 1f
+    }
+
+    private fun faceArea(faces: List<Face>, recipe: Recipe): Double {
+        val crop = recipe.geometry.crop
+        val cropArea = crop?.let { ((it.right - it.left) * (it.bottom - it.top)).toDouble() } ?: 1.0
+        return (faces.sumOf { (it.width * it.height).toDouble() } / cropArea).coerceIn(0.0, 1.0)
     }
 
     private fun medianChroma(rgb: FloatArray, sample: PipelineInput, inside: (Int, Int) -> Boolean): Double {

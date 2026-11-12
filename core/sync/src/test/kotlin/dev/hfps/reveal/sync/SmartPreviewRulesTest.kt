@@ -125,7 +125,10 @@ class SmartPreviewRulesTest {
 
     private fun remoteRow(raw: ByteArray) = runBlocking {
         val id = tablet.photoByFingerprint(FileFingerprint.of(raw))!!.id
-        tablet.db.photoDao().rows(PhotoQuerySql.toQuery(PhotoQuery(scope = LibraryScope.Server))).single { it.id == id }
+        // Every photo of the Server source, listed or not (the Server scope lists only those that open, FIX/V).
+        val server = checkNotNull(tablet.db.syncDao().serverSource()).id
+        tablet.db.photoDao().rows(PhotoQuerySql.toQuery(PhotoQuery(scope = LibraryScope.Source(server))))
+            .single { it.id == id }
     }
 
     @Test

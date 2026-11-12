@@ -21,6 +21,8 @@ data class SyncReport(
     val parked: Int,
     val nasFiles: Int,
     val lookedUp: Int,
+    /** The one-off clean-up of 0.5.3 when this run did it, else null. */
+    val cleanup: CleanupReport? = null,
 )
 
 /** The server behind the paired URL is another one (a reset, or the URL now points elsewhere). */
@@ -35,8 +37,10 @@ class ServerChangedException(val expected: String, val found: String) : IllegalS
 class SyncEngine(
     private val db: RevealDatabase,
     private val store: SyncStore,
+    serverLibrary: ServerLibrary? = null,
     private val clock: () -> Long = System::currentTimeMillis,
 ) {
+    private val library = serverLibrary ?: ServerLibrary(db, store, clock)
     private val meta = db.metaDao()
 
     /**
@@ -56,6 +60,12 @@ class SyncEngine(
         var pulled = 0
         var copies = 0
         var parked = 0
+        // 0.5.3 (FIX/V), once: the feed again from the start, so records whose photo this device lost come back.
+        val cleanup = meta.get(KEY_CLEANUP) != CLEANUP_VERSION
+        if (cleanup && !first && meta.get(KEY_CLEANUP_PULLED) != CLEANUP_VERSION) {
+            library.prepareCleanup()
+            meta.delete(KEY_CURSOR)
+        }
         if (first) {
             val stats = pull(api, info, deviceName)
             pulled += stats.applied
@@ -64,6 +74,7 @@ class SyncEngine(
         }
         val (pushed, conflicts) = push(api, info)
         val stats = pull(api, info, deviceName)
+        if (cleanup) meta.put(MetaEntity(KEY_CLEANUP_PULLED, CLEANUP_VERSION))
         pulled += stats.applied
         copies += stats.copies
         val retried = store.retryInbox(deviceName)
@@ -72,8 +83,16 @@ class SyncEngine(
         parked = db.syncDao().inbox().size
         val nas = pullNas(api, info)
         val lookups = lookup(api, info)
+        var cleaned: CleanupReport? = null
+        if (cleanup) {
+            cleaned = library.cleanUp()
+            // Its tombstones go up now, not with the next change.
+            push(api, info)
+            meta.put(MetaEntity(KEY_CLEANUP, CLEANUP_VERSION))
+            meta.delete(KEY_CLEANUP_PULLED)
+        }
         meta.put(MetaEntity(KEY_LAST_SYNC, clock().toString()))
-        return SyncReport(pushed, conflicts, pulled, copies, parked, nas, lookups)
+        return SyncReport(pushed, conflicts, pulled, copies, parked, nas, lookups, cleaned)
     }
 
     // ------------------------------------------------------------------ push
@@ -187,13 +206,24 @@ class SyncEngine(
         var rounds = 0
         val before = clock() - RECHECK_MS
         while (rounds++ < MAX_PAGES) {
-            val candidates = db.syncDao().unchecked(before, limit)
+            val candidates = db.syncDao().unchecked(before, (limit / 2).coerceAtLeast(1))
             if (candidates.isEmpty()) break
-            val answer = api.lookup(candidates.map { it.fingerprint }.distinct())
-            val found = answer.found.associateBy { it.fingerprint }
-            for (candidate in candidates) store.lookedUp(candidate.photoId, found[candidate.fingerprint]?.source)
+            // A Server photo opens from any file of its shot (FIX/V): its other files are asked about too.
+            val others = db.syncDao().serverFilesOf(candidates.map { it.photoId }.distinct())
+            val asked = (candidates.map { it.fingerprint } + others.mapNotNull { it.fingerprint }).distinct()
+            val found = HashMap<String, String>()
+            for (part in asked.chunked(limit)) {
+                for (hit in api.lookup(part).found) found[hit.fingerprint] = hit.source
+            }
+            store.filesLookedUp(asked, found.keys)
+            val serverPhotos = others.groupBy { it.photoId }
+            for (candidate in candidates) {
+                val source = found[candidate.fingerprint]
+                    ?: serverPhotos[candidate.photoId]?.firstNotNullOfOrNull { file -> file.fingerprint?.let(found::get) }
+                store.lookedUp(candidate.photoId, source)
+            }
             count += candidates.size
-            if (candidates.size < limit) break
+            if (candidates.size < (limit / 2).coerceAtLeast(1)) break
         }
         return count
     }
@@ -203,7 +233,9 @@ class SyncEngine(
 
     /** Forgets the cursors (unpair, another server). */
     suspend fun resetCursors() {
-        for (key in listOf(KEY_CURSOR, KEY_NAS_CURSOR, KEY_TRACKING, KEY_LAST_SYNC)) meta.delete(key)
+        for (key in listOf(KEY_CURSOR, KEY_NAS_CURSOR, KEY_TRACKING, KEY_LAST_SYNC, KEY_CLEANUP, KEY_CLEANUP_PULLED)) {
+            meta.delete(key)
+        }
     }
 
     companion object {
@@ -212,6 +244,11 @@ class SyncEngine(
         const val KEY_NAS_CURSOR = "sync.nasCursor"
         const val KEY_TRACKING = "sync.tracking"
         const val KEY_LAST_SYNC = "sync.lastSync"
+
+        /** The one-off clean-up of 0.5.3 is done (its version), and its re-pull is done (a run cut short resumes). */
+        const val KEY_CLEANUP = "sync.cleanup"
+        const val KEY_CLEANUP_PULLED = "sync.cleanup.pulled"
+        const val CLEANUP_VERSION = "1"
         private const val DEFAULT_PUSH = 500
         private const val DEFAULT_PULL = 500
         private const val DEFAULT_LOOKUP = 1000

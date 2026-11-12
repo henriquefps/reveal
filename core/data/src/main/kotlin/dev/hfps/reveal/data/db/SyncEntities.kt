@@ -154,3 +154,16 @@ data class SyncInboxEntity(
     val rev: Long,
     val json: String,
 )
+
+/**
+ * An uploaded original the user deleted from the server (removing a folder with "Also delete from the server", or
+ * "Delete from server" in the Server scope, ADR 0018 "Deleting from the server"): `DELETE /v1/originals/{fingerprint}`
+ * after the photo's tombstone was pushed. Not tied to a photo row: the photo is gone from this device already.
+ */
+@Entity(tableName = "sync_deletes")
+data class SyncDeleteEntity(
+    @PrimaryKey val fingerprint: String,
+    @ColumnInfo(name = "created_at") val createdAt: Long,
+    /** `referenced` answers so far (a tombstone not pushed yet); given up after a few. */
+    val attempts: Int = 0,
+)

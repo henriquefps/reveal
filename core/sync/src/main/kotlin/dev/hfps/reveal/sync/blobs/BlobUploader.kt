@@ -198,6 +198,44 @@ class BlobUploader(
         return settled
     }
 
+    /**
+     * Deletes the originals the user deleted from the server (ADR 0018 "Deleting from the server"):
+     * `DELETE /v1/originals/{fingerprint}` once the photos' tombstones are pushed (the sync run calls this after its
+     * push). One a live record still names waits and is given up after a few tries (another device may have the photo
+     * and edited it since: its record keeps the original); a server before 0.5.3 keeps them queued. Returns how many
+     * left the queue.
+     */
+    suspend fun deleteOriginals(api: SyncApi, limit: Int = DROP_BATCH): Int {
+        var done = 0
+        for (queued in sync.pendingDeletes(limit)) {
+            currentCoroutineContext().ensureActive()
+            when (api.deleteOriginal(queued.fingerprint)) {
+                DropResult.DROPPED, DropResult.GONE, DropResult.REFUSED -> {
+                    sync.deleteQueued(queued.fingerprint)
+                    // Nothing here should think the server still has it.
+                    sync.setOnServer(queued.fingerprint, false)
+                    done++
+                }
+
+                DropResult.REFERENCED -> {
+                    val attempts = queued.attempts + 1
+                    if (attempts >= MAX_DROP_ATTEMPTS) {
+                        sync.deleteQueued(queued.fingerprint)
+                        done++
+                    } else {
+                        sync.updateDelete(queued.copy(attempts = attempts))
+                    }
+                }
+
+                DropResult.UNSUPPORTED -> {
+                    Log.i(TAG, "The server cannot delete originals yet: they wait for its update")
+                    break
+                }
+            }
+        }
+        return done
+    }
+
     private suspend fun queueDrop(photoId: Long, sha: String) {
         sync.insertUpload(
             SyncUploadEntity(
@@ -333,7 +371,7 @@ class BlobUploader(
                 sync.putCloud(cloud.copy(originalSha = sha))
             }
             val done = send(api, upload, blob, progress)
-            if (done) store.lookedUp(photo.id, SyncStore.SOURCE_BACKUP)
+            if (done) store.originalLanded(photo.id, main.fingerprint ?: queued.fingerprint.orEmpty())
             return done
         }
     }

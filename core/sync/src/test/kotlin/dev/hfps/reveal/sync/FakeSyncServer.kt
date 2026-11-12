@@ -182,6 +182,8 @@ class FakeSyncServer : Dispatcher() {
 
             path.startsWith("/v1/uploads/") -> upload(device, path.removePrefix("/v1/uploads/"), request)
 
+            path.startsWith("/v1/originals/") && method == "DELETE" -> deleteOriginal(url.pathSegments.last())
+
             path.startsWith("/v1/originals/") -> serve(request, original(url.pathSegments.last()))
 
             path.startsWith("/v1/blobs/") && method == "DELETE" -> drop(device, url.pathSegments.last())
@@ -209,6 +211,33 @@ class FakeSyncServer : Dispatcher() {
         blobs.remove(sha)
         blobKinds.remove(sha)
         blobOwners.remove(sha)
+        return MockResponse.Builder().code(204).build()
+    }
+
+    /** Answer `DELETE /v1/originals/{fp}` like a server before 0.5.3 (`405`). */
+    var deleteOriginalUnsupported = false
+
+    /** ADR 0017 "Deleting an original": an uploaded original no live photo record names. */
+    private fun deleteOriginal(fp: String): MockResponse {
+        if (deleteOriginalUnsupported) return error(405, "method_not_allowed")
+        val sha = originals[fp]
+        if (sha == null) {
+            return if (nasBytes.containsKey(fp)) {
+                error(403, "forbidden", buildJsonObject { put("reason", "nas") })
+            } else {
+                error(404, "not_found")
+            }
+        }
+        val named = records.values.any { r ->
+            r.kind == "photo" && !r.deleted && r.data?.toString()?.contains("\"$fp\"") == true
+        }
+        if (named) return error(409, "conflict", buildJsonObject { put("reason", "referenced") })
+        originals.remove(fp)
+        if (originals.values.none { it == sha }) {
+            blobs.remove(sha)
+            blobKinds.remove(sha)
+            blobOwners.remove(sha)
+        }
         return MockResponse.Builder().code(204).build()
     }
 
@@ -370,6 +399,8 @@ class FakeSyncServer : Dispatcher() {
         data: JsonElement?,
         current: Record?,
     ) {
+        val before = (current?.data as? JsonObject)?.get("preview")?.let { it as? JsonObject }
+            ?.get("sha256")?.jsonPrimitive?.content
         head++
         if (current == null) {
             records[kind to id] = Record(kind, id, head, deleted, at, device, copyOf, if (deleted) null else data)
@@ -382,6 +413,12 @@ class FakeSyncServer : Dispatcher() {
             // Re-insert so iteration follows the latest revision.
             records.remove(kind to id)
             records[kind to id] = current
+        }
+        // A photo tombstone releases the preview its record named, unless another live record names it (ADR 0017).
+        if (kind == "photo" && deleted && before != null && !previewNamed(before) && blobKinds[before] == "preview") {
+            blobs.remove(before)
+            blobKinds.remove(before)
+            blobOwners.remove(before)
         }
     }
 
@@ -561,6 +598,19 @@ class FakeSyncServer : Dispatcher() {
     }
 
     fun record(kind: String, id: String): Record? = records[kind to id]
+
+    /** Stores [bytes] as an uploaded original (as a device's backup would). */
+    @Synchronized
+    fun putOriginal(bytes: ByteArray, device: String = "test") {
+        val sha = MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
+        blobs[sha] = bytes
+        blobKinds[sha] = "original"
+        blobOwners[sha] = device
+        originals[dev.hfps.image.source.FileFingerprint.of(bytes)] = sha
+    }
+
+    /** True when the server holds an uploaded original of [fingerprint]. */
+    fun hasOriginal(fingerprint: String) = originals[fingerprint]?.let { blobs.containsKey(it) } == true
 
     fun copies(): List<Record> = records.values.filter { it.copyOf != null }
 

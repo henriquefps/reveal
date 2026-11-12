@@ -538,6 +538,13 @@ class LibraryRepository(
      * runs after every fingerprint pass, so rows printed before this existed are merged on the first walk too.
      */
     suspend fun mergeHandoffs(sourceId: Long): MergeReport = withContext(Dispatchers.IO) {
+        // A photo the sync server already describes (this folder added again, or added here after another device
+        // backed it up) becomes this folder's photo with its id, edits and ratings, never a second photo (FIX/V).
+        val server = merge.mergeServerPhotosInto(sourceId)
+        if (server.merged > 0) {
+            Log.i(TAG, "Merged ${server.merged} server photos into source $sourceId")
+            if (server.cullingChanged.isNotEmpty()) sidecars.write(server.cullingChanged)
+        }
         val report = merge.mergeInto(sourceId)
         if (report.merged > 0) {
             Log.i(TAG, "Merged ${report.merged} hand-off photos into source $sourceId")

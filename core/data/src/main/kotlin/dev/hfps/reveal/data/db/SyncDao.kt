@@ -178,8 +178,10 @@ interface SyncDao {
     @Query("SELECT * FROM sources WHERE kind = 'SERVER' LIMIT 1")
     suspend fun serverSource(): SourceEntity?
 
+    /** The photos the "Server" entry lists: only those that open (`PhotoQuerySql.SERVER_OPENABLE_SQL`). */
     @Query(
-        "SELECT COUNT(*) FROM photos WHERE hidden = 0 AND source_id IN (SELECT id FROM sources WHERE kind = 'SERVER')",
+        "SELECT COUNT(*) FROM photos p LEFT JOIN photo_cloud c ON c.photo_id = p.id WHERE p.hidden = 0 AND " +
+            "p.source_id IN (SELECT id FROM sources WHERE kind = 'SERVER') AND " + PhotoQuerySql.SERVER_OPENABLE_SQL,
     )
     fun observeServerPhotoCount(): Flow<Int>
 
@@ -293,6 +295,84 @@ interface SyncDao {
     )
     suspend fun backupCandidates(limit: Int): List<CloudCandidate>
 
+    /**
+     * The other files of the Server-source photos among [photoIds] (their main file is in the lookup already): a shot
+     * opens from any file the server holds (FIX/V).
+     */
+    @Query(
+        "SELECT f.* FROM photo_files f JOIN sources s ON s.id = f.source_id WHERE s.kind = 'SERVER' AND " +
+            "f.photo_id IN (:photoIds) AND f.fingerprint IS NOT NULL",
+    )
+    suspend fun serverFilesOf(photoIds: List<Long>): List<PhotoFileEntity>
+
+    /** What a lookup or the NAS feed said about one file (per file: a pair may have only its RAW on the server). */
+    @Query("UPDATE photo_files SET on_server = :onServer WHERE fingerprint = :fingerprint")
+    suspend fun setOnServer(fingerprint: String, onServer: Boolean)
+
+    /** True when the server can serve [fingerprint] as far as this device knows (a lookup or the NAS feed said so). */
+    @Query("SELECT COUNT(*) > 0 FROM photo_files WHERE fingerprint = :fingerprint AND on_server = 1")
+    suspend fun knownOnServer(fingerprint: String): Boolean
+
+    // ---- deleting from the server (FIX/V)
+
+    @Query("SELECT * FROM photos WHERE source_id = :sourceId")
+    suspend fun photosOfSource(sourceId: Long): List<PhotoEntity>
+
+    @Query("SELECT * FROM photos WHERE id IN (:ids)")
+    suspend fun photosById(ids: List<Long>): List<PhotoEntity>
+
+    @Query("SELECT COUNT(*) FROM photos WHERE source_id = :sourceId AND has_edit = 1")
+    suspend fun editedInSource(sourceId: Long): Int
+
+    @Update
+    suspend fun updatePhotoRow(photo: PhotoEntity)
+
+    @Update
+    suspend fun updateFileRows(files: List<PhotoFileEntity>)
+
+    @Query("DELETE FROM photo_files WHERE id IN (:ids)")
+    suspend fun deleteFileRows(ids: List<Long>)
+
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun queueDeletes(deletes: List<SyncDeleteEntity>)
+
+    @Query("SELECT * FROM sync_deletes ORDER BY created_at, fingerprint LIMIT :limit")
+    suspend fun pendingDeletes(limit: Int): List<SyncDeleteEntity>
+
+    @Update
+    suspend fun updateDelete(delete: SyncDeleteEntity)
+
+    @Query("DELETE FROM sync_deletes WHERE fingerprint = :fingerprint")
+    suspend fun deleteQueued(fingerprint: String)
+
+    @Query("DELETE FROM sync_deletes")
+    suspend fun clearDeletes()
+
+    /** Unpairing: nothing is known to be on a server any more. */
+    @Query("UPDATE photo_files SET on_server = 0 WHERE on_server = 1")
+    suspend fun clearOnServer()
+
+    /** Photos (any source) whose main file is [fingerprint]: duplicates when more than one, ordered oldest first. */
+    @Query(
+        "SELECT p.* FROM photos p JOIN photo_files f ON f.photo_id = p.id WHERE f.fingerprint = :fingerprint AND " +
+            "(f.role = 'RAW' OR NOT EXISTS (SELECT 1 FROM photo_files o WHERE o.photo_id = p.id AND " +
+            "o.role = 'RAW')) ORDER BY p.id",
+    )
+    suspend fun photosWithMainFile(fingerprint: String): List<PhotoEntity>
+
+    /** Main-file fingerprints that more than one Server-source photo has (the one-off clean-up, FIX/V). */
+    @Query(
+        "SELECT f.fingerprint FROM photo_files f JOIN photos p ON p.id = f.photo_id JOIN sources s ON " +
+            "s.id = p.source_id WHERE s.kind = 'SERVER' AND f.fingerprint IS NOT NULL AND (f.role = 'RAW' OR NOT " +
+            "EXISTS (SELECT 1 FROM photo_files o WHERE o.photo_id = p.id AND o.role = 'RAW')) " +
+            "GROUP BY f.fingerprint HAVING COUNT(DISTINCT p.id) > 1",
+    )
+    suspend fun duplicateServerFingerprints(): List<String>
+
+    /** Every photo record id this device holds a row for (live ones), for the one-off clean-up (FIX/V). */
+    @Query("SELECT record_id FROM sync_records WHERE kind = 'photo' AND deleted = 0 AND rev > 0")
+    suspend fun livePhotoRecordIds(): List<String>
+
     // ---- uploads
 
     @Insert
@@ -345,4 +425,8 @@ interface SyncDao {
 
     @Query("DELETE FROM sync_inbox")
     suspend fun clearInbox()
+
+    /** The pending uploads of [photoId] (a photo moved to the Server source cannot send them any more). */
+    @Query("DELETE FROM sync_uploads WHERE photo_id = :photoId AND state = 'pending' AND kind != 'drop_preview'")
+    suspend fun cancelUploads(photoId: Long)
 }

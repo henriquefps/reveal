@@ -7,7 +7,20 @@ import dev.hfps.reveal.data.db.PhotoQuerySql
 import dev.hfps.reveal.data.model.LibraryScope
 import dev.hfps.reveal.data.model.PhotoQuery
 import dev.hfps.reveal.data.model.PickFlag
+import dev.hfps.reveal.data.preset.GroupKind
+import dev.hfps.reveal.data.preset.ImportResult
+import dev.hfps.reveal.data.preset.PresetOrigin
+import dev.hfps.reveal.pipeline.preset.PackGroup
+import dev.hfps.reveal.pipeline.preset.Preset
+import dev.hfps.reveal.pipeline.preset.PresetPack
+import dev.hfps.reveal.pipeline.preset.PresetPacks
+import dev.hfps.reveal.pipeline.preset.PresetPatch
+import dev.hfps.reveal.pipeline.preset.PresetSection
+import dev.hfps.reveal.pipeline.recipe.Colour
+import dev.hfps.reveal.pipeline.recipe.Light
+import dev.hfps.reveal.pipeline.recipe.Recipe
 import dev.hfps.reveal.sync.api.SyncApi
+import kotlinx.coroutines.flow.first
 import dev.hfps.reveal.sync.engine.AuthorshipData
 import dev.hfps.reveal.sync.engine.SyncedSetting
 import kotlin.random.Random
@@ -281,5 +294,72 @@ class SyncEngineTest {
             runBlocking { tablet.db.photoDao().rows(PhotoQuerySql.toQuery(PhotoQuery(scope = LibraryScope.Server))) }
         assertThat(rows).hasSize(1000)
         assertThat(rows.count { it.hasEdit }).isEqualTo(900)
+    }
+
+    @Test
+    fun `presets follow the owner with their group and favourite, renames and deletes too`() {
+        val phone = device("Phone")
+        val tablet = device("Tablet")
+        val patch = PresetPatch.fromSections(
+            Recipe(light = Light(contrast = 30f)),
+            listOf(PresetSection.CONTRAST),
+        )
+        val uuid = runBlocking {
+            val group = phone.presets.createGroup("Travel")
+            phone.presets.create("Crisp", patch, group).also { phone.presets.setFavourite(it, true) }
+        }
+        phone.sync()
+        tablet.sync()
+        val onTablet = runBlocking { tablet.presets.library().first() }
+        val synced = onTablet[uuid]!!
+        assertThat(synced.preset.patch).isEqualTo(patch)
+        assertThat(synced.favourite).isTrue()
+        assertThat(onTablet.groups.single { it.uuid == synced.groupUuid }.name).isEqualTo("Travel")
+        assertThat(tablet.pending()).isEqualTo(0)
+
+        tablet.now += 1000
+        runBlocking { tablet.presets.rename(uuid, "Crisp travel") }
+        tablet.sync()
+        phone.sync()
+        assertThat(runBlocking { phone.presets.library().first() }[uuid]!!.name).isEqualTo("Crisp travel")
+
+        phone.now += 2000
+        runBlocking { phone.presets.delete(uuid) }
+        phone.sync()
+        tablet.sync()
+        val after = runBlocking { tablet.presets.library().first() }
+        assertThat(after[uuid]).isNull()
+        assertThat(after.groups.none { it.name == "Travel" }).isTrue()
+        assertThat(server.record("preset", uuid)!!.deleted).isTrue()
+    }
+
+    @Test
+    fun `a pack on trial stays on the device until it is kept`() {
+        val phone = device("Phone")
+        val tablet = device("Tablet")
+        val group = PackGroup("1c9e5b2a-0d3f-4a7b-9c8d-2e1f0a9b8c7d", "Golden")
+        val preset = Preset(
+            "2b3c4d5e-6f70-4182-9a3b-4c5d6e7f8091",
+            "Warm",
+            PresetPatch.fromSections(Recipe(colour = Colour(vibrance = 20f)), listOf(PresetSection.VIBRANCE)),
+            group = group.name,
+        )
+        val pack = PresetPack(
+            id = "6a5b4c3d-2e1f-4a0b-8c9d-0e1f2a3b4c5d", name = "Pack", author = "Ana Example", version = 1,
+            licenceName = "Personal use", licenceText = "Yours.", link = null, groups = listOf(group),
+            presets = listOf(preset), groupOf = mapOf(preset.id to group.id), cover = null,
+        )
+        val bytes = java.io.ByteArrayOutputStream().also { PresetPacks.write(pack, it) }.toByteArray()
+        val added = runBlocking { phone.presets.importPack(java.io.ByteArrayInputStream(bytes)) } as ImportResult.PackAdded
+        phone.sync()
+        assertThat(server.record("preset", preset.id)).isNull()
+        runBlocking { phone.presets.keepPack(added.packRowId) }
+        phone.sync()
+        tablet.sync()
+        val onTablet = runBlocking { tablet.presets.library().first() }
+        val group2 = onTablet.groups.single { it.kind == GroupKind.PACK }
+        assertThat(group2.pack!!.name).isEqualTo("Pack")
+        assertThat(group2.pack!!.trial).isFalse()
+        assertThat(group2.presets.single().origin).isEqualTo(PresetOrigin.PACK)
     }
 }

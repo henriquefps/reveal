@@ -78,6 +78,13 @@ interface SyncDao {
     )
     suspend fun markAllVersions(now: Long)
 
+    /** Every preset of the library (packs on trial too: the push skips those until they are kept). */
+    @Query(
+        "INSERT OR REPLACE INTO sync_records (kind, record_id, rev, dirty, modified_at, deleted) " +
+            "SELECT 'preset', uuid, 0, 1, :now, 0 FROM presets",
+    )
+    suspend fun markAllPresets(now: Long)
+
     @Query("SELECT COUNT(*) FROM sync_records WHERE dirty = 1")
     fun observePending(): Flow<Int>
 

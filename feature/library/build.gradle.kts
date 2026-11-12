@@ -1,5 +1,6 @@
 plugins {
     id("reveal.android.feature")
+    id("org.jetbrains.kotlin.plugin.serialization")
 }
 
 android {
@@ -13,4 +14,6 @@ dependencies {
     implementation(projects.core.data)
     implementation(projects.core.sync)
     implementation(projects.feature.export)
+    implementation(libs.androidx.work.runtime.ktx)
+    implementation(libs.kotlinx.serialization.json)
 }

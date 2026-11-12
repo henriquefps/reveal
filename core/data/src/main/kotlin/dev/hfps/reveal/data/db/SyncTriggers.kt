@@ -81,6 +81,8 @@ object SyncTriggers {
             "AFTER UPDATE OF name, position ON preset_groups",
             markPresets("group_id = NEW.id"),
         ),
+        Triple("preset_mark_insert", "AFTER INSERT ON preset_marks", markPresets("uuid = NEW.uuid")),
+        Triple("preset_mark_update", "AFTER UPDATE OF favourite ON preset_marks", markPresets("uuid = NEW.uuid")),
         Triple(
             "preset_pack_update",
             "AFTER UPDATE OF trial ON preset_packs",

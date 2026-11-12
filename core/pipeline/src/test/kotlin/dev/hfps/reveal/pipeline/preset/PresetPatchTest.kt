@@ -165,4 +165,19 @@ class PresetPatchTest {
         assertThat(applied.colour.whiteBalance.temperatureK).isNull()
         assertThat(applied.colour.whiteBalance.mode).isEqualTo(WbMode.AS_SHOT)
     }
+
+    @Test
+    fun `the chooser suggests the changed style sections, not the photo-specific ones`() {
+        assertThat(PresetSection.changedIn(Recipe.DEFAULT)).isEmpty()
+        val changed = PresetSection.changedIn(edit)
+        assertThat(changed).containsAtLeast(
+            PresetSection.PROFILE, PresetSection.EXPOSURE, PresetSection.CONTRAST, PresetSection.TONE_CURVE,
+            PresetSection.WHITE_BALANCE, PresetSection.COLOUR_MIXER, PresetSection.LENS_CORRECTIONS,
+        )
+        val suggested = PresetSection.suggestedFor(edit)
+        assertThat(suggested).containsNoneOf(
+            PresetSection.EXPOSURE, PresetSection.WHITE_BALANCE, PresetSection.LENS_CORRECTIONS,
+        )
+        assertThat(suggested).contains(PresetSection.CONTRAST)
+    }
 }

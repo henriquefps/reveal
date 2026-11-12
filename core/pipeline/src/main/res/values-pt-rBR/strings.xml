@@ -82,6 +82,7 @@
     <string name="history_action_previous">Edição anterior</string>
     <string name="history_action_auto">Automático</string>
     <string name="history_action_preset">Predefinição</string>
+    <string name="history_action_preset_named">Predefinição: %1$s</string>
     <string name="history_original">Original</string>
     <!-- A step that changed several fields: the first label and how many more. -->
     <plurals name="history_and_more">

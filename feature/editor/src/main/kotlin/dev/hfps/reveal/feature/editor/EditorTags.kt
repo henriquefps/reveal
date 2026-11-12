@@ -14,6 +14,28 @@ import dev.hfps.reveal.pipeline.recipe.WbMode
 /** Test tags of the editor, for instrumented and screenshot tests (locale-independent). */
 object EditorTags {
     const val CANVAS = "editor-canvas"
+
+    // Presets (docs/adr/0019)
+    const val PRESET_GRID = "editor-preset-grid"
+    const val PRESET_STRENGTH = "editor-preset-strength"
+    const val PRESET_CREATE = "editor-preset-create"
+    const val PRESET_MENU = "editor-preset-menu"
+    const val PRESET_EMPTY = "editor-preset-empty"
+    const val PRESET_NAME = "editor-preset-name"
+    const val PRESET_NEW_GROUP = "editor-preset-new-group"
+    const val PRESET_IMPORT = "editor-preset-import"
+    const val PRESET_KEEP_PACK = "editor-preset-keep-pack"
+    const val PRESET_REMOVE_PACK = "editor-preset-remove-pack"
+    const val PRESET_SECTIONS = "editor-preset-section"
+
+    /** A preset cell by the preset's id. */
+    fun preset(uuid: String): String = "editor-preset-$uuid"
+
+    /** A presets chip: a group's uuid, `favourites` or `recent`. */
+    fun presetChip(key: String): String = "editor-preset-chip-$key"
+
+    /** A row of a preset's or group's options sheet ("rename", "delete", "favourite", …). */
+    fun presetOption(name: String): String = "editor-preset-option-$name"
     const val PREVIEW = "editor-preview"
     const val LOADING = "editor-loading"
     const val DEVELOPED = "editor-developed"

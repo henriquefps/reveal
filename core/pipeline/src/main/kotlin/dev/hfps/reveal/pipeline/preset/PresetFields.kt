@@ -90,6 +90,17 @@ enum class PresetSection(val prefixes: List<String>) {
 
         /** The section of [path] (every [PresetField] has one). */
         fun of(path: String): PresetSection = entries.first { it.owns(path) }
+
+        /** The sections in which [recipe] differs from the default recipe (what an edit changed). */
+        fun changedIn(recipe: Recipe): Set<PresetSection> {
+            val json = JsonObjectParser.parse(RecipeCodec.Default.encode(recipe))
+            return PresetFields.all.filter { field ->
+                JsonTree.get(json, field.segments) != JsonTree.get(PresetFields.defaultJson, field.segments)
+            }.mapTo(LinkedHashSet()) { it.section }
+        }
+
+        /** What "Create preset" offers ticked for [recipe]: the changed sections that describe a style. */
+        fun suggestedFor(recipe: Recipe): Set<PresetSection> = changedIn(recipe) - PHOTO_SPECIFIC
     }
 }
 

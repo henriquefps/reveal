@@ -1,5 +1,7 @@
 package dev.hfps.reveal.feature.library
 
+import dev.hfps.reveal.feature.library.presets.ApplyPresetSheet
+import androidx.compose.ui.platform.LocalContext
 import android.net.Uri
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.PredictiveBackHandler
@@ -114,6 +116,9 @@ fun LibraryScreen(
     LibraryMessages(viewModel.events, snackbar)
     val thumbnails = remember(viewModel) { RepositoryThumbnails(viewModel.thumbnails) }
     var exportRequest by remember { mutableStateOf<ExportRequest?>(null) }
+    var choosingPreset by remember { mutableStateOf(false) }
+    val presetLibrary by viewModel.presetLibrary.collectAsStateWithLifecycle()
+    val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val actions = remember(viewModel) {
         LibraryActions(
@@ -142,12 +147,24 @@ fun LibraryScreen(
                     if (versions.isNotEmpty()) exportRequest = ExportRequest.Versions(versions)
                 }
             },
+            onApplyPreset = { choosingPreset = true },
             onSettings = onSettings,
             onGallery = onGallery,
             onAbout = onAbout,
         )
     }
     ExportSheetHost(request = exportRequest, onDismiss = { exportRequest = null })
+    if (choosingPreset) {
+        ApplyPresetSheet(
+            library = presetLibrary,
+            count = state.selected.size,
+            onApply = { uuid, strength ->
+                choosingPreset = false
+                viewModel.applyPreset(context, uuid, strength)
+            },
+            onDismiss = { choosingPreset = false },
+        )
+    }
     BackHandler(enabled = state.selecting) { viewModel.setSelected(emptySet()) }
     BackHandler(enabled = !state.selecting && state.searchOpen) { viewModel.setSearchOpen(false) }
     BoxWithConstraints(modifier) {
@@ -208,6 +225,13 @@ private fun LibraryMessages(events: Flow<LibraryMessage>, snackbar: SnackbarHost
                 is LibraryMessage.Reset -> resources.getQuantityString(
                     R.plurals.library_edits_reset,
                     message.count,
+                    message.count,
+                )
+
+                is LibraryMessage.PresetQueued -> resources.getQuantityString(
+                    R.plurals.presets_batch_queued,
+                    message.count,
+                    message.name,
                     message.count,
                 )
 

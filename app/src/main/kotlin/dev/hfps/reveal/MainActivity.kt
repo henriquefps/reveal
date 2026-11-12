@@ -25,6 +25,10 @@ import dev.hfps.reveal.data.handoff.HandoffRepository
 import dev.hfps.reveal.data.model.LibraryScope
 import dev.hfps.reveal.data.model.PhotoListCodec
 import dev.hfps.reveal.data.model.PhotoQuery
+import dev.hfps.reveal.data.preset.PresetFilesIo
+import dev.hfps.reveal.data.preset.PresetIntents
+import dev.hfps.reveal.data.preset.PresetRepository
+import dev.hfps.reveal.feature.editor.presets.PresetMessages
 import dev.hfps.reveal.designsystem.theme.RevealTheme
 import dev.hfps.reveal.designsystem.theme.isDark
 import dev.hfps.reveal.feature.editor.EditorRoute
@@ -45,6 +49,9 @@ class MainActivity : ComponentActivity() {
 
     @Inject
     lateinit var handoffs: HandoffRepository
+
+    @Inject
+    lateinit var presets: PresetRepository
 
     /** What the last hand-off from another app (ADR 0011) resolved to, until navigated to. */
     private val openRequest = MutableStateFlow<HandoffOutcome?>(null)
@@ -151,6 +158,16 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun handleIntent(intent: Intent?) {
+        // A preset or pack file (docs/adr/0019): imported into the library, never a photo hand-off.
+        PresetIntents.presetFile(intent, contentResolver)?.let { uri ->
+            lifecycleScope.launch {
+                val event = PresetFilesIo(contentResolver, presets).import(uri)
+                PresetMessages.text(this@MainActivity, event)?.let {
+                    Toast.makeText(this@MainActivity, it, Toast.LENGTH_LONG).show()
+                }
+            }
+            return
+        }
         val request = HandoffIntents.parse(intent) ?: return
         lifecycleScope.launch {
             val outcome = handoffs.receive(request)

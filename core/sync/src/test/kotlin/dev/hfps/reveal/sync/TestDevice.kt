@@ -10,6 +10,7 @@ import dev.hfps.reveal.data.db.RevealDatabase
 import dev.hfps.reveal.data.db.SourceEntity
 import dev.hfps.reveal.data.db.VersionEntity
 import dev.hfps.reveal.data.edit.EditRepository
+import dev.hfps.reveal.data.preset.PresetRepository
 import dev.hfps.reveal.data.model.FileRole
 import dev.hfps.reveal.data.model.PhotoFormat
 import dev.hfps.reveal.data.model.SourceState
@@ -37,6 +38,10 @@ class TestDevice(
     val store = SyncStore(db, settings) { now }
     val engine = SyncEngine(db, store) { now }
     val edits = EditRepository(db) { now }
+    val presets = PresetRepository(
+        db,
+        java.io.File(System.getProperty("java.io.tmpdir"), "reveal-covers-$name-${System.nanoTime()}"),
+    ) { now }
     val api = SyncApi(url, key)
     private val folder: Long = runBlocking {
         db.sourceDao().insert(

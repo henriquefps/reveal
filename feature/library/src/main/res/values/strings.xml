@@ -92,7 +92,6 @@
     <string name="library_action_paste_edits">Paste edits</string>
     <string name="library_action_preset">Apply preset</string>
     <string name="library_action_export">Export</string>
-    <string name="library_action_coming">Coming soon</string>
     <string name="library_rating_none">No stars</string>
     <string name="library_saved_database_only">Saved in Reveal only: the folder is read-only, so no XMP sidecar was written.</string>
     <plurals name="library_removed">
@@ -170,4 +169,31 @@
     <string name="library_cloud_only">Original only on the server</string>
     <string name="library_cloud_preview">Smart preview only: the original is on another device</string>
     <string name="library_action_delete_conflicts">Delete conflict copies</string>
+
+    <!-- Presets on the selection (docs/adr/0019 "Batch") -->
+    <string name="presets_batch_title">Apply a preset</string>
+    <string name="presets_batch_strength">Strength</string>
+    <string name="presets_batch_apply">Apply</string>
+    <string name="presets_batch_cancel">Cancel</string>
+    <string name="presets_batch_empty">No presets yet: create one in the editor’s Presets panel, or import a file there.</string>
+    <string name="presets_batch_channel">Presets</string>
+    <string name="presets_batch_progress">%1$s: %2$d of %3$d photos</string>
+    <string name="presets_batch_default_group">My presets</string>
+    <string name="presets_batch_favourites">Favourites</string>
+    <plurals name="presets_batch_for">
+        <item quantity="one">On %d photo, one undoable step on it</item>
+        <item quantity="other">On %d photos, one undoable step on each</item>
+    </plurals>
+    <plurals name="presets_batch_queued">
+        <item quantity="one">Applying %1$s to %2$d photo…</item>
+        <item quantity="other">Applying %1$s to %2$d photos…</item>
+    </plurals>
+    <plurals name="presets_batch_done">
+        <item quantity="one">%1$s applied to %2$d photo</item>
+        <item quantity="other">%1$s applied to %2$d photos</item>
+    </plurals>
+    <plurals name="presets_batch_cancelled">
+        <item quantity="one">Stopped: %1$s applied to %2$d photo</item>
+        <item quantity="other">Stopped: %1$s applied to %2$d photos</item>
+    </plurals>
 </resources>

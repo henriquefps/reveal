@@ -87,3 +87,4 @@ qr-code
 link-simple
 hard-drives
 git-branch
+package

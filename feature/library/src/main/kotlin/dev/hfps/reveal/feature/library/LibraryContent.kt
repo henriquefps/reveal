@@ -434,13 +434,13 @@ private fun SelectionOverflow(state: LibraryUiState, actions: LibraryActions, wi
                     actions.onResetEdits()
                 }
             }
-            // Placeholder until its workstream lands (presets).
-            val coming = stringResource(R.string.library_action_coming)
-            MenuItem(
-                PhosphorRegular.Sparkle,
-                "${stringResource(R.string.library_action_preset)} · $coming",
-                enabled = false,
+            TaggedMenuItem(
+                PhosphorRegular.SquaresFour,
+                stringResource(R.string.library_action_preset),
+                LibraryTags.APPLY_PRESET,
             ) {
+                open = false
+                actions.onApplyPreset()
             }
             if (!wide) {
                 TaggedMenuItem(

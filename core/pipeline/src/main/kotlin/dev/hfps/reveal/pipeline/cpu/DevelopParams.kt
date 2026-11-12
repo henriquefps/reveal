@@ -71,7 +71,7 @@ class DevelopParams(
      */
     fun withoutDetail(): DevelopParams = DevelopParams(
         wbMultipliers, cameraToWorking, exposureGain, profile, highlights, tone, colour, curve, tools,
-        vignette = vignette, defringe = defringe, masks = masks,
+        vignette = vignette, defringe = defringe, masks = masks.withoutDetail(),
     )
 
     /** The same parameters without masks: what the masks' pre-local image depends on (docs/adr/0022). */

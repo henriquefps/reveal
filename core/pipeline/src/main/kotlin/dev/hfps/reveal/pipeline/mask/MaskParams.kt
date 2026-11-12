@@ -31,6 +31,19 @@ class MaskParams(
     /** True when [need] (a `NEED_` bit) is set. */
     fun needs(need: Int): Boolean = needs and need != 0
 
+    /**
+     * These parameters without what slots 11 and 12 read (texture, clarity, dehaze, sharpness, noise): what the develop
+     * pass depends on, so a drag of those keeps the develop output (as a global Detail or Effects drag does).
+     */
+    fun withoutDetail(): MaskParams {
+        if (!active) return this
+        val a = adjust.copyOf()
+        for (m in masks.indices) for (v in DETAIL_VECTOR) a[m * VECTOR + v] = 0f
+        val g = global.copyOf()
+        for (i in DETAIL_GLOBALS) g[i] = 0f
+        return MaskParams(masks, a, g, needs and DETAIL_NEEDS.inv())
+    }
+
     /** True when a mask's shape reads the image before local adjustments (a colour or luminance range). */
     val needsPre: Boolean get() = masks.any { MaskPlan.readsPre(it) }
 
@@ -95,6 +108,10 @@ class MaskParams(
         const val NEED_DEHAZE = 128
         const val NEED_SHARPEN = 256
         const val NEED_NOISE = 512
+
+        private val DETAIL_VECTOR = intArrayOf(V_TEXTURE, V_CLARITY, V_DEHAZE, V_SHARPNESS, V_NOISE)
+        private val DETAIL_GLOBALS = intArrayOf(G_TEXTURE, G_CLARITY, G_DEHAZE, G_SHARPEN, G_NOISE)
+        private const val DETAIL_NEEDS = NEED_TEXTURE or NEED_CLARITY or NEED_DEHAZE or NEED_SHARPEN or NEED_NOISE
 
         /** No mask renders. */
         val NONE: MaskParams = MaskParams(emptyList(), FloatArray(0), FloatArray(GLOBALS), 0)

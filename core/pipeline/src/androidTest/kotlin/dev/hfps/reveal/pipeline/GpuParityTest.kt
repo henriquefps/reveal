@@ -247,6 +247,64 @@ class GpuParityTest {
         assertThat(dehazeSum / dehazeCount).isAtMost(DETAIL_MEAN)
     }
 
+    /**
+     * Masks (docs/adr/0022): every component type and every local adjustment (MaskFixtures) on four images, the linear
+     * stage within ADR 0002's tolerances (Detail's where a mask reaches slots 11-12, the colour tolerance where it
+     * changes colour), and the 8-bit output within the Detail limits.
+     */
+    @Test
+    fun masksMatchCpuReference() = runBlocking {
+        renderer.setMaskSource(MaskFixtures.source, "fixture")
+        val failures = mutableListOf<String>()
+        var worstRatio = 0f
+        for (name in listOf("scene", "checker", "stepEdge", "hueSweep")) {
+            val image = images.getValue(name)
+            renderer.setInput(image)
+            for ((label, recipe) in MaskFixtures.recipes) {
+                val cpu = CpuDevelop.renderLinear(image, recipe, masks = MaskFixtures.context)
+                val gpu = renderer.renderLinear(recipe)
+                val local = recipe.masks.map { it.adjustments }
+                val detail = recipe.hasDetail() || local.any {
+                    it.texture != 0f || it.clarity != 0f || it.dehaze != 0f || it.sharpness != 0f || it.noise != 0f
+                }
+                val dehaze = if (local.any { it.dehaze > 0f }) 1f / EffectsParams.DEHAZE_T0 else 1f
+                var worst = 0f
+                var where = ""
+                for (p in 0 until image.width * image.height) {
+                    val scale = maxOf(abs(cpu[p * 3]), abs(cpu[p * 3 + 1]), abs(cpu[p * 3 + 2]))
+                    for (c in 0 until 3) {
+                        val error = abs(gpu[p * 3 + c] - cpu[p * 3 + c])
+                        val allowed = if (detail) {
+                            (DETAIL_ABS + DETAIL_REL * scale) * dehaze
+                        } else {
+                            LIGHT_ABS + COLOUR_LIGHT_REL * scale
+                        }
+                        if (error / allowed > worst) {
+                            worst = error / allowed
+                            where = "pixel (${p % image.width}, ${p / image.width}) channel $c: " +
+                                "cpu ${cpu[p * 3 + c]} gpu ${gpu[p * 3 + c]}"
+                        }
+                    }
+                }
+                Log.i(TAG, "masks $name / $label: worst error / tolerance $worst at $where")
+                worstRatio = maxOf(worstRatio, worst)
+                if (worst > 1f) failures += "$name / $label"
+                val out = maxDiff8(CpuDevelop.render(image, recipe, masks = MaskFixtures.context), renderer.renderOutput(recipe))
+                Log.i(TAG, "masks $name / $label: 8-bit max diff $out")
+                val limit = if (name == "hueSweep") OUTPUT_MAX_LEVELS_NOISE_TONE else OUTPUT_MAX_LEVELS_DETAIL
+                if (out > kotlin.math.ceil(limit * dehaze)) failures += "$name / $label (8-bit $out)"
+            }
+        }
+        Log.i(TAG, "masks: worst error / tolerance $worstRatio")
+        assertThat(failures).isEmpty()
+    }
+
+    private fun maxDiff8(a: ByteArray, b: ByteArray): Int {
+        var worst = 0
+        for (i in a.indices) if (i % 4 != 3) worst = maxOf(worst, abs((a[i].toInt() and 0xff) - (b[i].toInt() and 0xff)))
+        return worst
+    }
+
     @Suppress("CyclomaticComplexMethod")
     @Test
     fun outputMatchesCpuReferenceIn8Bit() = runBlocking {

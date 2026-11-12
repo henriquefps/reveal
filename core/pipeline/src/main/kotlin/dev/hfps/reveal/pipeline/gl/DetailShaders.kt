@@ -77,11 +77,31 @@ float smoothV(ivec2 p) {
 }
 """
 
-    /** The shrinkage of one level's detail, accumulated (`DetailOp.lumLevel`, the end of the second loop). */
-    private const val SHRINK = """
+    /**
+     * The shrinkage of one level's detail, accumulated (`DetailOp.lumLevel`, the end of the second loop), and the masks'
+     * per-pixel thresholds (docs/adr/0022): `noiseScale` gives the pixel's `(N/100)^1.5` when a mask sets its total
+     * luminance amount (-1 = the global thresholds) and whether that total is 0 (the pixel keeps its input lightness).
+     */
+    private val SHRINK = MaskShaders.MASKS + MaskShaders.TOTALS + """
+uniform int uLocal;        // 1 = masks change the luminance noise reduction somewhere
 float shrinkAdd(float acc, float d, float tau) {
-    float keep = d * d / (d * d + tau * tau);
+    float keep = d * d / max(d * d + tau * tau, ${ColourShaders.glslFloat(dev.hfps.reveal.pipeline.cpu.DetailOp.KEEP_FLOOR)});
     return q16(acc + d * keep * keep);
+}
+
+float noiseScale(ivec2 p, out bool none) {
+    none = false;
+    if (uLocal == 0) {
+        return -1.0;
+    }
+    vec4 s[5];
+    if (localSum(p, s) && s[3].z != 0.0) {
+        float total = clamp(maskGlobal[2].y + s[3].z, 0.0, 100.0);
+        none = total == 0.0;
+        return totalNoiseScale(total);
+    }
+    none = maskGlobal[2].y == 0.0;
+    return -1.0;
 }
 """
 
@@ -91,18 +111,27 @@ float shrinkAdd(float acc, float d, float tau) {
      * accumulator is 0), writes `(L_i+1, acc)` (RG16F). Tiles and exports; the preview splits it into [LUM_V_CHAIN_FRAG]
      * and [SHRINK_FRAG].
      */
-    const val LUM_V_FRAG: String = HEADER + LUM_V_SMOOTH + SHRINK + """
+    val LUM_V_FRAG: String = HEADER + LUM_V_SMOOTH + SHRINK + """
 uniform sampler2D uPrev;
+uniform sampler2D uLab;    // the OkLab input (masks: a pixel without noise reduction writes its L_0)
 uniform float uTau;
+uniform float uTauUnit;    // the level's threshold at amount 100 (DetailParams.lumUnit), for the masks
 uniform int uFirst;        // 1 = uPrev is the OkLab input (no accumulator yet)
+uniform int uLast;         // 1 = the last level
 
 void main() {
     ivec2 p = ivec2(gl_FragCoord.xy);
     vec4 prev = texelFetch(uPrev, p, 0);
     float acc = uFirst == 1 ? 0.0 : prev.y;
+    bool none;
+    float scale = noiseScale(p, none);
+    float tau = scale >= 0.0 ? uTauUnit * scale : uTau;
     // The detail against the stored smooth value: the levels telescope exactly (docs/adr/0012).
     float l1 = smoothV(p);
-    outColor = vec4(l1, shrinkAdd(acc, prev.x - l1, uTau), 0.0, 1.0);
+    outColor = vec4(l1, shrinkAdd(acc, prev.x - l1, tau), 0.0, 1.0);
+    if (uLast == 1 && none) {
+        outColor = vec4(texelFetch(uLab, p, 0).x, 0.0, 0.0, 1.0);
+    }
 }
 """
 
@@ -123,29 +152,33 @@ void main() {
      * value for value): [uSrc] is the OkLab input (`L_0`), [uChain0] holds `L_1 .. L_4` of the levels that run,
      * [uChain1] `L_5`; writes `(L_n, acc)` (RG16F).
      */
-    const val SHRINK_FRAG: String = HEADER + SHRINK + """
+    val SHRINK_FRAG: String = HEADER + SHRINK + """
 uniform sampler2D uChain0;
 uniform sampler2D uChain1;
 uniform int uLevels;
 uniform float uTau[5];
+uniform float uTauUnit[5];
 
 void main() {
     ivec2 p = ivec2(gl_FragCoord.xy);
-    float prev = texelFetch(uSrc, p, 0).x;
+    float l0 = texelFetch(uSrc, p, 0).x;
+    float prev = l0;
+    bool none;
+    float scale = noiseScale(p, none);
     vec4 c0 = texelFetch(uChain0, p, 0);
     float acc = 0.0;
     for (int i = 0; i < 4; i++) {
         if (i >= uLevels) break;
         float l1 = c0[i];
-        acc = shrinkAdd(acc, prev - l1, uTau[i]);
+        acc = shrinkAdd(acc, prev - l1, scale >= 0.0 ? uTauUnit[i] * scale : uTau[i]);
         prev = l1;
     }
     if (uLevels > 4) {
         float l1 = texelFetch(uChain1, p, 0).x;
-        acc = shrinkAdd(acc, prev - l1, uTau[4]);
+        acc = shrinkAdd(acc, prev - l1, scale >= 0.0 ? uTauUnit[4] * scale : uTau[4]);
         prev = l1;
     }
-    outColor = vec4(prev, acc, 0.0, 1.0);
+    outColor = none ? vec4(l0, 0.0, 0.0, 1.0) : vec4(prev, acc, 0.0, 1.0);
 }
 """
 
@@ -255,13 +288,17 @@ void main() {
     /** Writes the mean of each 2 x 2 block (the working texture's level 1) at half resolution. */
     const val FLAG_HALF: Int = 128
 
+    /** Masks render: per-pixel totals of sharpening, texture, clarity and dehaze (docs/adr/0022). */
+    const val FLAG_LOCAL: Int = 256
+
     /**
      * The final pass (`DetailOp.render`'s pixel loop): sharpening (high-pass shaping, edge mask), texture, clarity, the
      * colour from the half-resolution path, back to linear Rec.2020, dehaze; with the mask flag the sharpening mask as
      * grey (the masking overlay). With [FLAG_HALF] it writes the 2 x 2 means at half resolution (the preview's views at
      * 50 % or less read nothing finer: docs/adr/0012, "M2/P").
      */
-    private val FINAL_FRAG: String = HEADER + ColourShaders.OKLAB + EffectsShaders.APPLY + """
+    private val FINAL_FRAG: String = HEADER + ColourShaders.OKLAB + EffectsShaders.APPLY + MaskShaders.MASKS +
+        MaskShaders.TOTALS + """
 uniform sampler2D uLum;        // (L, acc) of the last luminance level
 uniform sampler2D uBlur;       // (G_sharpen, G_texture)
 uniform sampler2D uHalfS;      // colour levels' result, half resolution (L, a, b)
@@ -341,6 +378,35 @@ vec3 finalAt(ivec2 p, vec2 sUp, vec2 dUp) {
     bool showMask = (uFlags & $FLAG_SHOW_MASK) != 0;
     bool blurred = (uFlags & ($FLAG_SHARPEN | $FLAG_SHOW_MASK | $FLAG_TEXTURE)) != 0;
     vec2 g = blurred ? texelFetch(uBlur, p, 0).xy : vec2(0.0);
+    // Masks (docs/adr/0022, LocalDevelop.detail): this pixel's totals, the global constants where no mask covers it.
+    bool local = (uFlags & $FLAG_LOCAL) != 0;
+    float sharpenGain = uSharp.x;
+    float soften = 0.0;
+    float textureGain = uTexture.x;
+    float clarityGain = uEffects.x;
+    float omega = uEffects.y;
+    float beta = uEffects.z;
+    if (local) {
+        vec4 s[5];
+        if (localSum(p, s)) {
+            if (s[3].y != 0.0) {
+                float total = maskGlobal[2].x + s[3].y;
+                sharpenGain = totalSharpenGain(total, maskGlobal[2].z);
+                soften = totalSoften(total);
+            }
+            if (s[2].x != 0.0) {
+                textureGain = totalTextureGain(maskGlobal[1].y + s[2].x, maskGlobal[2].w);
+            }
+            if (s[2].y != 0.0) {
+                clarityGain = totalUnit(maskGlobal[1].z + s[2].y) * ${ColourShaders.glslFloat(dev.hfps.reveal.pipeline.cpu.EffectsParams.CLARITY_GAIN)};
+            }
+            if (s[2].z != 0.0) {
+                float u = totalUnit(maskGlobal[1].w + s[2].z);
+                omega = u > 0.0 ? u * ${ColourShaders.glslFloat(dev.hfps.reveal.pipeline.cpu.EffectsParams.DEHAZE_OMEGA)} : 0.0;
+                beta = u < 0.0 ? -u * ${ColourShaders.glslFloat(dev.hfps.reveal.pipeline.cpu.EffectsParams.DEHAZE_ADD)} : 0.0;
+            }
+        }
+    }
     if ((uFlags & $FLAG_SHARPEN) != 0 || showMask) {
         float h = l - g.x;
         if (uMask.y > 0.0) {
@@ -350,23 +416,26 @@ vec3 finalAt(ivec2 p, vec2 sUp, vec2 dUp) {
             float t = clamp((grad - uMask.x) / (uMask.y - uMask.x), 0.0, 1.0);
             mask = t * t * (3.0 - 2.0 * t);
         }
-        if ((uFlags & $FLAG_SHARPEN) != 0) {
-            l += uSharp.x * sharpenShape(h) * mask;
+        if ((uFlags & $FLAG_SHARPEN) != 0 && (!local || sharpenGain != 0.0)) {
+            l += sharpenGain * sharpenShape(h) * mask;
+        }
+        if (soften > 0.0) {
+            l += (g.x - l) * soften;
         }
     }
     if (showMask) {
         return fromOkLab(vec3(mask, 0.0, 0.0));
     }
-    if ((uFlags & $FLAG_TEXTURE) != 0) {
+    if ((uFlags & $FLAG_TEXTURE) != 0 && (!local || textureGain != 0.0)) {
         float t = lnr - g.y;
-        l += uTexture.x * t * (uTexture.y / (uTexture.y + t * t));
+        l += textureGain * t * (uTexture.y / (uTexture.y + t * t));
     }
     vec4 coef = vec4(0.0);
     bool grid = (uFlags & ($FLAG_CLARITY | $FLAG_DEHAZE)) != 0;
     if (grid) {
         coef = effectsCoef(p + uOrigin, lnr);
-        if ((uFlags & $FLAG_CLARITY) != 0) {
-            l = clarity(l, coef.x * lnr + coef.y);
+        if ((uFlags & $FLAG_CLARITY) != 0 && (!local || clarityGain != 0.0)) {
+            l = clarityWith(l, coef.x * lnr + coef.y, clarityGain);
         }
     }
     vec2 ab = c.yz;
@@ -377,8 +446,8 @@ vec3 finalAt(ivec2 p, vec2 sUp, vec2 dUp) {
         ab = s + r * (edge * edge);
     }
     vec3 rgb = fromOkLab(vec3(l, ab));
-    if ((uFlags & $FLAG_DEHAZE) != 0) {
-        rgb = dehaze(rgb, coef.z * lnr + coef.w);
+    if ((uFlags & $FLAG_DEHAZE) != 0 && (!local || omega != 0.0 || beta != 0.0)) {
+        rgb = dehazeWith(rgb, coef.z * lnr + coef.w, omega, beta);
     }
     return rgb;
 }

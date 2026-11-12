@@ -52,24 +52,31 @@ vec4 effectsCoef(ivec2 ip, float l) {
     return s / sw;
 }
 
-float clarity(float l, float b) {
+float clarityWith(float l, float b, float gain) {
     float w = min(max(4.0 * b * (1.0 - b), 0.0), 1.0);
     float d = l - b;
-    return l + uEffects.x * w * d * (${glslFloat(
-        EffectsParams.CLARITY_EDGE2,
-    )} / (${glslFloat(EffectsParams.CLARITY_EDGE2)} + d * d));
+    return l + gain * w * d * (${glslFloat(EffectsParams.CLARITY_EDGE2)} / (${glslFloat(EffectsParams.CLARITY_EDGE2)} + d * d));
 }
 
-vec3 dehaze(vec3 c, float hRaw) {
+float clarity(float l, float b) {
+    return clarityWith(l, b, uEffects.x);
+}
+
+// EffectsParams.dehaze with the strengths omega (positive dehaze) and beta (negative): masks pass per-pixel totals.
+vec3 dehazeWith(vec3 c, float hRaw, float omega, float beta) {
     float h = min(max(hRaw, 0.0), 1.0);
     vec4 airSum = texelFetch(uAir, ivec2(0), 0);
     vec3 air = max(fromOkLab(airSum.xyz / airSum.w), vec3(${glslFloat(EffectsGrid.AIR_MIN)}));
-    if (uEffects.y > 0.0) {
-        float t = max(1.0 - uEffects.y * h, ${glslFloat(EffectsParams.DEHAZE_T0)});
+    if (omega > 0.0) {
+        float t = max(1.0 - omega * h, ${glslFloat(EffectsParams.DEHAZE_T0)});
         return (c - air) / t + air;
     }
-    float f = uEffects.z * (${glslFloat(EffectsParams.HAZE_BASE)} + (1.0 - ${glslFloat(EffectsParams.HAZE_BASE)}) * h);
+    float f = beta * (${glslFloat(EffectsParams.HAZE_BASE)} + (1.0 - ${glslFloat(EffectsParams.HAZE_BASE)}) * h);
     return c + (air - c) * f;
+}
+
+vec3 dehaze(vec3 c, float hRaw) {
+    return dehazeWith(c, hRaw, uEffects.y, uEffects.z);
 }
 """
 

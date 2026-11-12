@@ -339,6 +339,48 @@ class TiledRendererTest {
         }
     }
 
+    /**
+     * Masks (docs/adr/0022): five masks of every type (brush, ranges, the fake AI source) export in tiles exactly like
+     * one tile (no seam: coverage is pointwise, the brush is rasterised per tile from the same dabs), like the preview
+     * renderer and within Detail's 8-bit tolerance of the CPU reference.
+     */
+    @Test
+    fun maskedTilesStitchAndMatchThePreviewAndTheCpu() = runBlocking {
+        val edit = MaskFixtures.fiveMasks().copy(light = recipe.light, detail = Detail(sharpenAmount = 30f))
+        val reach = DevelopParams.reach(edit)
+        assertThat(reach).isGreaterThan(0)
+        fun maskPlan(tile: Int, geometry: Geometry = Geometry()) =
+            ExportPlan.of(image.width, image.height, geometry, ExportSize.Original, tile, reach)
+        fun renderMasked(plan: ExportPlan, with: Recipe = edit): ByteArray {
+            val sink = ArraySink(plan.output.width, plan.output.height)
+            tiled.render(
+                PipelineInputTileSource(image), with, plan, OutputSettings(), sink, masks = MaskFixtures.context,
+            )
+            return sink.pixels
+        }
+        val whole = renderMasked(maskPlan(1024))
+        val tiles = renderMasked(maskPlan(256))
+        Log.i(TAG, "masks: 256 px tiles vs one tile ${maxDiff(tiles, whole)}")
+        assertThat(tiles.contentEquals(whole)).isTrue()
+        val straight = Geometry(crop = CropRect(0.05f, 0.1f, 0.9f, 0.95f), angle = 3.1f)
+        val turned = edit.copy(geometry = straight)
+        assertThat(
+            renderMasked(maskPlan(256, straight), turned).contentEquals(renderMasked(maskPlan(1024, straight), turned)),
+        ).isTrue()
+        val preview = GpuDevelopRenderer.create()
+        try {
+            preview.upload(image)
+            preview.setMaskSource(MaskFixtures.source, "fixture")
+            val vsPreview = maxDiff(preview.renderOutput(edit), whole)
+            val vsCpu = maxDiff(CpuDevelop.render(image, edit, masks = MaskFixtures.context), whole)
+            Log.i(TAG, "masks: vs preview $vsPreview, vs CPU $vsCpu (max levels, values differing)")
+            assertThat(vsPreview.first).isAtMost(1)
+            assertThat(vsCpu.first).isAtMost(8)
+        } finally {
+            preview.close()
+        }
+    }
+
     @Test
     fun highDepthOutputQuantisesToTheEightBitOutput() {
         val plan = plan(512)

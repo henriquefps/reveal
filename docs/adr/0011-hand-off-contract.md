@@ -319,6 +319,31 @@ the viewer, sync and export: `SecurityException`, `FileNotFoundException`, an `I
 `DatabaseUtils.readExceptionFromParcel`, or raised in `ContentResolver`), and any message saying `Permission Denial`
 or `no access to`, also when wrapped.
 
+### Unavailable photos (amended 2026-11-12, 0.5.2)
+
+A photo Reveal cannot show at all must never be an empty square. **Unavailable** is defined once: a file of the photo
+is unreadable (`photo_files.unreadable_at`) AND the sync server has no original (`photo_cloud.original_on_server`)
+AND no smart preview (`photo_cloud.preview_sha`) AND there is no local preview (`LocalPreviews`). The SQL half is
+`PhotoQuerySql.UNAVAILABLE_SQL` (the `unavailable` column of every row and `PhotoFilter.UNAVAILABLE`); the local preview
+is a file, so `LibraryRepository` clears `PhotoRow.unavailable` for photos that have one (and drops them from the
+filter) with `PhotoAvailability`, the Kotlin mirror (`UnavailablePhotosTest` keeps the two in step).
+
+- **Grid cell, filmstrip, viewer**: `UnavailablePlaceholder` (`:core:designsystem`): muted surface, Phosphor
+  `ImageBroken`, the file name on one line, a small "Unavailable" eyebrow; rating, flag, edited dot and selection stay.
+  The filmstrip's thumbnail is icon-only. The viewer centres the placeholder with an explanation and a "What can I do?"
+  button. A photo with any preview keeps showing it ("preview only").
+- **Tap** (grid) or the viewer's button opens `UnavailableSheet`: why (`UnavailableReason`: the sending app's grant
+  ended, the file is gone, the folder is not mounted), "Open <app>" to share it again (`HandoffApps`, 0.5.2), "Allow
+  access to photos" for a MediaStore URI, "Try again", and "Remove from Reveal". Removing forgets a hand-off photo
+  (rows, edits and local previews: the sender can share it again); a folder or Server photo is only hidden (deleting its
+  rows would sync to the other devices). It asks first when any photo has edits: they go too.
+- **Filter "Unavailable"** (pt-BR "Indisponíveis"), right after "All", only while the scope has such photos
+  (`LibraryRepository.unavailableCount`); it works with selection, so "Select all" then "Try again" or "Remove from
+  Reveal" cleans up in one go. When the last one is gone the filter resets to "All".
+- **Re-check**: opening a scope calls `LibraryRepository.recheckAccess()` (every file marked unreadable, whatever its
+  source, batch, background, at most once per 30 s); a file that reads again clears its mark. "Try again" does it now
+  for the chosen photos and reports how many are readable.
+
 ### Gallery access (amended 2026-11-12)
 
 Optional, offered in context, never as a system dialog out of the blue: when a hand-off whose document is a MediaStore

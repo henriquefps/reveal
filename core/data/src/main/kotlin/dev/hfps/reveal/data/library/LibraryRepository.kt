@@ -24,6 +24,9 @@ import dev.hfps.reveal.data.index.IndexProgress
 import dev.hfps.reveal.data.index.IndexReport
 import dev.hfps.reveal.data.index.LibraryIndexer
 import dev.hfps.reveal.data.model.FileRole
+import dev.hfps.reveal.data.model.LibraryScope
+import dev.hfps.reveal.data.model.PhotoAvailability
+import dev.hfps.reveal.data.model.PhotoFilter
 import dev.hfps.reveal.data.model.PhotoQuery
 import dev.hfps.reveal.data.model.PickFlag
 import dev.hfps.reveal.data.model.SourceKind
@@ -44,6 +47,9 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -173,6 +179,16 @@ sealed interface AddSourceResult {
     data object Unreadable : AddSourceResult
 }
 
+/** What explains an unavailable photo (`LibraryRepository.unavailableDetail`). [uri] is its main file's document. */
+data class UnavailableDetail(
+    val photoId: Long,
+    val name: String,
+    val hasEdit: Boolean,
+    val sourceKind: SourceKind,
+    val sourceState: SourceState,
+    val uri: Uri?,
+)
+
 /**
  * The library (ADR 0006): sources (SAF trees, persisted grants, volume state), their index, the grid queries, and
  * the rating/flag/remove actions. Indexing runs in [scope] (application lifetime), one job per source.
@@ -232,9 +248,113 @@ class LibraryRepository(
     /** How many photos "Opened from other apps" lists (ADR 0011). */
     fun fromAppsCount(): Flow<Int> = photoDao.observeFromAppsCount()
 
-    fun photos(query: PhotoQuery): Flow<List<PhotoRow>> = photoDao.observeRows(PhotoQuerySql.toQuery(query))
+    fun photos(query: PhotoQuery): Flow<List<PhotoRow>> =
+        photoDao.observeRows(PhotoQuerySql.toQuery(query)).map { withLocalPreviews(it, query) }.flowOn(Dispatchers.IO)
 
-    suspend fun photoList(query: PhotoQuery): List<PhotoRow> = photoDao.rows(PhotoQuerySql.toQuery(query))
+    suspend fun photoList(query: PhotoQuery): List<PhotoRow> =
+        withContext(Dispatchers.IO) { withLocalPreviews(photoDao.rows(PhotoQuerySql.toQuery(query)), query) }
+
+    /**
+     * The photos of [scope] Reveal cannot show at all (`PhotoAvailability`); the grid offers the "Unavailable" filter
+     * while this is above zero.
+     */
+    fun unavailableCount(scope: LibraryScope): Flow<Int> =
+        photos(PhotoQuery(scope = scope, filter = PhotoFilter.UNAVAILABLE)).map { rows ->
+            rows.distinctBy { it.id }.size
+        }
+            .distinctUntilChanged()
+
+    /**
+     * The SQL says "unreadable, no server original, no server preview"; a local preview is a file, so the photos that
+     * have one are not unavailable (`PhotoAvailability`), and the filter drops them.
+     */
+    private fun withLocalPreviews(rows: List<PhotoRow>, query: PhotoQuery): List<PhotoRow> {
+        if (rows.none { it.unavailable }) return rows
+        val local = previews
+        val checked = rows.map { row ->
+            if (!row.unavailable) return@map row
+            val hasLocal =
+                local != null &&
+                    row.unreadableFingerprint.let {
+                        it != null && (local.display(it) != null || local.smart(it) != null)
+                    }
+            row.copy(unavailable = PhotoAvailability.isUnavailable(true, row.cloudOriginal, row.cloudPreview, hasLocal))
+        }
+        return if (query.filter == PhotoFilter.UNAVAILABLE) checked.filter { it.unavailable } else checked
+    }
+
+    /**
+     * Opens every file marked unreadable again (ADR 0011): a grant given back, a gallery permission, a folder back
+     * online clears the mark. Batch and rate-limited (once per [RECHECK_MIN_MS]) unless [force] (the "Try again"
+     * action); [photoIds] narrows it to those photos. Returns how many files stay unreadable, or -1 when skipped.
+     */
+    suspend fun recheckAccess(photoIds: Collection<Long>? = null, force: Boolean = false): Int =
+        withContext(Dispatchers.IO) {
+            val now = clock()
+            if (!force && now - lastRecheck < RECHECK_MIN_MS) return@withContext -1
+            lastRecheck = now
+            var stillUnreadable = 0
+            val trees = HashMap<Long, DocumentTree?>()
+            for (file in photoDao.unreadableFiles()) {
+                if (photoIds != null && file.photoId !in photoIds) continue
+                val tree = trees.getOrPut(file.sourceId) {
+                    sourceDao.get(file.sourceId)?.let(this@LibraryRepository.trees::open)
+                } ?: continue
+                val readable = try {
+                    tree.openInput(file.documentId, file.name).close()
+                    true
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
+                    !isAccessError(e)
+                }
+                if (readable) photoDao.setReadable(file.documentId) else stillUnreadable++
+            }
+            stillUnreadable
+        }
+
+    @Volatile
+    private var lastRecheck = 0L
+
+    /** What the "Unavailable" explanation needs about [photoId]; null when the photo is gone. */
+    suspend fun unavailableDetail(photoId: Long): UnavailableDetail? = withContext(Dispatchers.IO) {
+        val photo = photoDao.get(photoId) ?: return@withContext null
+        val source = sourceDao.get(photo.sourceId) ?: return@withContext null
+        val files = photoDao.files(photoId)
+        val main = files.firstOrNull { it.role == FileRole.RAW } ?: files.firstOrNull { it.role == FileRole.RENDERED }
+            ?: files.firstOrNull()
+        val uri = main?.let { runCatching { trees.open(source).uri(it.documentId) }.getOrNull() }
+        UnavailableDetail(photoId, photo.name, photo.hasEdit, source.kind, source.state, uri)
+    }
+
+    /** Whether [photoId] is unavailable now (`PhotoAvailability`): the viewer shows the placeholder instead of an image. */
+    suspend fun isUnavailable(photoId: Long): Boolean = withContext(Dispatchers.IO) {
+        if (!photoDao.unavailableCandidate(photoId)) return@withContext false
+        val print = photoDao.files(photoId).firstOrNull { it.unreadableAt != null }?.fingerprint
+        val local = previews?.let { print != null && (it.display(print) != null || it.smart(print) != null) } == true
+        PhotoAvailability.isUnavailable(true, false, false, local)
+    }
+
+    /** How many of [photoIds] have edits (they go with "Remove from Reveal"). */
+    suspend fun editedCount(photoIds: List<Long>): Int = withContext(Dispatchers.IO) {
+        photoIds.chunked(SQL_ARGS).sumOf { photoDao.editedCount(it) }
+    }
+
+    /**
+     * "Remove from Reveal" for unavailable photos: a hand-off photo is forgotten, edits and local previews with it (the
+     * app that shared it can share it again). A folder or Server photo is only hidden, like "Remove from library":
+     * deleting its rows would be synced to the other devices.
+     */
+    suspend fun forget(photoIds: List<Long>): Int = withContext(Dispatchers.IO) {
+        val handoff = sourceDao.handoff()?.id
+        val (gone, hide) = photoDao.getAll(photoIds).partition { it.sourceId == handoff }
+        gone.map { it.id }.chunked(SQL_ARGS).forEach { ids ->
+            previews?.delete(photoDao.filesOf(ids).mapNotNull { it.fingerprint })
+            photoDao.deletePhotos(ids)
+        }
+        hide.map { it.id }.chunked(SQL_ARGS).forEach { photoDao.setHidden(it, true) }
+        photoIds.size
+    }
 
     // ------------------------------------------------------------------ sources
 
@@ -682,6 +802,7 @@ class LibraryRepository(
         private const val TAG = "RevealLibrary"
         private const val KEY_LAST_SELECTION = "library.lastSelection"
         private const val SQL_ARGS = 900
+        private const val RECHECK_MIN_MS = 30_000L
         private const val MAX_RATING = 5
     }
 }

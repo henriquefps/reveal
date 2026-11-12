@@ -6,6 +6,15 @@ All notable changes to Reveal are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- Photos Reveal cannot show at all (their file is unreadable and there is no server original, no preview anywhere:
+  for example an old hand-off whose temporary access ended) are no longer empty squares. The grid, the filmstrip and
+  the viewer show a placeholder with the file name and "Unavailable", keeping the rating, flag, edited mark and
+  selection. Tapping one explains why and what to do: open the app that shared it to share it again, allow access to
+  your photos (gallery), try again, or remove it from Reveal (it asks first when the photo has edits, which go too).
+- An "Unavailable" filter next to "All" in every place that has such photos, so you can select them all and try
+  again or remove them at once. Opening a place re-checks in the background whether they can be read again.
+
 ### Fixed
 - Photos another app handed over (Hoard's picks from a network share, a gallery share) open again after that app's
   access ended. When your sync server has the original (the CloudCheck badge), the editor, the viewer, the grid and

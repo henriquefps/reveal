@@ -224,10 +224,20 @@ editor opens when the server copy fails; `ExportTarget.previewUri` the same for 
 `LibraryRepository.originalPlace`. "Unreadable" = `storage/isAccessError` everywhere (opener, thumbnails, viewer, sync,
 export). Goldens `phone_preview_only`, `phone_error_handoff*`.
 
+Unavailable photos (ADR 0011 "Unavailable photos", 0.5.2): "unavailable" = unreadable file AND no server original AND
+no server/local preview, defined once: `PhotoQuerySql.UNAVAILABLE_SQL` (`PhotoRow.unavailable`,
+`PhotoFilter.UNAVAILABLE`), its Kotlin mirror `PhotoAvailability`, and `LibraryRepository.withLocalPreviews` (a local
+preview is a file: it clears the flag and drops the row from the filter). Also `unavailableCount(scope)` (the filter
+chip), `recheckAccess(photoIds?, force)` (batch, once per 30 s unless forced), `unavailableDetail`, `editedCount`,
+`forget` (hand-off photos deleted with edits and local previews; folder/Server photos only hidden), `isUnavailable`
+(viewer). UI: `UnavailablePlaceholder` (`:core:designsystem`) in the grid cell, the filmstrip cell and the viewer page;
+`feature/library/UnavailableSheet.kt` (`UnavailableInfo`/`UnavailableHelper`, the sheet, `ForgetDialog`); a grid tap on
+an unavailable photo opens the sheet, never the viewer. Goldens `phone_unavailable*`, `tablet_unavailable*`.
+
 ```sh
-./gradlew :core:data:testDebugUnitTest --tests '*HandoffMergeTest*' --tests '*UnreadableHandoffsTest*' --tests '*GalleryAccessTest*' --tests '*AccessErrorsTest*'
+./gradlew :core:data:testDebugUnitTest --tests '*UnavailablePhotosTest*' --tests '*HandoffMergeTest*' --tests '*UnreadableHandoffsTest*' --tests '*GalleryAccessTest*' --tests '*AccessErrorsTest*'
 ./gradlew :core:sync:testDebugUnitTest --tests '*HandoffSyncTest*'       # merged hand-offs on two devices, parked originals
-adb -s <serial> shell am instrument -w -e class dev.hfps.reveal.handoff.UnreadableHandoffTest dev.hfps.reveal.debug.test/androidx.test.runner.AndroidJUnitRunner
+adb -s <serial> shell am instrument -w -e class dev.hfps.reveal.handoff.UnavailablePhotoTest,dev.hfps.reveal.handoff.UnreadableHandoffTest dev.hfps.reveal.debug.test/androidx.test.runner.AndroidJUnitRunner
 # fallbacks; the backed-up case needs a local reveal-sync (scripts/sync/local-server.sh, adb reverse), skipped without:
 adb -s <serial> shell am instrument -w -e class dev.hfps.reveal.handoff.HandoffFallbackTest -e syncLink "'$(scripts/sync/local-server.sh pair <work dir>)'" dev.hfps.reveal.debug.test/androidx.test.runner.AndroidJUnitRunner
 adb -s <serial> shell am instrument -w -e class dev.hfps.reveal.pipeline.SmartPreviewMakerTest dev.hfps.reveal.pipeline.test/androidx.test.runner.AndroidJUnitRunner   # every format; CC0 RAWs in files/samples

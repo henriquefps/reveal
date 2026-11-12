@@ -151,6 +151,13 @@ fun LibraryScreen(
                 }
             },
             onApplyPreset = { choosingPreset = true },
+            onOpenUnavailable = viewModel::explain,
+            onUnavailableDismiss = viewModel::dismissUnavailable,
+            onOpenSender = viewModel::openSender,
+            onTryAgain = viewModel::tryAgain,
+            onForget = viewModel::forget,
+            onForgetConfirm = viewModel::confirmForget,
+            onForgetDismiss = viewModel::dismissForget,
             onSettings = onSettings,
             onGallery = onGallery,
             onAbout = onAbout,
@@ -167,6 +174,19 @@ fun LibraryScreen(
             onAllow = { galleryPermission.launch(GalleryAccess.permissions()) },
             onDecline = viewModel::declineGalleryAccess,
         )
+    }
+    state.unavailableInfo?.let { info ->
+        UnavailableSheet(
+            info = info,
+            onOpenApp = actions.onOpenSender,
+            onGallery = { galleryPermission.launch(GalleryAccess.permissions()) },
+            onTryAgain = { actions.onTryAgain(listOf(info.photoId)) },
+            onRemove = { actions.onForget(listOf(info.photoId)) },
+            onDismiss = actions.onUnavailableDismiss,
+        )
+    }
+    state.forgetPrompt?.let { prompt ->
+        ForgetDialog(prompt, onConfirm = actions.onForgetConfirm, onDismiss = actions.onForgetDismiss)
     }
     if (choosingPreset) {
         ApplyPresetSheet(
@@ -246,6 +266,18 @@ private fun LibraryMessages(events: Flow<LibraryMessage>, snackbar: SnackbarHost
                     R.plurals.presets_batch_queued,
                     message.count,
                     message.name,
+                    message.count,
+                )
+
+                is LibraryMessage.Rechecked -> resources.getString(
+                    R.string.library_unavailable_checked,
+                    message.readable,
+                    message.still,
+                )
+
+                is LibraryMessage.Forgotten -> resources.getQuantityString(
+                    R.plurals.library_forgotten,
+                    message.count,
                     message.count,
                 )
 

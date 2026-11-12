@@ -88,3 +88,5 @@ link-simple
 hard-drives
 git-branch
 package
+image-broken
+arrow-square-out

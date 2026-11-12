@@ -43,6 +43,9 @@ import dev.hfps.reveal.feature.library.LibraryUiState
 import dev.hfps.reveal.feature.library.PasteEditsContent
 import dev.hfps.reveal.feature.library.SpecialSource
 import dev.hfps.reveal.feature.library.ThumbnailSource
+import dev.hfps.reveal.feature.library.UnavailableContent
+import dev.hfps.reveal.feature.library.UnavailableInfo
+import dev.hfps.reveal.feature.library.UnavailableReason
 import dev.hfps.reveal.feature.library.buildGridEntries
 import dev.hfps.reveal.pipeline.recipe.Colour
 import dev.hfps.reveal.pipeline.recipe.Geometry
@@ -152,6 +155,37 @@ internal object LibrarySamples {
             photosLoaded = true,
         )
     }
+
+    /**
+     * The grid where four photos cannot be shown at all (FIX/U): the placeholder keeps their marks, the "Unavailable"
+     * chip shows. [only] = the Unavailable filter, [selected] = some of them selected for "Try again" / "Remove".
+     */
+    fun unavailable(only: Boolean = false, selected: Set<Long> = emptySet()): LibraryUiState {
+        val gone = setOf(2L, 3L, 6L, 9L)
+        val all = rows.map { if (it.id in gone) it.copy(unreadable = true, unavailable = true) else it }
+        val query = PhotoQuery(filter = if (only) PhotoFilter.UNAVAILABLE else PhotoFilter.ALL)
+        val shown = if (only) all.filter { it.unavailable } else all
+        return LibraryUiState(
+            sources = sources,
+            sourcesLoaded = true,
+            selection = LibrarySelection.Folder(1),
+            query = query,
+            entries = buildGridEntries(shown, query.copy(scope = LibraryScope.Source(1))),
+            photoCount = shown.size,
+            photosLoaded = true,
+            selected = selected,
+            unavailableCount = gone.size,
+        )
+    }
+
+    val unavailableInfo = UnavailableInfo(
+        photoId = 2,
+        name = "DSC07699.ARW",
+        hasEdit = true,
+        reason = UnavailableReason.SENDER,
+        appLabel = "Hoard",
+        appLaunch = android.content.Intent(),
+    )
 
     fun grid(
         selection: LibrarySelection = LibrarySelection.Folder(1),
@@ -298,6 +332,37 @@ class PhoneLibraryScreenshotTest : LibraryScreenshotBase("phone") {
         composeRule.onRoot().captureRoboImage("src/test/screenshots/library/phone_gallery_access_dark.png")
     }
 
+    @Test fun unavailableGrid() = shoot("unavailable_light", dark = false, state = LibrarySamples.unavailable())
+
+    @Test fun unavailableGridDark() = shoot("unavailable_dark", dark = true, state = LibrarySamples.unavailable())
+
+    @Test fun unavailableFilteredSelecting() = shoot(
+        "unavailable_selecting_light",
+        dark = false,
+        state = LibrarySamples.unavailable(only = true, selected = setOf(2L, 3L)),
+    )
+
+    /** What a tap on an unavailable photo opens: why, and what to do. */
+    @Test fun unavailableSheet() {
+        composeRule.setContent {
+            RevealTheme(darkTheme = true) {
+                Box(Modifier.fillMaxSize().background(RevealTheme.colors.background), Alignment.BottomCenter) {
+                    Surface(color = RevealTheme.colors.card, shape = RevealTheme.shapes.sheet) {
+                        UnavailableContent(
+                            LibrarySamples.unavailableInfo,
+                            onOpenApp = {},
+                            onGallery = {},
+                            onTryAgain = {},
+                            onRemove = {},
+                            modifier = Modifier.padding(top = 24.dp),
+                        )
+                    }
+                }
+            }
+        }
+        composeRule.onRoot().captureRoboImage("src/test/screenshots/library/phone_unavailable_sheet_dark.png")
+    }
+
     @Test fun indexing() = shoot(
         "indexing_light",
         dark = false,
@@ -312,6 +377,14 @@ class TabletLibraryScreenshotTest : LibraryScreenshotBase("tablet") {
     @Test fun twoPaneLight() = shoot("two_pane_light", dark = false, state = LibrarySamples.grid())
 
     @Test fun twoPaneDark() = shoot("two_pane_dark", dark = true, state = LibrarySamples.grid())
+
+    @Test fun unavailableTwoPane() = shoot("unavailable_light", dark = false, state = LibrarySamples.unavailable())
+
+    @Test fun unavailableTwoPaneSelecting() = shoot(
+        "unavailable_selecting_dark",
+        dark = true,
+        state = LibrarySamples.unavailable(only = true, selected = setOf(2L, 3L)),
+    )
 
     @Test fun twoPaneRecentEmpty() = shoot(
         "two_pane_recent_empty_light",

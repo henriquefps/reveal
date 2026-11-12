@@ -18,7 +18,10 @@ import dev.hfps.reveal.data.thumb.DisplayImage
 import dev.hfps.reveal.data.thumb.PhotoImages
 import dev.hfps.reveal.data.thumb.RegionSource
 import dev.hfps.reveal.data.thumb.ThumbnailRepository
+import dev.hfps.reveal.feature.library.ForgetPrompt
 import dev.hfps.reveal.feature.library.LibraryViewModel
+import dev.hfps.reveal.feature.library.UnavailableHelper
+import dev.hfps.reveal.feature.library.UnavailableInfo
 import dev.hfps.reveal.feature.library.ViewerRoute
 import dev.hfps.reveal.feature.library.scope
 import javax.inject.Inject
@@ -43,10 +46,23 @@ interface ViewerPages {
 
     /** Where the photo's original is (the info's "Original" line); null when unknown. */
     suspend fun originalPlace(id: Long): OriginalPlace? = null
+
+    /** Nothing can show the photo (`PhotoAvailability`): the viewer draws the placeholder and its explanation. */
+    suspend fun isUnavailable(id: Long): Boolean = false
 }
 
 /** The photos the viewer pages through (a snapshot of the grid's list when it opened) and where it starts. */
-data class ViewerUiState(val ids: List<Long> = emptyList(), val start: Int = 0, val loaded: Boolean = false)
+data class ViewerUiState(
+    val ids: List<Long> = emptyList(),
+    val start: Int = 0,
+    val loaded: Boolean = false,
+    /** The explanation of an unavailable photo (FIX/U); null = closed. */
+    val unavailable: UnavailableInfo? = null,
+    /** Asking before forgetting a photo that has edits. */
+    val forgetPrompt: ForgetPrompt? = null,
+    /** Bumped when access was re-checked, so the pages try their image again. */
+    val reloads: Int = 0,
+)
 
 /**
  * The full-screen viewer: the grid's photo list (same scope, filter, order, search) as a snapshot, so rating a photo
@@ -58,6 +74,7 @@ class ViewerViewModel @Inject constructor(
     private val library: LibraryRepository,
     private val images: PhotoImages,
     val thumbnails: ThumbnailRepository,
+    private val unavailableHelper: UnavailableHelper,
 ) : ViewModel(),
     ViewerPages {
     private val route = savedState.toRoute<ViewerRoute>()
@@ -79,7 +96,9 @@ class ViewerViewModel @Inject constructor(
             } else {
                 library.photoList(query.copy(scope = scope)).map { it.id }.distinct().ifEmpty { listOf(route.photoId) }
             }
-            _state.update { ViewerUiState(ids, ids.indexOf(route.photoId).coerceAtLeast(0), true) }
+            _state.update {
+                it.copy(ids = ids, start = ids.indexOf(route.photoId).coerceAtLeast(0), loaded = true)
+            }
         }
     }
 
@@ -98,6 +117,53 @@ class ViewerViewModel @Inject constructor(
     override suspend fun metadata(detail: PhotoDetail): PhotoMetadata? = library.metadata(detail)
 
     override suspend fun originalPlace(id: Long): OriginalPlace? = library.originalPlace(id)
+
+    override suspend fun isUnavailable(id: Long): Boolean = library.isUnavailable(id)
+
+    /** Explains why [id] cannot be shown and what to do (the placeholder's button). */
+    fun explain(id: Long) {
+        viewModelScope.launch {
+            unavailableHelper.info(id)?.let { info -> _state.update { it.copy(unavailable = info) } }
+        }
+    }
+
+    fun dismissUnavailable() = _state.update { it.copy(unavailable = null) }
+
+    fun openSender() {
+        _state.value.unavailable?.let(unavailableHelper::openApp)
+    }
+
+    /** Re-checks access now: a photo readable again shows on its page. */
+    fun tryAgain(id: Long) {
+        viewModelScope.launch {
+            library.recheckAccess(listOf(id), force = true)
+            _state.update { it.copy(unavailable = null, reloads = it.reloads + 1) }
+        }
+    }
+
+    /** "Remove from Reveal": at once, or after asking when the photo has edits; [onDone] when it is gone. */
+    fun forget(id: Long, onDone: () -> Unit) {
+        viewModelScope.launch {
+            if (library.editedCount(listOf(id)) == 0) {
+                library.forget(listOf(id))
+                _state.update { it.copy(unavailable = null) }
+                onDone()
+            } else {
+                _state.update { it.copy(unavailable = null, forgetPrompt = ForgetPrompt(listOf(id), 1)) }
+            }
+        }
+    }
+
+    fun confirmForget(onDone: () -> Unit) {
+        val prompt = _state.value.forgetPrompt ?: return
+        viewModelScope.launch {
+            library.forget(prompt.ids)
+            _state.update { it.copy(forgetPrompt = null) }
+            onDone()
+        }
+    }
+
+    fun dismissForget() = _state.update { it.copy(forgetPrompt = null) }
 
     fun rate(id: Long, rating: Int) {
         viewModelScope.launch { library.setRating(listOf(id), rating) }

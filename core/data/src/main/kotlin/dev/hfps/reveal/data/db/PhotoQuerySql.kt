@@ -13,6 +13,15 @@ object PhotoQuerySql {
     const val RECENT_LIMIT = 500
 
     /**
+     * "Unavailable", defined once (`PhotoAvailability` is its Kotlin mirror): a file of the photo is unreadable AND the
+     * sync server has no original AND no smart preview. The local preview is a file, not a row: the repository removes
+     * the photos that have one after the query.
+     */
+    const val UNAVAILABLE_SQL =
+        "EXISTS (SELECT 1 FROM photo_files uf WHERE uf.photo_id = p.id AND uf.unreadable_at IS NOT NULL) " +
+            "AND COALESCE(c.original_on_server, 0) = 0 AND c.preview_sha IS NULL"
+
+    /**
      * One row per version: the first version of every photo, then its other versions (sync conflict copies and
      * versions another device added, ADR 0018) right after it. `remote` = the photo lives only on the sync server.
      */
@@ -23,7 +32,8 @@ object PhotoQuerySql {
             "COALESCE(c.original_on_server, 0) AS cloud_original, c.preview_sha IS NOT NULL AS cloud_preview, " +
             "p.source_id IN (SELECT id FROM sources WHERE kind = 'SERVER') AS remote, " +
             "EXISTS (SELECT 1 FROM photo_files uf WHERE uf.photo_id = p.id AND uf.unreadable_at IS NOT NULL) " +
-            "AS unreadable " +
+            "AS unreadable, ($UNAVAILABLE_SQL) AS unavailable, (SELECT uf.fingerprint FROM photo_files uf WHERE " +
+            "uf.photo_id = p.id AND uf.unreadable_at IS NOT NULL LIMIT 1) AS unreadable_fingerprint " +
             "FROM photos p JOIN versions v ON v.photo_id = p.id " +
             "LEFT JOIN recipes r ON r.version_id = v.id AND r.is_default = 0 " +
             "LEFT JOIN photo_cloud c ON c.photo_id = p.id"
@@ -73,6 +83,7 @@ object PhotoQuerySql {
         PhotoFilter.RATED -> Clause("p.rating >= ?", query.minRating.coerceIn(1, MAX_RATING))
         PhotoFilter.RAW -> Clause("p.has_raw = 1")
         PhotoFilter.JPEG -> Clause("p.has_raw = 0")
+        PhotoFilter.UNAVAILABLE -> Clause("($UNAVAILABLE_SQL)")
     }
 
     private fun order(query: PhotoQuery): String = when {

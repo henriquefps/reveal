@@ -52,6 +52,13 @@ data class PhotoRow(
      * its local preview ("preview only").
      */
     val unreadable: Boolean = false,
+    /**
+     * [PhotoAvailability]: unreadable, and neither the server's original nor a server preview can stand in. A local
+     * preview is not in the database: [LibraryRepository] clears this for photos that have one.
+     */
+    val unavailable: Boolean = false,
+    /** The fingerprint of an unreadable file of the photo (to look for its local preview), null when readable. */
+    @ColumnInfo(name = "unreadable_fingerprint") val unreadableFingerprint: String? = null,
 ) {
     /** The grid's key: the photo for its first version, the version for a copy (two cells of one photo). */
     val gridKey: Any get() = if (versionPosition == 0) id else "v$versionId"
@@ -343,6 +350,21 @@ interface PhotoDao {
             "photo_cloud c WHERE c.photo_id = v.photo_id AND c.original_on_server = 1)",
     )
     suspend fun unreadableVersions(versionIds: List<Long>): Int
+
+    /** Every file marked unreadable, whatever its source (the "Unavailable" re-check). */
+    @Query("SELECT * FROM photo_files WHERE unreadable_at IS NOT NULL")
+    suspend fun unreadableFiles(): List<PhotoFileEntity>
+
+    /** [PhotoQuerySql.UNAVAILABLE_SQL] for one photo (the viewer); a local preview is checked by the repository. */
+    @Query(
+        "SELECT EXISTS(SELECT 1 FROM photos p LEFT JOIN photo_cloud c ON c.photo_id = p.id WHERE p.id = :id AND (" +
+            PhotoQuerySql.UNAVAILABLE_SQL + "))",
+    )
+    suspend fun unavailableCandidate(id: Long): Boolean
+
+    /** How many of [ids] have an edit (the "Remove from Reveal" confirmation says they go too). */
+    @Query("SELECT COUNT(*) FROM photos WHERE id IN (:ids) AND has_edit = 1")
+    suspend fun editedCount(ids: List<Long>): Int
 
     /** Every file of the hand-off source (the access check). */
     @Query("SELECT f.* FROM photo_files f JOIN sources s ON s.id = f.source_id WHERE s.kind = 'HANDOFF'")

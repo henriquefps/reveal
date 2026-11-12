@@ -212,4 +212,33 @@
         <item quantity="one">Stopped: %1$s applied to %2$d photo</item>
         <item quantity="other">Stopped: %1$s applied to %2$d photos</item>
     </plurals>
+    <!-- Unavailable photos (FIX/U) -->
+    <string name="library_filter_unavailable">Unavailable</string>
+    <string name="library_unavailable_label">Unavailable</string>
+    <string name="library_unavailable_cell">Unavailable: Reveal cannot read this photo. Tap to see why</string>
+    <string name="library_unavailable_title">This photo is unavailable</string>
+    <string name="library_unavailable_reason_sender_named">%1$s shared it with Reveal and no longer gives access to it. Photos from other apps can only be read for a while.</string>
+    <string name="library_unavailable_reason_sender">The app that shared it with Reveal no longer gives access to it. Photos from other apps can only be read for a while.</string>
+    <string name="library_unavailable_reason_file">The file is gone or was moved, so Reveal cannot read it. Its rating, flag and edits are kept.</string>
+    <string name="library_unavailable_reason_folder">Its folder is not mounted right now. Plug the drive back in and try again.</string>
+    <string name="library_unavailable_keeps">Reveal never copies your photos, so it has nothing to show. Its rating, flag and edits are kept.</string>
+    <string name="library_unavailable_open_app">Open %1$s to share it again</string>
+    <string name="library_unavailable_gallery">Allow access to photos</string>
+    <string name="library_unavailable_try_again">Try again</string>
+    <string name="library_unavailable_remove">Remove from Reveal</string>
+    <string name="library_unavailable_checked">Checked again: %1$d readable now, %2$d still unavailable.</string>
+    <string name="library_forget_title">Remove from Reveal?</string>
+    <string name="library_forget_body_edited">Their edits go too, and this cannot be undone.</string>
+    <string name="library_forget_confirm">Remove</string>
+    <plurals name="library_forget_question">
+        <item quantity="one">Remove %1$d photo from Reveal?</item>
+        <item quantity="other">Remove %1$d photos from Reveal?</item>
+    </plurals>
+    <plurals name="library_forgotten">
+        <item quantity="one">%1$d photo removed from Reveal.</item>
+        <item quantity="other">%1$d photos removed from Reveal.</item>
+    </plurals>
+    <string name="viewer_unavailable_title">This photo is unavailable</string>
+    <string name="viewer_unavailable_body">Reveal can no longer read this photo and has no preview of it.</string>
+    <string name="viewer_unavailable_details">What can I do?</string>
 </resources>

@@ -404,4 +404,5 @@
     <string name="presets_smart_white_balance">White balance (keeps skin natural)</string>
     <string name="presets_smart_vibrance">Vibrance</string>
     <string name="presets_smart_straighten">Straighten</string>
+    <string name="editor_filmstrip_unavailable">Unavailable</string>
 </resources>

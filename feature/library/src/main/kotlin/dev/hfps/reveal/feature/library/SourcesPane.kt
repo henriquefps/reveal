@@ -61,7 +61,6 @@ fun SourcesPane(
         EmptyLibrary(actions, modifier)
         return
     }
-    var confirmRemove by remember { mutableStateOf<SourceItem?>(null) }
     LazyColumn(modifier.fillMaxSize().testTag(LibraryTags.SOURCES), contentPadding = PaddingValues(bottom = 16.dp)) {
         item { SectionLabel(stringResource(R.string.library_section_library)) }
         val specials = SpecialSource.entries.filter { it != SpecialSource.SERVER || serverPhotos > 0 }
@@ -73,7 +72,7 @@ fun SourcesPane(
                 selected = selection == LibrarySelection.Folder(source.id),
                 onClick = { actions.onSelect(LibrarySelection.Folder(source.id)) },
                 onRescan = { actions.onRescan(source.id) },
-                onRemove = { confirmRemove = source },
+                onRemove = { actions.onRemoveSource(source.id) },
             )
         }
         item {
@@ -86,16 +85,6 @@ fun SourcesPane(
                 )
             }
         }
-    }
-    confirmRemove?.let { source ->
-        RemoveFolderDialog(
-            name = source.name,
-            onConfirm = {
-                confirmRemove = null
-                actions.onRemoveSource(source.id)
-            },
-            onDismiss = { confirmRemove = null },
-        )
     }
 }
 
@@ -243,27 +232,6 @@ internal fun MenuItem(icon: ImageVector?, text: String, enabled: Boolean = true,
         leadingIcon = icon?.let { { Icon(it, contentDescription = null) } },
         enabled = enabled,
         onClick = onClick,
-    )
-}
-
-@Composable
-private fun RemoveFolderDialog(name: String, onConfirm: () -> Unit, onDismiss: () -> Unit) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        containerColor = RevealTheme.colors.card,
-        shape = RevealTheme.shapes.card,
-        title = {
-            Text(stringResource(R.string.library_remove_folder_title, name), style = RevealTheme.typography.title)
-        },
-        text = {
-            Text(
-                stringResource(R.string.library_remove_folder_body),
-                style = RevealTheme.typography.body,
-                color = RevealTheme.colors.mutedForeground,
-            )
-        },
-        confirmButton = { PrimaryButton(stringResource(R.string.library_remove_folder_confirm), onConfirm) },
-        dismissButton = { GhostButton(stringResource(R.string.library_cancel), onDismiss) },
     )
 }
 

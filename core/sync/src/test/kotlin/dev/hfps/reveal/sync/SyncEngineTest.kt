@@ -152,6 +152,16 @@ class SyncEngineTest {
         }
         phone.sync()
         tablet.sync()
+        // Only described so far (its original has not reached the server): in the database, not in the Server scope.
+        fun serverScope() =
+            runBlocking { tablet.db.photoDao().rows(PhotoQuerySql.toQuery(PhotoQuery(scope = LibraryScope.Server))) }
+        assertThat(tablet.photoByFingerprint(FileFingerprint.of(raw))).isNotNull()
+        assertThat(serverScope()).isEmpty()
+        // The phone's backup lands: it pushes the record again and the tablet asks about the shot at once.
+        server.putOriginal(raw)
+        runBlocking { phone.store.originalLanded(p, FileFingerprint.of(raw)) }
+        phone.sync()
+        tablet.sync()
 
         val remote = tablet.photoByFingerprint(FileFingerprint.of(raw))!!
         assertThat(remote.rating).isEqualTo(4)
@@ -160,8 +170,7 @@ class SyncEngineTest {
         assertThat(runBlocking { tablet.db.photoDao().files(remote.id) }).hasSize(2)
         assertThat(tablet.recipe(tablet.version(remote.id)).light.exposureEv).isEqualTo(0.4f)
         val all = runBlocking { tablet.db.photoDao().rows(PhotoQuerySql.toQuery(PhotoQuery(scope = LibraryScope.All))) }
-        val onServer =
-            runBlocking { tablet.db.photoDao().rows(PhotoQuerySql.toQuery(PhotoQuery(scope = LibraryScope.Server))) }
+        val onServer = serverScope()
         assertThat(all).isEmpty()
         assertThat(onServer.map { it.id }).containsExactly(remote.id)
         assertThat(onServer.single().remote).isTrue()
@@ -290,8 +299,10 @@ class SyncEngineTest {
         println("SYNC_JVM push=${push}ms pull=${pull}ms pushed=${report.pushed}")
         assertThat(report.pushed).isEqualTo(1900)
         assertThat(ids).hasSize(1000)
-        val rows =
-            runBlocking { tablet.db.photoDao().rows(PhotoQuerySql.toQuery(PhotoQuery(scope = LibraryScope.Server))) }
+        val server = runBlocking { checkNotNull(tablet.db.syncDao().serverSource()).id }
+        val rows = runBlocking {
+            tablet.db.photoDao().rows(PhotoQuerySql.toQuery(PhotoQuery(scope = LibraryScope.Source(server))))
+        }
         assertThat(rows).hasSize(1000)
         assertThat(rows.count { it.hasEdit }).isEqualTo(900)
     }

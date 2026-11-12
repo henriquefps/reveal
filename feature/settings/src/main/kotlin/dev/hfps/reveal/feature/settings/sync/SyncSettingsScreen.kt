@@ -433,9 +433,12 @@ private fun Paired(
                 modifier = Modifier.padding(horizontal = 16.dp),
             )
             for (folder in state.folders) {
+                // On = "Everything", off = "Only photos you edit" (the default for new folders, FIX/V).
                 SwitchRow(
                     title = folder.name,
-                    subtitle = null,
+                    subtitle = stringResource(
+                        if (folder.backup) R.string.sync_folder_everything else R.string.sync_folder_edited,
+                    ),
                     checked = folder.backup,
                     onChange = { actions.onFolderBackup(folder.id, it) },
                     tag = SyncTags.folder(folder.id),

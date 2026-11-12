@@ -158,6 +158,13 @@ fun LibraryScreen(
             onForget = viewModel::forget,
             onForgetConfirm = viewModel::confirmForget,
             onForgetDismiss = viewModel::dismissForget,
+            onAddFolderBackup = viewModel::chooseFolderBackup,
+            onAddFolderDismiss = viewModel::dismissAddFolder,
+            onRemoveConfirm = viewModel::confirmRemove,
+            onRemoveDismiss = viewModel::dismissRemove,
+            onDeleteFromServer = viewModel::deleteFromServer,
+            onDeleteFromServerConfirm = viewModel::confirmDeleteFromServer,
+            onDeleteFromServerDismiss = viewModel::dismissDeleteFromServer,
             onSettings = onSettings,
             onGallery = onGallery,
             onAbout = onAbout,
@@ -188,6 +195,7 @@ fun LibraryScreen(
     state.forgetPrompt?.let { prompt ->
         ForgetDialog(prompt, onConfirm = actions.onForgetConfirm, onDismiss = actions.onForgetDismiss)
     }
+    ServerViewDialogs(state, actions)
     if (choosingPreset) {
         ApplyPresetSheet(
             library = presetLibrary,
@@ -277,6 +285,12 @@ private fun LibraryMessages(events: Flow<LibraryMessage>, snackbar: SnackbarHost
 
                 is LibraryMessage.Forgotten -> resources.getQuantityString(
                     R.plurals.library_forgotten,
+                    message.count,
+                    message.count,
+                )
+
+                is LibraryMessage.DeletedFromServer -> resources.getQuantityString(
+                    R.plurals.library_deleted_server,
                     message.count,
                     message.count,
                 )

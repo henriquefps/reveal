@@ -383,15 +383,24 @@ interface PhotoDao {
      * Pairs of a hand-off file and a file of the available folder [folderSourceId] with the same fingerprint, whose
      * photo was not removed from the library: the hand-off photos that are a folder photo too.
      */
+    suspend fun handoffTwins(folderSourceId: Long): List<HandoffTwin> = twins(folderSourceId, "HANDOFF")
+
+    /**
+     * Pairs of a Server-source file (ADR 0018 "Server photos") and a file of the available folder [folderSourceId]
+     * with the same fingerprint: a folder added again (or added on this device) holds a photo the server already
+     * describes, which becomes the folder's photo instead of a duplicate (ADR 0018 "Deleting from the server").
+     */
+    suspend fun serverTwins(folderSourceId: Long): List<HandoffTwin> = twins(folderSourceId, "SERVER")
+
     @Query(
         "SELECT h.photo_id AS handoff_photo_id, f.photo_id AS folder_photo_id, h.role AS handoff_role, " +
             "f.role AS folder_role FROM photo_files f JOIN photo_files h ON h.fingerprint = f.fingerprint " +
             "JOIN sources fs ON fs.id = f.source_id JOIN sources hs ON hs.id = h.source_id " +
             "JOIN photos fp ON fp.id = f.photo_id WHERE f.source_id = :folderSourceId AND fs.kind = 'FOLDER' " +
-            "AND fs.state = 'AVAILABLE' AND hs.kind = 'HANDOFF' AND fp.hidden = 0 AND f.fingerprint IS NOT NULL " +
+            "AND fs.state = 'AVAILABLE' AND hs.kind = :otherKind AND fp.hidden = 0 AND f.fingerprint IS NOT NULL " +
             "ORDER BY h.photo_id, f.id",
     )
-    suspend fun handoffTwins(folderSourceId: Long): List<HandoffTwin>
+    suspend fun twins(folderSourceId: Long, otherKind: String): List<HandoffTwin>
 
     @Query(
         "UPDATE photos SET handoff_at = :at, handoff_title = :title WHERE id = :id AND " +

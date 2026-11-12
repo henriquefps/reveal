@@ -13,6 +13,7 @@ import dev.hfps.reveal.sync.api.SyncApi
 import dev.hfps.reveal.sync.api.SyncHttpException
 import dev.hfps.reveal.sync.blobs.BlobUploader
 import dev.hfps.reveal.sync.engine.ServerChangedException
+import dev.hfps.reveal.sync.engine.ServerLibrary
 import dev.hfps.reveal.sync.engine.SyncEngine
 import dev.hfps.reveal.sync.engine.SyncReport
 import dev.hfps.reveal.sync.engine.SyncStore
@@ -79,6 +80,7 @@ class SyncRepository(
     private val clientInfo: ClientInfo,
     /** The library's trees: the Server source's headers are read through the server-files provider. */
     private val trees: DocumentTreeFactory? = null,
+    private val library: ServerLibrary = ServerLibrary(db, store),
     private val newApi: (url: String, key: String?) -> SyncApi = { url, key -> SyncApi(url, key) },
 ) {
     /** The device's name, platform and app version, sent when pairing. */
@@ -178,6 +180,9 @@ class SyncRepository(
                 // Previews no longer needed stop being named before the push, so the blob run can drop them.
                 uploader.markDrops()
                 val report = engine.sync(api, account.serverId)
+                // After the push: the server keeps an original while a live record names it.
+                val deleted = uploader.deleteOriginals(api)
+                if (deleted > 0) Log.i(TAG, "deleted $deleted originals from the server")
                 val headers = readServerHeaders()
                 Log.i(TAG, "sync: $report, $headers server headers")
                 runtime.update { it.copy(running = false, problem = null, lastSyncAt = engine.lastSync()) }
@@ -246,6 +251,27 @@ class SyncRepository(
         return runCatching {
             LibraryIndexer(db).readServerMetadata(source.id, factory.open(source), HEADERS_PER_RUN)
         }.onFailure { Log.w(TAG, "server headers: ${it.javaClass.simpleName}") }.getOrDefault(0)
+    }
+
+    /** How many photos of folder [sourceId] have an edit (the removal dialog's default for "Also delete"). */
+    suspend fun editedInFolder(sourceId: Long): Int = withContext(Dispatchers.IO) { library.editedCount(sourceId) }
+
+    /** True while paired with a server (the removal dialog asks about the server only then). */
+    val paired: Boolean get() = accounts.account.value != null
+
+    /**
+     * Prepares the removal of folder [sourceId] for the server's view (ADR 0018 "Deleting from the server"); call it
+     * before the library forgets the folder. Nothing when not paired.
+     */
+    suspend fun removeFolder(sourceId: Long, deleteFromServer: Boolean) = withContext(Dispatchers.IO) {
+        if (accounts.account.value == null) return@withContext null
+        mutex.withLock { library.removeFolder(sourceId, deleteFromServer) }
+    }
+
+    /** "Delete from server" for Server-scope photos: records, edits and uploaded originals, on every device. */
+    suspend fun deleteFromServer(photoIds: List<Long>): Int = withContext(Dispatchers.IO) {
+        if (accounts.account.value == null) return@withContext 0
+        mutex.withLock { library.deleteFromServer(photoIds) }
     }
 
     /** Deletes a version (a conflict copy) here and on the other devices. */

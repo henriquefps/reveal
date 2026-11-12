@@ -209,6 +209,29 @@ with the drop. A record pushed later that names a dropped preview (a device that
 change) gets `404` on download; the device that owns the preview pushes the record again with its current preview
 when it sees one without it. Servers before 0.5.2 answer `405`: the app keeps its drops queued until the server is updated.
 
+### A deleted photo releases its preview
+
+Added in 0.5.3 (FIX/V). When a push turns a photo record into a tombstone (applied, or a conflict the tombstone wins)
+and the record's previous `data.preview.sha256` is a `preview` blob that no live photo record names any more, the
+server deletes that blob (row in the push's transaction, file right after) whichever device uploaded it: nothing can
+reach it after that. A tombstone that loses a conflict releases nothing; a retried identical push releases nothing
+again.
+
+### Deleting an original
+
+Added in 0.5.3 (FIX/V; the user removed a folder with "Also delete from the server", or chose "Delete from server").
+`DELETE /v1/originals/{fingerprint}`, any paired device, after the photo's tombstone was pushed:
+
+- `204`: the `originals` row is gone; the blob row and file go too when no other fingerprint uses the bytes.
+- `404 not_found`: no uploaded original with this fingerprint (never uploaded, or deleted before).
+- `403 forbidden`, `details.reason = nas`: the fingerprint is an indexed NAS file; the server never deletes those.
+- `409 conflict`, `details.reason = referenced`: a photo record that is not deleted names the fingerprint (its
+  `fingerprint` or any `files[].fingerprint`; the check finds the quoted fingerprint in the record's JSON, exact for
+  `v1:` + 64 hex). Another device still describes the photo: its backup stays.
+
+The check and the delete are one transaction, serialised with blob uploads completing. Servers before 0.5.3 answer
+`405`: the app keeps its deletes queued.
+
 ### Originals and the fingerprint lookup
 
 `POST /v1/fingerprints/lookup` `{"fingerprints": ["v1:…", …]}` (at most 1000) →
@@ -284,10 +307,10 @@ Every error is JSON:
 | --- | --- |
 | 400 | `invalid_request`, `invalid_cursor`, `invalid_json` |
 | 401 | `unauthorized`, `invalid_pairing_token` |
-| 403 | `forbidden` (admin: missing `X-Reveal-Admin` or foreign `Origin`; `DELETE /v1/blobs`: an original or another device's preview) |
+| 403 | `forbidden` (admin: missing `X-Reveal-Admin` or foreign `Origin`; `DELETE /v1/blobs`: an original or another device's preview; `DELETE /v1/originals`: a NAS file) |
 | 404 | `not_found` |
 | 405 | `method_not_allowed` |
-| 409 | `offset_mismatch`, `upload_busy` (another request is writing the same upload), `conflict` (admin: e.g. changing a backup root that holds blobs; `DELETE /v1/blobs`: still referenced) |
+| 409 | `offset_mismatch`, `upload_busy` (another request is writing the same upload), `conflict` (admin: e.g. changing a backup root that holds blobs; `DELETE /v1/blobs`, `DELETE /v1/originals`: still referenced) |
 | 413 | `too_large` |
 | 415 | `unsupported_media_type` |
 | 422 | `invalid_change`, `checksum_mismatch` |
@@ -330,7 +353,8 @@ exactly 2 MiB, 2 MiB + 1).
 - Device clocks decide conflicts. A device with a clock far in the future always wins; the loser is still kept as a
   copy, so nothing is lost. A server-side clock check is a possible later addition (`modifiedAt` far ahead of the
   server's time could be clamped).
-- Originals are never garbage collected (they are a backup). Since 0.5.2 a device drops the smart previews it no
+- Originals are never garbage collected (they are a backup); since 0.5.3 the user can delete them explicitly
+  ("Deleting an original"). Since 0.5.2 a device drops the smart previews it no
   longer needs ("Dropping a smart preview"); a server-side sweep of blobs no record references can still come later.
 - Encryption at rest of originals (`sync.md` "Security", optional) is not in v1; the backup root can live on an
   encrypted volume.

@@ -21,9 +21,11 @@ import dev.hfps.reveal.data.handoff.HandoffFallbacks
 import dev.hfps.reveal.data.handoff.LocalPreviews
 import dev.hfps.reveal.data.library.DocumentTreeFactory
 import dev.hfps.reveal.data.model.FileRole
+import dev.hfps.reveal.data.model.SourceKind
 import dev.hfps.reveal.data.model.SourceState
 import dev.hfps.reveal.data.storage.DocumentTree
 import dev.hfps.reveal.data.storage.isAccessError
+import dev.hfps.reveal.data.sync.ServerTree
 import dev.hfps.reveal.pipeline.preview.SmartPreviewCodec
 import dev.hfps.reveal.pipeline.recipe.Recipe
 import java.io.Closeable
@@ -90,16 +92,26 @@ class PhotoImages(
     private val photos = db.photoDao()
     private val fallbacks = HandoffFallbacks(db, previews, serverAuthority)
 
-    private class Opened(val tree: DocumentTree, val raw: PhotoFileEntity?, val rendered: PhotoFileEntity?)
+    private class Opened(
+        val tree: DocumentTree,
+        val raw: PhotoFileEntity?,
+        val rendered: PhotoFileEntity?,
+        /** A Server photo: a failed read means the server is out of reach, not an unreadable file. */
+        val server: Boolean = false,
+    )
 
     private suspend fun open(photoId: Long): Opened? {
         val source = photos.get(photoId)?.let { db.sourceDao().get(it.sourceId) }
             ?.takeIf { it.state == SourceState.AVAILABLE } ?: return null
-        val files = photos.files(photoId)
+        val files = photos.files(photoId).let { all ->
+            // A Server photo opens from the files the server holds (FIX/V).
+            if (source.kind == SourceKind.SERVER) ServerTree.reachable(all) { it.onServer } else all
+        }
         return Opened(
             trees.open(source),
             files.firstOrNull { it.role == FileRole.RAW },
             files.firstOrNull { it.role == FileRole.RENDERED },
+            source.kind == SourceKind.SERVER,
         )
     }
 
@@ -153,7 +165,7 @@ class PhotoImages(
         }.recoverCatching { e ->
             if (!isAccessError(e)) throw e
             // A hand-off whose grant ended (ADR 0011 "Fallbacks"): the server's original, else a smart preview.
-            photos.setUnreadable(main.documentId, clock())
+            if (!opened.server) photos.setUnreadable(main.documentId, clock())
             developedFallback(main, recipe, longEdge) ?: throw e
         }.getOrNull()
     }

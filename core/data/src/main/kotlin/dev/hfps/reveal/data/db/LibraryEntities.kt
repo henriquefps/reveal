@@ -153,6 +153,12 @@ data class PhotoFileEntity(
      * successful read and by a new hand-off of the file (new rows).
      */
     @ColumnInfo(name = "unreadable_at") val unreadableAt: Long? = null,
+    /**
+     * The sync server can serve this file (`/v1/originals/{fingerprint}`: an indexed NAS file or an uploaded backup),
+     * from the fingerprint lookups and the NAS feed (ADR 0018 "Server photos"). Per file: a RAW + JPEG shot may have
+     * only its RAW backed up.
+     */
+    @ColumnInfo(name = "on_server", defaultValue = "0") val onServer: Boolean = false,
 )
 
 /**

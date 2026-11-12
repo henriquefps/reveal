@@ -37,11 +37,14 @@ class ServerFiles(private val db: RevealDatabase, private val api: () -> SyncApi
     suspend fun knownSize(fingerprint: String): Long? = db.photoDao().filesByFingerprint(listOf(fingerprint))
         .firstOrNull()?.file?.size?.takeIf { it > 0 }
 
-    /** The original of [fingerprint] when the server can serve it (NAS or backup), else null. */
+    /**
+     * The original of [fingerprint] when the server can serve it (NAS or backup), else null. What this device knows is
+     * per file (`photo_files.on_server`): a RAW + JPEG shot often has only its RAW on the server, and trusting the
+     * photo's flag for its JPEG read a file the server never had (`404`, FIX/V). Anything not known is asked first.
+     */
     suspend fun original(fingerprint: String): RemoteFile? {
         val client = api() ?: return null
-        val photoId = db.photoDao().filesByFingerprint(listOf(fingerprint)).firstOrNull()?.file?.photoId
-        val onServer = photoId?.let { db.syncDao().cloud(it) }?.originalOnServer == true
+        val onServer = db.syncDao().knownOnServer(fingerprint)
         var size = knownSize(fingerprint)
         if (!onServer || size == null) {
             val since = missing[fingerprint]

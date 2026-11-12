@@ -49,10 +49,12 @@
     <string name="sync_previews">Prévias inteligentes</string>
     <string name="sync_previews_subtitle">Uma cópia editável (cerca de 2560 px, poucos MB) das fotos editadas cujo original não chega ao servidor, para os outros aparelhos continuarem a edição. Notas, marcações e rótulos sincronizam sem ela.</string>
     <string name="sync_originals">Backup dos originais</string>
-    <string name="sync_originals_subtitle">Fotos que só este aparelho tem são enviadas uma vez: todas as fotos de uma pasta com backup ligado, e toda foto que você editar. Fotos que o servidor já tem, como as das pastas do NAS, nunca são.</string>
-    <string name="sync_folders_hint">Desligado: só as fotos que você editar entram no backup.</string>
+    <string name="sync_originals_subtitle">Fotos que só este aparelho tem são enviadas uma vez: as fotos que você editar, e todas as fotos de uma pasta marcada como “Tudo”. Fotos que o servidor já tem, como as das pastas do NAS, nunca são.</string>
+    <string name="sync_folders_hint">Cada pasta faz backup dos originais das fotos que você editar; ligue uma para fazer backup de todas as fotos dela.</string>
     <string name="sync_wifi_only">Originais só pelo Wi-Fi</string>
-    <string name="sync_section_folders">Backup dos originais destas pastas</string>
+    <string name="sync_section_folders">O que cada pasta envia</string>
+    <string name="sync_folder_everything">Tudo: todas as fotos que o servidor ainda não tem</string>
+    <string name="sync_folder_edited">Só as fotos que você editar</string>
     <string name="sync_section_storage">Armazenamento</string>
     <string name="sync_uploaded">Enviado deste aparelho: %1$s</string>
     <string name="sync_unpair">Desfazer pareamento</string>

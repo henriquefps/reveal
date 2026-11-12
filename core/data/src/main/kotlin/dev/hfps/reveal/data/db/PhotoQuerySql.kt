@@ -13,13 +13,22 @@ object PhotoQuerySql {
     const val RECENT_LIMIT = 500
 
     /**
-     * "Unavailable", defined once (`PhotoAvailability` is its Kotlin mirror): a file of the photo is unreadable AND the
-     * sync server has no original AND no smart preview. The local preview is a file, not a row: the repository removes
+     * A Server-source photo the library lists (ADR 0018 "Server photos", FIX/V): the server can serve a file of the
+     * shot (`photo_cloud.original_on_server`, any file for these photos) or holds its smart preview. A record without
+     * either only describes a photo (ratings, edits) and waits, unlisted, until the photo shows up.
+     */
+    const val SERVER_OPENABLE_SQL = "(COALESCE(c.original_on_server, 0) = 1 OR c.preview_sha IS NOT NULL)"
+
+    /**
+     * "Unavailable", defined once (`PhotoAvailability` is its Kotlin mirror): a file of one of this device's photos is
+     * unreadable AND the sync server has no original AND no smart preview (Server photos are listed only when they
+     * open, FIX/V, so never unavailable). The local preview is a file, not a row: the repository removes
      * the photos that have one after the query.
      */
     const val UNAVAILABLE_SQL =
         "EXISTS (SELECT 1 FROM photo_files uf WHERE uf.photo_id = p.id AND uf.unreadable_at IS NOT NULL) " +
-            "AND COALESCE(c.original_on_server, 0) = 0 AND c.preview_sha IS NULL"
+            "AND COALESCE(c.original_on_server, 0) = 0 AND c.preview_sha IS NULL " +
+            "AND p.source_id NOT IN (SELECT id FROM sources WHERE kind = 'SERVER')"
 
     /**
      * One row per version: the first version of every photo, then its other versions (sync conflict copies and
@@ -62,7 +71,8 @@ object PhotoQuerySql {
     private fun scopeClause(scope: LibraryScope): Clause? = when (scope) {
         LibraryScope.All -> Clause("p.source_id NOT IN (SELECT id FROM sources WHERE kind = 'SERVER')")
 
-        LibraryScope.Server -> Clause("p.source_id IN (SELECT id FROM sources WHERE kind = 'SERVER')")
+        LibraryScope.Server ->
+            Clause("p.source_id IN (SELECT id FROM sources WHERE kind = 'SERVER') AND $SERVER_OPENABLE_SQL")
 
         LibraryScope.Recent -> Clause("p.last_opened_at IS NOT NULL")
 

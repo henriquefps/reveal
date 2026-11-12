@@ -59,6 +59,13 @@ class ServerTree(private val resolver: ContentResolver, private val authority: S
             .appendPath(documentId.substringAfter('/', fingerprint(documentId)))
             .build()
 
+        /**
+         * The files of a Server photo that open (FIX/V): those the server can serve when it can serve any (a RAW + JPEG
+         * shot whose JPEG alone is on a NAS opens from the JPEG), else all of them (the smart preview stands in).
+         */
+        fun <T> reachable(files: List<T>, onServer: (T) -> Boolean): List<T> =
+            if (files.any(onServer)) files.filter(onServer) else files
+
         /** The smart preview URI of any photo's main file (the editor opens it when the original is out of reach). */
         fun smartUri(authority: String, fingerprint: String, name: String): Uri =
             uri(authority, SMART, documentId(fingerprint, name))

@@ -21,6 +21,8 @@ import androidx.sqlite.db.SupportSQLiteDatabase
  * |   | `versions.copy_of` / `copy_device`, `sources.backup` |
  * | 7 | Presets (ADR 0019): `preset_packs`, `preset_groups`, `presets`, `preset_marks` |
  * | 8 | Unreadable hand-offs (ADR 0011): `photo_files.unreadable_at` |
+ * | 9 | Smart preview formats (ADR 0018 FIX/P): `photo_cloud.preview_format` |
+ * | 10 | Server view (ADR 0018 FIX/V): `photo_files.on_server`, `sync_deletes` |
  *
  * Open it with [configure] (migrations and the sync triggers of [SyncTriggers]).
  */
@@ -44,6 +46,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         PresetGroupEntity::class,
         PresetEntity::class,
         PresetMarkEntity::class,
+        SyncDeleteEntity::class,
     ],
     version = RevealDatabase.VERSION,
     exportSchema = true,
@@ -51,6 +54,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         AutoMigration(from = 1, to = 2), AutoMigration(from = 2, to = 3),
         AutoMigration(from = 3, to = 4), AutoMigration(from = 5, to = 6), AutoMigration(from = 6, to = 7),
         AutoMigration(from = 7, to = 8), AutoMigration(from = 8, to = 9),
+        AutoMigration(from = 9, to = 10),
     ],
 )
 abstract class RevealDatabase : RoomDatabase() {
@@ -70,7 +74,7 @@ abstract class RevealDatabase : RoomDatabase() {
 
     companion object {
         const val NAME = "reveal.db"
-        const val VERSION = 9
+        const val VERSION = 10
 
         /** Every manual migration, for `Room.databaseBuilder(...).addMigrations(*MIGRATIONS)`. */
         val MIGRATIONS: Array<Migration> get() = arrayOf(MIGRATION_4_5)

@@ -49,10 +49,12 @@
     <string name="sync_previews">Smart previews</string>
     <string name="sync_previews_subtitle">A developable copy (about 2560 px, a few MB) of edited photos whose original cannot reach the server, so your other devices can keep editing them. Ratings, flags and labels sync without one.</string>
     <string name="sync_originals">Back up originals</string>
-    <string name="sync_originals_subtitle">Photos only this device has are uploaded once: every photo of a folder with backup on, and every photo you edit. Photos the server already has, such as its NAS folders, never are.</string>
-    <string name="sync_folders_hint">Off: only photos you edit are backed up.</string>
+    <string name="sync_originals_subtitle">Photos only this device has are uploaded once: the photos you edit, and every photo of a folder set to “Everything”. Photos the server already has, such as its NAS folders, never are.</string>
+    <string name="sync_folders_hint">Each folder backs up the originals of the photos you edit; switch one on to back up all its photos.</string>
     <string name="sync_wifi_only">Originals over Wi-Fi only</string>
-    <string name="sync_section_folders">Back up originals of these folders</string>
+    <string name="sync_section_folders">What each folder backs up</string>
+    <string name="sync_folder_everything">Everything: every photo the server does not have yet</string>
+    <string name="sync_folder_edited">Only photos you edit</string>
     <string name="sync_section_storage">Storage</string>
     <string name="sync_uploaded">Uploaded from this device: %1$s</string>
     <string name="sync_unpair">Unpair</string>

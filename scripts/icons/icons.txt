@@ -90,3 +90,5 @@ git-branch
 package
 image-broken
 arrow-square-out
+radio-button
+circle

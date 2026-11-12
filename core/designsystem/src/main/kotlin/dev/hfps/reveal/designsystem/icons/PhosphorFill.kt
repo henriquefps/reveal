@@ -735,4 +735,20 @@ object PhosphorFill {
             )
         }.build()
     }
+    val RadioButton: ImageVector by lazy {
+        ImageVector.Builder("FillRadioButton", 24.dp, 24.dp, 256f, 256f).apply {
+            addPath(
+                PathParser().parsePathString("M128,24A104,104,0,1,0,232,128,104.11,104.11,0,0,0,128,24Zm0,192a88,88,0,1,1,88-88A88.1,88.1,0,0,1,128,216Zm56-88a56,56,0,1,1-56-56A56.06,56.06,0,0,1,184,128Z").toNodes(),
+                fill = SolidColor(Color.Black),
+            )
+        }.build()
+    }
+    val Circle: ImageVector by lazy {
+        ImageVector.Builder("FillCircle", 24.dp, 24.dp, 256f, 256f).apply {
+            addPath(
+                PathParser().parsePathString("M232,128A104,104,0,1,1,128,24,104.13,104.13,0,0,1,232,128Z").toNodes(),
+                fill = SolidColor(Color.Black),
+            )
+        }.build()
+    }
 }

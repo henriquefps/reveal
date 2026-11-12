@@ -44,7 +44,6 @@ object UnavailableTags {
     const val REMOVE = "unavailable-remove"
     const val FORGET_CONFIRM = "unavailable-forget-confirm"
     const val FORGET_CANCEL = "unavailable-forget-cancel"
-    const val CHIP = "library-filter-unavailable"
     const val SELECTION_TRY_AGAIN = "library-unavailable-try-again"
     const val SELECTION_REMOVE = "library-unavailable-remove"
     const val VIEWER_DETAILS = "viewer-unavailable-details"

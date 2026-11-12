@@ -2,6 +2,7 @@ package dev.hfps.reveal.data.handoff
 
 import androidx.room.withTransaction
 import dev.hfps.reveal.data.db.HandoffTwin
+import dev.hfps.reveal.data.db.PhotoCloudEntity
 import dev.hfps.reveal.data.db.PhotoEntity
 import dev.hfps.reveal.data.db.RevealDatabase
 import dev.hfps.reveal.data.db.SyncAliasEntity
@@ -30,8 +31,11 @@ data class MergeReport(val merged: Int, val cullingChanged: List<Long>, val fing
  *   is pushed as a tombstone (other devices drop their Server copy of it and find the folder photo by fingerprint);
  * - "Opened from other apps" keeps showing the photo: the folder photo takes the hand-off time and title.
  *
- * Another folder or a Server-source photo with the same fingerprint is never merged into a folder: two folders are two
- * copies (ADR 0006).
+ * Another folder with the same fingerprint is never merged into a folder: two folders are two copies (ADR 0006).
+ *
+ * A **Server-source** photo (ADR 0018 "Server photos") merges the same way ([mergeServerPhotosInto], FIX/V): a folder
+ * added again, or added on this device, holds a photo the server already describes; the folder photo takes its id,
+ * edits and ratings (and the preview the record names) instead of becoming a second photo on every device.
  */
 class HandoffMerge(private val db: RevealDatabase, private val clock: () -> Long = System::currentTimeMillis) {
     private val photos = db.photoDao()
@@ -39,8 +43,12 @@ class HandoffMerge(private val db: RevealDatabase, private val clock: () -> Long
     private val sync = db.syncDao()
 
     /** Merges every hand-off photo that has a file of folder [folderSourceId] (by fingerprint) into that photo. */
-    suspend fun mergeInto(folderSourceId: Long): MergeReport {
-        val twins = photos.handoffTwins(folderSourceId)
+    suspend fun mergeInto(folderSourceId: Long): MergeReport = merge(photos.handoffTwins(folderSourceId))
+
+    /** Merges every Server-source photo that has a file of folder [folderSourceId] into that photo (FIX/V). */
+    suspend fun mergeServerPhotosInto(folderSourceId: Long): MergeReport = merge(photos.serverTwins(folderSourceId))
+
+    private suspend fun merge(twins: List<HandoffTwin>): MergeReport {
         if (twins.isEmpty()) return MergeReport(0, emptyList(), emptyList())
         val changed = LinkedHashSet<Long>()
         val prints = ArrayList<String>()
@@ -77,6 +85,9 @@ class HandoffMerge(private val db: RevealDatabase, private val clock: () -> Long
         if (cullingChanged) photos.setCulling(folder.id, culling.rating, culling.label, culling.flag)
         moveVersions(handoff.id, folder.id)
         handoff.handoffAt?.let { photos.setHandoffAt(folder.id, it, handoff.handoffTitle) }
+        // Only when the folder photo takes the merged photo's id: its record then goes on naming the preview.
+        val ours = sync.record(SyncRecordEntity.KIND_PHOTO, folder.uuid)
+        if (ours == null || ours.rev == 0L) movePreview(handoff.id, folder.id)
         val identity = moveIdentity(handoff, folder)
         // The hand-off row goes (its files, cloud state and leftover versions with it); its aliases now name the
         // folder photo.
@@ -85,6 +96,25 @@ class HandoffMerge(private val db: RevealDatabase, private val clock: () -> Long
         identity?.invoke()
         photos.setHasEdit(folder.id, edits.photoHasEdit(folder.id))
         return cullingChanged
+    }
+
+    /**
+     * The smart preview the merged photo's record named stays named by the folder photo's record (it may be the only
+     * picture another device has); the folder photo's original is asked about again by the next lookup.
+     */
+    private suspend fun movePreview(fromId: Long, toId: Long) {
+        val from = sync.cloud(fromId)?.takeIf { it.previewSha != null } ?: return
+        val to = sync.cloud(toId) ?: PhotoCloudEntity(toId)
+        if (to.previewSha != null) return
+        sync.putCloud(
+            to.copy(
+                previewSha = from.previewSha,
+                previewWidth = from.previewWidth,
+                previewHeight = from.previewHeight,
+                previewFingerprint = from.previewFingerprint,
+                previewFormat = from.previewFormat,
+            ),
+        )
     }
 
     /**

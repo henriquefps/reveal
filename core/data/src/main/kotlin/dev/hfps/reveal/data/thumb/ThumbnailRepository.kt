@@ -25,9 +25,11 @@ import dev.hfps.reveal.data.handoff.HandoffFallbacks
 import dev.hfps.reveal.data.handoff.LocalPreviews
 import dev.hfps.reveal.data.library.DocumentTreeFactory
 import dev.hfps.reveal.data.model.FileRole
+import dev.hfps.reveal.data.model.SourceKind
 import dev.hfps.reveal.data.model.SourceState
 import dev.hfps.reveal.data.storage.DocumentTree
 import dev.hfps.reveal.data.storage.isAccessError
+import dev.hfps.reveal.data.sync.ServerTree
 import dev.hfps.reveal.pipeline.PIPELINE_VERSION
 import dev.hfps.reveal.pipeline.PipelineInput
 import dev.hfps.reveal.pipeline.input.PipelineInputMapper
@@ -96,15 +98,31 @@ class ThumbnailRepository(
         val main: PhotoFileEntity,
         val rendered: PhotoFileEntity?,
         val identity: FileIdentity,
-    )
+        /** A Server photo: a failed read means the server is out of reach, never that the file is unreadable. */
+        val server: Boolean = false,
+    ) {
+        /** [error] says this device's file cannot be read (access refused or gone); never for a Server photo. */
+        fun refused(error: Throwable): Boolean = !server && isAccessError(error)
+    }
 
     private suspend fun target(photoId: Long): Target? {
         val photo = photos.get(photoId)
-        val files = photos.files(photoId)
+        val server = photo?.let { db.sourceDao().get(it.sourceId) }?.kind == SourceKind.SERVER
+        // A Server photo's thumbnail comes from a file the server holds (FIX/V).
+        val files = photos.files(photoId).let { all -> if (server) ServerTree.reachable(all) { it.onServer } else all }
         val main = files.firstOrNull { it.role == FileRole.RAW } ?: files.firstOrNull { it.role == FileRole.RENDERED }
         if (photo == null || main == null) return null
         val identity = FileIdentity(photo.sourceId.toString(), main.relativePath, main.size, main.modified)
-        return Target(photoId, photo.sourceId, main, files.firstOrNull { it.role == FileRole.RENDERED }, identity)
+        return Target(
+            photoId,
+            photo.sourceId,
+            main,
+            files.firstOrNull {
+                it.role == FileRole.RENDERED
+            },
+            identity,
+            server,
+        )
     }
 
     private suspend fun load(photoId: Long, versionId: Long, editTime: Long?): Bitmap? {
@@ -142,7 +160,7 @@ class ThumbnailRepository(
         } catch (e: CancellationException) {
             throw e
         } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
-            if (isAccessError(e)) {
+            if (target.refused(e)) {
                 // A hand-off whose grant ended (ADR 0011): remember it, and show its local preview.
                 photos.setUnreadable(main.documentId, clock())
                 localPreview(main)?.let { return it }
@@ -169,7 +187,7 @@ class ThumbnailRepository(
         } catch (e: CancellationException) {
             throw e
         } catch (@Suppress("TooGenericExceptionCaught") e: Throwable) {
-            if (isAccessError(e)) {
+            if (target.refused(e)) {
                 photos.setUnreadable(target.main.documentId, clock())
                 return renderFallback(renderer, target, versionId)
             }

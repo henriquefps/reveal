@@ -361,9 +361,11 @@ class LibraryRepository(
 
     /**
      * Adds the folder of an `ACTION_OPEN_DOCUMENT_TREE` result: persists the grant (read + write when offered, so
-     * sidecars can be written), records the volume, then indexes it in the background. Nothing is copied.
+     * sidecars can be written), records the volume, then indexes it in the background. Nothing is copied. [backup]: the
+     * originals backup of every photo the server lacks ("Everything"); the default backs up only edited photos (FIX/V,
+     * ADR 0018 "Originals backup").
      */
-    suspend fun addSource(treeUri: Uri): AddSourceResult = withContext(Dispatchers.IO) {
+    suspend fun addSource(treeUri: Uri, backup: Boolean = false): AddSourceResult = withContext(Dispatchers.IO) {
         sourceDao.byTree(treeUri.toString())?.let { return@withContext AddSourceResult.AlreadyAdded(it.id) }
         val writeGranted = persist(treeUri)
         val rootId = runCatching { DocumentsContract.getTreeDocumentId(treeUri) }.getOrNull()
@@ -382,6 +384,7 @@ class LibraryRepository(
                 state = SourceState.AVAILABLE,
                 writable = writeGranted && (root.flags and DocumentsContract.Document.FLAG_DIR_SUPPORTS_CREATE) != 0,
                 addedAt = clock(),
+                backup = backup,
             ),
         )
         index(id)
@@ -538,6 +541,13 @@ class LibraryRepository(
      * runs after every fingerprint pass, so rows printed before this existed are merged on the first walk too.
      */
     suspend fun mergeHandoffs(sourceId: Long): MergeReport = withContext(Dispatchers.IO) {
+        // A photo the sync server already describes (this folder added again, or added here after another device
+        // backed it up) becomes this folder's photo with its id, edits and ratings, never a second photo (FIX/V).
+        val server = merge.mergeServerPhotosInto(sourceId)
+        if (server.merged > 0) {
+            Log.i(TAG, "Merged ${server.merged} server photos into source $sourceId")
+            if (server.cullingChanged.isNotEmpty()) sidecars.write(server.cullingChanged)
+        }
         val report = merge.mergeInto(sourceId)
         if (report.merged > 0) {
             Log.i(TAG, "Merged ${report.merged} hand-off photos into source $sourceId")
@@ -587,8 +597,14 @@ class LibraryRepository(
             photo = photo,
             versionId = version,
             sourceState = source.state,
-            files = photoDao.files(photoId).map { it.detail(tree) },
+            files = filesOf(photoId, source).map { it.detail(tree) },
         )
+    }
+
+    /** A photo's files; for a Server photo only those that open when any does (`ServerTree.reachable`, FIX/V). */
+    private suspend fun filesOf(photoId: Long, source: SourceEntity): List<PhotoFileEntity> {
+        val files = photoDao.files(photoId)
+        return if (source.kind == SourceKind.SERVER) ServerTree.reachable(files) { it.onServer } else files
     }
 
     /** EXIF of a photo (RAW header first, gaps from its rendering), read now from the files. */

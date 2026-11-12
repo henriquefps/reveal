@@ -102,6 +102,8 @@ class SyncStore(
         sync.clearUploads()
         sync.clearAliases()
         sync.clearInbox()
+        sync.clearDeletes()
+        sync.clearOnServer()
         sync.deleteServerSource()
         for (setting in settings) meta.delete(settingKey(setting.key))
     }
@@ -311,8 +313,10 @@ class SyncStore(
             // server's state waits in the inbox and applies after that push if it is still the newest.
             local != null && local.dirty -> false
 
-            // Already applied, or older than what the push left (our state won).
-            local != null && (local.rev > record.rev || (local.rev == record.rev && !fromInbox)) -> {
+            // Already applied, or older than what the push left (our state won). A live record whose photo or version
+            // is gone from this device (its folder was removed before 0.5.3, a forgotten hand-off) is placed again:
+            // it may be openable from the server, or merge when its file shows up (FIX/V).
+            local != null && applied(local, record, fromInbox) -> {
                 stats.skipped++
                 return
             }
@@ -351,6 +355,17 @@ class SyncStore(
         )
         reassert = false
         stats.applied++
+    }
+
+    /** [record] is already applied (or older than what our push left) and its photo or version is still here. */
+    private suspend fun applied(local: SyncRecordEntity, record: FeedRecord, fromInbox: Boolean): Boolean =
+        (local.rev > record.rev || (local.rev == record.rev && !fromInbox)) && (record.deleted || present(record))
+
+    /** True when the photo or version of [record] is on this device (other kinds always are). */
+    private suspend fun present(record: FeedRecord): Boolean = when (record.kind) {
+        Kinds.PHOTO -> sync.photoByUuid(record.id) != null || sync.alias(record.id) != null
+        Kinds.VERSION -> sync.versionByUuid(record.id) != null
+        else -> true
     }
 
     /** Set by [applyPhoto] when this device's preview must be named again: the applied record is pushed again. */
@@ -401,7 +416,11 @@ class SyncStore(
                 return true
             }
             // Only photos that live on the server alone go away; a file on this device stays in its folder.
-            if (photo.sourceId == serverSource().id) photos.deletePhotos(listOf(photo.id))
+            if (photo.sourceId == serverSource().id) {
+                photos.deletePhotos(listOf(photo.id))
+            } else {
+                forgetServerCopies(photo.id)
+            }
             return true
         }
         val data = decode(record.data, PhotoData.serializer()) ?: return true
@@ -426,8 +445,42 @@ class SyncStore(
                 ),
             )
         }
-        if (photo.sourceId == serverSource().id) updateServerFiles(photo, data)
+        if (photo.sourceId == serverSource().id) refreshServerPhoto(photo, data)
         return true
+    }
+
+    /**
+     * A new state of a photo only the server describes: its files, and another lookup in this run (another device may
+     * just have backed up its original; it pushes the record again then, FIX/V).
+     */
+    private suspend fun refreshServerPhoto(photo: PhotoEntity, data: PhotoData) {
+        updateServerFiles(photo, data)
+        sync.cloud(photo.id)?.takeIf { !it.originalOnServer && it.checkedAt > 0 }?.let {
+            sync.putCloud(it.copy(checkedAt = 0))
+        }
+    }
+
+    /**
+     * The photo was deleted from the server (ADR 0018 "Deleting from the server"): its originals and preview went with
+     * the record, so this device stops naming them (a preview of its own would otherwise be named again) and asks
+     * again whether the server has the original (the folder's backup rule may send it again).
+     */
+    private suspend fun forgetServerCopies(photoId: Long) {
+        sync.cloud(photoId)?.let { cloud ->
+            sync.putCloud(
+                cloud.copy(
+                    originalOnServer = false,
+                    originalSource = null,
+                    previewSha = null,
+                    previewWidth = null,
+                    previewHeight = null,
+                    previewFingerprint = null,
+                    previewFormat = null,
+                    checkedAt = 0,
+                ),
+            )
+        }
+        for (file in photos.files(photoId)) file.fingerprint?.let { sync.setOnServer(it, false) }
     }
 
     /** A photo only the server has: filed under the Server source with its files and a first (unedited) version. */
@@ -610,7 +663,8 @@ class SyncStore(
         val local = photos.filesByFingerprint(listOf(fingerprint))
         val elsewhere = local.firstOrNull { it.file.sourceId != source.id }
         if (elsewhere != null) {
-            markOriginal(elsewhere.file.photoId, SOURCE_NAS)
+            sync.setOnServer(fingerprint, true)
+            if (isMainFile(elsewhere.file)) markOriginal(elsewhere.file.photoId, SOURCE_NAS)
             return
         }
         val dir = file.path.substringBeforeLast('/', "")
@@ -631,6 +685,7 @@ class SyncStore(
                     photoId = photoId, sourceId = source.id, relativePath = path,
                     documentId = ServerTree.documentId(fingerprint, name), name = name,
                     size = file.size, modified = file.modifiedAt, role = role, fingerprint = fingerprint,
+                    onServer = true,
                 ),
             ),
         )
@@ -676,6 +731,28 @@ class SyncStore(
         if (!cloud.originalOnServer || cloud.originalSource != source) {
             sync.putCloud(cloud.copy(originalOnServer = true, originalSource = source, checkedAt = clock()))
         }
+    }
+
+    /** True when [file] is its photo's main file (the RAW of a pair, else the rendering). */
+    private suspend fun isMainFile(file: PhotoFileEntity): Boolean = mainFile(photos.files(file.photoId))?.id == file.id
+
+    /** The per-file answer of a fingerprint lookup (FIX/V): which of [asked] the server can serve. */
+    suspend fun filesLookedUp(asked: Collection<String>, found: Set<String>) = db.withTransaction {
+        for (fingerprint in asked) sync.setOnServer(fingerprint, fingerprint in found)
+    }
+
+    /**
+     * An original this device uploaded is on the server now: the lookups say so, and the photo record is pushed again
+     * so other devices ask about it at once (their Server photo becomes openable) instead of a day later.
+     */
+    suspend fun originalLanded(photoId: Long, fingerprint: String) = db.withTransaction {
+        lookedUp(photoId, SOURCE_BACKUP)
+        sync.setOnServer(fingerprint, true)
+        val uuid = photos.get(photoId)?.uuid ?: return@withTransaction
+        val record = sync.record(Kinds.PHOTO, uuid) ?: return@withTransaction
+        // A later modifiedAt than the pushed one, so the server takes it as a new state (an identical repeat is not).
+        val at = maxOf(clock(), record.modifiedAt + 1)
+        if (!record.dirty && !record.deleted) sync.putRecord(record.copy(dirty = true, modifiedAt = at))
     }
 
     /** The answer of a fingerprint lookup for [photoId]: found (`nas`/`backup`) or missing. */

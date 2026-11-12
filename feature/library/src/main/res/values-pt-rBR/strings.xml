@@ -219,7 +219,6 @@
         <item quantity="other">Interrompido: %1$s aplicada a %2$d fotos</item>
     </plurals>
     <!-- Fotos indisponíveis (FIX/U) -->
-    <string name="library_filter_unavailable">Indisponíveis</string>
     <string name="library_unavailable_label">Indisponível</string>
     <string name="library_unavailable_cell">Indisponível: o Reveal não consegue ler esta foto. Toque para ver o motivo</string>
     <string name="library_unavailable_title">Esta foto está indisponível</string>
@@ -249,4 +248,27 @@
     <string name="viewer_unavailable_title">Esta foto está indisponível</string>
     <string name="viewer_unavailable_body">O Reveal não consegue mais ler esta foto e não tem uma prévia dela.</string>
     <string name="viewer_unavailable_details">O que posso fazer?</string>
+    <!-- A visão do servidor (ADR 0018, FIX/V) -->
+    <string name="library_backup_title">Fazer backup desta pasta no seu servidor de sincronização?</string>
+    <string name="library_backup_body">Edições, estrelas e marcações sempre sincronizam. Os originais são enviados uma vez, por Wi-Fi por padrão. Dá para mudar depois em Configurações → Sincronização.</string>
+    <string name="library_backup_edited">Só as fotos que você editar</string>
+    <string name="library_backup_edited_detail">O original de uma foto sobe na primeira vez que você a editar.</string>
+    <string name="library_backup_everything">Tudo</string>
+    <string name="library_backup_everything_detail">Todas as fotos desta pasta que o servidor ainda não tem.</string>
+    <string name="library_remove_folder_server">Excluir também do servidor</string>
+    <string name="library_remove_folder_server_on">As fotos, as edições e os originais com backup saem do servidor e dos seus outros aparelhos.</string>
+    <string name="library_remove_folder_server_off">As fotos com backup lá ficam em Servidor, com as edições, e abrem pela cópia do servidor.</string>
+    <string name="library_action_delete_server">Excluir do servidor</string>
+    <plurals name="library_delete_server_title">
+        <item quantity="one">Excluir %1$d foto do servidor?</item>
+        <item quantity="many">Excluir %1$d fotos do servidor?</item>
+        <item quantity="other">Excluir %1$d fotos do servidor?</item>
+    </plurals>
+    <string name="library_delete_server_body">As edições, estrelas e originais com backup são excluídos do servidor e dos seus outros aparelhos. Os arquivos nas pastas dos seus aparelhos e nas pastas do NAS do servidor não são tocados.</string>
+    <string name="library_delete_server_confirm">Excluir</string>
+    <plurals name="library_deleted_server">
+        <item quantity="one">%1$d foto excluída do servidor</item>
+        <item quantity="many">%1$d fotos excluídas do servidor</item>
+        <item quantity="other">%1$d fotos excluídas do servidor</item>
+    </plurals>
 </resources>

@@ -7,6 +7,7 @@ import android.os.SystemClock
 import android.util.Log
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.google.common.truth.Truth.assertThat
+import dev.hfps.reveal.ml.refine.GpuGuidedRefiner
 import dev.hfps.reveal.ml.refine.GuidedFilterShader
 import dev.hfps.reveal.ml.refine.GuidedRefiner
 import java.nio.ByteBuffer
@@ -99,6 +100,68 @@ class GuidedFilterGpuTest {
                     t1 - t0,
                 )} ms applyGpu=${"%.1f".format(Locale.ROOT, gpuMs)} ms",
             )
+        } finally {
+            gl.release()
+        }
+    }
+
+    /**
+     * The whole filter on the GPU ([GpuGuidedRefiner], M4/C): the refined mask matches the CPU reference at two
+     * subsamples, and the coefficient pass's cost at the size the CPU needed 0.6-0.9 s for (1500 x 1000) is logged.
+     */
+    @Test
+    @Suppress("NestedBlockDepth")
+    fun gpuCoefficientsMatchTheCpu() {
+        val gl = Gl()
+        try {
+            GpuGuidedRefiner().use { gpu ->
+                for ((w, h, params) in listOf(
+                    Triple(1200, 800, GuidedRefiner.Params(subsample = 4, radius = 8, eps = 1e-3f)),
+                    Triple(600, 400, GuidedRefiner.Params(subsample = 1, radius = 4, eps = 2e-4f)),
+                )) {
+                    val guide = guide(w, h)
+                    val cpu = GuidedRefiner.refine(guide, coarseMask(), params)
+                    val out = gpu.refine(guide, coarseMask(), params)
+                    var maxErr = 0f
+                    var sum = 0.0
+                    for (i in cpu.values.indices) {
+                        val e = abs(out.values[i] - cpu.values[i])
+                        maxErr = maxOf(maxErr, e)
+                        sum += e
+                    }
+                    val mean = sum / cpu.values.size
+                    Log.i(
+                        TAG,
+                        "refine gpu-coefficients ${w}x$h s=${params.subsample} r=${params.radius} " +
+                            "maxErr=${"%.5f".format(Locale.ROOT, maxErr)} meanErr=${"%.6f".format(Locale.ROOT, mean)}",
+                    )
+                    assertThat(maxErr).isLessThan(0.01f)
+                    assertThat(mean).isLessThan(1e-4)
+                }
+                // Cost: coefficients for a 1500 x 1000 grid (a 24 MP photo at subsample 4), GPU vs CPU.
+                val small = guide(1500, 1000)
+                val t0 = SystemClock.elapsedRealtimeNanos()
+                GuidedRefiner.coefficients(small, coarseMask(), GuidedRefiner.Params(subsample = 1))
+                val cpuMs = (SystemClock.elapsedRealtimeNanos() - t0) / 1e6
+                val g = gpu.uploadRgb(small)
+                val m = gpu.uploadPlane(coarseMask().values, 64, 64)
+                val params = GuidedRefiner.Params(subsample = 1)
+                GLES30.glDeleteTextures(1, intArrayOf(gpu.coefficients(g, 1500, 1000, m, 64, 64, params).texture), 0)
+                GLES30.glFinish()
+                val t1 = SystemClock.elapsedRealtimeNanos()
+                repeat(RUNS) {
+                    val k = gpu.coefficients(g, 1500, 1000, m, 64, 64, params)
+                    GLES30.glDeleteTextures(1, intArrayOf(k.texture), 0)
+                }
+                GLES30.glFinish()
+                val gpuMs = (SystemClock.elapsedRealtimeNanos() - t1) / 1e6 / RUNS
+                GLES30.glDeleteTextures(2, intArrayOf(g, m), 0)
+                Log.i(
+                    TAG,
+                    "refine coefficients 1500x1000 cpu=${"%.0f".format(Locale.ROOT, cpuMs)} ms " +
+                        "gpu=${"%.1f".format(Locale.ROOT, gpuMs)} ms",
+                )
+            }
         } finally {
             gl.release()
         }

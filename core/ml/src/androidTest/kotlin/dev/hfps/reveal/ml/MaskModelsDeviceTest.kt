@@ -36,13 +36,15 @@ class MaskModelsDeviceTest {
 
     @Test
     fun everyBundledModelIsInTheApk() {
-        for (spec in MaskModels.bundled) assertWithMessage(spec.asset).that(Fixtures.bundled(spec)).isTrue()
+        for (spec in MaskModels.bundled + MaskModels.lab + MaskModels.FACE_LANDMARKER) {
+            assertWithMessage(spec.asset).that(Fixtures.bundled(spec)).isTrue()
+        }
     }
 
     @Test
     fun sky() {
-        for (spec in listOf(MaskModels.DEEPLAB_ADE20K)) {
-            Fixtures.load(spec, Backend.GPU).use { model ->
+        for (spec in listOf(MaskModels.DEEPLAB_ADE20K, MaskModels.DEEPLAB_ADE20K_SKY)) {
+            Fixtures.load(spec, Fixtures.preferred).use { model ->
                 val sky = model.segment(group).masks.getValue(MaskKind.SKY)
                 assertWithMessage("${spec.id} sky top-left").that(sky.meanIn(0f, 0f, 0.2f, 0.07f)).isGreaterThan(0.7f)
                 assertWithMessage("${spec.id} ground").that(sky.meanIn(0f, 0.85f, 1f, 1f)).isLessThan(0.05f)
@@ -62,7 +64,7 @@ class MaskModelsDeviceTest {
             MaskModels.MODNET,
         )
         for (spec in models) {
-            Fixtures.load(spec, Backend.GPU).use { model ->
+            Fixtures.load(spec, Fixtures.preferred).use { model ->
                 val people = model.segment(portrait).masks.getValue(MaskKind.PEOPLE)
                 assertWithMessage("${spec.id} face").that(people.meanIn(0.38f, 0.32f, 0.52f, 0.45f)).isGreaterThan(0.8f)
                 assertWithMessage("${spec.id} backdrop").that(people.meanIn(0.8f, 0.05f, 0.98f, 0.3f)).isLessThan(0.1f)
@@ -72,7 +74,7 @@ class MaskModelsDeviceTest {
         }
         // The general models also find a group of small people outdoors.
         for (spec in listOf(MaskModels.SELFIE_MULTICLASS, MaskModels.LRASPP_VOC)) {
-            Fixtures.load(spec, Backend.GPU).use { model ->
+            Fixtures.load(spec, Fixtures.preferred).use { model ->
                 val people = model.segment(group).masks.getValue(MaskKind.PEOPLE)
                 assertWithMessage("${spec.id} group").that(people.meanIn(0.25f, 0.35f, 0.8f, 0.7f)).isGreaterThan(0.3f)
                 assertWithMessage("${spec.id} sky").that(people.meanIn(0f, 0f, 1f, 0.1f)).isLessThan(0.05f)
@@ -82,14 +84,14 @@ class MaskModelsDeviceTest {
 
     @Test
     fun peopleParts() {
-        Fixtures.load(MaskModels.SELFIE_MULTICLASS, Backend.GPU).use { model ->
+        Fixtures.load(MaskModels.SELFIE_MULTICLASS, Fixtures.preferred).use { model ->
             val m = model.segment(portrait).masks
             assertThat(m.getValue(MaskKind.HAIR).meanIn(0.33f, 0.18f, 0.53f, 0.24f)).isGreaterThan(0.6f)
             assertThat(m.getValue(MaskKind.FACE_SKIN).meanIn(0.4f, 0.33f, 0.5f, 0.43f)).isGreaterThan(0.6f)
             assertThat(m.getValue(MaskKind.CLOTHES).meanIn(0.35f, 0.75f, 0.6f, 0.85f)).isGreaterThan(0.5f)
             assertThat(m.getValue(MaskKind.HAIR).meanIn(0.4f, 0.33f, 0.5f, 0.43f)).isLessThan(0.2f)
         }
-        Fixtures.load(MaskModels.HAIR_SEGMENTER, Backend.GPU).use { model ->
+        Fixtures.load(MaskModels.HAIR_SEGMENTER, Fixtures.preferred).use { model ->
             val hair = model.segment(portrait).masks.getValue(MaskKind.HAIR)
             assertThat(hair.meanIn(0.33f, 0.18f, 0.53f, 0.24f)).isGreaterThan(0.6f)
             assertThat(hair.meanIn(0.4f, 0.33f, 0.5f, 0.43f)).isLessThan(0.2f)
@@ -98,7 +100,7 @@ class MaskModelsDeviceTest {
 
     @Test
     fun tapSelectsTheObjectUnderTheFinger() {
-        Fixtures.load(MaskModels.MAGIC_TOUCH, Backend.GPU).use { model ->
+        Fixtures.load(MaskModels.MAGIC_TOUCH, Fixtures.preferred).use { model ->
             val subject = model.segment(portrait, MaskPrompt(0.45f, 0.6f)).masks.getValue(MaskKind.SUBJECT)
             assertThat(subject.meanIn(0.4f, 0.55f, 0.5f, 0.65f)).isGreaterThan(0.7f)
             assertThat(subject.meanIn(0.8f, 0.05f, 0.98f, 0.3f)).isLessThan(0.1f)
@@ -107,9 +109,10 @@ class MaskModelsDeviceTest {
 
     @Test
     fun gpuMatchesCpu() {
+        assumeTrue("GPU parity runs on a device with the GPU accelerator", Fixtures.preferred == Backend.GPU)
         for (spec in MaskModels.bundled) {
             val prompt = if (spec.interactive) MaskPrompt(0.45f, 0.6f) else null
-            val gpu = Fixtures.load(spec, Backend.GPU).use { it.segment(portrait, prompt) }
+            val gpu = Fixtures.load(spec, Fixtures.preferred).use { it.segment(portrait, prompt) }
             val cpu = Fixtures.load(spec, Backend.CPU).use { it.segment(portrait, prompt) }
             for ((kind, g) in gpu.masks) {
                 val c = cpu.masks.getValue(kind)

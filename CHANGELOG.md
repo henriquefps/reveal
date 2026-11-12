@@ -12,6 +12,15 @@ All notable changes to Reveal are documented here. The format follows
   timings, to judge them before M4's masks. Release builds are unchanged (no models, no ML runtime).
 - `:core:ml`: on-device mask models through LiteRT, pinned model files fetched at build time, guided-filter edge
   refinement (CPU reference and GPU pass); the choice of models is in docs/adr/0021.
+- M4/C, groundwork for AI masks (no editor UI yet): release builds now carry the on-device mask runtime and four
+  models (people and their parts, subject, sky, face landmarks), all offline. One service makes every AI mask kind:
+  subject (automatic seeds from faces or saliency, plus taps), background, sky, people, hair, face skin, body skin,
+  skin, clothes, and new eyes, irises, lips, teeth and eyebrows drawn from face landmarks; masks are cached on disk
+  ("AI masks" in Settings -> Storage, cleared by "Clear cache").
+- The sky model is converted at build time so it runs entirely on the GPU (dilated convolutions, a single sky
+  output), with the same masks as the published model; edge refinement now runs fully on the GPU too, with per-kind
+  settings (finer for hair, wider for skies with branches).
+- Debug builds: the mask lab offers the face parts (eyes, irises, lips, teeth, eyebrows).
 
 ## [0.5.5] - 2026-11-12
 

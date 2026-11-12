@@ -13,18 +13,12 @@ import dev.hfps.reveal.ml.tensor.OutputSpec
  * licence) are in `core/ml/models.json`; `MaskModelsTest` keeps the two in step. Assets live under `ml/` in the APK.
  */
 object MaskModels {
-    /** The asset path of [spec] in the APK. */
-    fun assetPath(spec: ModelSpec): String = "ml/${spec.asset}"
-
-    /**
-     * MediaPipe SelfieMulticlass: people and their parts (background, hair, body skin, face skin, clothes, others).
-     * Its probabilities are soft (the background tops out near 0.92), so every kind is stretched from 0.1..0.9.
-     */
-    val SELFIE_MULTICLASS = ModelSpec(
+    /** MediaPipe SelfieMulticlass's tensors and classes (both versions). */
+    private fun selfieMulticlass(version: Int, sha256: String) = ModelSpec(
         id = ModelId("selfie-multiclass"),
-        version = 1,
-        asset = "selfie-multiclass-v1.tflite",
-        sha256 = "c6748b1253a99067ef71f7e26ca71096cd449baefa8f101900ea23016507e0e0",
+        version = version,
+        asset = "selfie-multiclass-v$version.tflite",
+        sha256 = sha256,
         input = InputSpec(256, 256, Layout.NHWC, Normalisation.MINUS_ONE_ONE),
         output = OutputSpec(256, 256, 6, Layout.NHWC, Activation.SOFTMAX),
         kinds = mapOf(
@@ -36,6 +30,17 @@ object MaskModels {
             MaskKind.CLOTHES to KindRule(listOf(4), low = SOFT_LOW, high = SOFT_HIGH),
         ),
     )
+
+    /**
+     * MediaPipe SelfieMulticlass: people and their parts (background, hair, body skin, face skin, clothes, others).
+     * Its probabilities are soft (the background tops out near 0.92), so every kind is stretched from 0.1..0.9.
+     * Version 2 = the published file (version 1) with float16 convolution weights
+     * (`scripts/ml/convert_fp16_weights.py`, docs/adr/0021 "M4/C"): 8.3 MB instead of 16.4, the same masks.
+     */
+    val SELFIE_MULTICLASS = selfieMulticlass(2, "8d66dc0645fda3ba08106594da0677f8558d3a3955c3248c1511c4190dde0c1d")
+
+    /** The published float32 file of [SELFIE_MULTICLASS] (the lab's comparison). */
+    val SELFIE_MULTICLASS_V1 = selfieMulticlass(1, "c6748b1253a99067ef71f7e26ca71096cd449baefa8f101900ea23016507e0e0")
 
     /** MediaPipe SelfieSegmenter (square): one person-vs-background probability, made for selfies. */
     val SELFIE_SEGMENTER = ModelSpec(
@@ -85,7 +90,10 @@ object MaskModels {
         ),
     )
 
-    /** DeepLab-v3 MobileNetV2 on ADE20K (150 classes + "other"; 3 = sky). */
+    /**
+     * DeepLab-v3 MobileNetV2 on ADE20K (150 classes + "other"; 3 = sky), as published: kept for the lab's comparison.
+     * Its SPACE_TO_BATCH_ND ops keep most of it off the GPU; the app uses [DEEPLAB_ADE20K_SKY].
+     */
     val DEEPLAB_ADE20K = ModelSpec(
         id = ModelId("deeplab-v3-ade20k"),
         version = 1,
@@ -94,6 +102,36 @@ object MaskModels {
         input = InputSpec(513, 513, Layout.NHWC, Normalisation.MINUS_ONE_ONE),
         output = OutputSpec(513, 513, 151, Layout.NHWC, Activation.SOFTMAX),
         kinds = mapOf(MaskKind.SKY to KindRule(listOf(ADE20K_SKY))),
+    )
+
+    /**
+     * The sky model the app uses: [DEEPLAB_ADE20K] converted by `scripts/ml/convert_deeplab_sky.py` (docs/adr/0021
+     * "M4/C"): dilated convolutions instead of SPACE_TO_BATCH_ND / BATCH_TO_SPACE_ND (the whole graph on the GPU), and
+     * one output channel, the sky logit against the log-sum-exp of the 150 other classes (its sigmoid is the sky's
+     * softmax probability), instead of 151 logits.
+     */
+    val DEEPLAB_ADE20K_SKY = ModelSpec(
+        id = ModelId("deeplab-v3-ade20k-sky"),
+        version = 1,
+        asset = "deeplab-v3-ade20k-sky-v1.tflite",
+        sha256 = "f57fbaa14e106b5750f58f3b07b7ba390a42df58b0dfe671fddf15c1ec00b013",
+        input = InputSpec(513, 513, Layout.NHWC, Normalisation.MINUS_ONE_ONE),
+        output = OutputSpec(513, 513, 1, Layout.NHWC, Activation.SIGMOID),
+        kinds = mapOf(MaskKind.SKY to KindRule(listOf(0))),
+    )
+
+    /**
+     * MediaPipe Face Landmarker's landmark model (478 points: face mesh + irises), extracted from the pinned `.task`
+     * bundle at build time. Eyes, irises, lips, teeth and brows are polygons over its points
+     * ([dev.hfps.reveal.ml.face.FaceParts]).
+     */
+    val FACE_LANDMARKER = LandmarkModelSpec(
+        id = ModelId("face-landmarker"),
+        version = 1,
+        asset = "face-landmarker-v1.tflite",
+        sha256 = "c7d54204ce0448474c7f3fa9af494787c0965cbdd6f20fc72867e43046bd43d5",
+        side = 256,
+        points = 478,
     )
 
     /**
@@ -136,17 +174,22 @@ object MaskModels {
     private const val SOFT_LOW = 0.1f
     private const val SOFT_HIGH = 0.9f
 
-    /** The models the APK carries (the mask lab's list), in the lab's order. */
-    val bundled: List<ModelSpec> = listOf(
-        SELFIE_MULTICLASS,
-        LRASPP_VOC,
-        DEEPLAB_ADE20K,
-        MAGIC_TOUCH,
-        HAIR_SEGMENTER,
-        SELFIE_SEGMENTER,
-        MODNET,
-    )
+    /**
+     * The segmentation models every build carries (release included): what [dev.hfps.reveal.ml.service.MaskService]
+     * uses.
+     */
+    val bundled: List<ModelSpec> = listOf(SELFIE_MULTICLASS, MAGIC_TOUCH, DEEPLAB_ADE20K_SKY)
 
-    /** Every model with a spec (bundled or not). */
-    val all: List<ModelSpec> = bundled + DEEPLAB_ADE20K_XCEPTION + ISNET
+    /** The models only debug builds carry, for the mask lab's comparisons. */
+    val lab: List<ModelSpec> =
+        listOf(SELFIE_MULTICLASS_V1, LRASPP_VOC, DEEPLAB_ADE20K, HAIR_SEGMENTER, SELFIE_SEGMENTER, MODNET)
+
+    /** Every segmentation model with a spec (bundled, lab or neither). */
+    val all: List<ModelSpec> = bundled + lab + DEEPLAB_ADE20K_XCEPTION + ISNET
+
+    /** Every pinned file with a Kotlin spec, segmentation or not (kept in step with `models.json` by a test). */
+    val pinned: List<PinnedModel> = all + FACE_LANDMARKER
+
+    /** The asset path of any pinned model. */
+    fun assetPath(model: PinnedModel): String = "ml/${model.asset}"
 }

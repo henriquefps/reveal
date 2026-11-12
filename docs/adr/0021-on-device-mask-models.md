@@ -1,6 +1,6 @@
 # ADR 0021: On-device mask models
 
-Status: accepted (M4/S spike). Date: 2026-11-12. Precedes M4 "Masks" (`docs/plan/milestones.md`); builds on
+Status: accepted (M4/S spike), amended by M4/C (below). Date: 2026-11-12. Precedes M4 "Masks" (`docs/plan/milestones.md`); builds on
 `docs/plan/architecture.md` "On-device ML", ADR 0010 / 0020 (faces and the saliency map, BlazeFace in pure Kotlin) and
 ADR 0002 (pipeline order). Platform-neutral where it can be: the masks are model outputs plus documented maths.
 
@@ -18,14 +18,14 @@ redistribution inside a paid AGPL-3.0-or-later app (weights and training-data te
 | --- | --- |
 | Runtime | **LiteRT 2.3.2** (`com.google.ai.edge.litert:litert` + `litert-gpu`, Apache-2.0), CompiledModel API, GPU (OpenCL on Adreno) with the CPU registered too (ops the GPU lacks run on XNNPACK), CPU-only fallback. No NNAPI/QNN, no ONNX Runtime. |
 | People + parts | **MediaPipe Selfie Multiclass 256** (Apache-2.0): people, hair, face skin, body skin, skin, clothes. |
-| Sky | **DeepLab-v3 MobileNetV2 ADE20K** (Apache-2.0 weights; ADE20K terms flagged below). |
+| Sky | **DeepLab-v3 MobileNetV2 ADE20K** (Apache-2.0 weights; ADE20K terms accepted by the owner), converted for the GPU at build time (M4/C: `deeplab-v3-ade20k-sky@1`). |
 | Subject | **MediaPipe MagicTouch** (Apache-2.0), seeded automatically (faces, else saliency peaks), and by taps. |
 | Background | `1 - subject` (or `1 - people`); no model. |
-| Eyes, lips | Not from a segmenter (every bundled option lacks them; BiSeNet/CelebAMask-HQ is non-commercial). M4 draws them from face landmarks (MediaPipe Face Landmarker, Apache-2.0: lip and eye contours) — to evaluate in M4. |
-| Edge refinement | Colour guided filter, fast form: coefficients at 1/4 resolution, one GPU pass at full resolution (8.6 ms at 24 MP on the S24). |
-| APK budget | ≈ 34 MB per arm64 install: runtime 9.4 MB + models 25.0 MB. Today in **debug builds only** (the mask lab). |
+| Eyes, lips | Not from a segmenter (every bundled option lacks them; BiSeNet/CelebAMask-HQ is non-commercial). Drawn from face landmarks (M4/C): MediaPipe Face Landmarker's landmark model (Apache-2.0) run by LiteRT on Reveal's BlazeFace crops; eyes, irises, lips, teeth, eyebrows as soft polygons. |
+| Edge refinement | Colour guided filter, fast form: coefficients on a ~512 px grid (M4/C: size-independent, per-kind radius/eps), all passes on the GPU (M4/C) with the CPU reference kept; one GPU pass at full resolution (8.6 ms at 24 MP on the S24). |
+| APK budget | ≈ 34 MB per arm64 install. M4/C, release: runtime 9.4 MB + models 19.6 MB = **29.0 MB** (Selfie Multiclass stored with float16 weights). |
 | Recipe | A mask stores the model reference `<id>@<version>`, the kind, prompts, refinement parameters; never pixels. Cache keyed by photo fingerprint + model id@version + parameters. |
-| Delivery | `core/ml/models.json` (URL, SHA-256, size, licence) + `scripts/ml/fetch_models.py` (stdlib, cached by checksum, `--check`), run by Gradle into `:core:ml`'s generated assets. |
+| Delivery | `core/ml/models.json` (URL or a derivation from a pinned file, SHA-256, size, licence) + `scripts/ml/fetch_models.py` (stdlib, cached by checksum, `--check`), run by Gradle into `:core:ml`'s generated assets; a release set and a debug (lab) set (M4/C). |
 
 ## Candidates
 
@@ -161,3 +161,163 @@ the editor: release builds carry no LiteRT and no model.
   timings on screen. No release UI.
 - Open for M4: GPU coefficients, the ADE20K graph rewrite, face-landmark eyes/lips, the recipe field and cache, and
   a decision by the owner on ADE20K's data terms.
+
+## Amendment M4/C: release delivery, GPU sky, eyes and lips, GPU refinement, `MaskService`
+
+Date: 2026-11-12. Delivered by M4/C (`:core:ml`, `:core:data`, `:app`); the mask engine in `:core:pipeline` (M4/A) and
+the editor's masks (M4/B) build on it. Measurements on cachy-fps (host CPU, x86_64 emulator with SwiftShader, LiteRT
+CPU only there); the GPU numbers come from the owner's phone (commands in CLAUDE.md "On-device mask models").
+
+### Release delivery and size
+
+- Every build carries `:core:ml` (the app, the editor; `:core:data` provides `MaskService`). The mask lab stays in
+  `src/debug`. `core/ml/models.json` now has two sets: `bundled` (every build) and `lab` (debug only: the published
+  Selfie Multiclass, DeepLab ADE20K, LR-ASPP, Hair Segmenter, Selfie Segmenter, MODNet for comparison);
+  `fetchMlModelsRelease` / `fetchMlModelsDebug` copy each set into the variant's assets. Entries are keyed by
+  `<id>@<version>`, the key a recipe stores; a new file of a model is a new version (`selfie-multiclass@2`).
+- A **derived** entry is made on the build machine from another pinned entry by a stdlib script and pinned by its
+  output checksum like a download (`--check` re-derives): `convert` (`convert_deeplab_sky.py`,
+  `convert_fp16_weights.py`, over `tflite_flatbuffer.py`, a minimal deterministic TFLite reader/writer that refuses
+  any table or option it does not know rather than rewrite it lossily) and `extract` (a member of a `.task` zip).
+- **Selfie Multiclass float16** (`selfie-multiclass@2`): the published float32 file with its 86 convolution filters
+  stored as float16 behind DEQUANTIZE ops (TensorFlow's float16 weight layout): 16.4 → 8.3 MB. Against the original
+  on LiteRT's CPU (host, the 6 public fixtures, per class at 256 px): mean absolute difference ≤ 0.00023, IoU at 0.5
+  ≥ 0.9957 (`scripts/ml/verify_fp16.py`). The GPU computes in half precision anyway.
+- R8: `core/ml/consumer-rules.pro` keeps `com.google.ai.edge.litert.**` and `org.tensorflow.lite.**` (LiteRT's JNI
+  finds them by name; the AAR has no rules for them). Proved on the emulator with the R8-minified `bench` build
+  (`--es mode masks`: every kind through the Hilt `MaskService` and through a CPU-only service) and the release APK
+  signed with the debug key (installs, opens a RAW).
+- ABIs: the app keeps `arm64-v8a` and `x86_64` (`ndk.abiFilters`): LibRaw has no 32-bit build, so LiteRT's
+  `armeabi-v7a` natives (6.3 MB) were dead weight. Play delivers one ABI per device from the App Bundle, so the
+  phone receives only arm64; `x86_64` stays in the universal APK so the release can be checked on an emulator.
+
+| Release APK (`:app:assembleRelease`, unsigned) | Universal APK | arm64-v8a install (APK minus x86_64 libs) |
+| --- | --- | --- |
+| Before (88da15e, 0.5.5 + spike: no `:core:ml` in release) | 11.1 MB | 9.7 MB |
+| After (M4/C) | 52.9 MB | 39.2 MB |
+| of which LiteRT natives | 21.6 MB (arm64 9.4 + x86_64 12.2) | 9.4 MB |
+| of which models | 19.6 MB (multiclass@2 8.3, MagicTouch 6.2, face landmarks 2.6, sky 2.5) | 19.6 MB |
+
+The ML part of an arm64 install is 29.0 MB, under the ≈ 34 MB budget (25.0 MB of models in the spike's plan, plus
+the 2.6 MB landmark model, minus the 8.1 MB float16 saves). Models are stored uncompressed (memory-mapped).
+
+### Sky under 50 ms on the GPU: the conversion
+
+`scripts/ml/convert_deeplab_sky.py` rewrites the pinned `deeplab-v3-ade20k@1`:
+
+1. The 10 SPACE_TO_BATCH_ND → DEPTHWISE_CONV_2D (VALID) → BATCH_TO_SPACE_ND triples (TensorFlow's lowering of the
+   atrous convolutions, rates 2 and 4) become the depthwise convolution with dilation = the block size and SAME
+   padding, only where provably identical (stride 1, odd kernel, paddings before minus crops before = dilation ×
+   (kernel − 1) / 2, block output the size of its input).
+2. The 151 logits (513 × 513 × 151 after two bilinear upsamplings: 159 MB of float readback a run) become one
+   channel at the logits' 129 × 129, then the same upsampling: `D = L − L_sky` (1 × 1 conv), `s = Σ_{c≠sky}
+   exp(min(D_c, 6)) + 1e-4` (MINIMUM, EXP, 1 × 1 conv), `z = −log s` (LOG, MUL) = the sky logit against the
+   log-sum-exp of the 150 other classes; `sigmoid(z)` is exactly the sky's softmax probability. The clamp keeps a
+   half-precision sum finite (150 × e⁶ < 65504) and only bites where the sky's probability is < 0.0025; the 1e-4
+   keeps the log finite where the sky wins by far (≤ 0.9999). Readback: 1.05 MB.
+
+Ops of the converted graph (135 → 121): CONV_2D 43, DEPTHWISE_CONV_2D 19 (10 dilated), ADD 20, DEQUANTIZE 17
+(float16 constants), MUL 11, RESIZE_BILINEAR 5, CONCATENATION 2, AVERAGE_POOL_2D 1, MINIMUM 1, EXP 1, LOG 1: all on
+LiteRT's GPU op list (the original's 91 CPU ops came from SPACE_TO_BATCH_ND / BATCH_TO_SPACE_ND, which it lacks).
+2.5 MB.
+
+Equivalence (converted vs original, sky mask at 0.5 and mean absolute difference of the probability):
+
+| Run | Images | Worst IoU | Worst mean diff | CPU time original → converted |
+| --- | --- | --- | --- | --- |
+| Host, LiteRT 2.3.0 Python, 4 threads (`verify_sky.py`) | 6 public fixtures (3 with sky) | 0.9936 | 0.0008 | 106 → 79 ms (median) |
+| x86_64 emulator, LiteRT 2.3.2 CPU (`SkyConversionTest`) | 4 (outdoor group, landscape, portrait, trio) | 0.9988 | 0.0008 | 4.9-7.0 s → 0.44-0.79 s |
+
+The phone's GPU time (target < 50 ms: the original ran 374 ms with 91 ops on the CPU) and the GPU/CPU parity come
+from `MaskBenchmark` and `MaskModelsDeviceTest#gpuMatchesCpu` on the S24 (orchestrator run; LiteRT logs the
+partition when it compiles).
+
+### Eyes, irises, lips, teeth, eyebrows: Face Landmarker
+
+- Model: `face_landmarks_detector.tflite` (2.55 MB, float16 weights, 478 points = MediaPipe's face mesh v2 with the
+  irises 468-477, a face-presence logit), extracted at build time from the pinned `face_landmarker.task` bundle
+  (Apache-2.0); the bundle's own face detector and blendshape model are not used. Input 256 × 256 RGB in 0..1.
+- Run by LiteRT, **without MediaPipe Tasks**: Tasks would ship a second native runtime next to LiteRT (several MB a
+  ABI) and its short-range face detector (128 px input, faces filling the frame), which misses the small faces of
+  group photos that Reveal's full-range BlazeFace with tiles (ADR 0010) finds. Reveal does the graph's glue itself:
+  `face/FaceCrop` (MediaPipe's ROI: the detection box × 1.5 on its long side, turned so the eye keypoints are level;
+  bilinear sampling with explicit weights) and a second, tracked pass around the first pass's landmarks (eye-corner
+  line level, box × 1.5), which MediaPipe's video graph does between frames; faces with presence < 0.5 are dropped.
+- Parts (`face/FaceParts`): closed contours of MediaPipe's `face_mesh_connections` (FACEMESH_LIPS outer and inner,
+  _LEFT_EYE / _RIGHT_EYE, _IRISES, _EYEBROWS), smoothed by a closed Catmull-Rom spline (4 points per segment), drawn
+  with a linear soft edge 2 % of the outer-eye-corner distance wide (at least 0.75 px): **EYES** = the two eye
+  openings; **IRISES** = a circle through the iris contour, clipped to the eye opening; **LIPS** = outer minus inner
+  contour; **TEETH** = the inner contour (the open mouth: teeth and tongue; empty when the mouth is closed);
+  **EYEBROWS** = the brow outlines. Several faces unite (max). No guided refinement by default (the polygons follow
+  the landmarks; refinement would bleed into skin of similar colour).
+- Results (public-domain fixtures; `FaceLandmarksDeviceTest`, emulator CPU): the studio portrait's 1 face, the
+  trio's 3, 8 of the outdoor group's 16 people (those BlazeFace finds; eye corners 9-11 px apart there, so the parts
+  are a few pixels); 134-233 ms for one face (two passes) and 342 ms for 8 faces on the emulator's CPU. The portrait
+  and trio overlays are in `docs/screenshots/masks/face-parts-*.jpg`. Limits: faces the detector misses get no
+  parts, and on faces a few dozen pixels wide the parts are only a few pixels (the group's eyes).
+
+### Edge refinement on the GPU and per-kind settings
+
+- `refine/GpuGuidedRefiner`: every pass of the fast guided filter on the GPU, the same maths as the CPU reference
+  (`GuidedRefiner`) pass for pass: the explicit-weight resample of `Resample.taps` (taps in a texture, x then y), the
+  13 window statistics into 4 RGBA32F targets, separable clamped box means, the 3 × 3 solve by cofactors, the box
+  mean of the coefficients, then the existing full-resolution apply pass. `texelFetch` everywhere, no hardware
+  filtering, no derivatives. Parity on the emulator (SwiftShader): max |GPU − CPU| 0.00001 (1200 × 800, subsample 4)
+  and 0.00022 (600 × 400, subsample 1) on the refined mask. The phone's cost for the 1500 × 1000 coefficients (the CPU
+  takes 0.5-0.9 s) comes from `GuidedFilterGpuTest#gpuCoefficientsMatchTheCpu`. Memory: about 9 RGBA32F textures of
+  the coefficient grid at once (600 × 400: 35 MB).
+- **Size-independent settings** (`refine/RefineDefaults`): the coefficient grid's long side is about 512 px
+  (`subsample = long side / 512`), so the cache (≤ 1024 px), the preview and a 24 MP export refine a mask the same
+  way relative to the photo, and the GPU grid stays small (coefficients from the preview's scale serve any output
+  size: `apply` upsamples them). Radius in grid pixels, eps in 0..1 units²:
+
+| Kind | Radius | eps | Why |
+| --- | --- | --- | --- |
+| People, subject, background, skin, face/body skin, clothes | 4 (0.8 % of the long side) | 1e-3 | the spike's setting, now size-independent |
+| Hair | 4 | 2e-4 | a smaller eps follows fine, low-contrast strands |
+| Sky | 8 | 1e-3 | a wider window cuts branches and foliage out of the sky |
+| Eyes, irises, lips, teeth, eyebrows | none | — | landmark polygons |
+
+To be tuned on the owner's review sheets in M4/B (the constants live in one place).
+
+### `MaskService`: one entry point
+
+`service/MaskService.mask(MaskRequest) → MaskOutput` (in `:core:ml`; `:core:data` provides it). An adapter to M4/A's
+`AiMaskSource` maps: photo key (fingerprint) → `photoKey`; the model input (the upright recipe-independent render,
+≤ 1024 px, "Model input" above) → `image` (+ `inputVersion` for the render's version); the recipe's kind, `model`
+(`<id>@<version>`), prompts and refinement → the same fields; and gets a single-channel `Mask` at the input's size in
+upright image coordinates (and the raw model output plus the setting, to refine on the GPU at render size).
+
+- Kinds → models (`MaskService.modelFor`, what a new recipe records): subject / background → `magic-touch@1` (seeds:
+  each face's centre and the body two face heights below, else the 3 strongest saliency peaks, plus taps; masks
+  united; background = 1 − subject, which commutes with the linear guided filter); sky →
+  `deeplab-v3-ade20k-sky@1`; people, hair, face skin, body skin, skin, clothes → `selfie-multiclass@2`; eyes,
+  irises, lips, teeth, eyebrows → `face-landmarker@1`. A recipe naming a model that cannot make its kind is refused.
+- Faces and saliency (`PhotoCues`): the caller's (`PhotoFeatures`) when given, else found once per photo (BlazeFace
+  + saliency at 576 px).
+- **Cache** (`service/MaskDiskCache`, `cache/masks`): the model's unrefined output and the refined mask separately,
+  keyed by photo + `<id>@<version>` + kind + input version and size + seeds (+ radius/eps for the refined entry), so
+  a refinement change never re-runs a model and one Selfie Multiclass run fills its six kinds. 8-bit, deflated, files
+  named by the key's SHA-256 (no photo name or fingerprint on disk); fresh results are quantised the same way, so a
+  hit and a miss give identical pixels. It is a `CacheArea` (`:core:data` `storage/MaskCacheArea`,
+  `StorageKind.MASKS`, Settings → Storage "AI masks"): capped by `CacheBudget` on every write, trimmed with the other
+  caches, emptied by "Clear cache". The adapter lives in `:core:data` (which now depends on `:core:ml`) because
+  `:core:ml` must not depend on the library's database.
+- **Memory and threads** (the editor also holds the proxy and the GL renderer): one segmentation model compiled at
+  a time (GPU PSS 30-140 MB, ADR table) plus the landmark model (small); `release()` frees them (editor closed,
+  `onTrimMemory`). One request at a time (a mutex); work on `Dispatchers.Default`; LiteRT's CPU fallback uses 4
+  XNNPACK threads (`LiteRtEngine.CPU_THREADS`), so a CPU-only device keeps cores for the UI; the CPU refinement at
+  ≤ 1024 px is parallel over rows (55-220 ms on the emulator). The last photo's cues and landmarks stay in memory
+  (every face part reuses them).
+- **Cancellation**: checked between steps (cues, each seed's run, refinement); a single model run is not
+  interruptible (≤ 50 ms on a GPU, ≤ ~0.5 s on a CPU).
+- Emulator CPU (614 × 768 portrait, first request includes compiling the model): subject 1.07 s (two seeds), sky
+  0.42 s, Selfie Multiclass 0.21 s (all six kinds), face landmarks 0.09 s; every second request from the cache.
+
+### Open (M4/B and the phone)
+
+- The phone run: GPU times and op placement of the sky model, GPU/CPU parity of `selfie-multiclass@2` and the sky,
+  the GPU coefficient pass's cost, the landmark model on the GPU.
+- Tuning the refinement constants and the face-part feather on the owner's review sheets.
+- The editor integration: the adapter to M4/A's `AiMaskSource`, the model-input render and its `inputVersion`.
+

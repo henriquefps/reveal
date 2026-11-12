@@ -11,6 +11,9 @@ android {
 
     defaultConfig {
         applicationId = "dev.hfps.reveal"
+        // 64-bit only: LibRaw (:core:image) is built for these two, so a 32-bit device could not run Reveal anyway;
+        // this drops LiteRT's armeabi-v7a natives (6.3 MB, docs/adr/0021 "M4/C"). Play delivers one ABI per device.
+        ndk { abiFilters += setOf("arm64-v8a", "x86_64") }
     }
 
     // Release signing reads the keystore from the environment, never from the repo. The values live in the skv
@@ -72,8 +75,9 @@ dependencies {
     implementation(projects.core.designsystem)
     implementation(projects.core.image)
     implementation(projects.core.pipeline)
-    // The on-device mask models (ADR 0021) only reach debug builds, through the mask lab, until M4 ships masks.
-    debugImplementation(projects.core.ml)
+    // The on-device mask models (ADR 0021): every build carries the runtime and the bundled models (M4/C); the mask
+    // lab and its comparison models stay in debug builds.
+    implementation(projects.core.ml)
     implementation(projects.core.data)
     implementation(projects.core.sync)
     implementation(projects.feature.library)

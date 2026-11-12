@@ -73,6 +73,7 @@ internal object PolishSamples {
             bytes = mapOf(
                 StorageKind.THUMBNAILS to 182 * MB,
                 StorageKind.SERVER_FILES to 1_240 * MB,
+                StorageKind.MASKS to 64 * MB,
                 StorageKind.HANDOFF_PREVIEWS to 96 * MB,
                 StorageKind.OTHER to 14 * MB,
                 StorageKind.LIBRARY to 38 * MB,

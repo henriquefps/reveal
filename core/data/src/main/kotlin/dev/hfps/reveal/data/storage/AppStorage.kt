@@ -18,7 +18,8 @@ data class StorageUsage(
 
     /** What "Clear cache" would free (about: other caches written in the last minutes are kept). */
     val clearable: Long
-        get() = get(StorageKind.THUMBNAILS) + get(StorageKind.SERVER_FILES) + get(StorageKind.OTHER) +
+        get() = get(StorageKind.THUMBNAILS) + get(StorageKind.SERVER_FILES) + get(StorageKind.MASKS) +
+            get(StorageKind.OTHER) +
             (get(StorageKind.HANDOFF_PREVIEWS) - keptPreviews).coerceAtLeast(0)
 }
 
@@ -44,7 +45,7 @@ class AppStorage(
     suspend fun usage(): StorageUsage = withContext(Dispatchers.IO) {
         val areas = budget.areas().groupBy { it.kind }
         val bytes = LinkedHashMap<StorageKind, Long>()
-        for (kind in listOf(StorageKind.THUMBNAILS, StorageKind.SERVER_FILES)) {
+        for (kind in listOf(StorageKind.THUMBNAILS, StorageKind.SERVER_FILES, StorageKind.MASKS)) {
             bytes[kind] = areas[kind].orEmpty().sumOf { area -> area.items().sumOf { it.bytes } }
         }
         val local = previewFiles()
@@ -99,8 +100,8 @@ class AppStorage(
     }
 
     companion object {
-        /** The cache directories the budget's areas own (thumbnails, server file parts, server previews). */
-        val AREA_DIRS = setOf("thumbs", "sync-originals", "sync-previews")
+        /** The cache directories the budget's areas own (thumbnails, server file parts, server previews, masks). */
+        val AREA_DIRS = setOf("thumbs", "sync-originals", "sync-previews", MaskCacheArea.DIR)
         const val RECENT_MS = 10 * 60 * 1000L
         private const val TEMP_SUFFIX = ".tmp"
     }

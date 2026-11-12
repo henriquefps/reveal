@@ -109,22 +109,25 @@ class EditorEffectsTest {
     private fun enabled(id: ControlId): Boolean = !compose.onNodeWithTag(EditorTags.control(id))
         .fetchSemanticsNode().config.contains(SemanticsProperties.Disabled)
 
-    /** Numeric entry of [text] on [id]'s slider; waits for the value label to change (retries once: on a busy phone
-     * the first tap can land before the row settles after scrolling). */
+    /**
+     * Numeric entry of [text] on [id]'s slider, each step awaited on a condition: no entry dialog open, then exactly
+     * one field, then the dialog gone after Done, then the value label changed (retries once: on a busy phone the
+     * first tap can land before the row settles after scrolling; a second dialog is never opened over the first).
+     */
     private fun type(id: ControlId, text: String) {
         val before = value(id)
         repeat(2) {
+            compose.waitUntilDoesNotExist(hasTestTag(NumericInputTags.FIELD), TIMEOUT_MS)
             compose.onNodeWithTag(EditorTags.control(id)).performScrollTo()
             compose.waitForIdle()
             compose.onNodeWithTag(EditorTags.control(id) + RevealSliderTags.VALUE_SUFFIX, useUnmergedTree = true)
                 .performClick()
-            compose.waitUntilAtLeastOneExists(hasTestTag(NumericInputTags.FIELD), TIMEOUT_MS)
+            compose.waitUntilExactlyOneExists(hasTestTag(NumericInputTags.FIELD), TIMEOUT_MS)
             compose.onNodeWithTag(NumericInputTags.FIELD).performTextReplacement(text)
             compose.onNodeWithTag(NumericInputTags.DONE).performClick()
-            compose.waitForIdle()
-            val deadline = System.currentTimeMillis() + RETRY_MS
-            while (value(id) == before && System.currentTimeMillis() < deadline) Thread.sleep(POLL_MS)
-            if (value(id) != before) return
+            compose.waitUntilDoesNotExist(hasTestTag(NumericInputTags.FIELD), TIMEOUT_MS)
+            val changed = runCatching { compose.waitUntil(RETRY_MS) { value(id) != before } }.isSuccess
+            if (changed) return
         }
     }
 
@@ -203,6 +206,5 @@ class EditorEffectsTest {
         const val TIMEOUT_MS = 30_000L
         const val SETTLE_MS = 600L
         const val RETRY_MS = 3_000L
-        const val POLL_MS = 50L
     }
 }

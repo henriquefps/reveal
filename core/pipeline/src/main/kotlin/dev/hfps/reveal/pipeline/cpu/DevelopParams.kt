@@ -3,6 +3,8 @@ package dev.hfps.reveal.pipeline.cpu
 import dev.hfps.reveal.pipeline.InputKind
 import dev.hfps.reveal.pipeline.PipelineInput
 import dev.hfps.reveal.pipeline.optics.VignetteTable
+import dev.hfps.reveal.pipeline.recipe.Detail
+import dev.hfps.reveal.pipeline.recipe.Effects
 import dev.hfps.reveal.pipeline.recipe.Recipe
 import dev.hfps.reveal.pipeline.recipe.RecipeRanges
 import dev.hfps.reveal.pipeline.recipe.Treatment
@@ -81,6 +83,19 @@ class DevelopParams(
         )
     }
 
+    /**
+     * These parameters with [recipe]'s Detail and Effects (slots 11 and 12) for [input] at [pixelScale]; every other
+     * field is kept, so the result equals `from(input, recipe, pixelScale)` when the rest of [recipe] resolved to
+     * these parameters (`from(input, recipe.withoutLocal(), pixelScale)`).
+     */
+    fun withLocal(input: PipelineInput, recipe: Recipe, pixelScale: Float): DevelopParams = DevelopParams(
+        wbMultipliers, cameraToWorking, exposureGain, profile, highlights, tone, colour, curve, tools,
+        detail = localDetail(input, recipe, pixelScale),
+        effects = EffectsParams.from(recipe.effects, pixelScale),
+        vignette = vignette,
+        defringe = defringe,
+    )
+
     /** True when slot 11 or 12 runs: the develop stage writes OkLab for them. */
     val localActive: Boolean get() = detail.active || effects.localActive
 
@@ -143,12 +158,15 @@ class DevelopParams(
                     grey = if (blackWhite) GreyParams.from(colour.greyMixer) else null,
                     grading = GradingParams.from(colour.grading),
                 ),
-                detail = DetailParams.from(recipe.detail, pixelScale, NoiseModel.factor(input.kind, input.noise)),
+                detail = localDetail(input, recipe, pixelScale),
                 effects = EffectsParams.from(recipe.effects, pixelScale),
                 vignette = VignetteTable.of(input.lens, recipe.optics),
                 defringe = DefringeParams.from(recipe.optics, pixelScale),
             )
         }
+
+        private fun localDetail(input: PipelineInput, recipe: Recipe, pixelScale: Float): DetailParams =
+            DetailParams.from(recipe.detail, pixelScale, NoiseModel.factor(input.kind, input.noise))
 
         /**
          * The apron of [recipe] at full resolution ([reach] does not depend on the input): for export plans and zoom
@@ -163,3 +181,6 @@ class DevelopParams(
         }
     }
 }
+
+/** [this] without Detail and Effects (slots 11 and 12): the part of a recipe the stages before slot 11 resolve. */
+fun Recipe.withoutLocal(): Recipe = copy(detail = Detail(), effects = Effects())

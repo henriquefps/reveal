@@ -1,6 +1,7 @@
 # ADR 0012: Detail and full-resolution tiles
 
-Status: accepted (M2/Z); amended by M2/C (section "M2/C: Detail at the display rate and the noise model", version 8).
+Status: accepted (M2/Z); amended by M2/C (section "M2/C: Detail at the display rate and the noise model", version 8)
+and M2/P (section "M2/P: every Detail and Effects drag at the display rate", version 10).
 Date: 2026-11-11. Amends ADR 0002 (slot 11, `PIPELINE_VERSION` 6, "Proxies and tiles"),
 ADR 0009 (the Detail apron of export tiles). Builds on ADR 0007 (Light grids) and ADR 0008 (OkLab).
 
@@ -230,6 +231,9 @@ candidates are colour NR at half resolution (chroma is low-frequency) and a chea
 **6**: the Detail operator exists (identity at its defaults, so no existing output changes); a fifth golden CRC pins
 it (`CpuDevelopTest`, two recipes at scale 1 and one at a proxy scale).
 
+**10** (M2/P): the luminance edge stop follows the noise, not the sliders, and the blurs store float16 (section
+"M2/P"); the Detail and Effects golden CRCs changed with it.
+
 ## M2/C: Detail at the display rate and the noise model
 
 M2/Z left a Detail drag at 23 ms per frame on the Adreno 750 (43 fps), against about 9 ms for a Light drag. Target: at
@@ -329,12 +333,134 @@ Same camera, ISO 2000 -> 12800: measured 2.2x, model 2.5x. Across five cameras s
 +-30 % (the low-ISO files have a floor of real texture in their "flattest" blocks), against a 17x spread of the factor:
 the model normalises what it should. Without the model, amount 50 would mean a 7x different strength on these files.
 
+## M2/P: every Detail and Effects drag at the display rate
+
+M2/C left drags with every Detail and Effects tool on at 10-23 ms on the Adreno 750. Target: every Detail and Effects
+slider drag at most 8.3 ms p50 and 12 ms p95 with every Detail, Effects and colour tool on, without changing the
+committed pixels beyond ADR 0002's tolerance.
+
+### Measuring on a phone
+
+- **GPU timer queries.** `PassProfiler` times each section with `GL_EXT_disjoint_timer_query` (`TIME_ELAPSED`, no
+  `glFinish` between passes) where the driver has it, else with `glFinish` after each section; it also records the GL
+  thread's CPU time per section. `glGenerateMipmap` is invisible to the timer on the Adreno (0.01 ms) but costs about
+  1-1.4 ms (2-3 ms with a sync).
+- **The GPU clock follows its load.** The same pass costs up to 2x more after an idle second, and a frame serialised
+  with `glFinish` lets the GPU idle between frames, so it runs at a low clock and pays the wake-up: M2/C's "latency"
+  (`glFinish` per frame) reads 2-4x the GPU's frame cost. Benchmarks now warm up with 2 s of continuous rendering, and
+  report three numbers: **pipelined** (sustained ms per frame with two frames in flight, fenced, as a display's swap
+  chain runs them: the display rate), **GPU per frame** (one timer query around each pipelined frame, p50 / p95) and
+  **latency** (one frame then `glFinish`, M2/C's measure). The target is read on the display rate: pipelined <= 8.3 ms
+  and GPU per frame p50 <= 8.3, p95 <= 12.
+- **As the editor draws.** `everyToolOnSliderDrags` sets Light, Camera JPEG match, the tone curve, the mixer, grading,
+  Detail and Effects, and draws the output fitted to the photo frame of the owner's phone (1080 x 720 of a 2400 x 1600
+  proxy, `-e frame`); M2/C's `detailAndEffectsSliderDrags` drew it at 1:1 into 2400 x 1600, which the editor never does.
+  `EditorMeasurementsTest -e all true -e drag <control>` measures the editor itself with a finger (`input swipe`).
+
+### Profile before (main, GPU timer queries, fit view, mean ms per pass)
+
+| Pass | luminance drag | colour drag | sharpening / texture / clarity drag |
+| --- | --- | --- | --- |
+| parameters (CPU, every frame) | 3.0-4.2 | 3.3-4.0 | 1.3-4.1 |
+| luminance levels (3 levels x 2 axes) | 4.9-6.9 | - | - |
+| blurs (2 passes, RG32F) | 2.6-4.0 | - | - |
+| colour levels (binning + 2-3 half-res levels) | - | 2.5-3.5 | - |
+| final pass (full resolution) | 2.8-4.0 | 4.1-4.4 | 3.2-5.1 |
+| mipmaps of the working texture | ~1.2 (hidden) | ~1.2 | ~1.2 |
+| output pass (1080 x 720, trilinear) | 0.6-0.9 | 0.9-1.1 | 0.7-1.2 |
+
+Interleaved breakdown of the final pass (sharpening drag, every tool on, variants alternating frame by frame): 3.9 ms
+with everything, 2.2 with sharpening alone, 1.9 for a pass that only reads the OkLab input, converts and writes: **a
+2400 x 1600 pass costs about 2 ms whatever it computes** (memory traffic), colour NR's upsampling and the Effects
+grid about 0.6 each. `mediump` made it slower (6.8 against 5.3 ms).
+
+### Changes
+
+1. **The luminance smoothing chain no longer depends on the sliders** (pixels change, `PIPELINE_VERSION` 10). The
+   edge stop of each level was `sigma_e = tau * mix(8, 3, detail)`, so every luminance drag re-ran 2 passes per level.
+   It is now `sigma_e = 1.5 * LUM_TAU_MAX * LUM_LEVEL[i] * noiseFactor` (`DetailParams.EDGE_SIGMA`): it follows the
+   expected noise, and amount, detail and contrast act through the shrinkage alone. Measured on the synthetic card
+   (`DetailOpTest`, and a sweep of the factor 1-3): the flat-area noise left at amounts 30-60 equals the old stop's
+   (0.0015 / 0.0075 L at noise 0.06 / 0.12, amount 60), and edges and thin lines survive high amounts much better
+   (amount 100: step edge kept 99 % instead of 78 %, a 1 px line 97 % instead of 62 %); Luminance detail 100 keeps a
+   little more noise, as its name says. The preview keeps the chain `L_1 .. L_n` in a packed RGBA16F texture
+   (`LUM_V_CHAIN_FRAG`, one channel per level, colour-masked) and a luminance drag is **one** pass (`SHRINK_FRAG`:
+   every level's shrinkage in order, float16 as before: equal to the fused levels value for value). Tiles and the
+   export keep the fused levels.
+2. **The blurs store float16** (RG16F with `q16`, mirrored in `DetailOp.blur`): half the traffic of RG32F; the error is
+   below 2^-11 relative, 0.05 of an 8-bit level after sharpening.
+3. **The colour path's binning is kept** across a colour drag (it depends on the develop output only).
+4. **Half-resolution final pass at the fit view.** When every pane reads only level 1 or coarser of the working
+   texture (axis-aligned, 50 % or less, no tiles, no loupe, no mask overlay), the final pass writes level 1 directly:
+   each fragment evaluates its 2 x 2 block (the colour upsampling's 3 x 3 half-resolution fetch shared by the four)
+   and writes their mean. Level 0 is rendered on demand (one final pass, inputs cached) when anything reads it.
+   `PreviewPassesTest`: the levels above match the full render's mips within 1 level (mean 0.01-0.03).
+5. **No mips per frame.** The output pass reads the working texture with four bilinear samples at an explicit level
+   spread over the pixel's footprint (`OutputSampling.MODE_BOX`, ADR 0002) for minified axis-aligned views down to
+   1/3; mips are generated lazily below that, from level 1 when only it is current.
+6. **The output pass covers the photo only.** On screen the window is the whole display behind the chrome; the pass
+   ran its shader over 2.5 MP to show 0.8. It is now scissored to the output's rectangle, the rest cleared to the
+   surround (4.0 -> 1.35 ms on screen).
+7. **Parameters kept across a drag.** Everything but Detail and Effects is resolved once while the rest of the
+   recipe (geometry aside) is unchanged (`DevelopParams.withLocal`): 1.3-4.2 -> 0.1-0.4 ms of CPU per frame.
+
+Tried and rejected (measured): framebuffer invalidation before each pass (no change on the Adreno, kept as a hint);
+the shrinkage inline in the first blur axis (4.6-5.6 ms against 4.0 for the separate passes); the vertical blur
+inside the final pass (11-12.5 ms: the 2 x 2 block recomputes it); 16 explicit texel fetches for the minification
+(1.9 ms against 0.8 for four bilinear samples); a half-resolution Detail render during a drag (a visible pop: 28 %
+of the pixels of the noisy card more than 2 levels off at the displayed scale, dehaze's atmospheric light differs).
+
+### After (phone, every tool on, fitted to 1080 x 720, ms)
+
+| Drag | before: latency p50 / p95 | pipelined | GPU per frame p50 / p95 | latency p50 / p95 |
+| --- | --- | --- | --- | --- |
+| luminance | 27.9 / 39.5 | 6.31 | 5.41 / 8.34 | 8.65 / 12.18 |
+| luminance detail | 20.5 / 34.8 | 5.4-9.8 | 5.3-9.1 / 7.8-9.2 | 11.5 / 14.1 |
+| luminance contrast | 18.1 / 27.0 | 7.19 | 6.40 / 7.93 | 12.1 / 14.1 |
+| colour | 17.4 / 21.6 | 4.00 | 3.47 / 4.82 | 8.59 / 11.1 |
+| colour detail | 12.4 / 21.8 | 3.93 | 3.47 / 5.17 | 8.58 / 10.3 |
+| colour smoothness | 8.5 / 18.3 | 4.33 | 4.09 / 5.28 | 10.1 / 12.4 |
+| sharpening amount | 6.7 / 13.5 | 3.21 | 2.77 / 4.94 | 7.54 / 9.07 |
+| sharpening radius | 8.1 / 14.1 | 4.42 | 4.33 / 4.88 | 12.1 / 14.4 |
+| sharpening detail | 7.7 / 15.2 | 2.86 | 2.44 / 4.08 | 6.64 / 8.55 |
+| sharpening masking | 5.8 / 8.5 | 3.05 | 2.74 / 4.30 | 7.38 / 8.64 |
+| texture | 5.6 / 8.7 | 3.17 | 2.74 / 4.28 | 7.60 / 9.59 |
+| clarity | 8.1 / 12.9 | 3.17 | 2.76 / 4.06 | 6.54 / 8.27 |
+| dehaze | 7.1 / 8.4 | 2.96 | 2.46 / 5.03 | 7.67 / 9.00 |
+| vignette | 4.2 / 6.3 | 1.27 | 0.82 / 1.30 | 3.11 / 4.36 |
+| grain | 4.0 / 7.4 | 1.23 | 0.83 / 1.30 | 3.03 / 4.54 |
+
+"Before" is main's code with the new profiler, on a cool phone with M2/C's 10-frame warm-up (its latency is the best
+case: a warm phone read 1.5-2x more). The luminance-detail row varies with the phone's temperature (5.4-5.9 ms
+pipelined in three runs, 9.8 in the last, hot one). A landscape frame (1560 x 1040, scale 0.65, so the full-resolution
+final pass) stays within the target too: 1.9-7.3 ms pipelined, GPU p95 <= 8.7. At 1:1 into 2400 x 1600 (M2/C's
+benchmark, never on screen) sharpening and texture drags still cost 10-17 ms: the full-resolution final pass and a
+3.84 MP output.
+
+Per pass after (GPU timer queries, fit view): shrinkage 2.0-2.2, blurs 3.2-4.4, final pass at half resolution
+3.6-4.4, colour levels 1.4-2.1, output pass 0.8-1.0, mipmaps none, parameters 0.1-0.4 ms CPU.
+
+**On screen** (`EditorMeasurementsTest -e all true`, CC0 ZV-E10, a finger dragging for 4 s, three runs each, main and
+M2/P alternating on the same phone; render+swap with `glFinish`, p50 / p95 ms): luminance 9.3 / 23.7 -> 7.0 / 19.1,
+colour 8.8 / 20.3 -> 7.4 / 13.4, sharpening radius 8.8 / 20.6 -> 7.4 / 17.3, texture 9.1 / 13.4 -> 7.7 / 10.4,
+vignette 8.8 / 10.8 -> 6.8 / 8.7. Without the sync the editor presents 90-100 frames per second while the finger
+moves on both builds, even for the vignette (1.4 ms of GPU): the drag's frame rate on screen is now set by how the
+slider's updates arrive (the injected touch events), not by the renderer.
+
+**Target status:** met at the display rate for every Detail and Effects slider (pipelined <= 7.2 ms; GPU per frame
+p95 <= 9.2 ms; one hot run of luminance detail 9.8 ms pipelined) and for the Transform in the editor (ADR 0015). Not
+met as serialised latency for the luminance, contrast, colour smoothness and sharpening radius drags (p50 10-12 ms,
+p95 12-14 ms) nor on screen at p95 for luminance and sharpening radius (17-19 ms with `glFinish` per frame): those
+drags re-run the shrinkage and both blurs, three full-resolution passes. Next levers: the blurs at half resolution at
+the fit view (the final pass then reads them per 2 x 2 block: changes the sharpening of the fit view only, needs a
+display-only parity argument), and a single 2D blur pass for small radii.
+
 ## Limits and follow-ups
 
 - The noise reduction did not know the camera's noise: fixed in M2/C (the noise model above). A per-image estimate
   (the finest wavelet level) would also cover in-camera NR differences and unknown cameras.
 - Tiles are made from 50 % up; between the proxy's scale and 50 % a 61 MP photo's proxy is magnified up to 2x.
-- A Detail drag cost 23 ms per frame on the Adreno 750 (above); M2/C (section above) rebuilt the passes for the display
-  rate, to be re-measured on the phone.
+- A Detail drag cost 23 ms per frame on the Adreno 750 (above); M2/C and M2/P (sections above) brought every Detail
+  and Effects drag to the display rate; the serialised latency of the luminance and blur drags is still 10-14 ms.
 - `GpuParityTest.outputMatchesCpuReferenceIn8Bit` fails on the Linux host GPU (NVIDIA via the emulator's translator)
   for one Light-only regression recipe on the sRGB chart (5 levels, also on `main`); it passes on the phone.

@@ -16,6 +16,15 @@ internal object OutputSampling {
     /** Shader mode: Catmull-Rom at LOD 0 through explicit texel fetches (straightened geometry, 1:1 and above). */
     const val MODE_CATMULL_ROM = 2
 
+    /**
+     * Shader mode: four bilinear samples of level 0 at an explicit LOD 0 spread over the screen pixel's footprint
+     * (minified views down to [BOX_MIN_SCALE]), so the editor's fit view needs no mips. On-screen only, like the mips.
+     */
+    const val MODE_BOX = 3
+
+    /** Smallest screen scale [MODE_BOX] covers (a footprint of 3 texels). */
+    const val BOX_MIN_SCALE = 1f / 3f
+
     /** Screen scale from which magnified pixels are shown as nearest rather than bilinear. */
     const val NEAREST_ABOVE_SCALE = 2f
 
@@ -30,6 +39,30 @@ internal object OutputSampling {
         scale == 1f -> MODE_TEXEL_FETCH
         else -> MODE_LOD
     }
+
+    /**
+     * The editor's sampling of its working texture: [mode], except [MODE_BOX] for axis-aligned views minified down to
+     * [BOX_MIN_SCALE] (docs/adr/0012, "M2/P": generating the mips of the 2400 px working texture cost about a
+     * millisecond per frame on the Adreno 750). Zoom tiles keep [mode] (their atlas has its own two levels).
+     */
+    fun stageMode(scale: Float, axisAligned: Boolean = true): Int =
+        if (axisAligned && scale < 1f && scale >= BOX_MIN_SCALE) MODE_BOX else mode(scale, axisAligned)
+
+    /** True when [stageMode] reads mip levels above 0 (the working texture's mips must be current). */
+    fun needsMips(scale: Float, axisAligned: Boolean = true): Boolean =
+        stageMode(scale, axisAligned) == MODE_LOD && lod(scale) > 0f
+
+    /**
+     * True when [stageMode] reads level 0 of the working texture: every mode but [MODE_BOX] at 50 % or less (which
+     * reads level 1 when only it is current) and [MODE_LOD] at LOD 1 or more.
+     */
+    fun readsLevel0(scale: Float, axisAligned: Boolean = true): Boolean = when (stageMode(scale, axisAligned)) {
+        MODE_BOX -> scale > HALF_SCALE
+        MODE_LOD -> lod(scale) < 1f
+        else -> true
+    }
+
+    private const val HALF_SCALE = 0.5f
 
     /**
      * Whether the output point snaps to its output pixel centre: Catmull-Rom at 1:1 (the operator's exact samples) and

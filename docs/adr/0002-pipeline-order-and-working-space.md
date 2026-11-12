@@ -3,8 +3,9 @@
 Status: accepted (M0, W5). Date: 2026-11-10. Amended by ADR 0007 (M1 Light: slots 1, 5, 5b, 8; version 3), by
 M1/G (slot 13 geometry, version 5; section "Geometry (slot 13)"), by ADR 0012 (M2: slot 11 Detail, version 6, the
 editor's full-resolution tiles), by ADR 0013 (M2/B: tone curve in slot 8, colour mixer, black & white and colour
-grading in slot 9; version 7), by ADR 0014 (M2/C: slot 12 Effects and the post-crop finish, version 8) and by ADR 0015
-(M2/D: slot 3 vignetting, slot 10b defringe, lens geometry and the Transform in slot 13; version 9).
+grading in slot 9; version 7), by ADR 0014 (M2/C: slot 12 Effects and the post-crop finish, version 8), by ADR 0015
+(M2/D: slot 3 vignetting, slot 10b defringe, lens geometry and the Transform in slot 13; version 9) and by ADR 0012
+"M2/P" (Detail's luminance edge stop and float16 blurs; the editor's output sampling; version 10).
 
 ## Fixed operator order
 
@@ -225,6 +226,10 @@ The rule, decided on the CPU (`OutputSampling`):
 - view scale exactly 1 (readback, export, and on screen at 100 %): `texelFetch(uStage, floor(ip), 0)`; no filtering, no mips;
 - minified (scale < 1): `textureLod` with the uniform LOD `log2(1 / scale)`, trilinear;
 - magnified (scale > 1): `textureLod` at LOD 0, nearest from 200 %, bilinear below.
+- M2/P (ADR 0012, "M2/P"): the editor's working texture, minified and axis-aligned down to 1/3, reads four bilinear
+  samples at an explicit level (`OutputSampling.MODE_BOX`: level 0, or level 1 when the Detail passes wrote only it)
+  spread over the pixel's footprint, so no mips are generated per frame; below 1/3 the mips are generated lazily,
+  from level 1 when only it is current. Zoom tiles keep the rule above. On-screen only: readback and export unchanged.
 
 Only on-screen pixels at minification can change, so this has no cache key impact. `PIPELINE_VERSION` stays 2:
 readback at 1:1 on a conforming GPU (the emulator, where LOD was already exactly 0) is bit-identical to before, and

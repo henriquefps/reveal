@@ -32,18 +32,22 @@ ivec2 tap(ivec2 p) {
 const float H[5] = float[5](0.0625, 0.25, 0.375, 0.25, 0.0625);
 """ + Shaders.Q16
 
-    /** One axis of a luminance level, horizontal (`DetailOp.lumLevel`, first loop): writes the smoothed `L` (R16F). */
+    /**
+     * One axis of a luminance level, horizontal (`DetailOp.lumLevel`, first loop): writes the smoothed `L` (R16F).
+     * `L_i` is channel [uChannel] of [uSrc] (0: the OkLab input, `(L_i, acc)`; the preview's packed chain otherwise).
+     */
     const val LUM_H_FRAG: String = HEADER + """
 uniform int uStep;
 uniform float uEdge;       // 1/(2 sigma_e^2)
+uniform int uChannel;
 
 void main() {
     ivec2 p = ivec2(gl_FragCoord.xy);
-    float c = texelFetch(uSrc, p, 0).x;
+    float c = texelFetch(uSrc, p, 0)[uChannel];
     float sum = 0.0;
     float ws = 0.0;
     for (int k = 0; k < 5; k++) {
-        float q = texelFetch(uSrc, tap(p + ivec2((k - 2) * uStep, 0)), 0).x;
+        float q = texelFetch(uSrc, tap(p + ivec2((k - 2) * uStep, 0)), 0)[uChannel];
         float dl = q - c;
         float w = H[k] * exp(-dl * dl * uEdge);
         sum += w * q;
@@ -53,20 +57,12 @@ void main() {
 }
 """
 
-    /**
-     * The vertical axis of a luminance level and its shrinkage (`DetailOp.lumLevel`, second loop): reads the
-     * horizontal result ([uSrc]) and the level's input `(L_i, acc)` ([uPrev]; the OkLab input on the first level, whose
-     * accumulator is 0), writes `(L_i+1, acc)` (RG16F).
-     */
-    const val LUM_V_FRAG: String = HEADER + """
-uniform sampler2D uPrev;
+    /** The vertical smoothing of a level (`DetailOp.lumLevel`, second loop) on the horizontal result in [uSrc]. */
+    private const val LUM_V_SMOOTH = """
 uniform int uStep;
 uniform float uEdge;
-uniform float uTau;
-uniform int uFirst;        // 1 = uPrev is the OkLab input (no accumulator yet)
 
-void main() {
-    ivec2 p = ivec2(gl_FragCoord.xy);
+float smoothV(ivec2 p) {
     float c = texelFetch(uSrc, p, 0).x;
     float sum = 0.0;
     float ws = 0.0;
@@ -77,13 +73,79 @@ void main() {
         sum += w * q;
         ws += w;
     }
+    return q16(sum / ws);
+}
+"""
+
+    /** The shrinkage of one level's detail, accumulated (`DetailOp.lumLevel`, the end of the second loop). */
+    private const val SHRINK = """
+float shrinkAdd(float acc, float d, float tau) {
+    float keep = d * d / (d * d + tau * tau);
+    return q16(acc + d * keep * keep);
+}
+"""
+
+    /**
+     * The vertical axis of a luminance level and its shrinkage (`DetailOp.lumLevel`, second loop): reads the
+     * horizontal result ([uSrc]) and the level's input `(L_i, acc)` ([uPrev]; the OkLab input on the first level, whose
+     * accumulator is 0), writes `(L_i+1, acc)` (RG16F). Tiles and exports; the preview splits it into [LUM_V_CHAIN_FRAG]
+     * and [SHRINK_FRAG].
+     */
+    const val LUM_V_FRAG: String = HEADER + LUM_V_SMOOTH + SHRINK + """
+uniform sampler2D uPrev;
+uniform float uTau;
+uniform int uFirst;        // 1 = uPrev is the OkLab input (no accumulator yet)
+
+void main() {
+    ivec2 p = ivec2(gl_FragCoord.xy);
     vec4 prev = texelFetch(uPrev, p, 0);
     float acc = uFirst == 1 ? 0.0 : prev.y;
     // The detail against the stored smooth value: the levels telescope exactly (docs/adr/0012).
-    float l1 = q16(sum / ws);
-    float d = prev.x - l1;
-    float keep = d * d / (d * d + uTau * uTau);
-    outColor = vec4(l1, q16(acc + d * keep * keep), 0.0, 1.0);
+    float l1 = smoothV(p);
+    outColor = vec4(l1, shrinkAdd(acc, prev.x - l1, uTau), 0.0, 1.0);
+}
+"""
+
+    /**
+     * The vertical axis of a luminance level without the shrinkage: writes `L_i+1` alone, into channel `i % 4` of
+     * the preview's packed chain (RGBA16F, the other channels masked off): the smoothing chain depends on the develop
+     * output and the noise only, so a drag of the luminance sliders keeps it (docs/adr/0012, "M2/P").
+     */
+    const val LUM_V_CHAIN_FRAG: String = HEADER + LUM_V_SMOOTH + """
+void main() {
+    outColor = vec4(smoothV(ivec2(gl_FragCoord.xy)));
+}
+"""
+
+    /**
+     * Every level's shrinkage in one pass over the preview's cached chain (`DetailOp.lumLevel`'s accumulation, level
+     * by level in the same order and with the same float16 rounding as [LUM_V_FRAG], so it equals the fused levels
+     * value for value): [uSrc] is the OkLab input (`L_0`), [uChain0] holds `L_1 .. L_4` of the levels that run,
+     * [uChain1] `L_5`; writes `(L_n, acc)` (RG16F).
+     */
+    const val SHRINK_FRAG: String = HEADER + SHRINK + """
+uniform sampler2D uChain0;
+uniform sampler2D uChain1;
+uniform int uLevels;
+uniform float uTau[5];
+
+void main() {
+    ivec2 p = ivec2(gl_FragCoord.xy);
+    float prev = texelFetch(uSrc, p, 0).x;
+    vec4 c0 = texelFetch(uChain0, p, 0);
+    float acc = 0.0;
+    for (int i = 0; i < 4; i++) {
+        if (i >= uLevels) break;
+        float l1 = c0[i];
+        acc = shrinkAdd(acc, prev - l1, uTau[i]);
+        prev = l1;
+    }
+    if (uLevels > 4) {
+        float l1 = texelFetch(uChain1, p, 0).x;
+        acc = shrinkAdd(acc, prev - l1, uTau[4]);
+        prev = l1;
+    }
+    outColor = vec4(prev, acc, 0.0, 1.0);
 }
 """
 
@@ -137,6 +199,13 @@ void main() {
 }
 """
 
+    private const val BLUR_UNIFORMS = """
+uniform int uRadius;
+uniform float uWs[10];
+uniform float uWt[10];
+uniform float uRange;      // texture's range weight 1/(2 s^2)
+"""
+
     /**
      * One axis of the two blurs of the denoised `L` (`DetailOp.blur`): x = sharpening's Gaussian, y = Effects'
      * texture's cross-bilateral Gaussian. `uMode` 0 reads `L + acc` (luminance levels ran), 1 reads the OkLab input's
@@ -144,10 +213,7 @@ void main() {
      */
     const val BLUR_FRAG: String = HEADER + """
 uniform ivec2 uDir;
-uniform int uRadius;
-uniform float uWs[10];
-uniform float uWt[10];
-uniform float uRange;      // texture's range weight 1/(2 s^2)
+""" + BLUR_UNIFORMS + """
 uniform int uMode;
 
 vec2 value(ivec2 p) {
@@ -170,7 +236,7 @@ void main() {
         s1 += wl * lo.y + wh * hi.y;
         n1 += wl + wh;
     }
-    outColor = vec4(s0, n1 > 0.0 ? s1 / n1 : c.y, 0.0, 1.0);
+    outColor = vec4(q16(s0), q16(n1 > 0.0 ? s1 / n1 : c.y), 0.0, 1.0);
 }
 """
 
@@ -186,10 +252,14 @@ void main() {
     const val FLAG_CLARITY: Int = 32
     const val FLAG_DEHAZE: Int = 64
 
+    /** Writes the mean of each 2 x 2 block (the working texture's level 1) at half resolution. */
+    const val FLAG_HALF: Int = 128
+
     /**
      * The final pass (`DetailOp.render`'s pixel loop): sharpening (high-pass shaping, edge mask), texture, clarity, the
      * colour from the half-resolution path, back to linear Rec.2020, dehaze; with the mask flag the sharpening mask as
-     * grey (the masking overlay).
+     * grey (the masking overlay). With [FLAG_HALF] it writes the 2 x 2 means at half resolution (the preview's views at
+     * 50 % or less read nothing finer: docs/adr/0012, "M2/P").
      */
     private val FINAL_FRAG: String = HEADER + ColourShaders.OKLAB + EffectsShaders.APPLY + """
 uniform sampler2D uLum;        // (L, acc) of the last luminance level
@@ -234,8 +304,32 @@ vec2 upChroma(sampler2D s, ivec2 q) {
     return top + (bottom - top) * fr.y;
 }
 
-void main() {
-    ivec2 p = ivec2(gl_FragCoord.xy);
+// upChroma for the four pixels 2J + (0..1, 0..1) of a half-resolution block from one 3 x 3 fetch (the same values:
+// pixel 2J uses texels J-1, J with fraction 0.75, pixel 2J+1 texels J, J+1 with fraction 0.25, on each axis).
+void upChroma4(sampler2D s, ivec2 j, out vec2 r[4]) {
+    vec2 t[9];
+    for (int y = 0; y < 3; y++) {
+        for (int x = 0; x < 3; x++) {
+            t[y * 3 + x] = texelFetch(s, halfTap(j + ivec2(x - 1, y - 1)), 0).yz;
+        }
+    }
+    for (int k = 0; k < 4; k++) {
+        int dx = k & 1;
+        int dy = k >> 1;
+        float fx = dx == 0 ? 0.75 : 0.25;
+        float fy = dy == 0 ? 0.75 : 0.25;
+        vec2 a = t[dy * 3 + dx];
+        vec2 b = t[dy * 3 + dx + 1];
+        vec2 d = t[(dy + 1) * 3 + dx];
+        vec2 e = t[(dy + 1) * 3 + dx + 1];
+        vec2 top = a + (b - a) * fx;
+        vec2 bottom = d + (e - d) * fx;
+        r[k] = top + (bottom - top) * fy;
+    }
+}
+
+// The final pixel at p; sUp / dUp are upChroma of the colour levels' result and of the binned copy there.
+vec3 finalAt(ivec2 p, vec2 sUp, vec2 dUp) {
     vec4 c = texelFetch(uSrc, p, 0);
     float lnr = c.x;
     if ((uFlags & $FLAG_LUM) != 0) {
@@ -245,9 +339,10 @@ void main() {
     float l = lnr;
     float mask = 1.0;
     bool showMask = (uFlags & $FLAG_SHOW_MASK) != 0;
+    bool blurred = (uFlags & ($FLAG_SHARPEN | $FLAG_SHOW_MASK | $FLAG_TEXTURE)) != 0;
+    vec2 g = blurred ? texelFetch(uBlur, p, 0).xy : vec2(0.0);
     if ((uFlags & $FLAG_SHARPEN) != 0 || showMask) {
-        float g = texelFetch(uBlur, p, 0).x;
-        float h = l - g;
+        float h = l - g.x;
         if (uMask.y > 0.0) {
             float gx = blurAt(p + ivec2(1, 0)) - blurAt(p - ivec2(1, 0));
             float gy = blurAt(p + ivec2(0, 1)) - blurAt(p - ivec2(0, 1));
@@ -260,11 +355,10 @@ void main() {
         }
     }
     if (showMask) {
-        outColor = vec4(fromOkLab(vec3(mask, 0.0, 0.0)), 1.0);
-        return;
+        return fromOkLab(vec3(mask, 0.0, 0.0));
     }
     if ((uFlags & $FLAG_TEXTURE) != 0) {
-        float t = lnr - texelFetch(uBlur, p, 0).y;
+        float t = lnr - g.y;
         l += uTexture.x * t * (uTexture.y / (uTexture.y + t * t));
     }
     vec4 coef = vec4(0.0);
@@ -277,9 +371,8 @@ void main() {
     }
     vec2 ab = c.yz;
     if ((uFlags & $FLAG_CHROMA) != 0) {
-        ivec2 q = p + uOrigin;
-        vec2 s = upChroma(uHalfS, q);
-        vec2 r = c.yz - upChroma(uHalfD, q);
+        vec2 s = sUp;
+        vec2 r = c.yz - dUp;
         float edge = 1.0 - exp(-(r.x * r.x + r.y * r.y) * uFineRange);
         ab = s + r * (edge * edge);
     }
@@ -287,7 +380,42 @@ void main() {
     if ((uFlags & $FLAG_DEHAZE) != 0) {
         rgb = dehaze(rgb, coef.z * lnr + coef.w);
     }
-    outColor = vec4(rgb, 1.0);
+    return rgb;
+}
+
+void main() {
+    ivec2 p = ivec2(gl_FragCoord.xy);
+    bool chroma = (uFlags & $FLAG_CHROMA) != 0;
+    if ((uFlags & $FLAG_HALF) != 0) {
+        // Texel J of level 1: the mean of pixels 2J .. 2J + 1, the last row / column repeated at an odd edge (a
+        // whole-image region, origin 0: the image pixel 2J is the block's first).
+        ivec2 b = 2 * p;
+        ivec2 hi = uSize - 1;
+        vec2 sUp[4];
+        vec2 dUp[4];
+        if (chroma) {
+            upChroma4(uHalfS, p + uHalfOrigin, sUp);
+            upChroma4(uHalfD, p + uHalfOrigin, dUp);
+        }
+        vec3 sum = vec3(0.0);
+        for (int k = 0; k < 4; k++) {
+            ivec2 q = b + ivec2(k & 1, k >> 1);
+            // At an odd edge the repeated pixel is the previous one, chroma included.
+            ivec2 qc = min(q, hi);
+            int kc = (qc.x - b.x) + 2 * (qc.y - b.y);
+            sum += chroma ? finalAt(qc, sUp[kc], dUp[kc]) : finalAt(qc, vec2(0.0), vec2(0.0));
+        }
+        outColor = vec4(0.25 * sum, 1.0);
+        return;
+    }
+    vec2 sUp = vec2(0.0);
+    vec2 dUp = vec2(0.0);
+    if (chroma) {
+        ivec2 q = p + uOrigin;
+        sUp = upChroma(uHalfS, q);
+        dUp = upChroma(uHalfD, q);
+    }
+    outColor = vec4(finalAt(p, sUp, dUp), 1.0);
 }
 """
 }

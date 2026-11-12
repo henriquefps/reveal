@@ -89,4 +89,18 @@ class CompareLayoutTest {
         assertThat(ix).isWithin(1e-3f).of(1234f)
         assertThat(iy).isWithin(1e-3f).of(567f)
     }
+
+    @Test
+    fun `the output rectangle covers the fitted photo and nothing of the chrome`() {
+        // A 2400 x 1600 output fitted to the phone's 1080 px wide window (scale 0.45), centred.
+        val fit = ViewTransform(0.45f, 1200f, 800f)
+        val r = checkNotNull(CompareLayout.outputRect(fit, 1080, 2340, 2400, 1600))
+        // 1080 x 720 centred vertically, one pixel of margin, clamped to the window.
+        assertThat(r.toList()).isEqualTo(listOf(0, 809, 1080, 722))
+        // A clip (side by side) bounds it; an output entirely off screen draws nothing.
+        val clipped =
+            checkNotNull(CompareLayout.outputRect(fit, 1080, 2340, 2400, 1600, ViewFrame(0f, 0f, 540f, 2340f)))
+        assertThat(clipped.toList()).isEqualTo(listOf(0, 809, 540, 722))
+        assertThat(CompareLayout.outputRect(ViewTransform(1f, -5000f, 800f), 1080, 2340, 2400, 1600)).isNull()
+    }
 }

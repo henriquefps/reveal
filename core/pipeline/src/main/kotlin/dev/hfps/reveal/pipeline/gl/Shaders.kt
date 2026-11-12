@@ -160,11 +160,12 @@ precision highp sampler2D;
 
 layout(std140) uniform Output {
     mat4 workingToOutput;    // OutputTransformOp: upper-left 3x3, column-major
-    vec4 image;              // xy = image size in pixels, z = screen pixels per image pixel, w = explicit LOD
+    vec4 image;              // xy = image size in pixels, z = screen pixels per image pixel, w = explicit LOD (the
+                             // level for the area box)
     vec4 viewport;           // xy = image point at the view centre (image px), zw = view size in pixels
     vec4 surround;           // rgb = display-encoded colour outside the image
     uvec4 dither;            // x = seed, y = 1 when dithering is on, z = sampling mode (0 texelFetch, 1 textureLod,
-                             // 2 Catmull-Rom), w = clipping-warning bits (1 shadows, 2 highlights; ClippingWarnings)
+                             // 2 Catmull-Rom, 3 area box), w = clipping-warning bits (1 shadows, 2 highlights; ClippingWarnings)
     vec4 geomX;              // GeometryMapping.toImage: image x = dot(xy, output) + z; w = output width
     vec4 geomY;              // image y = dot(xy, output) + z; w = output height
     uvec4 geomFlags;         // x = 1 snaps to output pixel centres, y = 1 when empty means the surround
@@ -225,6 +226,18 @@ vec3 catmullRom(vec2 ip) {
     return sum;
 }
 
+// OutputSampling.MODE_BOX: a minified view's pixel (footprint f of 1 to 3 image pixels) without mips: four bilinear
+// samples of one level (image.w: 0, or 1 when only it is current) at an explicit LOD, a quarter of the footprint from
+// its centre on each axis.
+vec3 areaBox(vec2 ip, float f) {
+    vec2 d = vec2(0.25 * f);
+    vec2 lo = clamp(ip - d, vec2(0.5), image.xy - 0.5) / image.xy;
+    vec2 hi = clamp(ip + d, vec2(0.5), image.xy - 0.5) / image.xy;
+    float level = image.w;
+    return 0.25 * (textureLod(uStage, lo, level).rgb + textureLod(uStage, vec2(hi.x, lo.y), level).rgb +
+        textureLod(uStage, vec2(lo.x, hi.y), level).rgb + textureLod(uStage, hi, level).rgb);
+}
+
 // A zoom tile's colour at full-resolution image point fp of tile t, from the atlas slot the index names: the same
 // three samplings as the proxy (exact texel at 1:1, Catmull-Rom when straightened, textureLod at the explicit LOD),
 // taps clamped to the image; the slot's border holds the neighbours (or the repeated edge).
@@ -262,6 +275,8 @@ vec3 sampleStage(vec2 ip) {
         return texelFetch(uStage, clamp(ivec2(floor(ip)), ivec2(0), ivec2(image.xy) - 1), 0).rgb;
     } else if (dither.z == 2u) {
         return catmullRom(ip);
+    } else if (dither.z == 3u) {
+        return areaBox(ip, 1.0 / image.z);
     }
     // Explicit LOD from the CPU (never from derivatives); magnified views run at LOD 0.
     return textureLod(uStage, clamp(ip, vec2(0.0), image.xy) / image.xy, image.w).rgb;

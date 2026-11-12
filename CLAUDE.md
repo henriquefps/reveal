@@ -349,6 +349,27 @@ per-slider caching in `DetailPasses` (`invalidate()` when the develop output cha
 model: `cpu/NoiseModel.kt` (`PipelineInput.noise` = ISO + model from `PipelineInputMapper.noise`). The panel is
 `panels/EffectsPanel.kt`. Positive dehaze has a 4x parity tolerance (`GpuParityTest.dehazeGain`).
 
+Drag speed (M2/P, ADR 0012 "M2/P"): on the Adreno a 2400 x 1600 pass costs ~2 ms whatever it computes, so the preview
+runs as few full-resolution passes per drag as possible. The luminance edge stop follows the noise (`DetailParams.
+EDGE_SIGMA`), never the sliders: the preview keeps the smoothing chain in a packed RGBA16F texture (`Targets.chain`,
+`LUM_V_CHAIN_FRAG`) and a luminance drag is one `SHRINK_FRAG` pass; the colour binning and the blurs (RG16F, `q16`)
+are kept too. Views at 50 % or less (`halfViewOnly`) make the final pass write the working texture's level 1 directly
+(`FLAG_HALF`, 2 x 2 means; level 0 is rendered on demand by `ensureStageLevel0`), the output reads it with
+`OutputSampling.MODE_BOX` (no per-frame mips). The tiled renderer (zoom, export) is unchanged. `DevelopParams` other
+than Detail/Effects are memoised across a drag (`UploadedImage.params`, `DevelopParams.withLocal`).
+
+```sh
+# REVEAL_BENCH: every tool on, each Detail/Effects slider; pipelined ms per frame (the display rate), GPU per frame, and
+# the serialised latency; -e profile true = per-pass GPU timer queries (-e timers false: glFinish after each pass)
+adb -s <serial> shell am instrument -w -e class dev.hfps.reveal.pipeline.PipelineBenchmark#everyToolOnSliderDrags dev.hfps.reveal.pipeline.test/androidx.test.runner.AndroidJUnitRunner
+# on screen (needs files/samples/sony-zv-e10.arw): frame intervals while a finger drags one slider, every tool on
+adb -s <serial> shell am instrument -w -e class dev.hfps.reveal.editor.EditorMeasurementsTest -e all true -e gpu false -e drag nr_luminance dev.hfps.reveal.debug.test/androidx.test.runner.AndroidJUnitRunner
+adb -s <serial> shell am instrument -w -e class dev.hfps.reveal.pipeline.PreviewPassesTest dev.hfps.reveal.pipeline.test/androidx.test.runner.AndroidJUnitRunner
+```
+
+A phone's GPU clock follows its load: benchmarks warm up for 2 s of continuous rendering (`-e warmup <ms>`), and a
+measurement serialised with `glFinish` per frame runs at a low clock (it reads up to 2x the pipelined frame time).
+
 ```sh
 ./gradlew :core:pipeline:testDebugUnitTest --tests '*EffectsOpTest*' --tests '*DetailOpTest*' --tests '*NoiseModelTest*'
 adb -s emulator-<port> shell am instrument -w -e class dev.hfps.reveal.pipeline.PipelineBenchmark#detailAndEffectsSliderDrags dev.hfps.reveal.pipeline.test/androidx.test.runner.AndroidJUnitRunner

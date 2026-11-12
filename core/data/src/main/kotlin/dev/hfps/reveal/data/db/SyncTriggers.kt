@@ -6,7 +6,9 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 /**
  * SQLite triggers that mark synced records dirty whenever the library changes them (ADR 0018 "Change tracking"), so no
  * write path (editor, library, XMP sidecars, hand-offs, indexing) can forget to: a photo's metadata or files change ->
- * its `photo` record; a version, its recipe or its history cursor change -> its `version` record. While the sync
+ * its `photo` record; a version, its recipe or its history cursor change -> its `version` record; a preset, its
+ * group (name, order) or its pack (kept after a trial) change -> its `preset` record, and a deleted preset becomes a
+ * tombstone (docs/adr/0019 "Sync"). While the sync
  * engine applies pulled records it sets the `meta` key [APPLYING] in the same transaction, and the triggers stay quiet.
  *
  * Triggers are not part of Room's schema, so they are (re)created on every open ([callback]); the names carry a
@@ -17,7 +19,7 @@ object SyncTriggers {
     /** The `meta` key that silences the triggers while pulled records are applied. */
     const val APPLYING = "sync.applying"
 
-    private const val VERSION = 1
+    private const val VERSION = 2
 
     /** Unix milliseconds in SQL. */
     private const val NOW = "CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)"
@@ -34,6 +36,22 @@ object SyncTriggers {
             "(SELECT 1 FROM sync_records WHERE kind = '$kind' AND record_id = $id); " +
             "UPDATE sync_records SET dirty = 1, deleted = 0, modified_at = $NOW " +
             "WHERE kind = '$kind' AND record_id = $id;"
+
+    /** Marks the record deleted (a tombstone to push). */
+    private fun markDeleted(kind: String, id: String): String =
+        "INSERT INTO sync_records (kind, record_id, rev, dirty, modified_at, deleted) " +
+            "SELECT '$kind', $id, 0, 1, $NOW, 1 WHERE $id IS NOT NULL AND NOT EXISTS " +
+            "(SELECT 1 FROM sync_records WHERE kind = '$kind' AND record_id = $id); " +
+            "UPDATE sync_records SET dirty = 1, deleted = 1, modified_at = $NOW " +
+            "WHERE kind = '$kind' AND record_id = $id;"
+
+    /** Marks every preset whose row matches [where] (a condition on `presets`). */
+    private fun markPresets(where: String): String =
+        "INSERT INTO sync_records (kind, record_id, rev, dirty, modified_at, deleted) " +
+            "SELECT 'preset', uuid, 0, 1, $NOW, 0 FROM presets WHERE ($where) AND uuid NOT IN " +
+            "(SELECT record_id FROM sync_records WHERE kind = 'preset'); " +
+            "UPDATE sync_records SET dirty = 1, deleted = 0, modified_at = $NOW " +
+            "WHERE kind = 'preset' AND record_id IN (SELECT uuid FROM presets WHERE $where);"
 
     private val photoOf = { photoId: String -> "(SELECT uuid FROM photos WHERE id = $photoId)" }
     private val versionOf = { versionId: String -> "(SELECT uuid FROM versions WHERE id = $versionId)" }
@@ -55,6 +73,19 @@ object SyncTriggers {
         Triple("recipe_update", "AFTER UPDATE ON recipes", mark("version", versionOf("NEW.version_id"))),
         Triple("cursor_insert", "AFTER INSERT ON history_cursor", mark("version", versionOf("NEW.version_id"))),
         Triple("cursor_update", "AFTER UPDATE ON history_cursor", mark("version", versionOf("NEW.version_id"))),
+        Triple("preset_insert", "AFTER INSERT ON presets", mark("preset", "NEW.uuid")),
+        Triple("preset_update", "AFTER UPDATE ON presets", mark("preset", "NEW.uuid")),
+        Triple("preset_delete", "AFTER DELETE ON presets", markDeleted("preset", "OLD.uuid")),
+        Triple(
+            "preset_group_update",
+            "AFTER UPDATE OF name, position ON preset_groups",
+            markPresets("group_id = NEW.id"),
+        ),
+        Triple(
+            "preset_pack_update",
+            "AFTER UPDATE OF trial ON preset_packs",
+            markPresets("group_id IN (SELECT id FROM preset_groups WHERE pack_id = NEW.id)"),
+        ),
     )
 
     /** Creates the triggers (idempotent) and drops those of older trigger versions. */

@@ -185,6 +185,43 @@ class RevealDatabaseMigrationTest {
     }
 
     @Test
+    fun `version 6 gets the empty preset tables and keeps its library`() {
+        helper.createDatabase(name, 6).use { db ->
+            db.execSQL("INSERT INTO meta (`key`, value) VALUES ('seed', 'v6')")
+        }
+        helper.runMigrationsAndValidate(name, 7, true).use { db ->
+            for (table in listOf("preset_packs", "preset_groups", "presets", "preset_marks")) {
+                db.query("SELECT COUNT(*) FROM $table").use { c ->
+                    assertThat(c.moveToFirst()).isTrue()
+                    assertThat(c.getInt(0)).isEqualTo(0)
+                }
+            }
+        }
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val database = RevealDatabase.configure(Room.databaseBuilder(context, RevealDatabase::class.java, name))
+            .allowMainThreadQueries().build()
+        try {
+            runBlocking {
+                assertThat(database.metaDao().get("seed")).isEqualTo("v6")
+                val group = database.presetDao().insertGroup(
+                    PresetGroupEntity(name = "Mine", position = 0, createdAt = 1),
+                )
+                database.presetDao().insertPreset(
+                    PresetEntity(
+                        uuid = "0f8fad5b-d9cb-469f-a165-70867728950e", groupId = group, name = "P", author = "",
+                        version = 1, createdAt = 1, updatedAt = 1, position = 0, patchJson = "{}", smartJson = null,
+                        origin = "USER",
+                    ),
+                )
+                val record = database.syncDao().record("preset", "0f8fad5b-d9cb-469f-a165-70867728950e")
+                assertThat(record!!.dirty).isTrue()
+            }
+        } finally {
+            database.close()
+        }
+    }
+
+    @Test
     fun `every exported schema up to the current version exists`() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val folder = "dev.hfps.reveal.data.db.RevealDatabase"

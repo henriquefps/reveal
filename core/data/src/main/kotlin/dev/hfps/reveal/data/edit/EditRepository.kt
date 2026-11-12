@@ -242,6 +242,8 @@ class EditRepository(private val db: RevealDatabase, private val clock: () -> Lo
         val value: String? = null,
         val action: String? = null,
         val groups: List<String>? = null,
+        /** The applied thing's own name (a preset's, docs/adr/0019). */
+        val name: String? = null,
     )
 
     @Serializable
@@ -254,7 +256,9 @@ class EditRepository(private val db: RevealDatabase, private val clock: () -> Lo
     private val labelList = ListSerializer(Label.serializer())
 
     private fun encodeLabel(label: StepLabel): String {
-        val action = label.action?.let { Label(action = it.name, groups = label.groups.map(RecipeGroup::name)) }
+        val action = label.action?.let {
+            Label(action = it.name, groups = label.groups.map(RecipeGroup::name), name = label.name)
+        }
         return json.encodeToString(
             labelList,
             listOfNotNull(action) + label.changes.map { Label(it.field.name, it.value) },
@@ -274,6 +278,7 @@ class EditRepository(private val db: RevealDatabase, private val clock: () -> Lo
             groups = actionItem?.groups.orEmpty().mapNotNull { name ->
                 RecipeGroup.entries.firstOrNull { it.name == name }
             },
+            name = actionItem?.name,
         )
     }.getOrDefault(StepLabel(emptyList()))
 

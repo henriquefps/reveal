@@ -250,6 +250,33 @@ class RevealDatabaseMigrationTest {
     }
 
     @Test
+    fun `version 8 keeps its previews with an unknown format (made again lazily)`() {
+        helper.createDatabase(name, 8).use { db ->
+            db.execSQL(
+                "INSERT INTO sources (id, tree_uri, root_document_id, display_name, state, writable, added_at, kind, " +
+                    "backup) VALUES (1, 'content://t', 'r', 'DCIM', 'AVAILABLE', 0, 0, 'FOLDER', 1)",
+            )
+            db.execSQL(
+                "INSERT INTO photos (id, uuid, source_id, folder, folder_document_id, stem_key, name, format, " +
+                    "has_raw, sort_time, orientation, rating, flag, has_edit, metadata_state, added_at, hidden) " +
+                    "VALUES (1, 'u1', 1, 'f', '', 'a', 'A.ARW', 'RAW', 1, 0, 1, 0, 'NONE', 1, 'READ', 0, 0)",
+            )
+            db.execSQL(
+                "INSERT INTO photo_cloud (photo_id, original_on_server, preview_sha, preview_width, preview_height, " +
+                    "preview_fingerprint, checked_at) VALUES (1, 0, 'abc', 2560, 1707, 'v1:aa', 5)",
+            )
+        }
+        helper.runMigrationsAndValidate(name, 9, true).use { db ->
+            db.query("SELECT preview_sha, preview_fingerprint, preview_format FROM photo_cloud").use { c ->
+                assertThat(c.moveToFirst()).isTrue()
+                assertThat(c.getString(0)).isEqualTo("abc")
+                assertThat(c.getString(1)).isEqualTo("v1:aa")
+                assertThat(c.isNull(2)).isTrue()
+            }
+        }
+    }
+
+    @Test
     fun `every exported schema up to the current version exists`() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val folder = "dev.hfps.reveal.data.db.RevealDatabase"

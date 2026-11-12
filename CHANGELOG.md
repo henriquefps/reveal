@@ -29,6 +29,20 @@ All notable changes to Reveal are documented here. The format follows
   in the editor, thumbnails, sync and export alike.
 
 ### Changed
+- Sync backs up the original of every photo you edit, even in a folder whose backup is off (like Lightroom): turning
+  a folder's backup off now means "only photos you edit are backed up". Ratings, picks and labels sync without sending
+  anything else. Removing an edit later never deletes an uploaded original.
+- Smart previews are only made when a photo's original cannot go to your server (Reveal can no longer read the file,
+  or the originals backup is off and the photo is edited), and they are about 40-55 % of their old size (about
+  3.6-5 MB instead of ~9 MB for a 24 MP RAW) with no visible difference after editing; their grid picture is 1280 px. Previews
+  that are no longer needed (an edit undone, the original now backed up) are removed from the server, and older
+  previews are remade in the new format a few at a time on Wi-Fi. Older versions of Reveal cannot open the new
+  previews: update every device.
+- A photo only another device has, with no preview on the server, shows an "only on another device" badge instead of
+  "smart preview only".
+- Sync server: `DELETE /v1/blobs/{sha256}` lets a device remove a smart preview it uploaded once no photo names it
+  (originals are never removed). Update the server along with the app; an older server keeps those previews until
+  then.
 - The grid's cloud badges say what they mean to TalkBack, and the viewer's info has an "Original" line: on this
   device, backed up, only on the server, on another device, or read from the server / preview only / unreadable for a
   shared photo, with what that means for editing and export. A shared photo Reveal can no longer read whose original

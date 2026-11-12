@@ -58,6 +58,11 @@ data class PhotoCloudEntity(
     @ColumnInfo(name = "preview_height") val previewHeight: Int? = null,
     /** This device made the preview for this version of the main file and uploaded it (or it already existed). */
     @ColumnInfo(name = "preview_fingerprint") val previewFingerprint: String? = null,
+    /**
+     * The [previewSha]'s format version (`SmartPreviewCodec.VERSION`) when this device uploaded it; null for one
+     * another device made, or one 0.5.0-0.5.1 uploaded (format 1, made again lazily, ADR 0018 "Smart previews").
+     */
+    @ColumnInfo(name = "preview_format") val previewFormat: Int? = null,
     /** The full SHA-256 of the main file (the original's content address), computed before an upload. */
     @ColumnInfo(name = "original_sha") val originalSha: String? = null,
     /** When the server was last asked about the fingerprint (0 = never). */
@@ -108,6 +113,12 @@ data class SyncUploadEntity(
         const val STATE_FAILED = "failed"
         const val KIND_PREVIEW = "preview"
         const val KIND_ORIGINAL = "original"
+
+        /**
+         * A smart preview this device uploaded and no longer needs ([sha256]): dropped from the server once the photo
+         * record without it is pushed (`DELETE /v1/blobs/{sha256}`, ADR 0017 "Dropping a smart preview").
+         */
+        const val KIND_DROP = "drop_preview"
     }
 }
 

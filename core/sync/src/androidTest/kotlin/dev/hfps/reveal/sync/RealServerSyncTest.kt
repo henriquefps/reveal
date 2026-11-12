@@ -228,7 +228,7 @@ class RealServerSyncTest {
         phone.sync() // pushes and looks the photo up: missing on the server
         val uploader =
             BlobUploader(phone.db, phone.store, phone.trees, SmartPreviewMaker(File(phone.files, "previews")))
-        val made = runBlocking { uploader.previews(phone.api, limit = 5, noBackup = true) }
+        val made = runBlocking { uploader.previews(phone.api, limit = 5) }
         assertThat(made).isAtLeast(1)
         phone.sync() // the photo record now names its preview
         tablet.sync()

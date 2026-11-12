@@ -46,6 +46,24 @@ class SyncHttpException(
     }
 }
 
+/** What `DELETE /v1/blobs/{sha256}` answered. */
+enum class DropResult {
+    /** The server no longer holds the preview. */
+    DROPPED,
+
+    /** It held no such blob (dropped before, or never stored). */
+    GONE,
+
+    /** A live photo record still names it: push the record without it first, then ask again. */
+    REFERENCED,
+
+    /** Not this device's preview, or not a preview: never asked again. */
+    REFUSED,
+
+    /** The server predates the route: asked again after it is updated. */
+    UNSUPPORTED,
+}
+
 /**
  * The client of the `reveal-sync` HTTP API (`/v1`, ADR 0017), one per server. Blocking (OkHttp): call it from an IO
  * dispatcher. [apiKey] is the device's bearer key (null only for [pair] and [health]). Never logs keys, tokens or
@@ -153,6 +171,33 @@ class SyncApi(baseUrl: String, private val apiKey: String?, private val client: 
         }
     }
 
+    /**
+     * Drops a smart preview this device uploaded (`DELETE /v1/blobs/{sha256}`, ADR 0017 "Dropping a smart preview").
+     * Servers before 0.5.2 do not have the route (`405`): [DropResult.UNSUPPORTED], the drop waits for an update.
+     */
+    fun dropPreview(sha256: String): DropResult {
+        val url = url("v1/blobs").newBuilder().addPathSegment(sha256).build()
+        val request = authed(Request.Builder().url(url).delete())
+        return client.newCall(request.build()).execute().use { response ->
+            when (response.code) {
+                HTTP_NO_CONTENT -> DropResult.DROPPED
+
+                HTTP_NOT_FOUND -> DropResult.GONE
+
+                HTTP_FORBIDDEN -> DropResult.REFUSED
+
+                HTTP_CONFLICT -> DropResult.REFERENCED
+
+                HTTP_METHOD_NOT_ALLOWED -> DropResult.UNSUPPORTED
+
+                else -> {
+                    check(response)
+                    DropResult.DROPPED
+                }
+            }
+        }
+    }
+
     // ------------------------------------------------------------------ plumbing
 
     private fun uploadUrl(id: String) = url("v1/uploads").newBuilder().addPathSegment(id).build()
@@ -231,6 +276,10 @@ class SyncApi(baseUrl: String, private val apiKey: String?, private val client: 
     companion object {
         private const val HTTP_OK = 200
         private const val HTTP_NOT_FOUND = 404
+        private const val HTTP_NO_CONTENT = 204
+        private const val HTTP_FORBIDDEN = 403
+        private const val HTTP_CONFLICT = 409
+        private const val HTTP_METHOD_NOT_ALLOWED = 405
         private val JSON_TYPE = "application/json; charset=utf-8".toMediaType()
         private val OFFSET_OCTETS = "application/offset+octet-stream".toMediaType()
         private const val TIMEOUT_S = 30L

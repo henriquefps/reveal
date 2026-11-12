@@ -47,9 +47,10 @@
     <string name="sync_section_what">O que sincroniza</string>
     <string name="sync_edits_always">Edições com histórico, versões, classificações, marcações, rótulos e o seu autor de exportação sempre sincronizam.</string>
     <string name="sync_previews">Prévias inteligentes</string>
-    <string name="sync_previews_subtitle">Uma cópia editável (cerca de 2560 px) das fotos que só este aparelho tem, para os outros aparelhos poderem editá-las.</string>
+    <string name="sync_previews_subtitle">Uma cópia editável (cerca de 2560 px, poucos MB) das fotos editadas cujo original não chega ao servidor, para os outros aparelhos continuarem a edição. Notas, marcações e rótulos sincronizam sem ela.</string>
     <string name="sync_originals">Backup dos originais</string>
-    <string name="sync_originals_subtitle">Fotos que só este aparelho tem sobem uma vez. Fotos que o servidor já tem, como as pastas do NAS, nunca sobem.</string>
+    <string name="sync_originals_subtitle">Fotos que só este aparelho tem são enviadas uma vez: todas as fotos de uma pasta com backup ligado, e toda foto que você editar. Fotos que o servidor já tem, como as das pastas do NAS, nunca são.</string>
+    <string name="sync_folders_hint">Desligado: só as fotos que você editar entram no backup.</string>
     <string name="sync_wifi_only">Originais só pelo Wi-Fi</string>
     <string name="sync_section_folders">Backup dos originais destas pastas</string>
     <string name="sync_section_storage">Armazenamento</string>

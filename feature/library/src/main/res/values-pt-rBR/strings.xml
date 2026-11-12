@@ -176,6 +176,7 @@
     <string name="library_cloud_backed_up">Original também no servidor</string>
     <string name="library_cloud_only">Original só no servidor</string>
     <string name="library_cloud_preview">Só a prévia inteligente: o original está em outro aparelho</string>
+    <string name="library_cloud_elsewhere">Só em outro aparelho: o servidor não tem prévia dela. Edite-a lá para enviar uma</string>
     <string name="library_local_preview">Só a prévia: o Reveal não consegue mais ler o original. Compartilhe a foto com o Reveal de novo para a foto completa</string>
     <string name="library_gallery_access_title">Continuar lendo as fotos da galeria?</string>
     <string name="library_gallery_access_body">Fotos compartilhadas pela galeria só podem ser lidas enquanto o Reveal está aberto, por isso algumas agora mostram só a prévia. Permita o acesso às fotos e o Reveal volta a lê-las quando quiser: miniaturas completas, exportações no tamanho completo e backups. Só as fotos selecionadas também serve. O Reveal só lê as fotos, nunca as altera. Dá para mudar isso depois em Configurações.</string>

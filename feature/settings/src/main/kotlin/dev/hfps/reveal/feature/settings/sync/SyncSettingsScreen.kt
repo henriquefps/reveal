@@ -426,6 +426,12 @@ private fun Paired(
                 stringResource(R.string.sync_section_folders),
                 Modifier.padding(start = 16.dp, end = 16.dp, top = 12.dp),
             )
+            Text(
+                stringResource(R.string.sync_folders_hint),
+                style = RevealTheme.typography.ui,
+                color = RevealTheme.colors.mutedForeground,
+                modifier = Modifier.padding(horizontal = 16.dp),
+            )
             for (folder in state.folders) {
                 SwitchRow(
                     title = folder.name,

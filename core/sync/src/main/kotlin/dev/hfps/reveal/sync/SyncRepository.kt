@@ -175,6 +175,8 @@ class SyncRepository(
             if (accounts.account.value != account) return@withLock null
             runtime.update { it.copy(running = true) }
             try {
+                // Previews no longer needed stop being named before the push, so the blob run can drop them.
+                uploader.markDrops()
                 val report = engine.sync(api, account.serverId)
                 val headers = readServerHeaders()
                 Log.i(TAG, "sync: $report, $headers server headers")
@@ -198,27 +200,39 @@ class SyncRepository(
     }
 
     /**
-     * Blob work: smart previews (when on) and, when [originalsAllowed] (the network suits the Wi-Fi rule), the
+     * Blob work: smart previews (when on; on an [unmetered] network also a few made again in the current format),
+     * dropping the previews no longer needed and, when [originalsAllowed] (the network suits the Wi-Fi rule), the
      * originals backup. Returns true when more work is left for another run.
      */
-    suspend fun syncBlobs(originalsAllowed: Boolean): Boolean = withContext(Dispatchers.IO) {
-        val api = api() ?: return@withContext false
-        val options = accounts.options.value
-        try {
-            var progress = 0
-            if (options.previews) progress += uploader.previews(api, PREVIEWS_PER_RUN, noBackup = !options.originals)
-            if (options.originals && originalsAllowed) progress += uploader.originals(api, ORIGINALS_PER_RUN)
-            val left =
-                db.syncDao().pendingUploads(dev.hfps.reveal.data.db.SyncUploadEntity.KIND_PREVIEW, 1).isNotEmpty() ||
-                    (options.previews && db.syncDao().previewCandidates(!options.originals, 1).isNotEmpty()) ||
-                    (options.originals && originalsAllowed && db.syncDao().backupCandidates(1).isNotEmpty())
-            // A run that moved nothing forward (every item unreadable or failing) does not start the next one at
-            // once: the next metadata sync or the periodic job tries again.
-            left && progress > 0
-        } catch (e: SyncHttpException) {
-            runtime.update { it.copy(problem = problemOf(e)) }
-            if (e.code == "storage_not_configured" || !e.transient) false else throw e
+    suspend fun syncBlobs(originalsAllowed: Boolean, unmetered: Boolean = false): Boolean =
+        withContext(Dispatchers.IO) {
+            val api = api() ?: return@withContext false
+            val options = accounts.options.value
+            try {
+                var progress = 0
+                if (options.previews) {
+                    val reformat = if (unmetered) REFORMATS_PER_RUN else 0
+                    progress +=
+                        uploader.previews(api, PREVIEWS_PER_RUN, originalsOff = !options.originals, reformat = reformat)
+                }
+                progress += uploader.drops(api)
+                if (options.originals && originalsAllowed) progress += uploader.originals(api, ORIGINALS_PER_RUN)
+                val left = blobWorkLeft(options, originalsAllowed)
+                // A run that moved nothing forward (every item unreadable or failing) does not start the next one at
+                // once: the next metadata sync or the periodic job tries again.
+                left && progress > 0
+            } catch (e: SyncHttpException) {
+                runtime.update { it.copy(problem = problemOf(e)) }
+                if (e.code == "storage_not_configured" || !e.transient) false else throw e
+            }
         }
+
+    /** True when a blob run would find something to do (previews or originals; queued drops wait for a push). */
+    private suspend fun blobWorkLeft(options: SyncOptions, originalsAllowed: Boolean): Boolean {
+        val dao = db.syncDao()
+        return dao.pendingUploads(dev.hfps.reveal.data.db.SyncUploadEntity.KIND_PREVIEW, 1).isNotEmpty() ||
+            (options.previews && dao.previewCandidates(!options.originals, 1).isNotEmpty()) ||
+            (options.originals && originalsAllowed && dao.backupCandidates(1).isNotEmpty())
     }
 
     /**
@@ -246,6 +260,9 @@ class SyncRepository(
     private companion object {
         const val TAG = "RevealSync"
         const val PREVIEWS_PER_RUN = 20
+
+        /** Previews made again in the current format per blob run (unmetered network only; never re-schedules). */
+        const val REFORMATS_PER_RUN = 3
         const val ORIGINALS_PER_RUN = 10
         const val HEADERS_PER_RUN = 300
     }

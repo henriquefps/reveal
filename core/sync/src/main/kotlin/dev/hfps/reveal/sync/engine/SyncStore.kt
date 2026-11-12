@@ -304,6 +304,7 @@ class SyncStore(
         stats: ApplyStats,
         fromInbox: Boolean = false,
     ) {
+        reassert = false
         val local = sync.record(record.kind, record.id)
         val placed = when {
             // Unpushed local work: the next push carries the old baseRev and the server decides (ADR 0017); the
@@ -343,13 +344,17 @@ class SyncStore(
                 record.kind,
                 record.id,
                 record.rev,
-                dirty = false,
-                modifiedAt = record.modifiedAt,
+                dirty = reassert,
+                modifiedAt = if (reassert) clock() else record.modifiedAt,
                 deleted = record.deleted,
             ),
         )
+        reassert = false
         stats.applied++
     }
+
+    /** Set by [applyPhoto] when this device's preview must be named again: the applied record is pushed again. */
+    private var reassert = false
 
     private suspend fun applySetting(record: FeedRecord): Boolean {
         val setting = settings.firstOrNull { it.key == record.id } ?: return true
@@ -405,13 +410,22 @@ class SyncStore(
         sync.applyPhotoMetadata(photo.id, data.rating.coerceIn(0, MAX_RATING), flag, data.label, data.hidden)
         val cloud = sync.cloud(photo.id) ?: PhotoCloudEntity(photo.id)
         val preview = data.preview
-        sync.putCloud(
-            cloud.copy(
-                previewSha = preview?.sha256 ?: cloud.previewSha,
-                previewWidth = preview?.width ?: cloud.previewWidth,
-                previewHeight = preview?.height ?: cloud.previewHeight,
-            ),
-        )
+        // The record says what the server holds: no preview there means none (a device dropped it, ADR 0018 "Smart
+        // previews"), unless this device made the one it names here; then the record is pushed again with it (another
+        // device wrote the photo without having seen it).
+        val own = cloud.previewSha != null && (cloud.previewFormat != null || cloud.previewFingerprint != null)
+        if (preview == null && own) {
+            reassert = true
+        } else {
+            sync.putCloud(
+                cloud.copy(
+                    previewSha = preview?.sha256,
+                    previewWidth = preview?.width,
+                    previewHeight = preview?.height,
+                    previewFormat = cloud.previewFormat.takeIf { preview?.sha256 == cloud.previewSha },
+                ),
+            )
+        }
         if (photo.sourceId == serverSource().id) updateServerFiles(photo, data)
         return true
     }

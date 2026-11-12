@@ -23,8 +23,8 @@ adds: the server is the user's own (no host in the app), no feature locks.
 | Conflicts | A record with unpushed local work is not overwritten: the server's state waits in `sync_inbox` and applies after our push if it is still the newest. A `copyOf` version becomes a local version with `versions.copy_of` / `copy_device`: a second cell with a "Conflict" badge until M5's versions UI. |
 | Identity | A pulled photo is found by uuid, then by alias, then by its main file's fingerprint. A local photo never pushed adopts the server's uuid; one already pushed under another uuid keeps it and the server's id becomes an alias (`sync_aliases`). A local version nobody edited adopts an incoming version at the same position. |
 | Server photos | One `sources.kind = SERVER` source holds photos only the server has (NAS files, other devices' photos). Their document id is `<fingerprint>/<name>`; `ServerFilesProvider` serves them by range, so thumbnails, viewer, editor and export need no change. "All photos" excludes them; the library has a "Server" entry. |
-| Smart previews | `SmartPreviewCodec` (`:core:pipeline/preview`): the editor's own `PipelineInput` at 2560 px (log-encoded 16-bit luma, half-resolution chroma, deflate) plus a 1600 px display JPEG. The editor opens it directly; made by devices for their device-only photos. |
-| Originals | Device-only photos (lookup says missing) of folders with the backup on: full SHA-256, chunked resumable upload, Wi-Fi only by default. The server's fingerprint check guarantees the bytes. |
+| Smart previews | `SmartPreviewCodec` (`:core:pipeline/preview`): the editor's own `PipelineInput` at 2560 px (version 2 since 0.5.2: log-encoded luma and half-resolution chroma quantised to the photo's own noise, deflate) plus a 1280 px display JPEG. The editor opens it directly; made by devices only for device-only photos whose original cannot go up (amendment FIX/P). |
+| Originals | Device-only photos (lookup says missing) of folders with the backup on, and edited photos of any folder (amendment FIX/P): full SHA-256, chunked resumable upload, Wi-Fi only by default. The server's fingerprint check guarantees the bytes. |
 | Jobs | `SyncWorker` (any network, exponential backoff), `BlobWorker` (network, battery not low, storage not low; originals only unmetered unless allowed), a 15-minute periodic sync, a sync 3 s after local changes settle, and one every 30 s while the app is in the foreground. |
 | Server change | `GET /v1/devices` (new, ADR 0017 "Other endpoints") names the device of a conflict copy. |
 
@@ -96,12 +96,12 @@ like local photos. It writes with the triggers quiet: a capture time read from a
 
 ## Smart previews
 
-The format (`RVSP`, version 1) is in `SmartPreviewCodec`'s KDoc. Luma (green) keeps 0.0003-stop steps over 20 stops;
-chroma (`log2 r - log2 g`, `log2 b - log2 g`) is half resolution at 0.004-stop steps; values below black clamp to 0.
-`SmartPreviewCodecTest`: green within 0.1 %, mean colour error under 2 % at the scene's ring edges, a developed preview
-within 1.5 8-bit levels (mean) of the developed original. A device makes previews only for its device-only photos that
-are edited, rated or picked, or whose originals are not being backed up (the option or the folder's switch is off):
-that keeps preview storage to the photos people work on, and a backed-up original serves the others.
+The format (`RVSP`) is in `SmartPreviewCodec`'s KDoc. Version 1 (0.5.0-0.5.1): luma (green) at 0.0003-stop steps
+over 20 stops, chroma (`log2 r - log2 g`, `log2 b - log2 g`) at half resolution and 0.004-stop steps. Version 2
+(0.5.2): the same planes with steps that follow the photo's own noise (amendment FIX/P below); values below black
+clamp to 0 in both. `SmartPreviewCodecTest`: green within 0.1 %, mean colour error under 2 % at the scene's ring edges,
+a developed preview within 1.5 8-bit levels (mean) of the developed original, version 1 files still open, a clean
+gradient keeps fine monotone steps. Which photos get one: amendment FIX/P (only where the original cannot go up).
 
 `LibraryRepository.editTarget` opens the smart preview when the original is out of reach (a Server photo the server
 cannot serve, an unplugged folder); `PhotoOpener` recognises the magic and builds the editor's input from it (no full
@@ -181,12 +181,91 @@ TalkBack; "Delete conflict copies" in the selection menu deletes them here and p
   both; pulling it keeps a photo another server id names (an alias: `sync_aliases`) under that id instead of deleting
   it. `versions.photo_id` changes are tracked (trigger version 3).
 
+## Amendment 2026-11-12 (FIX/P, 0.5.2): fewer and smaller smart previews
+
+The owner's server held 153 previews of about 9 MB each (1.42 GB), more than the JPEG originals: 0.5.x made one for
+every edited, rated or picked device-only photo, and for every photo of a folder with the backup off.
+
+- **Edited photos back up their original** (like Lightroom): `backupCandidates` takes every device-only photo of a
+  folder with the backup on **and every edited photo** (`photos.has_edit`: a version with a non-default recipe) of
+  any folder or hand-off, with the same Wi-Fi rule, uploader and lookup. A folder with the backup off sends nothing
+  else: ratings, flags, labels and recipes travel as records. Removing an edit never deletes an uploaded original.
+  Settings → Sync says so ("Off: only photos you edit are backed up").
+- **A smart preview only where the original cannot go up**: the file is unreadable (a hand-off whose grant ended, ADR
+  0011; then it is the only copy) or the photo is edited while the originals backup is off (`previewCandidates`,
+  `originalsOff`). No stop-gap preview while an edited photo's original waits for Wi-Fi: that would upload a preview
+  and drop it again minutes later; the other device sees the photo (metadata, edit) without pixels until the original
+  lands. A rated or picked photo only another device has shows the "only on another device" badge
+  (`CloudState.ELSEWHERE`), not "smart preview only".
+- **Previews that no longer qualify are dropped** (an edit reset, the original backed up): before each metadata push
+  `BlobUploader.markDrops` clears the photo's preview (the record is pushed without it) and queues a `drop_preview`
+  row in `sync_uploads`; the blob run asks `DELETE /v1/blobs/{sha256}` (ADR 0017 "Dropping a smart preview"), which
+  the server refuses while any live photo record names it. A preview replaced by a new one (format 2, or a changed
+  file) is dropped the same way. A server before 0.5.2 (`405`) keeps the drops queued. A pulled photo record without a
+  preview now clears the device's pointer (0.5.x kept the old one), except for a preview this device made: then the
+  record is pushed again with it.
+- **Old previews are made again lazily**: `photo_cloud.preview_format` (database v9, null = made by 0.5.x or by
+  another device) marks the format this device uploaded; on an unmetered network each blob run makes up to 3
+  qualifying format 1 previews again (`outdatedPreviews`), never re-scheduling itself for them.
+- **Format 2** (`SmartPreviewCodec` KDoc, `PreviewPlanes.kt`): decoding reads 1 and 2. The bytes of format 1 were
+  almost all the photo's own sensor noise coded exactly (16-bit log luma at 0.0003-stop steps). Format 2 measures that
+  noise per 1/2-stop level (`PreviewNoise`: lower quartile of each pixel's difference to its 4-neighbour mean,
+  relative, never rising with brightness) and quantises in log2 with steps of one noise sigma, clamped to
+  0.0004-0.02 stops for green and 0.004-0.015 stops for chroma (1/8-stop level tables in the header), then LOCO-I
+  median prediction, split low/high residual bytes and deflate level 9. The display JPEG is 1280 px (was 1600).
+
+### Measurements (FIX/P)
+
+`SmartPreviewSizesTest` (`REVEAL_PREVIEW_SIZES`, sizes without the display JPEG, CPU develop of both previews, CIEDE2000 on the float output before 8-bit
+rounding; "strong" = Auto + an S tone curve + sharpening 80 + noise reduction + texture/clarity/dehaze, "lift" = Auto
++2 EV and shadows +80; "block" = the worst 4 x 4-pixel mean, what is visible at 1:1 without single noisy pixels):
+
+| Sample | v1 | Steps (max green/chroma stops) | v2 | of v1 | strong p99 / max / block | lift p99 / max / block |
+| --- | --- | --- | --- | --- | --- | --- |
+| Sony ZV-E10 (ISO 100) 2560x1710 | 8.95 MB | **A 0.02/0.015 (default)** | 3.73 MB | 42 % | 0.80 / 2.52 / 1.11 | 0.96 / 1.88 / 1.15 |
+| Sony ZV-E10 (ISO 100) 2560x1710 | 8.95 MB | B 0.03/0.03 | 3.39 MB | 38 % | 1.17 / 3.11 / 1.60 | 1.58 / 2.95 / 1.68 |
+| Sony ZV-E10 (ISO 100) 2560x1710 | 8.95 MB | C 0.05/0.06 | 3.21 MB | 36 % | 1.28 / 3.38 / 1.75 | 2.00 / 4.21 / 2.51 |
+| Nikon D5600 2560x1709 | 10.16 MB | **A 0.02/0.015 (default)** | 4.79 MB | 47 % | 0.59 / 2.55 / 0.95 | 0.69 / 1.78 / 0.93 |
+| Nikon D5600 2560x1709 | 10.16 MB | B 0.03/0.03 | 4.40 MB | 43 % | 0.97 / 4.33 / 1.64 | 1.18 / 2.64 / 1.31 |
+| Nikon D5600 2560x1709 | 10.16 MB | C 0.05/0.06 | 3.85 MB | 38 % | 1.82 / 7.99 / 3.22 | 2.24 / 4.98 / 2.69 |
+| Sony A7C ISO 12800 2560x1710 | 9.38 MB | **A 0.02/0.015 (default)** | 4.13 MB | 44 % | 0.59 / 1.64 / 0.73 | 0.77 / 1.81 / 0.85 |
+| Sony A7C ISO 12800 2560x1710 | 9.38 MB | B 0.03/0.03 | 3.66 MB | 39 % | 0.87 / 2.40 / 1.04 | 1.31 / 2.70 / 1.80 |
+| Sony A7C ISO 12800 2560x1710 | 9.38 MB | C 0.05/0.06 | 3.23 MB | 34 % | 1.41 / 4.12 / 1.74 | 2.37 / 4.93 / 2.70 |
+| Sony A7C ISO 2000 2560x1710 | 8.92 MB | **A 0.02/0.015 (default)** | 3.66 MB | 41 % | 0.72 / 1.83 / 0.62 | 0.78 / 1.87 / 0.88 |
+| Sony A7C ISO 2000 2560x1710 | 8.92 MB | B 0.03/0.03 | 3.22 MB | 36 % | 1.02 / 2.44 / 1.16 | 1.34 / 2.76 / 1.65 |
+| Sony A7C ISO 2000 2560x1710 | 8.92 MB | C 0.05/0.06 | 3.03 MB | 34 % | 1.03 / 2.43 / 1.08 | 2.14 / 4.58 / 2.53 |
+| Canon EOS R6 2560x1709 | 8.79 MB | **A 0.02/0.015 (default)** | 3.43 MB | 39 % | 1.07 / 2.88 / 1.59 | 0.86 / 2.02 / 1.03 |
+| Canon EOS R6 2560x1709 | 8.79 MB | B 0.03/0.03 | 3.32 MB | 38 % | 1.20 / 3.70 / 1.60 | 1.15 / 2.87 / 1.47 |
+| Canon EOS R6 2560x1709 | 8.79 MB | C 0.05/0.06 | 3.31 MB | 38 % | 1.20 / 3.70 / 1.60 | 1.19 / 3.12 / 1.57 |
+| Pixel 4a DNG 2016x1512 | 7.29 MB | **A 0.02/0.015 (default)** | 3.69 MB | 51 % | 0.91 / 2.75 / 1.14 | 0.76 / 1.63 / 0.75 |
+| Pixel 4a DNG 2016x1512 | 7.29 MB | B 0.03/0.03 | 3.43 MB | 47 % | 1.55 / 4.38 / 1.86 | 1.31 / 2.67 / 1.42 |
+| Pixel 4a DNG 2016x1512 | 7.29 MB | C 0.05/0.06 | 3.07 MB | 42 % | 2.92 / 8.10 / 3.20 | 2.46 / 4.93 / 2.70 |
+| JPEG 768 px (public domain) 768x604 | 0.77 MB | **A 0.02/0.015 (default)** | 0.71 MB | 92 % | 0.14 / 0.66 / 0.08 | 0.12 / 0.22 / 0.11 |
+
+The display JPEG adds 104-411 KB at 1280 px (155-579 KB at 1600 px). Default A: 3.4-4.8 MB of pixels (39-51 % of format 1),
+about 3.6-5.1 MB with the JPEG; developed p99 0.6-1.07, the worst 4 x 4 block 0.6-1.6, single noisy pixels up to ~2.9 where
+the photo's own grain is several units (the differences there are grain-like, not banding or shifts).
+
+On a device (x86_64 emulator, the real `SmartPreviewMaker`: ProxyBuilder decode, LibRaw; `SmartPreviewMakerTest
+#publicSampleRaws`, log `REVEAL_PREVIEWS`), whole files with the display JPEG: ZV-E10 3.8 MB, A7C ISO 2000 3.8 MB,
+A7C ISO 12800 4.3 MB, Canon R6 3.6 MB, Nikon D5600 5.1 MB, Pixel 4a DNG (2560 x 1920) 5.7 MB; JPEGs 86-307 KB.
+
+Where the bytes go: in format 1 a 24 MP RAW at 2560 x 1710 is ~6.6 MB of green and ~2.4 MB of chroma; predictors
+(MED, averages, gradient) change the entropy by under 5 % and a context-adaptive coder would gain about 5 % over
+deflate: the residual is the noise. A plain bit cut (11-bit green, 8-bit chroma) still leaves ~3.5 MB. Only a step
+tied to the noise brings it down, and the developed difference then grows with the step (above), so the steps were
+chosen at the edge of "p99 below 1": 1.5-3 MB would need steps about twice as coarse (p99 1.5-2.5, max block 2-3).
+Decision (owner, 2026-11-12): keep A, quality first (~45 % of format 1). The 1.5-3 MB target came from the old "a
+preview for every rated, picked or unbacked photo" rule; with edited photos backing up their original, previews are
+rare (unreadable files, or the originals backup off), so their size matters far less than their fidelity.
+
 ## Consequences
 
 - The grid now has one cell per version (a photo with a conflict copy has two); selection stays per photo.
 - A conflict that arrives while a slider is held is not shown until the next sync after that commit: the server then
   turns it into a copy.
-- Previews and originals are never garbage collected on the server (ADR 0017); the app never deletes a backup.
+- Originals are never garbage collected on the server (ADR 0017); the app never deletes a backup. Smart previews this
+  device made are dropped when no longer needed (amendment FIX/P).
 - Encryption of originals at rest is still the backup volume's job.
 - The x86_64 emulator's host GL stack crashes on the editor's GPU tests (`RenderThread` SIGSEGV in
   `qemu-system-x86_64-headless` with `swiftshader_indirect`; with `-gpu host` the CPU threads hang and it segfaults

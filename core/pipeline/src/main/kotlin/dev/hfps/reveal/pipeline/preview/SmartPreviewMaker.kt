@@ -24,9 +24,9 @@ data class MadePreview(val file: File, val sha256: String, val size: Long, val w
  * JPEG, [JPEG_EDGE] px), in the [SmartPreviewCodec] format. Blocking and memory hungry (one 2560 px float proxy):
  * one at a time, from a worker.
  */
-class SmartPreviewMaker(private val dir: File) {
+open class SmartPreviewMaker(private val dir: File) {
     /** Writes the preview of [input] (a RAW, or the rendering of a photo without one) into [dir]. */
-    fun make(input: ImageInput, cancel: CancelToken = CancelToken.NONE): MadePreview {
+    open fun make(input: ImageInput, cancel: CancelToken = CancelToken.NONE): MadePreview {
         dir.mkdirs()
         val temp = File.createTempFile("preview", ".tmp", dir)
         val digest = MessageDigest.getInstance("SHA-256")
@@ -66,8 +66,11 @@ class SmartPreviewMaker(private val dir: File) {
     }
 
     companion object {
-        /** Long edge of the display JPEG inside a preview (grid and viewer of a preview-only photo). */
-        const val JPEG_EDGE = 1600
+        /**
+         * Long edge of the display JPEG inside a preview (grid and viewer of a preview-only photo; the editor develops
+         * the pixels). 1600 px until 0.5.1; 1280 px saves about a third of it (FIX/P).
+         */
+        const val JPEG_EDGE = 1280
         private const val JPEG_QUALITY = 85
         private const val BUFFER = 256 * 1024
         private const val BYTE_MASK = 0xFF

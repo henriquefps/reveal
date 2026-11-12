@@ -74,7 +74,7 @@ class BlobWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
         val connectivity = applicationContext.getSystemService(ConnectivityManager::class.java)
         val unmetered = connectivity?.isActiveNetworkMetered == false
         val allowed = unmetered || !sync.options.value.originalsWifiOnly
-        val more = sync.syncBlobs(originalsAllowed = allowed)
+        val more = sync.syncBlobs(originalsAllowed = allowed, unmetered = unmetered)
         if (more) SyncScheduler.blobs(applicationContext, again = true)
         Result.success()
     } catch (e: IOException) {

@@ -67,6 +67,11 @@ class FakeSyncServer : Dispatcher() {
     val devices = LinkedHashMap<String, String>() // key -> device id
     val deviceNames = LinkedHashMap<String, String>()
     val blobs = HashMap<String, ByteArray>()
+    val blobKinds = HashMap<String, String>() // sha -> kind
+    val blobOwners = HashMap<String, String>() // sha -> uploading device
+
+    /** Answer `DELETE /v1/blobs/{sha}` like a server before 0.5.2 (`405`). */
+    var dropUnsupported = false
     val originals = HashMap<String, String>() // fingerprint -> sha (backup)
     val nasFiles = ArrayList<JsonObject>()
     val nasBytes = HashMap<String, ByteArray>() // fingerprint -> bytes
@@ -179,6 +184,8 @@ class FakeSyncServer : Dispatcher() {
 
             path.startsWith("/v1/originals/") -> serve(request, original(url.pathSegments.last()))
 
+            path.startsWith("/v1/blobs/") && method == "DELETE" -> drop(device, url.pathSegments.last())
+
             path.startsWith("/v1/blobs/") -> serve(request, blobs[url.pathSegments.last()])
 
             path == "/v1/nas/files" -> ok(
@@ -191,6 +198,32 @@ class FakeSyncServer : Dispatcher() {
 
             else -> error(404, "not_found")
         }
+    }
+
+    /** ADR 0017 "Dropping a smart preview": the uploader's own preview, once no live photo record names it. */
+    private fun drop(device: String, sha: String): MockResponse {
+        if (dropUnsupported) return error(405, "method_not_allowed")
+        if (!blobs.containsKey(sha)) return error(404, "not_found")
+        if (blobKinds[sha] != "preview" || blobOwners[sha] != device) return error(403, "forbidden")
+        if (previewNamed(sha)) return error(409, "conflict", buildJsonObject { put("reason", "referenced") })
+        blobs.remove(sha)
+        blobKinds.remove(sha)
+        blobOwners.remove(sha)
+        return MockResponse.Builder().code(204).build()
+    }
+
+    /** Gives a record edited in place by a test a new `rev`, so the devices pull it (as another device's write). */
+    @Synchronized
+    fun bump(kind: String, id: String) {
+        head++
+        records[kind to id]!!.rev = head
+        records[kind to id]!!.modifiedAt += 1
+    }
+
+    /** True when a live photo record names [sha] as its smart preview. */
+    fun previewNamed(sha: String): Boolean = records.values.any { r ->
+        r.kind == "photo" && !r.deleted &&
+            ((r.data as? JsonObject)?.get("preview") as? JsonObject)?.get("sha256")?.jsonPrimitive?.content == sha
     }
 
     private fun original(fp: String): ByteArray? = nasBytes[fp] ?: originals[fp]?.let { blobs[it] }
@@ -470,6 +503,8 @@ class FakeSyncServer : Dispatcher() {
             return error(422, "checksum_mismatch", buildJsonObject { put("offset", 0) })
         }
         blobs[sha] = bytes
+        blobKinds[sha] = u.kind
+        blobOwners[sha] = u.device
         if (u.fp != null) originals[u.fp] = sha
         uploads.remove(id)
         return MockResponse.Builder().code(

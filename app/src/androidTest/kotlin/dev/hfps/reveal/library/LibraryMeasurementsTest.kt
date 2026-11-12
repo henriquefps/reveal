@@ -70,8 +70,12 @@ class LibraryMeasurementsTest {
         measureFilters(sourceId)
 
         // No Compose test rule here: it drives frames only while it synchronizes, which would starve the real
-        // touches below. The library reopens its last filters: none, so launching lands on the home (FIX/L).
-        runBlocking { folder.library.setLastFilters(PhotoFilters.NONE) }
+        // touches below. The library reopens its last filters: none, so launching lands on the home (FIX/L);
+        // `-e grid folder` flings the folder alone instead (the start screen before FIX/L, for comparison).
+        val grid = InstrumentationRegistry.getArguments().getString("grid") ?: "home"
+        val start = if (grid == "folder") PhotoFilters.folder(sourceId) else PhotoFilters.NONE
+        log("fling grid: $grid")
+        runBlocking { folder.library.setLastFilters(start) }
         LibraryMetrics.reset()
         ActivityScenario.launch(MainActivity::class.java).use { scenario ->
             waitFor(20_000) { LibraryMetrics.firstGridFrameMs >= 0 }

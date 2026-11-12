@@ -17,6 +17,10 @@ All notable changes to Reveal are documented here. The format follows
 - The top bar: Recent, Folders (add, remove, back up, or show one folder's photos), a compact sync status that opens
   the Sync screen, and Settings. The list of places (All photos, Opened from other apps, Server, folders) is gone.
 
+### Fixed
+- Scrolling quickly past many photos from other apps that Reveal can only show from their preview no longer runs out
+  of memory: their thumbnails are made one at a time, and a thumbnail that cannot be made shows its placeholder.
+
 ## [0.5.4] - 2026-11-12
 
 ### Fixed

@@ -7,6 +7,12 @@ All notable changes to Reveal are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- `reveal-sync`, the self-hosted sync server (`sync-server/`, ADR 0017): pairs devices by QR code (one revocable key
+  per device), syncs edits, ratings and virtual copies with a change feed that never loses an edit in a conflict (the
+  other edit becomes a virtual copy), backs up originals and smart previews with resumable uploads, and indexes NAS
+  folders read-only so photos the server can reach are never uploaded and can be opened away from home. A setup page
+  (English and Portuguese) manages devices, the backup folder and NAS folders. Docker image and static Linux
+  binaries; the app side of sync comes next.
 - Tone curve (Light → Tone curve): point curve for RGB and for red, green and blue separately (tap to add a point,
   drag to move, drag off to remove, double-tap to reset; Linear, Medium and Strong contrast presets) and a parametric
   curve (highlights, lights, darks, shadows with movable splits), with the photo's histogram behind the curve.

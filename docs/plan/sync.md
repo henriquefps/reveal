@@ -1,7 +1,10 @@
 # Reveal: sync and cloud library (proposal, not scheduled yet)
 
-Status: planned as **MS (0.4.0), after M2** (owner, 2026-11-11). Nothing here is built yet, except the
-content fingerprint (see "Prepare now").
+Status: **MS (0.4.0), after M2** (owner, 2026-11-11). Built: the content fingerprint and stable ids (see "Prepare
+now") and, in MS/1, the **server** (`sync-server/`, `reveal-sync`): the protocol is
+[ADR 0017](../adr/0017-sync-protocol.md) (HTTP API `/v1`, pairing, change feed, conflicts, chunked uploads, NAS
+indexing; OpenAPI in `sync-server/api/openapi.yaml`), self-hosting in `sync-server/README.md`. Next (MS/2): the app
+side (sync job, Settings screen, cloud states in the library).
 
 ## What the owner wants
 
@@ -67,7 +70,8 @@ Keystore, server secrets in `skv`. Files at mode 0600; optional encryption at re
 `reveal-sync` in Go in this repo (`sync-server/`): metadata in SQLite, blobs (previews, originals)
 in a content-addressed folder, chunked resumable uploads, a list endpoint with changes since a
 cursor, tombstones kept forever, health endpoint with counts only. Docker image + static binaries,
-like the other two servers. Deployed on `cachyos-fps` with Docker Compose and a Cloudflare Tunnel.
+like the other two servers. Built in MS/1 (ADR 0017). The owner's own deployment (Docker Compose and a
+Cloudflare Tunnel) is a separate, later step; nothing in the server or the app assumes it.
 
 ### Setup UI and deployment
 
@@ -96,6 +100,15 @@ only, original in the cloud), and the tablet layout from M2 using the same libra
 - Stable UUIDs for photos, versions and presets in addition to Room's numeric ids, before M3
   presets ship.
 - Recipes stay self-contained JSON (ADR 0003), which is already the sync payload.
+
+## Decided in MS/1 (ADR 0017)
+
+- Pairing by a one-time QR token (10 minutes) exchanged for a per-device key; the admin password is set on first run
+  with a setup code from the server's log, so nobody else on the network can claim a fresh server.
+- Conflict copies are new `version` records with `copyOf`; photo metadata, presets and settings are last-write-wins.
+- The server lists its NAS files to devices (`/v1/nas/files`) and serves them by fingerprint, so a device away from
+  home sees the NAS shoots.
+- Smart previews are made by devices (the server has no RAW decoder).
 
 ## Decided (2026-11-11)
 

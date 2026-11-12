@@ -86,6 +86,8 @@ spike may overturn one, but only with measurements written in the ADR.
   GPU/NNAPI delegates with a CPU fallback. Models are downloaded at build time into assets (no runtime
   download); APK size impact stated.
 - Edge refinement (guided filter on the full-res image) so masks follow hair and fine edges.
+- Spike result (M4/S): ADR 0021 (LiteRT; Selfie Multiclass for people and parts, DeepLab ADE20K for sky, MagicTouch
+  for the subject; guided filter refinement; masks referenced by model id@version, never stored as pixels).
 
 ## Storage and files
 

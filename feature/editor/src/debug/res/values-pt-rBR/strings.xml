@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Somente builds de depuração: o laboratório de máscaras (docs/adr/0021, spike do M4). -->
+<resources>
+    <string name="mask_lab_title">Laboratório de máscaras</string>
+    <string name="mask_lab_model">Modelo</string>
+    <string name="mask_lab_mask">Máscara</string>
+    <string name="mask_lab_auto_subject">Assunto automático</string>
+    <string name="mask_lab_refine">Refinar bordas</string>
+    <string name="mask_lab_running">Processando…</string>
+    <string name="mask_lab_tap">Toque na foto para selecionar o que está sob o dedo</string>
+    <string name="mask_lab_error">Falhou: %1$s</string>
+    <string name="mask_lab_result">%1$s · modelo %2$s ms · com pré/pós %3$s ms · bordas %4$d ms · %5$d %% selecionado</string>
+    <string name="mask_lab_kind_subject">Assunto</string>
+    <string name="mask_lab_kind_background">Fundo</string>
+    <string name="mask_lab_kind_sky">Céu</string>
+    <string name="mask_lab_kind_people">Pessoas</string>
+    <string name="mask_lab_kind_face_skin">Pele do rosto</string>
+    <string name="mask_lab_kind_body_skin">Pele do corpo</string>
+    <string name="mask_lab_kind_skin">Pele</string>
+    <string name="mask_lab_kind_hair">Cabelo</string>
+    <string name="mask_lab_kind_clothes">Roupas</string>
+</resources>

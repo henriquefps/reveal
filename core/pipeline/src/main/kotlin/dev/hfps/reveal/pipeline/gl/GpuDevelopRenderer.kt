@@ -473,6 +473,15 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
     suspend fun renderOutput(recipe: Recipe, settings: OutputSettings = OutputSettings()): ByteArray =
         onGl { readOutput(recipe, settings) }
 
+    /** [renderOutput] with its size: (width, height, RGBA8 top row first). The debug mask lab's input (ADR 0021). */
+    suspend fun renderOutputImage(
+        recipe: Recipe,
+        settings: OutputSettings = OutputSettings(),
+    ): Triple<Int, Int, ByteArray> = onGl {
+        val mapping = checkNotNull(input) { "no input" }.mapping(recipe)
+        Triple(mapping.outputWidth, mapping.outputHeight, readOutput(recipe, settings))
+    }
+
     /** [renderOutput] with the clipping overlays drawn as on screen (tests of the output-pass flag). */
     suspend fun renderOutput(recipe: Recipe, settings: OutputSettings, clipping: ClippingWarnings): ByteArray =
         onGl { readOutput(recipe, settings, clipping) }

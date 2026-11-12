@@ -26,7 +26,7 @@ import dev.hfps.reveal.pipeline.auto.AutoScope
 import dev.hfps.reveal.pipeline.recipe.RecipeGroup
 
 /** The tools of the strip, in strip order (docs/plan/ux.md, "Phone, portrait"). */
-enum class ToolId { PRESETS, AUTO, CROP, LIGHT, COLOUR, EFFECTS, DETAIL, OPTICS, MASKS, HEAL, HISTORY }
+enum class ToolId { PRESETS, AUTO, CROP, LIGHT, COLOUR, EFFECTS, DETAIL, OPTICS, MASKS, HEAL, HISTORY, MASK_LAB }
 
 /**
  * What a mode (Crop, Masks, Heal) gets from the editor while it is active: the state and actions, whether its
@@ -185,6 +185,16 @@ object EditorTools {
         ToolBehaviour.Panel(R.string.editor_history_title, group = null) { HistoryPanel(it) },
     )
 
+    /**
+     * The mask lab (debug builds only, docs/adr/0021): runs the on-device mask models on the open photo and tints the
+     * mask. Opened from More ⋯; null in release builds (`src/release` has no lab, no LiteRT and no models).
+     */
+    val maskLab: EditorTool? get() = DebugTools.maskLab
+
     /** The tool with [id]. */
-    operator fun get(id: ToolId): EditorTool = if (id == ToolId.HISTORY) history else all.first { it.id == id }
+    operator fun get(id: ToolId): EditorTool = when (id) {
+        ToolId.HISTORY -> history
+        ToolId.MASK_LAB -> checkNotNull(maskLab) { "no mask lab in this build" }
+        else -> all.first { it.id == id }
+    }
 }

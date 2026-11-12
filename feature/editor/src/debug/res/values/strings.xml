@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Debug builds only: the mask lab (docs/adr/0021, M4 spike). -->
+<resources>
+    <string name="mask_lab_title">Mask lab</string>
+    <string name="mask_lab_model">Model</string>
+    <string name="mask_lab_mask">Mask</string>
+    <string name="mask_lab_auto_subject">Auto subject</string>
+    <string name="mask_lab_refine">Refine edges</string>
+    <string name="mask_lab_running">Running…</string>
+    <string name="mask_lab_tap">Tap the photo to select what is under your finger</string>
+    <string name="mask_lab_error">Failed: %1$s</string>
+    <string name="mask_lab_result">%1$s · model %2$s ms · with pre/post %3$s ms · edges %4$d ms · %5$d %% selected</string>
+    <string name="mask_lab_kind_subject">Subject</string>
+    <string name="mask_lab_kind_background">Background</string>
+    <string name="mask_lab_kind_sky">Sky</string>
+    <string name="mask_lab_kind_people">People</string>
+    <string name="mask_lab_kind_face_skin">Face skin</string>
+    <string name="mask_lab_kind_body_skin">Body skin</string>
+    <string name="mask_lab_kind_skin">Skin</string>
+    <string name="mask_lab_kind_hair">Hair</string>
+    <string name="mask_lab_kind_clothes">Clothes</string>
+</resources>

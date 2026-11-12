@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- The 24 MP refinement measurement holds a full-size guide (docs/adr/0021). -->
+    <application android:largeHeap="true" />
+
+</manifest>

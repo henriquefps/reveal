@@ -124,6 +124,7 @@ internal fun TabletLayout(t: TabletChrome, filmstrip: FilmstripUi?, layout: Edit
                     compact = false,
                     onHistory = { t.select(EditorTools.history) },
                     filmstrip = if (filmstrip != null) layout.filmstripVisible else null,
+                    onTool = { t.select(it) },
                 )
             }
         }
@@ -282,6 +283,7 @@ internal fun DockedTabletLayout(t: TabletChrome, filmstrip: FilmstripUi?, layout
                     compact = false,
                     onHistory = { t.select(EditorTools.history) },
                     filmstrip = if (filmstrip != null) layout.filmstripVisible else null,
+                    onTool = { t.select(it) },
                 )
             }
         }

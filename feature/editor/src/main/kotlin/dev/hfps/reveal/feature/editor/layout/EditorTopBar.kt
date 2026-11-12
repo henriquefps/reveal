@@ -64,6 +64,8 @@ import dev.hfps.reveal.feature.editor.EditorActions
 import dev.hfps.reveal.feature.editor.EditorTags
 import dev.hfps.reveal.feature.editor.EditorUiState
 import dev.hfps.reveal.feature.editor.R
+import dev.hfps.reveal.feature.editor.tools.EditorTool
+import dev.hfps.reveal.feature.editor.tools.EditorTools
 import dev.hfps.reveal.pipeline.gl.CompareMode
 import kotlinx.coroutines.withTimeoutOrNull
 
@@ -83,6 +85,7 @@ fun EditorTopBar(
     narrow: Boolean = false,
     onHistory: () -> Unit = {},
     filmstrip: Boolean? = null,
+    onTool: (EditorTool) -> Unit = {},
 ) {
     RevealTopBar(
         title = if (compact) "" else state.fileName,
@@ -109,7 +112,7 @@ fun EditorTopBar(
             modifier = Modifier.testTag(EditorTags.REDO),
         )
         CompareButton(state, actions)
-        MoreMenu(state, actions, onHistory)
+        MoreMenu(state, actions, onHistory, onTool)
         when {
             compact -> RevealIconButton(
                 icon = PhosphorRegular.Export,
@@ -329,6 +332,7 @@ private fun MoreMenu(
     state: EditorUiState,
     actions: EditorActions,
     onHistory: () -> Unit,
+    onTool: (EditorTool) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var open by remember { mutableStateOf(false) }
@@ -359,6 +363,17 @@ private fun MoreMenu(
                 EditorTags.MENU_HISTORY,
                 onClick = run(onHistory),
             )
+            EditorTools.maskLab?.let { lab ->
+                ActionItem(
+                    lab.label,
+                    lab.icon,
+                    EditorTags.MENU_MASK_LAB,
+                    enabled = ready,
+                    onClick = run {
+                        onTool(lab)
+                    },
+                )
+            }
             ActionItem(
                 R.string.editor_menu_copy,
                 PhosphorRegular.Copy,

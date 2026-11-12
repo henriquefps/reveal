@@ -252,6 +252,21 @@ frame because a lazy grid re-places its items while it scrolls; Perfetto trace).
 node (`clearAndSetSemantics`). A release build (R8, no debug Compose) is expected to be well under these numbers; the
 orchestrator measures it with the release install.
 
+### Release build (M3/F)
+
+The `bench` build type (R8 and resource shrinking like release, app id `dev.hfps.reveal.bench`, debug-signed,
+profileable; `scripts/bench/release-bench.sh`), the same 60 presets, the CC0 ZV-E10 sample, 20 `input touchscreen
+swipe` scrolls, frame times from `dumpsys gfxinfo` (no instrumentation, so no accessibility connection from a test;
+the phone's own accessibility service stays on). Galaxy S24 Ultra at 60 Hz, three runs (installed as adb installs it,
+twice, and compiled ahead of time with `cmd package compile -m speed`):
+
+| | Frames | p50 | p90 | p95 | p99 | Janky |
+| --- | --- | --- | --- | --- | --- | --- |
+| Presets grid, live previews, minified | 679-688 | 6-8 ms | 10-11 ms | 11-12 ms | 19-22 ms | 1.8-2.5 % |
+
+About half the debug build's frame times (p50 14 ms, p90 20-22 ms above): the debug build's extra cost was Compose's
+debug code and the semantics pass, not the previews.
+
 ## Consequences
 
 - A preset file is plain, documented JSON: third parties (and a later Lightroom `.xmp` importer) can write one.

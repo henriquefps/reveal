@@ -14,6 +14,10 @@ All notable changes to Reveal are documented here. The format follows
 - A `bench` build (minified like a release, its own app id) and `scripts/bench/release-bench.sh` to measure the
   release code on a phone or tablet: face analysis per photo and the preset grid's scrolling.
 
+### Changed
+- Finding faces and the subject is about 40 % faster (under half a second per photo on a phone), with exactly the
+  same results.
+
 ### Fixed
 - Applying a preset with a white balance to many photos at once now blends each photo from its own camera
   white balance ("as shot"), as the editor does, instead of jumping to the preset's value at 50 % strength. The same

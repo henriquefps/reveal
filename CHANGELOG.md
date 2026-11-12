@@ -6,6 +6,12 @@ All notable changes to Reveal are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-12
+
+M2: the full global toolset (tone curve, colour mixer, grading, B&W, effects, Detail at 100 %, optics,
+transform and Upright), every drag at the display rate on the phone, and a real tablet editor. The sync server
+ships in the repository; the app side of sync comes in 0.4.0.
+
 ### Added
 - `reveal-sync`, the self-hosted sync server (`sync-server/`, ADR 0017): pairs devices by QR code (one revocable key
   per device), syncs edits, ratings and virtual copies with a change feed that never loses an edit in a conflict (the

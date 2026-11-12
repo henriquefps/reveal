@@ -62,6 +62,9 @@ All notable changes to Reveal are documented here. The format follows
   the photo on screen is drawn from fewer, cheaper passes, and only the photo's area of the screen is redrawn.
 - Luminance noise reduction keeps edges and fine lines better at high amounts; photos edited with it look marginally
   different (pipeline version 10).
+- Tablets in portrait and foldables' almost square inner screens: the photo uses the whole width and the panel is
+  docked at the bottom above the tool row; drag its top edge to make it taller or shorter (remembered). Landscape
+  tablets keep the panel beside the photo.
 - Pipeline version 9: lens corrections, defringe and the Transform (photos without them look exactly as before).
 - Detail sliders respond faster while dragging: sharpening on its own now keeps up with the 120 Hz display, and
   luminance noise reduction drags cost about a quarter less. Colour noise reduction removes slightly more colour noise.

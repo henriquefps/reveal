@@ -259,6 +259,9 @@
     <string name="editor_panel_resize">Largura do painel</string>
     <string name="editor_panel_wider">Painel mais largo</string>
     <string name="editor_panel_narrower">Painel mais estreito</string>
+    <string name="editor_panel_resize_height">Altura do painel</string>
+    <string name="editor_panel_taller">Painel mais alto</string>
+    <string name="editor_panel_shorter">Painel mais baixo</string>
     <string name="editor_hover_curve_point">Entrada %1$d · Saída %2$d</string>
     <string name="editor_hover_crop_size">%1$d × %2$d px</string>
     <string name="editor_hover_guide">Guia %1$s°</string>

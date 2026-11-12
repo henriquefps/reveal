@@ -20,6 +20,7 @@ import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipeLeft
+import androidx.compose.ui.test.swipeUp
 import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
@@ -70,6 +71,7 @@ class TabletEditorTest {
         assumeTrue("needs the tablet layout", context.resources.configuration.screenWidthDp >= TABLET_DP)
         // The layout is remembered across runs (the device keeps app data): start from the defaults.
         access.editorLayout().setPanelWidth(DEFAULT_PANEL_DP)
+        access.editorLayout().setPanelHeight(DEFAULT_DOCK_DP)
         access.editorLayout().setFilmstripVisible(true)
     }
 
@@ -114,28 +116,38 @@ class TabletEditorTest {
         }
     }
 
+    /**
+     * The panel's resizing edge: the column's left edge in landscape (drag left, wider), the docked panel's top edge
+     * in portrait (drag up, taller; docs/adr/0016 "Docked panel"). Both sizes survive a recreation and a new photo.
+     */
     @Test
     fun panelResizeIsRemembered() {
         val rows = photos(2)
-        var widened: Float
+        val docked = portrait()
+        fun size() = bounds(EditorTags.PANEL).let { if (docked) it.height else it.width }
+        var resized: Float
         launchEditor(rows[0]).use { scenario ->
             waitDeveloped()
-            val before = bounds(EditorTags.PANEL).width
-            // Drag the panel's left edge 120 px to the left: the panel grows by as much (within its range).
+            val before = size()
+            // Drag the resizing edge 120 px outwards: the panel grows by as much (within its range).
             compose.onNodeWithTag(EditorTags.PANEL_RESIZE).performTouchInput {
-                swipeLeft(startX = centerX, endX = centerX - DRAG_PX, durationMillis = 400)
+                if (docked) {
+                    swipeUp(startY = centerY, endY = centerY - DRAG_PX, durationMillis = 400)
+                } else {
+                    swipeLeft(startX = centerX, endX = centerX - DRAG_PX, durationMillis = 400)
+                }
             }
             compose.waitForIdle()
-            widened = bounds(EditorTags.PANEL).width
-            assertThat(widened).isGreaterThan(before + DRAG_PX / 2)
+            resized = size()
+            assertThat(resized).isGreaterThan(before + DRAG_PX / 2)
             // A recreation (rotation, fold) and the stored preference both keep it.
             scenario.recreate()
             waitDeveloped()
-            assertThat(bounds(EditorTags.PANEL).width).isWithin(2f).of(widened)
+            assertThat(size()).isWithin(2f).of(resized)
         }
         launchEditor(rows[1]).use {
             waitDeveloped()
-            assertThat(bounds(EditorTags.PANEL).width).isWithin(2f).of(widened)
+            assertThat(size()).isWithin(2f).of(resized)
         }
     }
 
@@ -238,9 +250,16 @@ class TabletEditorTest {
         assertThat(committedExposure()).isWithin(EPS).of(0.5f)
         // Same ViewModel, same renderer: only the surface was recreated.
         assertThat(EditorMetrics.renderer).isSameInstanceAs(renderer)
+        val photo = bounds(EditorTags.CANVAS)
+        val panel = bounds(EditorTags.PANEL)
         if (portrait()) {
+            // Docked: the photo takes the whole width, the panel sits under it (docs/adr/0016 "Docked panel").
+            assertThat(panel.top).isAtLeast(photo.bottom - 1f)
+            assertThat(panel.width).isAtLeast(photo.width * DOCKED_SHARE)
             Thread.sleep(ROTATION_SETTLE_MS)
             shot("editor-portrait-mixer")
+        } else {
+            assertThat(panel.left).isAtLeast(photo.right - 1f)
         }
     }
 
@@ -400,6 +419,8 @@ class TabletEditorTest {
     private companion object {
         const val TABLET_DP = 840
         const val DEFAULT_PANEL_DP = 400f
+        const val DEFAULT_DOCK_DP = 360f
+        const val DOCKED_SHARE = 0.9f
         const val TIMEOUT_MS = 30_000L
         const val EPS = 1e-3f
         const val DRAG_PX = 120f

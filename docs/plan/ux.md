@@ -67,9 +67,13 @@ slightly lighter than the surround, with the hfps hairline border and radius.
 
 - **Landscape phone:** photo on the left, panel as a right column (360dp), tool rail vertical on the
   far right; top bar collapses to icons.
-- **Tablet / foldable unfolded (≥ 840dp):** photo centre, panel right (380-420dp, resizable), a
-  filmstrip of the current folder at the bottom (hide-able) to move between photos without leaving
-  the editor; library uses a two-pane layout (sources list + grid). Stylus (S Pen) works for brushes
+- **Tablet / foldable unfolded (≥ 840dp):** in landscape, photo centre, panel right (320-560dp,
+  resizable, 400dp by default) and the tool rail; in portrait and on a foldable's almost square inner
+  screen, the photo takes the whole width and the panel is docked at the bottom (full width, its top
+  edge resizes its height, 360dp by default) above the tool strip as the bottom row. Which one: the
+  arrangement that shows a 3:2 photo larger (ADR 0016 "Docked panel"). A filmstrip of the current
+  folder sits under the photo (hide-able) to move between photos without leaving the editor; library
+  uses a two-pane layout (sources list + grid). Stylus (S Pen) works for brushes
   with pressure for size/flow; the finger pans/zooms while the pen paints (no tool switch).
 
 ## Controls

@@ -254,10 +254,13 @@ The full suite must pass twice in a row without `pm clear` (the phone keeps app 
 ## Tablet, filmstrip, pen and keyboard (`:feature:editor`, `:app`, M2/E, ADR 0016)
 
 Tablet layout: `TabletLayout.kt` (full-width top bar; photo + `layout/Filmstrip.kt` in the left column; panel column
-with a drag-to-resize left edge, `EditorLayoutKind.panelRange`; rail). The phone layouts must not change (their goldens
-stay byte-identical). Panel width and filmstrip visibility: `EditorLayoutPreferences` (`:core:data`). Rotation/fold
+with a drag-to-resize left edge, `EditorLayoutKind.panelRange`; rail). Portrait tablets and almost square foldables use
+`DockedTabletLayout` (`EditorLayoutKind.TABLET_DOCKED`, chosen by `prefersDock`: whichever shows a 3:2 photo larger;
+panel docked at the bottom with a drag-to-resize top edge, `dockRange`; tool strip as the bottom row; ADR 0016
+"Docked panel"). The phone layouts must not change (their goldens
+stay byte-identical). Panel width / docked height and filmstrip visibility: `EditorLayoutPreferences` (`:core:data`). Rotation/fold
 recreate the activity: chrome state (`rememberEditorChrome`: tool, mode, side panel, sub-panel stack via
-`SubPanels.byKey`, panel width) and zoom (`PhotoController.Saver`) are saved state; the ViewModel and renderer survive.
+`SubPanels.byKey`, panel width and height) and zoom (`PhotoController.Saver`) are saved state; the ViewModel and renderer survive.
 `RevealBottomSheet` is a centred dialog from `DialogMinWidth` (840 dp); the viewer's info is a side panel there.
 
 Filmstrip: `EditorRoute(versionId, strip, tool)`; `strip` = the grid's `PhotoQuery` (`PhotoListCodec`), passed by the

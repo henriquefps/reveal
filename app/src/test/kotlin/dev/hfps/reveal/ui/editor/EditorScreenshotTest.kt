@@ -401,7 +401,10 @@ class EditorTabletScreenshotTest : EditorScreenshotBase("tablet") {
     }
 }
 
-/** Tablet in portrait (Tab S9, 934x1495 dp): still the tablet layout, the photo column narrower. */
+/**
+ * Tablet in portrait (Tab S9, 934x1495 dp): the docked layout (docs/adr/0016 "Docked panel"), the photo across the
+ * whole width, the panel docked below and the tool strip as the bottom row.
+ */
 @RunWith(AndroidJUnit4::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 @Config(sdk = [35], qualifiers = "w934dp-h1495dp-mdpi")
@@ -414,10 +417,29 @@ class EditorTabletPortraitScreenshotTest : EditorScreenshotBase("tablet_portrait
 
     @Test fun colourMixer() = subPanel("colour_mixer", ToolId.COLOUR, EditorTags.MIXER_ROW)
 
+    @Test fun toneCurve() = subPanel("tone_curve", ToolId.LIGHT, EditorTags.TONE_CURVE_ROW)
+
     @Test fun transform() = transformTab("transform")
+
+    @Test fun crop() = shoot("crop") { CropEditor() }
+
+    /** The docked panel dragged to its highest and the filmstrip hidden (both remembered). */
+    @Test fun tallPanelNoFilmstrip() = shoot("tall_panel_no_filmstrip") {
+        Editor(layout = EditorLayout(panelHeightDp = 760f, filmstripVisible = false))
+    }
 }
 
-/** A foldable's inner screen (Pixel 9 Pro Fold class, 852x883 dp): the tablet layout from 840 dp. */
+/** A foldable's inner screen turned (883x852 dp): still docked, a 3:2 photo is larger there than beside a column. */
+@RunWith(AndroidJUnit4::class)
+@GraphicsMode(GraphicsMode.Mode.NATIVE)
+@Config(sdk = [35], qualifiers = "w883dp-h852dp-mdpi")
+class EditorFoldableLandscapeScreenshotTest : EditorScreenshotBase("foldable_landscape") {
+    override val strip: FilmstripUi? get() = Strip.ui
+
+    @Test fun light() = shoot("light") { Editor() }
+}
+
+/** A foldable's inner screen (Pixel 9 Pro Fold class, 852x883 dp): the docked tablet layout. */
 @RunWith(AndroidJUnit4::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 @Config(sdk = [35], qualifiers = "w852dp-h883dp-mdpi")

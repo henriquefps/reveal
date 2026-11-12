@@ -55,6 +55,8 @@ class FilmstripViewModel @Inject constructor(
 
     fun setPanelWidth(dp: Float) = preferences.setPanelWidth(dp)
 
+    fun setPanelHeight(dp: Float) = preferences.setPanelHeight(dp)
+
     private companion object {
         const val STOP_TIMEOUT_MS = 5_000L
     }

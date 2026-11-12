@@ -264,6 +264,9 @@
     <string name="editor_panel_resize">Panel width</string>
     <string name="editor_panel_wider">Wider panel</string>
     <string name="editor_panel_narrower">Narrower panel</string>
+    <string name="editor_panel_resize_height">Panel height</string>
+    <string name="editor_panel_taller">Taller panel</string>
+    <string name="editor_panel_shorter">Shorter panel</string>
     <string name="editor_hover_curve_point">In %1$d · Out %2$d</string>
     <string name="editor_hover_crop_size">%1$d × %2$d px</string>
     <string name="editor_hover_guide">Guide %1$s°</string>

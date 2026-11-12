@@ -159,6 +159,7 @@ fun EditorScreen(
             onOpenPhoto = { versionId, tool -> onSwitch(viewModel.routeFor(versionId, tool)) },
             onFilmstrip = strip::setFilmstripVisible,
             onPanelWidth = strip::setPanelWidth,
+            onPanelHeight = strip::setPanelHeight,
         )
     }
     val filmstrip = remember(photos, strip) {
@@ -230,6 +231,13 @@ fun EditorContent(
                 filmstrip = filmstrip,
                 layout = layout,
                 windowWidth = maxWidth,
+            )
+
+            EditorLayoutKind.TABLET_DOCKED -> DockedTabletLayout(
+                TabletChrome(state, actions, photo, chrome, host, select, onToggleChrome),
+                filmstrip = filmstrip,
+                layout = layout,
+                windowHeight = maxHeight,
             )
         }
     }

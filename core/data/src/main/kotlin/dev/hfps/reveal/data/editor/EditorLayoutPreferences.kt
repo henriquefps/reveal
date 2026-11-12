@@ -12,11 +12,13 @@ data class EditorLayout(
     /** Width of the side panel in dp; `null` = the default. */
     val panelWidthDp: Float? = null,
     val filmstripVisible: Boolean = true,
+    /** Height of the docked panel (tablet portrait) in dp; `null` = the default. */
+    val panelHeightDp: Float? = null,
 )
 
 /**
- * Small persistent layout choices of the tablet editor (docs/plan/ux.md "Landscape and tablets"): the panel width the
- * user dragged and the filmstrip's shown/hidden state. SharedPreferences, like `ExportPreferences`: two keys read
+ * Small persistent layout choices of the tablet editor (docs/plan/ux.md "Landscape and tablets"): the panel width (and
+ * the docked panel's height) the user dragged and the filmstrip's shown/hidden state. SharedPreferences, like `ExportPreferences`: two keys read
  * when the editor opens.
  */
 class EditorLayoutPreferences(context: Context) {
@@ -30,6 +32,11 @@ class EditorLayoutPreferences(context: Context) {
         _layout.value = read()
     }
 
+    fun setPanelHeight(dp: Float) {
+        prefs.edit { putFloat(KEY_PANEL_HEIGHT, dp) }
+        _layout.value = read()
+    }
+
     fun setFilmstripVisible(visible: Boolean) {
         prefs.edit { putBoolean(KEY_FILMSTRIP, visible) }
         _layout.value = read()
@@ -38,11 +45,13 @@ class EditorLayoutPreferences(context: Context) {
     private fun read() = EditorLayout(
         panelWidthDp = prefs.getFloat(KEY_PANEL_WIDTH, 0f).takeIf { it > 0f },
         filmstripVisible = prefs.getBoolean(KEY_FILMSTRIP, true),
+        panelHeightDp = prefs.getFloat(KEY_PANEL_HEIGHT, 0f).takeIf { it > 0f },
     )
 
     private companion object {
         const val FILE = "editor_layout"
         const val KEY_PANEL_WIDTH = "panel_width_dp"
+        const val KEY_PANEL_HEIGHT = "panel_height_dp"
         const val KEY_FILMSTRIP = "filmstrip_visible"
     }
 }

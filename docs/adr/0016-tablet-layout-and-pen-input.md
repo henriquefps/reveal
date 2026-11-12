@@ -1,12 +1,14 @@
 # ADR 0016: Tablet layout, filmstrip navigation, pen and keyboard input
 
-Status: accepted (M2/E). Date: 2026-11-11. Amends ADR 0005 (`RevealBottomSheet` on wide windows) and the editor
-layout of M1/E (`EditorLayoutKind.TABLET`).
+Status: accepted (M2/E), amended by M2/T (the docked panel). Date: 2026-11-11. Amends ADR 0005
+(`RevealBottomSheet` on wide windows) and the editor layout of M1/E (`EditorLayoutKind.TABLET`).
 
 ## Decision in one paragraph
 
 From 840 dp wide (and 480 dp tall) the editor uses its own tablet layout: a full-width top bar; below it the photo with
-a filmstrip under it, a side panel whose left edge drags to resize it (remembered), and the tool rail. The filmstrip
+a filmstrip under it, a side panel whose left edge drags to resize it (remembered), and the tool rail. In portrait, and
+on a foldable's almost square inner screen, the panel is **docked at the bottom** instead (full width, its top edge
+drags to resize its height) with the tool strip as the bottom row, so the photo keeps the whole width. The filmstrip
 shows the grid the editor was opened from; moving to another photo **replaces the editor's back-stack entry** (a new
 `EditorViewModel` and renderer per photo), it does not swap the photo inside one ViewModel. Rotation and fold/unfold
 still recreate the activity; the ViewModel and renderer survive, and the chrome and zoom are saved state. The pen is
@@ -23,11 +25,43 @@ hover events. Keyboard shortcuts are a preview key handler on the editor's root.
   the photo slot and the filmstrip share the left column; the panel column defaults to 400 dp and drags between
   320 dp and `min(560 dp, window − rail − 400 dp)` so the photo keeps at least 400 dp. A mode (Crop) takes the panel
   column and the rail for its controls; the filmstrip hides while a mode is open (moving would cancel it).
-- The panel width and the filmstrip's visibility are user choices, not per-photo state: `EditorLayoutPreferences`
+- The panel width (and the docked panel's height, below) and the filmstrip's visibility are user choices, not per-photo state: `EditorLayoutPreferences`
   (`:core:data`, SharedPreferences like `ExportPreferences`).
 - `RevealBottomSheet` opens as a centred dialog (max 560 dp) from the same 840 dp (paste chooser, numeric input, crop
   chooser, the export sheet, which had its own 600 dp rule before; one threshold for the whole app now). The library
   viewer's info is a side panel beside the photo there, following the page.
+
+## Docked panel (M2/T)
+
+The side column cost a portrait tablet most of its width: on the Tab S9 Ultra in portrait (1056 dp) a 400 dp panel and
+the rail left the photo about 480 dp wide, with empty space under it. `EditorLayoutKind.TABLET_DOCKED`
+(`DockedTabletLayout` in `TabletLayout.kt`): the full top bar; the photo across the whole width with the filmstrip
+under it; the panel docked below at full width (default 360 dp high; its top edge drags between 240 dp and
+`min(760 dp, window − top bar − filmstrip − tool row − 320 dp)`, so the photo keeps at least 320 dp); the tool strip
+as the bottom row, like a phone in portrait (ux.md: one row of tools under the panel, the thumb's reach). The panels and
+sub-panels are the same composables; a sub-panel that asks for room (curves, mixers, wheels: `SubPanel(expand = true)`)
+raises the dock to 55 % of the window while it is open, without changing the remembered height. A mode's controls
+(Crop) take the dock, laid out as on the phone; the filmstrip hides while a mode is open. The height is remembered
+next to the width (`EditorLayoutPreferences.setPanelHeight`) and is saved chrome state (`EditorChrome.panelHeight`).
+
+**The rule** (`EditorLayoutKind.prefersDock`): among tablet windows (>= 840 x 480 dp), dock when a 3:2 landscape photo
+(the usual camera frame) fits larger under a default dock (window minus top bar, filmstrip, 360 dp dock and tool row)
+than beside a default column (window minus the 400 dp column and the rail, height minus top bar and filmstrip). An
+area comparison rather than a fixed aspect ratio, because what matters is what the photo gets; it works out as:
+
+| Window (dp) | Beside the column | Docked | Layout |
+| --- | --- | --- | --- |
+| Tab S9 landscape 1495 x 934 | 1007 x 671 | 543 x 362 | column |
+| Tab S9 portrait 934 x 1495 | 446 x 297 | 934 x 623 | docked |
+| Tab S9 Ultra portrait 1056 x 1690 | 568 x 379 | 1056 x 704 | docked |
+| Foldable inner 852 x 883 | 364 x 243 | 466 x 311 | docked |
+| Foldable inner turned 883 x 852 | 395 x 263 | 420 x 280 | docked |
+
+So the column wins once the window is clearly wider than tall (about 1.04 : 1 at 800 dp high, 1.1 : 1 at 900 dp);
+portrait tablets and the almost square foldables dock in either orientation. Narrower portrait windows (< 840 dp, a
+small tablet or a Z Fold's inner screen in portrait) keep the phone's portrait layout, as before. Rotating between the
+two tablet arrangements recreates the activity like any rotation: the open panel, its sub-panel stack, the zoom and the
+steps survive (`TabletEditorTest#rotationKeepsTheOpenPanelAndTheStepCount` also checks where the panel sits).
 
 ## Filmstrip: a new editor entry per photo
 
@@ -59,7 +93,8 @@ size classes cleanly. What survives and how:
 - `EditorViewModel` (working + committed recipe, history, renderer with its textures): unchanged, so no step is lost
   and the GL work is not redone; only the `SurfaceView` is recreated and reattached.
 - `rememberEditorChrome`: active tool and mode, immersive, the portrait sheet's snap, the side panel's open state,
-  the **sub-panel stack** (saved as keys, rebuilt through `SubPanels.byKey`) and the dragged panel width.
+  the **sub-panel stack** (saved as keys, rebuilt through `SubPanels.byKey`) and the dragged panel width and docked
+  height.
 - `PhotoController.Saver`: the zoom (absolute scale, so 100 % stays 100 %, and the image point at the centre), applied
   once the photo, its content size and the new frame are known; a fitted view stays fitted.
 

@@ -290,7 +290,17 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, readFbo)
         GLES30.glViewport(0, 0, width, height)
         val tiles = if (tilesShown(req)) zoom.uniforms(pane.view, mapping) else null
-        drawOutput(image, pane.view, width, height, settings, surround, mapping = mapping, tiles = tiles, post = shownPost(req))
+        drawOutput(
+            image,
+            pane.view,
+            width,
+            height,
+            settings,
+            surround,
+            mapping = mapping,
+            tiles = tiles,
+            post = shownPost(req),
+        )
         val pixels = ByteBuffer.allocateDirect(width * height * RGBA)
         GLES30.glReadPixels(0, 0, width, height, GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, pixels)
         GlSupport.checkError("shown readback")
@@ -951,7 +961,6 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         GlSupport.checkError("output pass")
     }
 
-    /** The output pass at 1:1 into the RGBA8 read target sized to [mapping]'s output. */
     /**
      * [view] moved by less than half a pixel so that, at exactly 1:1 on an axis-aligned mapping, screen pixel centres
      * land on pixel centres of what the pass reads with `texelFetch`: the full-resolution tiles at 100 %, else the
@@ -977,6 +986,7 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         else -> view
     }
 
+    /** The output pass at 1:1 into the RGBA8 read target sized to [mapping]'s output. */
     private fun drawOutputOffscreen(
         settings: OutputSettings,
         clipping: ClippingWarnings = ClippingWarnings.NONE,

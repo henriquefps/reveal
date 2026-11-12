@@ -120,9 +120,9 @@ class ZoomTilesTest {
 
     /**
      * The worst 100 % view (docs/adr/0012 "Pixel alignment at 1:1"): screen pixel centres exactly on full-resolution
-     * pixel edges, where `floor` would follow the GPU's last-bit rounding and duplicate or skip rows (the Tab S9 Ultra's
-     * Adreno 740 did after a double-tap). The renderer aligns the view: the pane is the export shifted by one constant
-     * offset, every value identical.
+     * pixel edges, where `floor` would follow the GPU's last-bit rounding and duplicate or skip rows (the Tab S9
+     * Ultra's Adreno 740 did after a double-tap). The renderer aligns the view: the pane is the export shifted by one
+     * constant offset, every value identical.
      */
     @Test
     fun aHundredPercentViewOnPixelEdgesShowsEveryPixelOnce() = runBlocking {
@@ -301,10 +301,20 @@ class ZoomTilesTest {
                 val sy = (y * image.height / height).coerceAtMost(image.height - 1)
                 for (x in 0 until width) {
                     val sx = (x * image.width / width).coerceAtMost(image.width - 1)
-                    for (c in 0 until 3) out[(y * width + x) * 3 + c] = image.linearRgb[(sy * image.width + sx) * 3 + c]
+                    for (c in 0 until 3) {
+                        out[(y * width + x) * 3 + c] = image.linearRgb[(sy * image.width + sx) * 3 + c]
+                    }
                 }
             }
-            return PipelineInput(image.kind, width, height, out, image.cameraToXyz, image.asShotMultipliers, image.saturation)
+            return PipelineInput(
+                image.kind,
+                width,
+                height,
+                out,
+                image.cameraToXyz,
+                image.asShotMultipliers,
+                image.saturation,
+            )
         }
 
         /** The proxy: 2x2 means of the full-resolution image. */

@@ -51,6 +51,16 @@ android {
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
+        // Release-build measurements on the devices (docs/adr/0019 and 0020 "Measurements"): minified and shrunk like
+        // release, but its own app id (dev.hfps.reveal.bench: never the release app), signed with the debug key and
+        // profileable from the shell. `src/bench` adds an adb-driven BenchActivity. Never distributed.
+        create("bench") {
+            initWith(getByName("release"))
+            applicationIdSuffix = ".bench"
+            versionNameSuffix = "-bench"
+            signingConfig = signingConfigs.getByName("debug")
+            matchingFallbacks += "release"
+        }
     }
 
     testOptions {
@@ -84,4 +94,47 @@ dependencies {
     androidTestImplementation(libs.truth)
     androidTestImplementation(libs.androidx.work.runtime.ktx)
     androidTestImplementation(libs.androidx.room.runtime)
+    androidTestImplementation(libs.okhttp)
+    androidTestImplementation(libs.okhttp.mockwebserver)
+    androidTestImplementation(libs.okhttp.tls)
+}
+
+/**
+ * Guard for minified builds (M3/F): stale incremental KSP output once left the editor's ViewModel factories out of a
+ * release-variant build (debug was fine, so `HiltViewModelsTest` stayed green) and the minified app crashed opening the
+ * editor. After R8, every `@HiltViewModel` class in the sources must have its Hilt key module in the R8 mapping.
+ */
+abstract class VerifyHiltViewModels : DefaultTask() {
+    @get:InputFiles
+    abstract val sources: ConfigurableFileCollection
+
+    @get:InputFile
+    abstract val mapping: RegularFileProperty
+
+    @TaskAction
+    fun verify() {
+        val classes = sources.files.filter { it.extension == "kt" }.flatMap { file ->
+            val text = file.readText()
+            if (!text.contains("@HiltViewModel")) return@flatMap emptyList()
+            val pkg = Regex("""^package\s+([\w.]+)""", RegexOption.MULTILINE).find(text)?.groupValues?.get(1)
+            Regex("""@HiltViewModel\s+class\s+(\w+)""").findAll(text).map { "$pkg.${it.groupValues[1]}" }.toList()
+        }
+        val map = mapping.get().asFile.readText()
+        val missing = classes.filter { !map.contains("${it}_HiltModules_KeyModule_Provide_LazyMapKey") }
+        check(classes.isNotEmpty()) { "no @HiltViewModel classes found" }
+        check(missing.isEmpty()) {
+            "Hilt ViewModel factories missing from the minified build: $missing. Stale KSP output: rebuild with " +
+                "`--no-build-cache` after deleting the modules' build/generated/ksp (CLAUDE.md)."
+        }
+    }
+}
+
+for (variant in listOf("Bench", "Release")) {
+    val verify = tasks.register<VerifyHiltViewModels>("verifyHiltViewModels$variant") {
+        sources.from(fileTree(rootDir) { include("feature/*/src/main/kotlin/**/*.kt", "app/src/main/kotlin/**/*.kt") })
+        mapping.set(layout.buildDirectory.file("outputs/mapping/${variant.lowercase()}/mapping.txt"))
+        dependsOn("minify${variant}WithR8")
+        dependsOn("merge${variant}ComposeMapping")
+    }
+    tasks.matching { it.name == "assemble$variant" }.configureEach { dependsOn(verify) }
 }

@@ -115,7 +115,11 @@ object WhiteBalanceModel {
     }
 
     /** The camera's own as-shot illuminant as temperature and tint (what the sliders show for "as shot"). */
-    fun asShot(input: PipelineInput): Cct = cctAndTint(asShotWhite(input))
+    fun asShot(input: PipelineInput): Cct = asShot(input.cameraToXyz, input.asShotMultipliers)
+
+    /** [asShot] from the camera matrix and as-shot multipliers alone (a RAW header, without decoding the image). */
+    fun asShot(cameraToXyz: Mat3, asShotMultipliers: FloatArray?): Cct =
+        cctAndTint(asShotWhite(cameraToXyz, asShotMultipliers))
 
     /** Resolves the recipe's white balance against the camera: multipliers and the matrix into the working space. */
     fun solve(
@@ -271,13 +275,12 @@ object WhiteBalanceModel {
     private const val MIRED_PER_K = 1e6
     private const val MIN_SAMPLE = 1e-9
 
-    private fun asShotWhite(input: PipelineInput): DoubleArray {
-        val mul = input.asShotMultipliers
-        return if (mul == null) {
-            input.cameraToXyz.times(1.0, 1.0, 1.0)
-        } else {
-            input.cameraToXyz.times(1.0 / mul[0], 1.0 / mul[1], 1.0 / mul[2])
-        }
+    private fun asShotWhite(input: PipelineInput): DoubleArray = asShotWhite(input.cameraToXyz, input.asShotMultipliers)
+
+    private fun asShotWhite(cameraToXyz: Mat3, mul: FloatArray?): DoubleArray = if (mul == null) {
+        cameraToXyz.times(1.0, 1.0, 1.0)
+    } else {
+        cameraToXyz.times(1.0 / mul[0], 1.0 / mul[1], 1.0 / mul[2])
     }
 
     private fun normaliseGreen(mul: DoubleArray) = doubleArrayOf(mul[0] / mul[1], 1.0, mul[2] / mul[1])

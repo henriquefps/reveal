@@ -40,12 +40,15 @@ class PhotoFeatures(
             detectFaces: Boolean = true,
             lines: ImageLines? = null,
             findLines: Boolean = false,
+            sample: PipelineInput? = null,
+            wb: WbAnalysis? = null,
         ): PhotoFeatures {
             val image = FaceInput.from(input)
             val faces = if (detectFaces) FaceDetector.shipped().detect(image) else emptyList()
             return PhotoFeatures(
-                sample = AutoAnalyser.sample(input),
-                wb = runCatching { AutoWhiteBalance.analyse(input) }.getOrNull(),
+                // The editor has Auto's sample and white-balance analysis already (made at open): not done twice.
+                sample = sample ?: AutoAnalyser.sample(input),
+                wb = wb ?: runCatching { AutoWhiteBalance.analyse(input) }.getOrNull(),
                 faces = faces,
                 saliency = SaliencyMap.of(image),
                 lines = lines ?: if (findLines) ImageLines.of(input) else null,

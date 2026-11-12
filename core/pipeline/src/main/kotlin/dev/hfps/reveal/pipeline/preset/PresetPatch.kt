@@ -1,9 +1,13 @@
 package dev.hfps.reveal.pipeline.preset
 
+import dev.hfps.reveal.pipeline.InputKind
+import dev.hfps.reveal.pipeline.PipelineInput
+import dev.hfps.reveal.pipeline.cpu.WhiteBalanceModel
 import dev.hfps.reveal.pipeline.recipe.CurvePoint
 import dev.hfps.reveal.pipeline.recipe.Curves
 import dev.hfps.reveal.pipeline.recipe.Recipe
 import dev.hfps.reveal.pipeline.recipe.RecipeCodec
+import kotlin.math.roundToInt
 import kotlinx.serialization.descriptors.SerialDescriptor
 import kotlinx.serialization.descriptors.SerialKind
 import kotlinx.serialization.json.JsonArray
@@ -30,6 +34,16 @@ class PresetPatch private constructor(val values: Map<String, JsonElement>) {
     val sections: Set<PresetSection> get() = values.keys.mapTo(LinkedHashSet()) { PresetSection.of(it) }
 
     val isEmpty: Boolean get() = values.isEmpty()
+
+    /**
+     * True when the result between 0 and 100 % (or past it) depends on the photo's as-shot white balance: the patch
+     * sets an absolute temperature or tint ([FieldKind.KELVIN] / [FieldKind.TINT]), which blends from or to "as
+     * shot" through the [ApplyContext]. A batch reads each photo's own context only for these.
+     */
+    val usesAsShot: Boolean
+        get() = values.keys.any { path ->
+            PresetFields[path]?.kind.let { it == FieldKind.KELVIN || it == FieldKind.TINT }
+        }
 
     /** The patch as a nested partial recipe object, the `patch` member of a `.revealpreset` file. */
     fun toJson(): JsonObject {
@@ -132,7 +146,28 @@ class PresetPatch private constructor(val values: Map<String, JsonElement>) {
  * (kelvin and tint) for a RAW, so a preset that sets temperature can blend from "as shot". Unknown (null) makes the
  * absolute white balance switch at 50 % like a mode.
  */
-data class ApplyContext(val asShotTemperatureK: Float? = null, val asShotTint: Float? = null)
+data class ApplyContext(val asShotTemperatureK: Float? = null, val asShotTint: Float? = null) {
+    companion object {
+        /** Nothing known about the photo (a JPEG, an offline file): the absolute white balance switches at 50 %. */
+        val UNKNOWN: ApplyContext = ApplyContext()
+
+        /**
+         * The context of [input]: its camera's as-shot kelvin and tint when it is scene-referred (a RAW), rounded to
+         * whole numbers as the editor's sliders show them, else [UNKNOWN]. The editor and the library's batch apply
+         * both use it, so a photo gets the same result from either (docs/adr/0019 "Strength").
+         */
+        fun of(input: PipelineInput): ApplyContext = if (input.kind == InputKind.SCENE_REFERRED) {
+            of(WhiteBalanceModel.asShot(input))
+        } else {
+            UNKNOWN
+        }
+
+        /** The context of a camera whose as-shot white balance is [asShot] (from a RAW header, or `null`). */
+        fun of(asShot: WhiteBalanceModel.Cct?): ApplyContext = asShot?.let {
+            ApplyContext(it.temperatureK.roundToInt().toFloat(), it.tint.roundToInt().toFloat())
+        } ?: UNKNOWN
+    }
+}
 
 /** Type and range checks of one patch value against the recipe's schema. */
 internal object Validation {

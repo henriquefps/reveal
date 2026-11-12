@@ -77,6 +77,8 @@ import dev.hfps.reveal.feature.editor.layout.rememberEditorChrome
 import dev.hfps.reveal.feature.editor.panels.PanelCardContent
 import dev.hfps.reveal.feature.editor.panels.PanelHost
 import dev.hfps.reveal.feature.editor.panels.PasteChooserSheet
+import dev.hfps.reveal.feature.editor.presets.PresetLinkHost
+import dev.hfps.reveal.feature.editor.presets.PresetLinkViewModel
 import dev.hfps.reveal.feature.editor.presets.PresetMessages
 import dev.hfps.reveal.feature.editor.presets.PresetThumbnailSource
 import dev.hfps.reveal.feature.editor.tools.EditorTool
@@ -100,6 +102,7 @@ fun EditorScreen(
     onSwitch: (EditorRoute) -> Unit = {},
     viewModel: EditorViewModel = hiltViewModel(),
     strip: FilmstripViewModel = hiltViewModel(),
+    presetLink: PresetLinkViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val photos by strip.photos.collectAsStateWithLifecycle()
@@ -184,6 +187,7 @@ fun EditorScreen(
             onKeepPack = viewModel::keepPack,
             onRemovePack = viewModel::removePack,
             onImportPresets = viewModel::importPresets,
+            onImportPresetLink = presetLink::enter,
             onExportPreset = viewModel::exportPreset,
             onExportPresetGroup = viewModel::exportPresetGroup,
             presetThumbnails = object : PresetThumbnailSource {
@@ -213,6 +217,8 @@ fun EditorScreen(
             layout = layout,
         )
         ExportSheetHost(request = exportRequest, onDismiss = { exportRequest = null })
+        // The same ViewModel as `presetLink` (scoped to this screen's back stack entry).
+        PresetLinkHost()
     }
 }
 

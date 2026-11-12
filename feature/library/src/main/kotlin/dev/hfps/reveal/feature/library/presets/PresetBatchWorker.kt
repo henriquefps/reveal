@@ -22,6 +22,7 @@ import dev.hfps.reveal.data.preset.PresetRepository
 import dev.hfps.reveal.data.thumb.ThumbnailRepository
 import dev.hfps.reveal.feature.library.R
 import dev.hfps.reveal.pipeline.auto.PhotoFeatures
+import dev.hfps.reveal.pipeline.preset.ApplyContext
 import dev.hfps.reveal.pipeline.preset.Preset
 import dev.hfps.reveal.pipeline.preset.SmartCorrection
 import dev.hfps.reveal.pipeline.preset.SmartCorrector
@@ -95,7 +96,7 @@ class PresetBatchWorker(context: Context, params: WorkerParameters) : CoroutineW
         while (job.done < total && !isStopped) {
             val chunk = job.versionIds.subList(job.done, minOf(total, job.done + CHUNK))
             changed += if (preset.smart == null) {
-                apply(graph.edits(), preset, job.strength, chunk, graph.smartCorrection())
+                apply(graph, preset, job.strength, chunk)
             } else {
                 applySmart(graph, preset, job.strength, chunk)
             }
@@ -111,19 +112,32 @@ class PresetBatchWorker(context: Context, params: WorkerParameters) : CoroutineW
         return if (isStopped) Result.failure() else Result.success(workDataOf(KEY_DONE to job.done))
     }
 
+    /**
+     * A plain preset: the same patch on every photo. A patch that sets an absolute temperature or tint blends it from
+     * **each photo's own** as-shot white balance (its RAW header, read here off the transaction), never another
+     * photo's: between 0 and 100 % a RAW's "as shot" is its own camera's value (docs/adr/0019 "Strength", "Batch").
+     */
     private suspend fun apply(
-        edits: EditRepository,
+        graph: PresetBatchEntryPoint,
         preset: Preset,
         strength: Float,
         versions: List<Long>,
-        smart: SmartCorrection,
-    ): Int = edits.applyEach(versions, HistoryAction.PRESET, preset.name) { recipe ->
-        preset.apply(recipe, strength, smartCorrection = smart)
+    ): Int {
+        val contexts = if (preset.patch.usesAsShot) {
+            versions.associateWith { graph.thumbnails().applyContext(it) }
+        } else {
+            emptyMap()
+        }
+        val smart = graph.smartCorrection()
+        return graph.edits().applyEachVersion(versions, HistoryAction.PRESET, preset.name) { versionId, recipe ->
+            preset.apply(recipe, strength, contexts[versionId] ?: ApplyContext.UNKNOWN, smart)
+        }
     }
 
     /**
      * A smart preset (docs/adr/0020): every photo gets its own correction from its own features (decoded and analysed
-     * here, off the database transaction), then the style. A photo whose file is offline gets the style only.
+     * here, off the database transaction), then the style, blended from that photo's own as-shot white balance. A
+     * photo whose file is offline gets the style only.
      */
     private suspend fun applySmart(
         graph: PresetBatchEntryPoint,
@@ -134,13 +148,13 @@ class PresetBatchWorker(context: Context, params: WorkerParameters) : CoroutineW
         var changed = 0
         for (versionId in versions) {
             if (isStopped) break
+            val input = graph.thumbnails().analysisInput(versionId)
             val corrector = withContext(Dispatchers.Default) {
-                graph.thumbnails().analysisInput(versionId)?.let { input ->
-                    runCatching { SmartCorrector(PhotoFeatures.of(input, findLines = true)) }.getOrNull()
-                }
+                input?.let { runCatching { SmartCorrector(PhotoFeatures.of(it, findLines = true)) }.getOrNull() }
             } ?: graph.smartCorrection()
+            val context = input?.let(ApplyContext::of) ?: ApplyContext.UNKNOWN
             changed += graph.edits().applyEach(listOf(versionId), HistoryAction.PRESET, preset.name) { recipe ->
-                preset.apply(recipe, strength, smartCorrection = corrector)
+                preset.apply(recipe, strength, context, corrector)
             }
         }
         return changed

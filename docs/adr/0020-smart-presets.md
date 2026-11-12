@@ -151,9 +151,38 @@ the usual starting point; smart presets from the unedited photo) and an overview
 Sheets of the public-domain/CC0 photos are in `docs/screenshots/presets/`; sheets of the owner's photos only go to
 his private review folder.
 
+## Measurements (M3/F, release build)
+
+`PhotoFeatures.of` (face input, BlazeFace on the whole frame and 12 tiles, subject map, Auto's sample and white-balance
+analysis) on the `bench` build (minified like release; `scripts/bench/release-bench.sh`, `REVEAL_BENCH`): median of 5
+runs after a warm-up, per photo, on the editor's proxy (2400 px) and the batch's (1200 px), CC0 RAWs (ZV-E10, D5600,
+Pixel 4a DNG) and the public-domain three-person portrait (768 px).
+
+| Device | Before (M3/B code) | After | Detector alone (before → after) | Editor open, first photo of a fresh process (JIT / AOT) |
+| --- | --- | --- | --- | --- |
+| Galaxy S24 Ultra | 551-644 ms | 324-474 ms | ~455 → 230-397 ms | 1014 ms / 511 ms |
+| Galaxy Tab S9 Ultra | – | 346-388 ms | 252-303 ms | 1230 ms / 517 ms |
+
+The spread on the phone is its clock and temperature between runs (the same build measured 324-389 ms and, warmer,
+378-474 ms). The face input went from ~100 ms to ~45 ms and the detector roughly halved:
+
+- **Pointwise convolutions** (most of BlazeFace's work) compute 2 pixels x 4 output channels per pass over the inputs,
+  each output still summed in the same order, so the results are **bit-identical** (`FaceSpeedupTest` compares the
+  blocked kernel with the plain loop on random data).
+- **ADD and RELU in place** when their input is not read again (no new 1 MB arrays per layer and tile).
+- **The face input** converts and encodes rows in parallel, without a per-pixel allocation (same arithmetic,
+  bit-identical, `FaceSpeedupTest`); the downscale runs rows in parallel.
+- **The editor** passes Auto's sample and white-balance analysis (already made at open) instead of computing them twice.
+
+The tiles, the model and its float32 maths are unchanged, so the detections are exactly the ones before (the fixtures'
+counts in `FaceDetectorTest` and the phone's three faces on the portrait). A cold first open pays the JIT: about 1 s in
+the background (the open itself is not slower; Auto waits for it), half that once the app is compiled, as a
+profile-guided install from the store does.
+
 ## Consequences
 
 - Smart presets reuse Auto's documented, calibrated rules: improving Auto improves every smart preset.
 - A preset file with a smart part is still a plain file: a reader that ignores `smart` gets the style.
-- The face detector runs once per photo (open or batch, about 0.2-0.5 s on a phone, in the background).
+- The face detector runs once per photo (open or batch, about 0.3-0.5 s on a phone in a release build, in the
+  background; see "Measurements").
 - The built-in list is code: changing a built-in is a release; their ids never change.

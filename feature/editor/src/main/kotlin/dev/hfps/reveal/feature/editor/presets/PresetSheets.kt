@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextField
@@ -92,11 +93,19 @@ internal fun sectionName(section: PresetSection): Int = when (section) {
 
 /** A single-line text field in the editor's colours (as Settings' fields). */
 @Composable
-internal fun PresetTextField(label: String, value: String, onChange: (String) -> Unit, tag: String) {
+internal fun PresetTextField(
+    label: String,
+    value: String,
+    onChange: (String) -> Unit,
+    tag: String,
+    maxLength: Int = PresetLimits.NAME,
+    keyboardOptions: KeyboardOptions = KeyboardOptions.Default,
+) {
     val c = RevealTheme.colors
     TextField(
         value = value,
-        onValueChange = { onChange(it.take(PresetLimits.NAME)) },
+        onValueChange = { onChange(it.take(maxLength)) },
+        keyboardOptions = keyboardOptions,
         singleLine = true,
         label = { Text(label, style = RevealTheme.typography.ui) },
         textStyle = RevealTheme.typography.body.copy(color = c.foreground),
@@ -216,6 +225,7 @@ internal fun PresetsMenuSheet(
     canCreate: Boolean,
     onImport: () -> Unit,
     onGroupRemove: () -> Unit,
+    onImportLink: () -> Unit = actions.onImportPresetLink,
     onDismiss: () -> Unit,
 ) {
     var renaming by remember { mutableStateOf(false) }
@@ -281,6 +291,15 @@ internal fun PresetsMenuSheet(
                             onImport()
                         },
                         modifier = Modifier.testTag(EditorTags.PRESET_IMPORT),
+                    )
+                    RevealListRow(
+                        title = stringResource(R.string.presets_import_link),
+                        icon = PhosphorRegular.LinkSimple,
+                        onClick = {
+                            onDismiss()
+                            onImportLink()
+                        },
+                        modifier = Modifier.testTag(EditorTags.PRESET_IMPORT_LINK),
                     )
                     if (group != null && rowId != null) {
                         RevealRowDivider()

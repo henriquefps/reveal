@@ -455,6 +455,30 @@ adb -s <serial> shell am instrument -w -e class dev.hfps.reveal.editor.PresetsMe
 adb -s <serial> logcat -d -s REVEAL_PRESETS RevealPresets
 ```
 
+Import from a link (M3/F, ADR 0019 "Import from a link"): `PresetLinks.parse` (first http(s) token; https only),
+`PresetDownloader` (OkHttp; size limit, timeouts, https-only redirects; `testBaseClient` is the instrumented tests'
+TLS hook, never set in the app), `PresetIntents.presetLink` (`SEND text/plain`, `VIEW https`), `PresetLinkViewModel` +
+`PresetLinkSheet` (states Entering → Confirming → Downloading → Importing; hosted by `EditorScreen` and
+`MainActivity`), then `PresetFilesIo.import(file)`. Any new network use goes into `docs/privacy.md`. Batch and
+as-shot WB: `ApplyContext.of(input)` / `ApplyContext.of(PipelineInputMapper.asShot(header))`; the worker reads each
+RAW's header (`ThumbnailRepository.applyContext`) when `PresetPatch.usesAsShot`.
+
+```sh
+./gradlew :core:data:testDebugUnitTest --tests '*PresetLinksTest*' --tests '*PresetDownloaderTest*'
+adb -s <serial> shell am instrument -w -e class dev.hfps.reveal.editor.PresetLinkFlowTest,dev.hfps.reveal.library.PresetBatchWhiteBalanceTest dev.hfps.reveal.debug.test/androidx.test.runner.AndroidJUnitRunner
+#   the batch test needs two CC0 RAWs of different as-shot WB in files/samples (sony-zv-e10.arw, nikon-d5600.nef, ...)
+```
+
+Release-build measurements (`bench` build type: R8 like release, id `dev.hfps.reveal.bench`, debug-signed,
+profileable, `src/bench/BenchActivity` driven by adb; never the release app). A minified app cannot host instrumented
+tests, so the script drives it (results `REVEAL_BENCH`, frame times from `dumpsys gfxinfo`):
+
+```sh
+./gradlew :app:assembleBench
+scripts/bench/release-bench.sh <serial> app/build/outputs/apk/bench/app-bench.apk core/image/build/samples/sony-zv-e10.arw \
+  core/image/build/samples/nikon-d5600.nef app/src/androidTest/assets/faces/studio-trio.jpg   # ADB=<adb path>, KEEP=1, RUNS=5
+```
+
 Frame measurements: use `getUiAutomation(UiAutomation.FLAG_DONT_USE_ACCESSIBILITY)` for `input` commands (a
 connected UiAutomation makes Compose diff its semantics tree every frame). With an accessibility service on (the
 owner's phone has one), a lazy grid's scroll still pays that diff every frame.

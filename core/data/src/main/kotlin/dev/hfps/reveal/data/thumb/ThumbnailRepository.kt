@@ -14,6 +14,7 @@ import dev.hfps.image.cache.Variant
 import dev.hfps.image.decode.BitmapDecoding
 import dev.hfps.image.decode.Sampling
 import dev.hfps.image.proxy.ProxyBuilder
+import dev.hfps.image.raw.RawDecoder
 import dev.hfps.image.source.readRange
 import dev.hfps.reveal.data.db.CacheEntryEntity
 import dev.hfps.reveal.data.db.PhotoFileEntity
@@ -26,6 +27,7 @@ import dev.hfps.reveal.data.storage.DocumentTree
 import dev.hfps.reveal.pipeline.PIPELINE_VERSION
 import dev.hfps.reveal.pipeline.PipelineInput
 import dev.hfps.reveal.pipeline.input.PipelineInputMapper
+import dev.hfps.reveal.pipeline.preset.ApplyContext
 import java.io.File
 import java.io.IOException
 import java.util.concurrent.ConcurrentHashMap
@@ -178,6 +180,28 @@ class ThumbnailRepository(
         } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
             Log.w(TAG, "No analysis input for version $versionId", e)
             null
+        }
+    }
+
+    /**
+     * What a preset's strength needs to know about the photo of [versionId] (docs/adr/0019 "Strength"): its RAW's
+     * as-shot white balance, read from the header only (no decode, a few ms), so a batch blends every photo from its
+     * own as-shot value. [ApplyContext.UNKNOWN] for a JPEG, a RAW without a colour matrix or an offline source.
+     */
+    suspend fun applyContext(versionId: Long): ApplyContext = withContext(io) {
+        val photoId = photos.photoIdOfVersion(versionId) ?: return@withContext ApplyContext.UNKNOWN
+        val target = target(photoId) ?: return@withContext ApplyContext.UNKNOWN
+        val tree = availableTree(target.sourceId) ?: return@withContext ApplyContext.UNKNOWN
+        try {
+            tree.openInput(target.main.documentId, target.main.name).use { input ->
+                if (!input.type.isRaw) return@use ApplyContext.UNKNOWN
+                ApplyContext.of(PipelineInputMapper.asShot(RawDecoder.readInfo(input.descriptor)))
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
+            Log.w(TAG, "No as-shot white balance for version $versionId", e)
+            ApplyContext.UNKNOWN
         }
     }
 

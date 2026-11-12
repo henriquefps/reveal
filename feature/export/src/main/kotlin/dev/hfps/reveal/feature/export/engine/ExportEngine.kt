@@ -16,6 +16,7 @@ import dev.hfps.image.source.SourceInputStream
 import dev.hfps.image.source.readRange
 import dev.hfps.image.standard.StandardDecoder
 import dev.hfps.reveal.data.export.Authorship
+import dev.hfps.reveal.data.storage.isAccessError
 import dev.hfps.reveal.feature.export.destination.DestinationUnavailableException
 import dev.hfps.reveal.feature.export.destination.Destinations
 import dev.hfps.reveal.feature.export.encode.EmbeddedMetadata
@@ -47,7 +48,6 @@ import dev.hfps.reveal.pipeline.input.withLens
 import dev.hfps.reveal.pipeline.preview.SmartPreviewCodec
 import dev.hfps.reveal.pipeline.recipe.Recipe
 import java.io.File
-import java.io.FileNotFoundException
 import java.io.IOException
 import java.util.UUID
 
@@ -116,12 +116,14 @@ class ExportEngine(private val context: Context, private val destinations: Desti
     ): ExportResult {
         val input = try {
             ImageInput.fromUri(context.contentResolver, item.uri, item.name)
-        } catch (e: FileNotFoundException) {
-            throw ExportException(ExportFailure.SOURCE_MISSING, e)
-        } catch (e: SecurityException) {
-            throw ExportException(ExportFailure.SOURCE_MISSING, e)
         } catch (e: IllegalArgumentException) {
+            // The provider refused the URI while opening it (ADR 0011): it no longer serves it.
             throw ExportException(ExportFailure.SOURCE_MISSING, e)
+        } catch (e: RuntimeException) {
+            // Every other shape of "Reveal cannot read it" (`isAccessError`, ADR 0011).
+            throw if (isAccessError(e)) ExportException(ExportFailure.SOURCE_MISSING, e) else e
+        } catch (e: IOException) {
+            throw if (isAccessError(e)) ExportException(ExportFailure.SOURCE_MISSING, e) else e
         }
         val started = System.nanoTime()
         val (metadata, source) = input.use { image ->

@@ -55,8 +55,9 @@ fun SourcesPane(
     actions: LibraryActions,
     modifier: Modifier = Modifier,
     serverPhotos: Int = 0,
+    fromAppsPhotos: Int = 0,
 ) {
-    if (sources.isEmpty() && serverPhotos == 0) {
+    if (sources.isEmpty() && serverPhotos == 0 && fromAppsPhotos == 0) {
         EmptyLibrary(actions, modifier)
         return
     }

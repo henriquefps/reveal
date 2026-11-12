@@ -135,6 +135,10 @@ interface SourceDao {
 @Dao
 @Suppress("TooManyFunctions", "LongParameterList")
 interface PhotoDao {
+    /** How many photos "Opened from other apps" lists (ADR 0011): the library starts there when it has no folder. */
+    @Query("SELECT COUNT(*) FROM photos WHERE handoff_at IS NOT NULL AND hidden = 0")
+    fun observeFromAppsCount(): Flow<Int>
+
     @RawQuery(
         observedEntities = [
             PhotoEntity::class, VersionEntity::class, RecipeEntity::class, PhotoCloudEntity::class,
@@ -329,10 +333,14 @@ interface PhotoDao {
     @Query("UPDATE photo_files SET unreadable_at = NULL WHERE document_id = :documentId AND unreadable_at IS NOT NULL")
     suspend fun setReadable(documentId: String): Int
 
-    /** How many of [versionIds] are versions of a photo with an unreadable file. */
+    /**
+     * How many of [versionIds] are versions of a photo with an unreadable file whose original the sync server does not
+     * have (those export from the server, ADR 0011 "Fallbacks"): they export at preview size.
+     */
     @Query(
         "SELECT COUNT(*) FROM versions v WHERE v.id IN (:versionIds) AND EXISTS (SELECT 1 FROM photo_files f " +
-            "WHERE f.photo_id = v.photo_id AND f.unreadable_at IS NOT NULL)",
+            "WHERE f.photo_id = v.photo_id AND f.unreadable_at IS NOT NULL) AND NOT EXISTS (SELECT 1 FROM " +
+            "photo_cloud c WHERE c.photo_id = v.photo_id AND c.original_on_server = 1)",
     )
     suspend fun unreadableVersions(versionIds: List<Long>): Int
 

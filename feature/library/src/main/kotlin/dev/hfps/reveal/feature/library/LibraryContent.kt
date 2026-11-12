@@ -87,6 +87,7 @@ fun LibraryContent(
                         actions,
                         Modifier.width(SourcesPaneWidth).fillMaxHeight(),
                         serverPhotos = state.serverPhotos,
+                        fromAppsPhotos = state.fromAppsPhotos,
                     )
                     VerticalDivider(color = RevealTheme.colors.hairline)
                     Box(Modifier.weight(1f).fillMaxHeight()) {
@@ -104,7 +105,15 @@ fun LibraryContent(
                     }
                 }
             } else if (state.selection == null) {
-                if (state.sourcesLoaded) SourcesPane(state.sources, null, actions, serverPhotos = state.serverPhotos)
+                if (state.sourcesLoaded) {
+                    SourcesPane(
+                        state.sources,
+                        null,
+                        actions,
+                        serverPhotos = state.serverPhotos,
+                        fromAppsPhotos = state.fromAppsPhotos,
+                    )
+                }
             } else {
                 GridPane(state, actions, thumbnails, onGridDraw)
             }

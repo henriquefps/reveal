@@ -1,5 +1,6 @@
 package dev.hfps.reveal.data.thumb
 
+import android.content.ContentResolver
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.system.Os
@@ -20,6 +21,7 @@ import dev.hfps.reveal.data.db.CacheEntryEntity
 import dev.hfps.reveal.data.db.PhotoFileEntity
 import dev.hfps.reveal.data.db.RevealDatabase
 import dev.hfps.reveal.data.edit.EditRepository
+import dev.hfps.reveal.data.handoff.HandoffFallbacks
 import dev.hfps.reveal.data.handoff.LocalPreviews
 import dev.hfps.reveal.data.library.DocumentTreeFactory
 import dev.hfps.reveal.data.model.FileRole
@@ -58,7 +60,11 @@ class ThumbnailRepository(
     private val clock: () -> Long = System::currentTimeMillis,
     /** Hand-offs Reveal can no longer read show their local preview (ADR 0011 "Unreadable hand-offs"). */
     private val previews: LocalPreviews? = null,
+    /** Reads the server's copy of an unreadable hand-off (ADR 0011 "Fallbacks"); null without sync (tests). */
+    private val resolver: ContentResolver? = null,
+    private val serverAuthority: String? = null,
 ) {
+    private val fallbacks = HandoffFallbacks(db, previews, serverAuthority)
     private val cache = db.cacheDao()
     private val photos = db.photoDao()
     private val io = Dispatchers.IO.limitedParallelism(PARALLELISM)
@@ -140,7 +146,8 @@ class ThumbnailRepository(
                 // A hand-off whose grant ended (ADR 0011): remember it, and show its local preview.
                 photos.setUnreadable(main.documentId, clock())
                 localPreview(main)?.let { return it }
-                Log.i(TAG, "No access to photo ${target.photoId} and no local preview")
+                serverPreview(main)?.let { return it }
+                Log.i(TAG, "No access to photo ${target.photoId} and no preview")
                 return null
             }
             Log.w(TAG, "No thumbnail for photo ${target.photoId}", e)
@@ -164,7 +171,7 @@ class ThumbnailRepository(
         } catch (@Suppress("TooGenericExceptionCaught") e: Throwable) {
             if (isAccessError(e)) {
                 photos.setUnreadable(target.main.documentId, clock())
-                return renderLocal(renderer, target, versionId)
+                return renderFallback(renderer, target, versionId)
             }
             Log.w(TAG, "Edited thumbnail of version $versionId ($editTime) failed; showing the original", e)
             null
@@ -224,30 +231,58 @@ class ThumbnailRepository(
     }
 
     /** The local display image of an unreadable hand-off (ADR 0011), scaled to [EDGE]; null without one. */
-    @Suppress("ReturnCount")
     private fun localPreview(main: PhotoFileEntity): Bitmap? {
-        val local = previews ?: return null
-        val file = local.display(main.fingerprint)
-        val bytes = when {
-            file != null -> file.readBytes()
-            else -> local.smart(main.fingerprint)?.inputStream()?.use(SmartPreviewCodec::readJpeg)
-        } ?: return null
-        if (bytes.isEmpty()) return null
+        val bytes = fallbacks.localDisplayJpeg(main) ?: return null
         return BitmapDecoding.decode(bytes, EDGE, 1).bitmap
     }
 
-    /** The edit of an unreadable hand-off rendered from its local smart preview; null without one. */
-    private suspend fun renderLocal(renderer: EditedThumbnails, target: Target, versionId: Long): Bitmap? {
-        val file = previews?.smart(target.main.fingerprint) ?: return null
-        return runCatching {
-            val decoded = file.inputStream().use(SmartPreviewCodec::decode)
-            renderer.renderPreview(
-                decoded.input,
-                maxOf(decoded.fullWidth, decoded.fullHeight),
-                edits.recipe(versionId),
-                EDGE,
-            )
-        }.onFailure { if (it is CancellationException) throw it }.getOrNull()
+    /**
+     * An unreadable hand-off's thumbnail from the sync server (ADR 0011 "Fallbacks"): the original's embedded preview
+     * read by range, or the server's smart preview JPEG; null when the server has neither or cannot be reached.
+     */
+    @Suppress("ReturnCount")
+    private suspend fun serverPreview(main: PhotoFileEntity): Bitmap? {
+        val resolver = resolver ?: return null
+        val uri = fallbacks.serverDisplay(main) ?: return null
+        return try {
+            ImageInput.fromUri(resolver, uri, main.name).use { input ->
+                runCatching { embeddedPreview(input) }.getOrNull() ?: decodeStandard(input)
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
+            Log.i(TAG, "No server preview for a hand-off: ${e.javaClass.simpleName}")
+            null
+        }
+    }
+
+    /**
+     * The edit of an unreadable hand-off (ADR 0011 "Fallbacks"): rendered from its smart preview (local, else the
+     * server's), else from the server's original; null without any.
+     */
+    @Suppress("ReturnCount")
+    private suspend fun renderFallback(renderer: EditedThumbnails, target: Target, versionId: Long): Bitmap? {
+        val recipe = edits.recipe(versionId)
+        return try {
+            val preview = fallbacks.preview(target.main)
+            val local = preview?.takeIf { it.scheme == "file" }?.path?.let(::File)
+            val decoded = when {
+                local != null -> local.inputStream().use(SmartPreviewCodec::decode)
+                preview != null -> resolver?.openInputStream(preview)?.use(SmartPreviewCodec::decode)
+                else -> null
+            }
+            if (decoded != null) {
+                return renderer.renderPreview(decoded.input, maxOf(decoded.fullWidth, decoded.fullHeight), recipe, EDGE)
+            }
+            val resolver = resolver ?: return null
+            val original = fallbacks.original(target.main) ?: return null
+            ImageInput.fromUri(resolver, original, target.main.name).use { renderer.render(it, recipe, EDGE) }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
+            Log.i(TAG, "No fallback render of version $versionId: ${e.javaClass.simpleName}")
+            null
+        }
     }
 
     /** The embedded JPEG of a RAW (or a JPEG's own EXIF thumbnail is too small: never used). */

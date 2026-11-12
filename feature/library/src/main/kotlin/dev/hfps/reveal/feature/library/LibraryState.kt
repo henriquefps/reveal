@@ -59,6 +59,8 @@ data class LibraryUiState(
     val pasteChooser: Set<RecipeGroup>? = null,
     /** Photos only the sync server has (ADR 0018); the Server entry shows when there are any. */
     val serverPhotos: Int = 0,
+    /** Photos in "Opened from other apps": with them, a library without folders is not empty (ADR 0011). */
+    val fromAppsPhotos: Int = 0,
 ) {
     val selecting: Boolean get() = selected.isNotEmpty()
 

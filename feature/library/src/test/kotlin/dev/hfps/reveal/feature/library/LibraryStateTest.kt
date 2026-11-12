@@ -40,4 +40,16 @@ class LibraryStateTest {
     fun `the hand-off source maps to its own scope`() {
         assertThat(LibrarySelection.Special(SpecialSource.FROM_APPS).scope()).isEqualTo(LibraryScope.FromApps)
     }
+
+    @Test
+    fun `a library without folders starts on the photos other apps handed over`() {
+        val fromApps = LibrarySelection.Special(SpecialSource.FROM_APPS)
+        assertThat(LibraryViewModel.startSelection(null, folders = 0, fromApps = 3)).isEqualTo(fromApps)
+        // Nothing handed over: the empty library; a folder: the sources list.
+        assertThat(LibraryViewModel.startSelection(null, folders = 0, fromApps = 0)).isNull()
+        assertThat(LibraryViewModel.startSelection(null, folders = 1, fromApps = 3)).isNull()
+        // The last selection is always reopened.
+        val recent = LibrarySelection.Special(SpecialSource.RECENT)
+        assertThat(LibraryViewModel.startSelection(recent, folders = 0, fromApps = 3)).isEqualTo(recent)
+    }
 }

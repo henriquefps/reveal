@@ -35,8 +35,11 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
@@ -60,8 +63,10 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.core.graphics.withSave
+import dev.hfps.reveal.designsystem.components.GhostButton
 import dev.hfps.reveal.designsystem.components.PrimaryButton
 import dev.hfps.reveal.designsystem.components.RevealIconButton
+import dev.hfps.reveal.designsystem.components.SecondaryButton
 import dev.hfps.reveal.designsystem.icons.PhosphorRegular
 import dev.hfps.reveal.designsystem.theme.RevealMotion
 import dev.hfps.reveal.designsystem.theme.RevealTheme
@@ -69,8 +74,11 @@ import dev.hfps.reveal.feature.editor.EditorActions
 import dev.hfps.reveal.feature.editor.EditorPhase
 import dev.hfps.reveal.feature.editor.EditorTags
 import dev.hfps.reveal.feature.editor.EditorUiState
+import dev.hfps.reveal.feature.editor.PreviewOnly
 import dev.hfps.reveal.feature.editor.R
 import dev.hfps.reveal.feature.editor.TargetedTarget
+import dev.hfps.reveal.feature.editor.UnreadableHandoff
+import dev.hfps.reveal.feature.editor.ViewOptions
 import dev.hfps.reveal.feature.editor.edit.RecipeControls
 import dev.hfps.reveal.feature.editor.open.OpenError
 import dev.hfps.reveal.pipeline.HistoryLabels
@@ -156,7 +164,7 @@ fun PhotoSlot(
         PreviewOverlay(state, onFadeOut = actions.onPreviewHidden)
         when (phase) {
             is EditorPhase.Loading -> LoadingBadge(phase.progress, Modifier.align(Alignment.BottomCenter))
-            is EditorPhase.Failed -> ErrorState(phase.error, actions.onBack, Modifier.align(Alignment.Center))
+            is EditorPhase.Failed -> ErrorState(phase, actions, Modifier.align(Alignment.Center))
             is EditorPhase.Ready -> if (state.developed) Box(Modifier.size(1.dp).testTag(EditorTags.DEVELOPED))
         }
         if (phase is EditorPhase.Ready) {
@@ -173,6 +181,10 @@ fun PhotoSlot(
             ) {
                 HistogramView(state.histogram, state.view.clipping, actions.onClipping)
             }
+            val previewOnly = state.previewOnly
+            if (previewOnly != null && chromeVisible && state.view.noHint) {
+                PreviewOnlyNote(previewOnly, Modifier.align(Alignment.BottomCenter))
+            }
             if (state.view.eyedropper) EyedropperHint(actions, Modifier.align(Alignment.TopCenter))
             if (state.view.targeted != null) {
                 TargetedHint(state, actions, Modifier.align(Alignment.TopCenter))
@@ -182,6 +194,9 @@ fun PhotoSlot(
         }
     }
 }
+
+/** No eyedropper, targeted or crop hint is over the photo (the preview-only note may show). */
+private val ViewOptions.noHint: Boolean get() = !eyedropper && targeted == null && !cropping
 
 /** The still photo when there is no renderer (screenshot tests): the preview, split against [original]. */
 @Composable
@@ -559,9 +574,17 @@ private fun LoadingBadge(progress: Float, modifier: Modifier = Modifier) {
 }
 
 @Composable
-private fun ErrorState(error: OpenError, onBack: () -> Unit, modifier: Modifier = Modifier) {
+private fun ErrorState(phase: EditorPhase.Failed, actions: EditorActions, modifier: Modifier = Modifier) {
     val colors = RevealTheme.colors
-    val (title, body) = error.strings()
+    val handoff = phase.handoff
+    val (title, body) = phase.error.strings()
+    val app = handoff?.app
+    val text = when {
+        handoff == null -> stringResource(body)
+        app != null -> stringResource(R.string.editor_error_handoff_body_app, app)
+        handoff.gallery -> stringResource(R.string.editor_error_handoff_body_gallery)
+        else -> stringResource(R.string.editor_error_handoff_body)
+    }
     Column(
         modifier = modifier
             .widthIn(max = 360.dp)
@@ -583,15 +606,91 @@ private fun ErrorState(error: OpenError, onBack: () -> Unit, modifier: Modifier 
             textAlign = TextAlign.Center,
         )
         Text(
-            text = stringResource(body),
+            text = text,
             style = RevealTheme.typography.body,
             color = colors.mutedForeground,
             textAlign = TextAlign.Center,
+            modifier = Modifier.testTag(EditorTags.ERROR_BODY),
         )
         Spacer(Modifier.height(4.dp))
-        PrimaryButton(text = stringResource(R.string.editor_error_back), onClick = onBack)
+        ErrorButtons(handoff, actions)
     }
 }
+
+/** The error's actions: open the sending app, allow gallery access (hand-offs), back. */
+@Composable
+private fun ErrorButtons(handoff: UnreadableHandoff?, actions: EditorActions) {
+    val app = handoff?.app
+    Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        if (app != null) {
+            PrimaryButton(
+                text = stringResource(R.string.editor_error_handoff_open_app, app),
+                onClick = actions.onOpenSender,
+                modifier = Modifier.testTag(EditorTags.ERROR_OPEN_APP),
+            )
+        }
+        if (handoff?.gallery == true) {
+            val allow = stringResource(R.string.editor_error_handoff_gallery)
+            if (app == null) {
+                PrimaryButton(allow, actions.onGalleryAccess, Modifier.testTag(EditorTags.ERROR_GALLERY))
+            } else {
+                SecondaryButton(allow, actions.onGalleryAccess, Modifier.testTag(EditorTags.ERROR_GALLERY))
+            }
+        }
+        if (app == null && handoff?.gallery != true) {
+            PrimaryButton(text = stringResource(R.string.editor_error_back), onClick = actions.onBack)
+        } else {
+            GhostButton(text = stringResource(R.string.editor_error_back), onClick = actions.onBack)
+        }
+    }
+}
+
+/**
+ * The editor shows a smart preview, not the original (ADR 0011 "Fallbacks", ADR 0018): editing works, exports are at
+ * preview size (or wait for the original's backup). A one-line pill; a tap shows what it means.
+ */
+@Composable
+private fun PreviewOnlyNote(kind: PreviewOnly, modifier: Modifier = Modifier) {
+    val colors = RevealTheme.colors
+    var expanded by rememberSaveable { mutableStateOf(false) }
+    val (short, long) = when (kind) {
+        PreviewOnly.HANDOFF -> R.string.editor_preview_only_handoff_short to R.string.editor_preview_only_handoff
+        PreviewOnly.ELSEWHERE -> R.string.editor_preview_only_elsewhere_short to R.string.editor_preview_only_elsewhere
+    }
+    val description = stringResource(long)
+    Surface(
+        onClick = { expanded = !expanded },
+        modifier = modifier
+            .padding(8.dp)
+            .testTag(EditorTags.PREVIEW_ONLY)
+            .semantics { contentDescription = description },
+        shape = RevealTheme.shapes.chip,
+        color = colors.card.copy(alpha = NOTE_ALPHA),
+        border = BorderStroke(1.dp, colors.hairline),
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                PhosphorRegular.Image,
+                contentDescription = null,
+                tint = colors.primary,
+                modifier = Modifier.size(16.dp),
+            )
+            Text(
+                text = stringResource(if (expanded) long else short),
+                style = RevealTheme.typography.ui,
+                color = colors.foreground,
+                modifier = Modifier
+                    .padding(start = 8.dp)
+                    .widthIn(max = 300.dp),
+            )
+        }
+    }
+}
+
+private const val NOTE_ALPHA = 0.88f
 
 private fun OpenError.strings(): Pair<Int, Int> = when (this) {
     OpenError.PERMISSION_LOST -> R.string.editor_error_permission_title to R.string.editor_error_permission_body

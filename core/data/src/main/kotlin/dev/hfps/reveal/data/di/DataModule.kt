@@ -211,15 +211,26 @@ object DataModule {
         edited = edited,
         dir = File(context.cacheDir, "thumbs"),
         previews = previews,
+        resolver = context.contentResolver,
+        serverAuthority = ServerTree.authority(context.packageName),
     )
 
     @Provides
     @Singleton
     fun providePhotoImages(
+        @ApplicationContext context: Context,
         database: RevealDatabase,
         trees: DocumentTreeFactory,
         edits: EditRepository,
         edited: EditedThumbnails,
         previews: LocalPreviews,
-    ): PhotoImages = PhotoImages(database, trees, edits, edited, previews)
+    ): PhotoImages = PhotoImages(
+        database,
+        trees,
+        edits,
+        edited,
+        previews,
+        resolver = context.contentResolver,
+        serverAuthority = ServerTree.authority(context.packageName),
+    )
 }

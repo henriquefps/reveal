@@ -141,6 +141,14 @@
     <string name="info_shutter_value">%1$s s</string>
     <string name="info_dimensions_value">%1$d × %2$d · %3$s MP</string>
     <string name="info_file_value">%1$s · %2$s</string>
+    <string name="info_original">Original</string>
+    <string name="info_original_device">On this device</string>
+    <string name="info_original_backed_up">On this device, and backed up on your sync server</string>
+    <string name="info_original_server">Only on your sync server: it opens from there, full quality</string>
+    <string name="info_original_elsewhere">On another device: this one has a smart preview to view and edit; exports wait until its backup reaches the server</string>
+    <string name="info_original_handoff_server">Reveal can no longer read the file the app shared, so it opens the copy on your sync server, full quality</string>
+    <string name="info_original_handoff_preview">Preview only: Reveal can no longer read the file the app shared and your sync server has no copy. Edits work; exports are at preview size (2560 px). Share it to Reveal again for the full photo</string>
+    <string name="info_original_handoff_unreadable">Reveal can no longer read the file the app shared, and there is no copy or preview to open instead. Share it to Reveal again</string>
     <string name="library_action_paste_edits_choose">Paste edits…</string>
     <string name="library_edits_copied">Edits copied</string>
     <plurals name="library_edits_pasted">

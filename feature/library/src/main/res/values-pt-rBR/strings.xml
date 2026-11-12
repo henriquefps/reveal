@@ -138,6 +138,14 @@
     <string name="info_shutter_value">%1$s s</string>
     <string name="info_dimensions_value">%1$d × %2$d · %3$s MP</string>
     <string name="info_file_value">%1$s · %2$s</string>
+    <string name="info_original">Original</string>
+    <string name="info_original_device">Neste aparelho</string>
+    <string name="info_original_backed_up">Neste aparelho, com backup no seu servidor de sincronização</string>
+    <string name="info_original_server">Só no seu servidor de sincronização: abre de lá, na qualidade completa</string>
+    <string name="info_original_elsewhere">Em outro aparelho: este tem uma prévia inteligente para ver e editar; as exportações esperam o backup chegar ao servidor</string>
+    <string name="info_original_handoff_server">O Reveal não consegue mais ler o arquivo que o app compartilhou, então abre a cópia do seu servidor de sincronização, na qualidade completa</string>
+    <string name="info_original_handoff_preview">Só a prévia: o Reveal não consegue mais ler o arquivo que o app compartilhou e o seu servidor de sincronização não tem cópia. A edição funciona; as exportações saem no tamanho da prévia (2560 px). Compartilhe a foto com o Reveal de novo para a foto completa</string>
+    <string name="info_original_handoff_unreadable">O Reveal não consegue mais ler o arquivo que o app compartilhou, e não há cópia nem prévia para abrir no lugar. Compartilhe a foto com o Reveal de novo</string>
     <string name="library_action_paste_edits_choose">Colar edições…</string>
     <string name="library_edits_copied">Edições copiadas</string>
     <plurals name="library_edits_pasted">

@@ -13,7 +13,12 @@ service and no server of its own: it talks to the network only in the two cases 
   in its own storage, never backed up and never shared: a display image (1600 px) for every such photo and, when the
   other app's access ends with Reveal's activity (the Samsung Gallery's share does), a smart preview (about
   2560 px) to keep editing it (docs/adr/0011 "Unreadable hand-offs"). Forgotten hand-offs lose theirs; at most
-  1.5 GB of smart previews are kept.
+  1.5 GB of smart previews are kept. When it can no longer read such a photo and your own sync server has its
+  original (a backup or a NAS file), Reveal reads that copy from your server instead (docs/adr/0011 "Fallbacks"):
+  the same server and connection as sync, nothing new is sent.
+- To name the app that shared a photo it can no longer read ("share it to Reveal again from Hoard") and to open it,
+  Reveal can see which installed apps have a launcher icon (the manifest's `<queries>` for launcher apps). It looks
+  up only the app behind that photo's link, on the device; nothing is stored or sent.
 
 ## Permissions
 

@@ -10,15 +10,18 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.google.common.truth.Truth.assertThat
 import dev.hfps.image.ImageInput
 import dev.hfps.image.source.FileFingerprint
+import dev.hfps.reveal.data.db.PhotoCloudEntity
 import dev.hfps.reveal.data.db.PhotoQuerySql
 import dev.hfps.reveal.data.db.RevealDatabase
 import dev.hfps.reveal.data.edit.EditRepository
 import dev.hfps.reveal.data.index.LibraryIndexer
 import dev.hfps.reveal.data.library.LibraryRepository
+import dev.hfps.reveal.data.library.OriginalPlace
 import dev.hfps.reveal.data.library.OriginalReach
 import dev.hfps.reveal.data.library.SidecarSync
 import dev.hfps.reveal.data.model.LibraryScope
 import dev.hfps.reveal.data.model.PhotoQuery
+import dev.hfps.reveal.data.sync.ServerTree
 import dev.hfps.reveal.data.synthetic.SyntheticExif
 import dev.hfps.reveal.data.synthetic.SyntheticShoot
 import dev.hfps.reveal.data.thumb.ThumbnailRepository
@@ -96,8 +99,11 @@ class UnreadableHandoffsTest {
         SidecarSync(db, { tree }, "Reveal test"),
         CoroutineScope(Dispatchers.Unconfined),
         clock = { now },
+        serverAuthority = authority,
         previews = previews,
     )
+
+    private val authority: String get() = ServerTree.authority(context.packageName)
 
     private fun galleryFile(name: String): Pair<Uri, File> {
         val file = File(temp.newFolder(), name).apply {
@@ -244,6 +250,109 @@ class UnreadableHandoffsTest {
         assertThat(small.smartFile("v1:bb").exists()).isTrue()
         assertThat(small.smartFile("v1:cc").exists()).isTrue()
         assertThat(LocalPreviews.key("v1:AB/../x")).isEqualTo("v1_ab____x")
+    }
+
+    // ------------------------------------------------------------------ fallbacks (ADR 0011 "Fallbacks")
+
+    /** Marks [version]'s photo as known to the server: its original ([original]) and/or a smart preview. */
+    private suspend fun onServer(version: Long, original: Boolean, preview: Boolean) {
+        val photoId = db.photoDao().photoIdOfVersion(version)!!
+        db.syncDao().putCloud(
+            PhotoCloudEntity(
+                photoId,
+                originalOnServer = original,
+                previewSha = if (preview) "ab".repeat(32) else null,
+            ),
+        )
+    }
+
+    private fun dropLocalPreviews(print: String) {
+        previews.smartFile(print).delete()
+        previews.displayFile(print).delete()
+    }
+
+    @Test
+    fun `a backed-up hand-off opens and exports the server's original, its preview if the server is unreachable`() =
+        runTest {
+            val name = "20261112_102000.jpg"
+            val (uri, file) = galleryFile(name)
+            val version = receive(uri)
+            val print = FileFingerprint.of(file.readBytes())
+            onServer(version, original = true, preview = false)
+            tree.refused += uri.toString()
+
+            val server = ServerTree.uri(authority, ServerTree.ORIGINAL, ServerTree.documentId(print, name))
+            val edit = library().editTarget(version)!!
+            assertThat(edit.uri).isEqualTo(server)
+            assertThat(edit.fallback).isEqualTo(Uri.fromFile(previews.smartFile(print)))
+            assertThat(edit.unreadableHandoff).isTrue()
+            assertThat(edit.unreadable).isNull()
+            val export = library().exportTarget(version)!!
+            assertThat(export.reach).isEqualTo(OriginalReach.SERVER)
+            assertThat(export.uri).isEqualTo(server)
+            assertThat(export.previewUri).isEqualTo(Uri.fromFile(previews.smartFile(print)))
+            // Full size: the export sheet does not warn about it.
+            assertThat(library().unreadableCount(listOf(version))).isEqualTo(0)
+            val photoId = db.photoDao().photoIdOfVersion(version)!!
+            assertThat(library().originalPlace(photoId)).isEqualTo(OriginalPlace.HANDOFF_SERVER)
+        }
+
+    @Test
+    fun `without a local preview a hand-off opens the server's smart preview`() = runTest {
+        val name = "20261112_102100.jpg"
+        val (uri, file) = galleryFile(name)
+        val version = receive(uri)
+        val print = FileFingerprint.of(file.readBytes())
+        dropLocalPreviews(print)
+        onServer(version, original = false, preview = true)
+        tree.refused += uri.toString()
+
+        val smart = ServerTree.smartUri(authority, print, name)
+        val edit = library().editTarget(version)!!
+        assertThat(edit.uri).isEqualTo(smart)
+        assertThat(edit.fallback).isNull()
+        assertThat(edit.unreadableHandoff).isTrue()
+        val export = library().exportTarget(version)!!
+        assertThat(export.reach).isEqualTo(OriginalReach.PREVIEW)
+        assertThat(export.previewUri).isEqualTo(smart)
+        assertThat(library().unreadableCount(listOf(version))).isEqualTo(1)
+        val photoId = db.photoDao().photoIdOfVersion(version)!!
+        assertThat(library().originalPlace(photoId)).isEqualTo(OriginalPlace.HANDOFF_PREVIEW)
+    }
+
+    @Test
+    fun `a hand-off with nothing in its place reports its document`() = runTest {
+        val (uri, file) = galleryFile("20261112_102200.jpg")
+        val version = receive(uri)
+        val photoId = db.photoDao().photoIdOfVersion(version)!!
+        assertThat(library().originalPlace(photoId)).isEqualTo(OriginalPlace.DEVICE)
+        dropLocalPreviews(FileFingerprint.of(file.readBytes()))
+        tree.refused += uri.toString()
+
+        val edit = library().editTarget(version)!!
+        assertThat(edit.uri).isEqualTo(uri)
+        assertThat(edit.unreadable).isEqualTo(uri)
+        assertThat(edit.unreadableHandoff).isTrue()
+        assertThat(library().exportTarget(version)!!.reach).isEqualTo(OriginalReach.DEVICE)
+        assertThat(library().originalPlace(photoId)).isEqualTo(OriginalPlace.HANDOFF_UNREADABLE)
+    }
+
+    @Test
+    fun `the grid and the viewer read a backed-up hand-off from the server's display file`() = runTest {
+        val name = "20261112_102300.jpg"
+        val (uri, file) = galleryFile(name)
+        val version = receive(uri)
+        val print = FileFingerprint.of(file.readBytes())
+        val main = db.photoDao().files(db.photoDao().photoIdOfVersion(version)!!).single()
+        val fallbacks = HandoffFallbacks(db, previews, authority)
+        assertThat(fallbacks.serverDisplay(main)).isNull()
+        assertThat(fallbacks.localDisplayJpeg(main)).isNotNull()
+
+        onServer(version, original = true, preview = false)
+        assertThat(fallbacks.serverDisplay(main))
+            .isEqualTo(ServerTree.uri(authority, ServerTree.DISPLAY, ServerTree.documentId(print, name)))
+        // Without sync (no provider authority) there is no server fallback at all.
+        assertThat(HandoffFallbacks(db, null, null).of(main).isEmpty).isTrue()
     }
 
     private companion object {

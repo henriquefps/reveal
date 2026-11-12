@@ -9,6 +9,7 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import dev.hfps.image.format.PhotoMetadata
 import dev.hfps.reveal.data.db.PhotoEntity
 import dev.hfps.reveal.data.library.LibraryRepository
+import dev.hfps.reveal.data.library.OriginalPlace
 import dev.hfps.reveal.data.library.PhotoDetail
 import dev.hfps.reveal.data.model.PhotoListCodec
 import dev.hfps.reveal.data.model.PhotoQuery
@@ -39,6 +40,9 @@ interface ViewerPages {
     suspend fun detail(id: Long): PhotoDetail?
 
     suspend fun metadata(detail: PhotoDetail): PhotoMetadata?
+
+    /** Where the photo's original is (the info's "Original" line); null when unknown. */
+    suspend fun originalPlace(id: Long): OriginalPlace? = null
 }
 
 /** The photos the viewer pages through (a snapshot of the grid's list when it opened) and where it starts. */
@@ -92,6 +96,8 @@ class ViewerViewModel @Inject constructor(
     override suspend fun detail(id: Long): PhotoDetail? = library.detail(id)
 
     override suspend fun metadata(detail: PhotoDetail): PhotoMetadata? = library.metadata(detail)
+
+    override suspend fun originalPlace(id: Long): OriginalPlace? = library.originalPlace(id)
 
     fun rate(id: Long, rating: Int) {
         viewModelScope.launch { library.setRating(listOf(id), rating) }

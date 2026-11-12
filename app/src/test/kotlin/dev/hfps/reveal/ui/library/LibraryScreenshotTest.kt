@@ -226,6 +226,13 @@ class PhoneLibraryScreenshotTest : LibraryScreenshotBase("phone") {
         state = LibraryUiState(sourcesLoaded = true, photosLoaded = true),
     )
 
+    /** No folder, but photos other apps handed over: the library list, not the empty state (ADR 0011). */
+    @Test fun onlyHandOffs() = shoot(
+        "sources_only_handoffs_dark",
+        dark = true,
+        state = LibraryUiState(sourcesLoaded = true, photosLoaded = true, fromAppsPhotos = 3),
+    )
+
     @Test fun emptyLibraryFontScale200() = shoot(
         "empty_dark_font200",
         dark = true,

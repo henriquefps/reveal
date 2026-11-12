@@ -64,6 +64,7 @@ import dev.hfps.reveal.data.db.PhotoRow
 import dev.hfps.reveal.data.model.PhotoFormat
 import dev.hfps.reveal.data.model.PickFlag
 import dev.hfps.reveal.designsystem.components.Eyebrow
+import dev.hfps.reveal.designsystem.components.UnavailablePlaceholder
 import dev.hfps.reveal.designsystem.icons.PhosphorFill
 import dev.hfps.reveal.designsystem.icons.PhosphorRegular
 import dev.hfps.reveal.designsystem.theme.RevealTheme
@@ -351,8 +352,8 @@ private fun PhotoCell(
 ) {
     val colors = RevealTheme.colors
     var image by remember(row.versionId, row.editTime) { mutableStateOf(thumbnails.cached(row)) }
-    LaunchedEffect(row.versionId, row.editTime) {
-        if (image == null) image = thumbnails.load(row)
+    LaunchedEffect(row.versionId, row.editTime, row.unavailable) {
+        if (image == null && !row.unavailable) image = thumbnails.load(row)
     }
     val description = cellDescription(row)
     val selectLabel = stringResource(R.string.library_cell_select)
@@ -372,7 +373,14 @@ private fun PhotoCell(
             },
     ) {
         val bitmap = image
-        if (bitmap != null) {
+        if (row.unavailable) {
+            // Never an empty square: nothing can show this photo, so the cell says so (FIX/U).
+            UnavailablePlaceholder(
+                name = row.name,
+                label = stringResource(R.string.library_unavailable_label),
+                modifier = Modifier.testTag(UnavailableTags.cell(row.id)),
+            )
+        } else if (bitmap != null) {
             Image(
                 bitmap = bitmap,
                 contentDescription = null,
@@ -548,6 +556,9 @@ internal enum class CloudState {
 }
 
 internal fun cloudState(row: PhotoRow): CloudState = when {
+    // Nothing shows it: the placeholder says so, a cloud badge would only repeat it badly.
+    row.unavailable -> CloudState.LOCAL
+
     // A hand-off Reveal can no longer read whose original the server has opens from there (ADR 0011 "Fallbacks").
     row.unreadable && row.cloudOriginal -> CloudState.CLOUD
 
@@ -600,6 +611,7 @@ internal fun formatBadge(format: PhotoFormat): Int? = when (format) {
 @Composable
 internal fun cellDescription(row: PhotoRow): String {
     val parts = mutableListOf(row.name, stringResource(formatName(row.format)))
+    if (row.unavailable) parts += stringResource(R.string.library_unavailable_cell)
     if (row.rating > 0) parts += pluralStringResource(R.plurals.library_stars, row.rating, row.rating)
     when (row.flag) {
         PickFlag.PICK -> parts += stringResource(R.string.library_flag_picked)

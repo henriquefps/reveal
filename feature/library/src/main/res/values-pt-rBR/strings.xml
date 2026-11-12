@@ -217,4 +217,35 @@
         <item quantity="many">Interrompido: %1$s aplicada a %2$d fotos</item>
         <item quantity="other">Interrompido: %1$s aplicada a %2$d fotos</item>
     </plurals>
+    <!-- Fotos indisponíveis (FIX/U) -->
+    <string name="library_filter_unavailable">Indisponíveis</string>
+    <string name="library_unavailable_label">Indisponível</string>
+    <string name="library_unavailable_cell">Indisponível: o Reveal não consegue ler esta foto. Toque para ver o motivo</string>
+    <string name="library_unavailable_title">Esta foto está indisponível</string>
+    <string name="library_unavailable_reason_sender_named">%1$s compartilhou esta foto com o Reveal e não dá mais acesso a ela. Fotos de outros apps só podem ser lidas por um tempo.</string>
+    <string name="library_unavailable_reason_sender">O app que compartilhou esta foto com o Reveal não dá mais acesso a ela. Fotos de outros apps só podem ser lidas por um tempo.</string>
+    <string name="library_unavailable_reason_file">O arquivo foi apagado ou movido, então o Reveal não consegue lê-lo. A nota, a marca e as edições continuam guardadas.</string>
+    <string name="library_unavailable_reason_folder">A pasta desta foto não está montada agora. Conecte o disco de novo e tente outra vez.</string>
+    <string name="library_unavailable_keeps">O Reveal nunca copia suas fotos, então não tem o que mostrar. A nota, a marca e as edições continuam guardadas.</string>
+    <string name="library_unavailable_open_app">Abrir %1$s para compartilhar de novo</string>
+    <string name="library_unavailable_gallery">Permitir acesso às fotos</string>
+    <string name="library_unavailable_try_again">Tentar de novo</string>
+    <string name="library_unavailable_remove">Remover do Reveal</string>
+    <string name="library_unavailable_checked">Verificado de novo. Legíveis agora: %1$d. Ainda indisponíveis: %2$d.</string>
+    <string name="library_forget_title">Remover do Reveal?</string>
+    <string name="library_forget_body_edited">As edições também somem, e isso não pode ser desfeito.</string>
+    <string name="library_forget_confirm">Remover</string>
+    <plurals name="library_forget_question">
+        <item quantity="one">Remover %1$d foto do Reveal?</item>
+        <item quantity="many">Remover %1$d fotos do Reveal?</item>
+        <item quantity="other">Remover %1$d fotos do Reveal?</item>
+    </plurals>
+    <plurals name="library_forgotten">
+        <item quantity="one">%1$d foto removida do Reveal.</item>
+        <item quantity="many">%1$d fotos removidas do Reveal.</item>
+        <item quantity="other">%1$d fotos removidas do Reveal.</item>
+    </plurals>
+    <string name="viewer_unavailable_title">Esta foto está indisponível</string>
+    <string name="viewer_unavailable_body">O Reveal não consegue mais ler esta foto e não tem uma prévia dela.</string>
+    <string name="viewer_unavailable_details">O que posso fazer?</string>
 </resources>

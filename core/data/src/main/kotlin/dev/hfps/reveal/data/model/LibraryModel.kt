@@ -51,6 +51,22 @@ enum class PhotoFilter {
 
     /** Photos without a RAW: camera or phone JPEG, HEIF, PNG, WebP. */
     JPEG,
+
+    /** Photos Reveal cannot show at all (`PhotoAvailability`): shown only when the scope has some. */
+    UNAVAILABLE,
+}
+
+/**
+ * What "unavailable" means, once (the SQL twin is `PhotoQuerySql.UNAVAILABLE_SQL`): a file of the photo cannot be read
+ * AND nothing stands in for it (the sync server's original, a smart preview on the server, a local preview).
+ */
+object PhotoAvailability {
+    fun isUnavailable(
+        unreadable: Boolean,
+        serverOriginal: Boolean,
+        serverPreview: Boolean,
+        localPreview: Boolean,
+    ): Boolean = unreadable && !serverOriginal && !serverPreview && !localPreview
 }
 
 /** Grid order. Capture time falls back to the file's modification time when the header has none. */

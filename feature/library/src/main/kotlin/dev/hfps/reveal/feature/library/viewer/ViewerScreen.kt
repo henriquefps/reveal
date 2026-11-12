@@ -1,6 +1,8 @@
 package dev.hfps.reveal.feature.library.viewer
 
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -16,6 +18,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
@@ -35,6 +38,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
@@ -51,17 +55,22 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.hfps.image.decode.IntRect
 import dev.hfps.image.decode.Sampling
 import dev.hfps.reveal.data.db.PhotoEntity
+import dev.hfps.reveal.data.handoff.GalleryAccess
 import dev.hfps.reveal.data.model.PickFlag
 import dev.hfps.reveal.data.thumb.RegionSource
 import dev.hfps.reveal.designsystem.components.PrimaryButton
 import dev.hfps.reveal.designsystem.components.RevealIconButton
 import dev.hfps.reveal.designsystem.components.RevealTopBar
+import dev.hfps.reveal.designsystem.components.UnavailablePlaceholder
 import dev.hfps.reveal.designsystem.icons.PhosphorFill
 import dev.hfps.reveal.designsystem.icons.PhosphorRegular
 import dev.hfps.reveal.designsystem.theme.EditorTheme
 import dev.hfps.reveal.designsystem.theme.RevealTheme
+import dev.hfps.reveal.feature.library.ForgetDialog
 import dev.hfps.reveal.feature.library.R
 import dev.hfps.reveal.feature.library.TwoPaneMinWidth
+import dev.hfps.reveal.feature.library.UnavailableSheet
+import dev.hfps.reveal.feature.library.UnavailableTags
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
@@ -73,7 +82,7 @@ import kotlinx.coroutines.withContext
  * The full-screen viewer (always dark, zero-chroma surround like the editor): swipe between photos (pairs are one
  * page), pinch or double-tap to 100 %, tap to hide the controls, rate and flag, info sheet, "Edit".
  */
-@Suppress("LongMethod")
+@Suppress("LongMethod", "CyclomaticComplexMethod")
 @Composable
 fun ViewerScreen(
     onBack: () -> Unit,
@@ -87,6 +96,9 @@ fun ViewerScreen(
     var info by remember { mutableStateOf<Long?>(null) }
     val scope = rememberCoroutineScope()
     BackHandler(onBack = onBack)
+    val galleryPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
+        viewModel.tryAgain(viewModel.state.value.unavailable?.photoId ?: return@rememberLauncherForActivityResult)
+    }
     EditorTheme {
         BoxWithConstraints(modifier.fillMaxSize().background(RevealTheme.colors.background)) {
             val wide = maxWidth >= TwoPaneMinWidth
@@ -108,6 +120,8 @@ fun ViewerScreen(
                         ViewerPage(
                             id = id,
                             pages = pages,
+                            reloads = state.reloads,
+                            onExplain = { viewModel.explain(id) },
                             active = pager.currentPage == page,
                             onTap = { chrome = !chrome },
                             onZoomChange = { if (pager.currentPage == page) zoomed = it },
@@ -154,6 +168,23 @@ fun ViewerScreen(
                         modifier = Modifier.width(InfoPanelWidth).fillMaxHeight().systemBarsPadding(),
                     )
                 }
+            }
+            state.unavailable?.let { unavailable ->
+                UnavailableSheet(
+                    info = unavailable,
+                    onOpenApp = viewModel::openSender,
+                    onGallery = { galleryPermission.launch(GalleryAccess.permissions()) },
+                    onTryAgain = { viewModel.tryAgain(unavailable.photoId) },
+                    onRemove = { viewModel.forget(unavailable.photoId, onBack) },
+                    onDismiss = viewModel::dismissUnavailable,
+                )
+            }
+            state.forgetPrompt?.let { prompt ->
+                ForgetDialog(
+                    prompt,
+                    onConfirm = { viewModel.confirmForget(onBack) },
+                    onDismiss = viewModel::dismissForget,
+                )
             }
             if (!wide) info?.let { id -> InfoSheet(photoId = id, pages = pages, onDismiss = { info = null }) }
         }
@@ -272,6 +303,8 @@ private fun ViewerControls(
 private fun ViewerPage(
     id: Long,
     pages: ViewerPages,
+    reloads: Int,
+    onExplain: () -> Unit,
     active: Boolean,
     onTap: () -> Unit,
     onZoomChange: (Boolean) -> Unit,
@@ -279,10 +312,14 @@ private fun ViewerPage(
     val currentOnZoomChange by rememberUpdatedState(onZoomChange)
     val window = LocalWindowInfo.current.containerSize
     val longEdge = maxOf(window.width, window.height).coerceAtLeast(MIN_DISPLAY_EDGE)
-    val image by produceState<Loaded?>(null, id) {
+    val image by produceState<Loaded?>(null, id, reloads) {
         val display = pages.display(id, longEdge)
         value = if (display == null) {
-            Loaded.Failed
+            if (pages.isUnavailable(id)) {
+                Loaded.Unavailable(pages.detail(id)?.photo?.name.orEmpty())
+            } else {
+                Loaded.Failed
+            }
         } else {
             Loaded.Image(
                 display.bitmap.asImageBitmap(),
@@ -313,6 +350,8 @@ private fun ViewerPage(
             )
         }
 
+        is Loaded.Unavailable -> UnavailablePage(loaded.name, onExplain)
+
         is Loaded.Image -> {
             val detail = rememberDetail(id, loaded, zoom, pages, active)
             ZoomableImage(
@@ -326,8 +365,47 @@ private fun ViewerPage(
     }
 }
 
+/** The centred placeholder of a photo nothing can show, with what happened and a way to the actions. */
+@Composable
+private fun UnavailablePage(name: String, onExplain: () -> Unit) {
+    Column(
+        Modifier.fillMaxSize().padding(24.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+    ) {
+        Box(Modifier.size(UnavailableBox).clip(RevealTheme.shapes.card)) {
+            UnavailablePlaceholder(name, stringResource(R.string.library_unavailable_label))
+        }
+        Text(
+            stringResource(R.string.viewer_unavailable_title),
+            style = RevealTheme.typography.title,
+            color = RevealTheme.colors.foreground,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.padding(top = 20.dp),
+        )
+        Text(
+            stringResource(R.string.viewer_unavailable_body),
+            style = RevealTheme.typography.body,
+            color = RevealTheme.colors.mutedForeground,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.padding(top = 8.dp, bottom = 16.dp),
+        )
+        PrimaryButton(
+            text = stringResource(R.string.viewer_unavailable_details),
+            onClick = onExplain,
+            icon = PhosphorRegular.Info,
+            modifier = Modifier.testTag(UnavailableTags.VIEWER_DETAILS),
+        )
+    }
+}
+
+private val UnavailableBox = 180.dp
+
 private sealed interface Loaded {
     data object Failed : Loaded
+
+    /** No file, no preview: the placeholder with its explanation (FIX/U). */
+    class Unavailable(val name: String) : Loaded
 
     class Image(val bitmap: ImageBitmap, val fullSize: IntSize, val developed: Boolean) : Loaded
 }

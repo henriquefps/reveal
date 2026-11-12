@@ -61,6 +61,12 @@ data class LibraryUiState(
     val serverPhotos: Int = 0,
     /** Photos in "Opened from other apps": with them, a library without folders is not empty (ADR 0011). */
     val fromAppsPhotos: Int = 0,
+    /** Unavailable photos in the current scope (FIX/U): the "Unavailable" filter shows while this is above zero. */
+    val unavailableCount: Int = 0,
+    /** The explanation of a tapped unavailable photo; null = closed. */
+    val unavailableInfo: UnavailableInfo? = null,
+    /** Asking before "Remove from Reveal" forgets photos that have edits; null = not asking. */
+    val forgetPrompt: ForgetPrompt? = null,
 ) {
     val selecting: Boolean get() = selected.isNotEmpty()
 
@@ -72,6 +78,12 @@ data class LibraryUiState(
         get() = query.filter != dev.hfps.reveal.data.model.PhotoFilter.ALL || query.search.isNotBlank()
 
     val photoIds: List<Long> get() = entries.mapNotNull { (it as? GridEntry.Photo)?.row?.id }.distinct()
+
+    /** The selected photos Reveal cannot show at all: what "Try again" and "Remove from Reveal" act on. */
+    val selectedUnavailable: List<Long>
+        get() = entries.mapNotNull { entry ->
+            (entry as? GridEntry.Photo)?.row?.takeIf { it.unavailable && it.id in selected }?.id
+        }.distinct()
 
     /** Sync conflict copies among the selected photos (ADR 0018): what "Delete conflict copies" removes. */
     val selectedConflictCopies: List<Long>
@@ -113,6 +125,16 @@ data class LibraryActions(
     val onApplyPreset: () -> Unit = {},
     /** Deletes the sync conflict copies of the selected photos, here and on the other devices. */
     val onDeleteConflictCopies: () -> Unit = {},
+    /** A tap on an unavailable photo: the explanation sheet. */
+    val onOpenUnavailable: (PhotoRow) -> Unit = {},
+    val onUnavailableDismiss: () -> Unit = {},
+    val onOpenSender: () -> Unit = {},
+    /** Re-checks access to these photos now. */
+    val onTryAgain: (List<Long>) -> Unit = {},
+    /** "Remove from Reveal" for these unavailable photos (asks first when any has edits). */
+    val onForget: (List<Long>) -> Unit = {},
+    val onForgetConfirm: () -> Unit = {},
+    val onForgetDismiss: () -> Unit = {},
     val onSettings: () -> Unit = {},
     val onGallery: () -> Unit = {},
     val onAbout: () -> Unit = {},

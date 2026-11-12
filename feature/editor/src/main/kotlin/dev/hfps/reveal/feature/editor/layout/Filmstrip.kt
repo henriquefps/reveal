@@ -45,6 +45,7 @@ import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import dev.hfps.reveal.data.db.PhotoRow
 import dev.hfps.reveal.data.model.PickFlag
+import dev.hfps.reveal.designsystem.components.UnavailablePlaceholder
 import dev.hfps.reveal.designsystem.icons.PhosphorFill
 import dev.hfps.reveal.designsystem.theme.RevealTheme
 import dev.hfps.reveal.feature.editor.EditorTags
@@ -122,8 +123,8 @@ private fun KeepCurrentVisible(state: LazyListState, index: Int) {
 private fun FilmstripCell(row: PhotoRow, current: Boolean, thumbs: FilmstripThumbs, onClick: () -> Unit) {
     val colors = RevealTheme.colors
     var image by remember(row.id, row.editTime) { mutableStateOf(thumbs.cached(row)) }
-    LaunchedEffect(row.id, row.editTime) {
-        if (image == null) image = thumbs.load(row)
+    LaunchedEffect(row.id, row.editTime, row.unavailable) {
+        if (image == null && !row.unavailable) image = thumbs.load(row)
     }
     val description = cellDescription(row)
     Box(
@@ -138,7 +139,11 @@ private fun FilmstripCell(row: PhotoRow, current: Boolean, thumbs: FilmstripThum
                 selected = current
             },
     ) {
-        image?.let {
+        if (row.unavailable) {
+            // Never an empty square (FIX/U): the same placeholder as the library grid, icon only at this size.
+            UnavailablePlaceholder(row.name, stringResource(R.string.editor_filmstrip_unavailable), compact = true)
+        }
+        image?.takeUnless { row.unavailable }?.let {
             Image(
                 bitmap = it,
                 contentDescription = null,
@@ -226,6 +231,7 @@ private fun CellBadges(row: PhotoRow) {
 private fun cellDescription(row: PhotoRow): String {
     val parts = buildList {
         add(row.name)
+        if (row.unavailable) add(stringResource(R.string.editor_filmstrip_unavailable))
         if (row.rating > 0) add(pluralStringResource(R.plurals.editor_filmstrip_stars, row.rating, row.rating))
         when (row.flag) {
             PickFlag.PICK -> add(stringResource(R.string.editor_filmstrip_picked))

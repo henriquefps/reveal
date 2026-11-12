@@ -7,6 +7,7 @@ import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dev.hfps.reveal.data.db.PhotoRow
 import dev.hfps.reveal.data.edit.EditClipboard
 import dev.hfps.reveal.data.edit.EditRepository
 import dev.hfps.reveal.data.edit.HistoryWriter
@@ -14,6 +15,7 @@ import dev.hfps.reveal.data.handoff.GalleryAccess
 import dev.hfps.reveal.data.library.AddSourceResult
 import dev.hfps.reveal.data.library.LibraryRepository
 import dev.hfps.reveal.data.library.SidecarOutcome
+import dev.hfps.reveal.data.model.PhotoFilter
 import dev.hfps.reveal.data.model.PhotoQuery
 import dev.hfps.reveal.data.model.PickFlag
 import dev.hfps.reveal.data.preset.PresetLibrary
@@ -67,6 +69,12 @@ sealed interface LibraryMessage {
     /** Edits reset on [count] photos. */
     data class Reset(val count: Int) : LibraryMessage
 
+    /** Photos [count] became readable again and [still] stay unavailable (after "Try again"). */
+    data class Rechecked(val readable: Int, val still: Int) : LibraryMessage
+
+    /** [count] unavailable photos forgotten ("Remove from Reveal"). */
+    data class Forgotten(val count: Int) : LibraryMessage
+
     /** A preset is being applied to [count] photos in the background. */
     data class PresetQueued(val name: String, val count: Int) : LibraryMessage
 }
@@ -77,6 +85,7 @@ sealed interface LibraryMessage {
  * and query survive process death (SavedStateHandle).
  */
 @OptIn(ExperimentalCoroutinesApi::class, FlowPreview::class)
+@Suppress("LongParameterList")
 @HiltViewModel
 class LibraryViewModel @Inject constructor(
     private val savedState: SavedStateHandle,
@@ -88,6 +97,7 @@ class LibraryViewModel @Inject constructor(
     private val sync: SyncRepository,
     private val presets: PresetRepository,
     private val gallery: GalleryAccess,
+    private val unavailable: UnavailableHelper,
 ) : ViewModel() {
     /**
      * Offer the "Photos and videos" permission now (ADR 0011 "Gallery access"): a photo the gallery shared can no
@@ -206,6 +216,28 @@ class LibraryViewModel @Inject constructor(
                             )
                         }
                     }
+            }
+        }
+        // The "Unavailable" filter exists only where the scope has such photos; opening a scope also re-checks the
+        // files marked unreadable (batch, in the background, rate-limited by the repository).
+        viewModelScope.launch {
+            _state.map { it.selection?.scope() }.distinctUntilChanged().collectLatest { scope ->
+                if (scope == null) {
+                    _state.update { it.copy(unavailableCount = 0) }
+                    return@collectLatest
+                }
+                launch { library.recheckAccess() }
+                library.unavailableCount(scope).collect { count ->
+                    _state.update { s ->
+                        // Nothing left to filter: fall back to every photo instead of an empty "no match" grid.
+                        val query = if (count == 0 && s.query.filter == PhotoFilter.UNAVAILABLE) {
+                            s.query.copy(filter = PhotoFilter.ALL)
+                        } else {
+                            s.query
+                        }
+                        s.copy(unavailableCount = count, query = query)
+                    }
+                }
             }
         }
         // Volumes coming and going (SD card, USB drive) re-check the sources and index what came back.
@@ -346,6 +378,61 @@ class LibraryViewModel @Inject constructor(
 
     /** Rates or flags one photo (the viewer). */
     fun rateOne(photoId: Long, rating: Int) = act(listOf(photoId)) { ids -> library.setRating(ids, rating) }
+
+    // ------------------------------------------------------------------ unavailable photos (FIX/U)
+
+    /** A tap on an unavailable photo: explains why and what to do. */
+    fun explain(row: PhotoRow) {
+        viewModelScope.launch {
+            unavailable.info(row.id)?.let { info -> _state.update { it.copy(unavailableInfo = info) } }
+        }
+    }
+
+    fun dismissUnavailable() = _state.update { it.copy(unavailableInfo = null) }
+
+    fun openSender() {
+        _state.value.unavailableInfo?.let(unavailable::openApp)
+    }
+
+    /** Re-checks access to [ids] now (not rate limited) and says what changed. */
+    fun tryAgain(ids: List<Long>) {
+        if (ids.isEmpty()) return
+        viewModelScope.launch {
+            library.recheckAccess(ids, force = true)
+            _state.update { it.copy(unavailableInfo = null) }
+            val scope = _state.value.selection?.scope() ?: return@launch
+            val still = library.photoList(PhotoQuery(scope = scope, filter = PhotoFilter.UNAVAILABLE))
+                .mapTo(HashSet()) { it.id }.count { it in ids }
+            messages.send(LibraryMessage.Rechecked((ids.size - still).coerceAtLeast(0), still))
+        }
+    }
+
+    /** "Remove from Reveal": forgets [ids] at once, or asks first when any has edits (they go too). */
+    fun forget(ids: List<Long>) {
+        if (ids.isEmpty()) return
+        viewModelScope.launch {
+            val edited = library.editedCount(ids)
+            if (edited == 0) {
+                doForget(ids)
+            } else {
+                _state.update { it.copy(forgetPrompt = ForgetPrompt(ids, edited), unavailableInfo = null) }
+            }
+        }
+    }
+
+    fun confirmForget() {
+        val prompt = _state.value.forgetPrompt ?: return
+        _state.update { it.copy(forgetPrompt = null) }
+        viewModelScope.launch { doForget(prompt.ids) }
+    }
+
+    fun dismissForget() = _state.update { it.copy(forgetPrompt = null) }
+
+    private suspend fun doForget(ids: List<Long>) {
+        library.forget(ids)
+        _state.update { s -> s.copy(selected = s.selected - ids.toSet(), unavailableInfo = null, forgetPrompt = null) }
+        messages.send(LibraryMessage.Forgotten(ids.size))
+    }
 
     fun removeSelected() {
         val ids = _state.value.selected.toList()

@@ -405,6 +405,24 @@ private fun SelectionOverflow(state: LibraryUiState, actions: LibraryActions, wi
                 open = false
                 actions.onRemovePhotos()
             }
+            if (state.selectedUnavailable.isNotEmpty()) {
+                TaggedMenuItem(
+                    PhosphorRegular.ArrowsClockwise,
+                    stringResource(R.string.library_unavailable_try_again),
+                    UnavailableTags.SELECTION_TRY_AGAIN,
+                ) {
+                    open = false
+                    actions.onTryAgain(state.selectedUnavailable)
+                }
+                TaggedMenuItem(
+                    PhosphorRegular.ImageBroken,
+                    stringResource(R.string.library_unavailable_remove),
+                    UnavailableTags.SELECTION_REMOVE,
+                ) {
+                    open = false
+                    actions.onForget(state.selectedUnavailable)
+                }
+            }
             if (state.selectedConflictCopies.isNotEmpty()) {
                 TaggedMenuItem(
                     PhosphorRegular.GitBranch,
@@ -495,7 +513,7 @@ private fun GridPane(
     val source = state.currentSource
     Column(Modifier.fillMaxSize()) {
         source?.let { SourceBanner(it) }
-        if (state.photoCount > 0 || state.filtered) FilterRow(state.query, actions)
+        if (state.photoCount > 0 || state.filtered) FilterRow(state.query, state.unavailableCount, actions)
         Box(Modifier.weight(1f).fillMaxWidth()) {
             val selection = state.selection
             when {
@@ -529,7 +547,7 @@ private fun GridPane(
                     entries = state.entries,
                     selected = state.selected,
                     thumbnails = thumbnails,
-                    onOpen = actions.onOpen,
+                    onOpen = { row -> if (row.unavailable) actions.onOpenUnavailable(row) else actions.onOpen(row) },
                     onSelectionChange = actions.onSelectionChange,
                     onDraw = onGridDraw,
                 )
@@ -606,7 +624,7 @@ private fun BannerText(text: String, tint: Color) {
 }
 
 @Composable
-private fun FilterRow(query: PhotoQuery, actions: LibraryActions) {
+private fun FilterRow(query: PhotoQuery, unavailable: Int, actions: LibraryActions) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -619,6 +637,16 @@ private fun FilterRow(query: PhotoQuery, actions: LibraryActions) {
         RevealChip(stringResource(R.string.library_filter_all), query.filter == PhotoFilter.ALL, {
             set(PhotoFilter.ALL)
         })
+        // Only where the scope has photos Reveal cannot show; right after "All" so it is not missed.
+        if (unavailable > 0 || query.filter == PhotoFilter.UNAVAILABLE) {
+            RevealChip(
+                stringResource(R.string.library_filter_unavailable),
+                query.filter == PhotoFilter.UNAVAILABLE,
+                { set(PhotoFilter.UNAVAILABLE) },
+                icon = PhosphorRegular.ImageBroken,
+                modifier = Modifier.testTag(UnavailableTags.CHIP),
+            )
+        }
         RevealChip(stringResource(R.string.library_filter_edited), query.filter == PhotoFilter.EDITED, {
             set(PhotoFilter.EDITED)
         })

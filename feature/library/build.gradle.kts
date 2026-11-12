@@ -11,5 +11,6 @@ dependencies {
     implementation(projects.core.image)
     implementation(projects.core.pipeline)
     implementation(projects.core.data)
+    implementation(projects.core.sync)
     implementation(projects.feature.export)
 }

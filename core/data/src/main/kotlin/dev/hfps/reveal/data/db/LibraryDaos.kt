@@ -36,7 +36,21 @@ data class PhotoRow(
     /** Hand-off photos only: when another app sent it and the sender's title (ADR 0011). */
     @ColumnInfo(name = "handoff_at") val handoffAt: Long? = null,
     @ColumnInfo(name = "handoff_title") val handoffTitle: String? = null,
-)
+    /** 0 for a photo's first version; a later one is a virtual copy (a sync conflict copy when [conflict]). */
+    @ColumnInfo(name = "version_position") val versionPosition: Int = 0,
+    val conflict: Boolean = false,
+    /** The device whose losing change a conflict copy keeps (ADR 0017), null otherwise. */
+    @ColumnInfo(name = "copy_device") val copyDevice: String? = null,
+    /** The sync server can serve the original (ADR 0018 "Cloud states"). */
+    @ColumnInfo(name = "cloud_original") val cloudOriginal: Boolean = false,
+    /** The sync server holds a smart preview of it. */
+    @ColumnInfo(name = "cloud_preview") val cloudPreview: Boolean = false,
+    /** The photo lives only on the sync server (the Server source): no file on this device. */
+    val remote: Boolean = false,
+) {
+    /** The grid's key: the photo for its first version, the version for a copy (two cells of one photo). */
+    val gridKey: Any get() = if (versionPosition == 0) id else "v$versionId"
+}
 
 /** What the incremental walk compares a listed file with. */
 data class IndexedFile(
@@ -103,6 +117,9 @@ interface SourceDao {
     @Query("UPDATE sources SET state = :state, volume_name = COALESCE(:volumeName, volume_name) WHERE id = :id")
     suspend fun setState(id: Long, state: SourceState, volumeName: String?)
 
+    @Query("UPDATE sources SET backup = :backup WHERE id = :id")
+    suspend fun setBackup(id: Long, backup: Boolean)
+
     @Query("UPDATE sources SET indexed_at = :time WHERE id = :id")
     suspend fun setIndexed(id: Long, time: Long)
 
@@ -113,7 +130,12 @@ interface SourceDao {
 @Dao
 @Suppress("TooManyFunctions", "LongParameterList")
 interface PhotoDao {
-    @RawQuery(observedEntities = [PhotoEntity::class, VersionEntity::class, RecipeEntity::class])
+    @RawQuery(
+        observedEntities = [
+            PhotoEntity::class, VersionEntity::class, RecipeEntity::class, PhotoCloudEntity::class,
+            SourceEntity::class,
+        ],
+    )
     fun observeRows(query: SupportSQLiteQuery): Flow<List<PhotoRow>>
 
     @RawQuery

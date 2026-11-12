@@ -9,11 +9,14 @@ import dev.hfps.image.ImageInput
 import dev.hfps.image.format.ImageKind
 import dev.hfps.image.preview.FirstImageLoader
 import dev.hfps.image.proxy.ProxyBuilder
+import dev.hfps.image.proxy.ProxySource
 import dev.hfps.image.proxy.ProxyStats
 import dev.hfps.image.proxy.ProxyStep
 import dev.hfps.image.raw.RawDecoder
 import dev.hfps.image.source.CancelToken
 import dev.hfps.image.source.CancelledException
+import dev.hfps.image.source.SourceInputStream
+import dev.hfps.image.source.readRange
 import dev.hfps.reveal.pipeline.PipelineInput
 import dev.hfps.reveal.pipeline.gl.GlesRequirementException
 import dev.hfps.reveal.pipeline.input.BitmapTileSource
@@ -24,6 +27,7 @@ import dev.hfps.reveal.pipeline.input.TileSource
 import dev.hfps.reveal.pipeline.input.UnsupportedCameraException
 import dev.hfps.reveal.pipeline.input.withLens
 import dev.hfps.reveal.pipeline.optics.LensProfile
+import dev.hfps.reveal.pipeline.preview.SmartPreviewCodec
 import java.io.FileNotFoundException
 import java.io.IOException
 
@@ -104,7 +108,13 @@ class PhotoOpener(private val resolver: ContentResolver) {
         val name = displayName(uri)
         val image = openInput(uri, name)
         return try {
-            image.use { decode(it, name, proxyLongEdge, previewLongEdge, cancel, onEvent) }
+            image.use {
+                if (isSmartPreview(it)) {
+                    openSmartPreview(it, name, onEvent)
+                } else {
+                    decode(it, name, proxyLongEdge, previewLongEdge, cancel, onEvent)
+                }
+            }
         } catch (e: CancelledException) {
             throw e
         } catch (e: OpenException) {
@@ -177,6 +187,34 @@ class PhotoOpener(private val resolver: ContentResolver) {
         }
     }
 
+    private fun isSmartPreview(image: ImageInput): Boolean = runCatching {
+        image.withSource { SmartPreviewCodec.isSmartPreview(it.readRange(0, SMART_HEAD)) }
+    }.getOrDefault(false)
+
+    /**
+     * A smart preview (ADR 0018): the editor's input stored at about 2560 px, used when the original is out of reach.
+     * Its display JPEG is the instant preview; there is no full resolution behind it (zoom stops at the preview).
+     */
+    private fun openSmartPreview(image: ImageInput, name: String, onEvent: (OpenEvent) -> Unit): OpenedPhoto {
+        val start = System.currentTimeMillis()
+        val decoded = image.withSource { source ->
+            SmartPreviewCodec.decode(SourceInputStream(source))
+        }
+        onEvent(OpenEvent.Identified(name, decoded.input.isRaw))
+        if (decoded.jpeg.isNotEmpty()) {
+            BitmapFactory.decodeByteArray(decoded.jpeg, 0, decoded.jpeg.size)?.let { onEvent(OpenEvent.Preview(it)) }
+        }
+        val input = decoded.input
+        val millis = System.currentTimeMillis() - start
+        return OpenedPhoto(
+            name = name,
+            input = input,
+            fullWidth = input.width,
+            fullHeight = input.height,
+            stats = ProxyStats(ProxySource.SMART_PREVIEW, input.width, input.height, millis, 0, millis),
+        )
+    }
+
     private fun decode(
         image: ImageInput,
         name: String,
@@ -217,6 +255,8 @@ class PhotoOpener(private val resolver: ContentResolver) {
     }
 
     companion object {
+        private const val SMART_HEAD = 8
+
         /** Standard images above this many pixels are read in regions instead of decoded whole (160 MB at ARGB). */
         const val FULL_DECODE_MAX_PIXELS: Long = 40_000_000L
 

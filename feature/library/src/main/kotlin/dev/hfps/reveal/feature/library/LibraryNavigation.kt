@@ -135,6 +135,7 @@ fun LibraryScreen(
             onPasteConfirm = viewModel::confirmPaste,
             onPasteDismiss = viewModel::dismissPaste,
             onResetEdits = viewModel::resetEdits,
+            onDeleteConflictCopies = viewModel::deleteConflictCopies,
             onExport = {
                 scope.launch {
                     val versions = viewModel.selectedVersions()

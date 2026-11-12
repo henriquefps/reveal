@@ -1,6 +1,6 @@
 # ADR 0017: Sync protocol and the `reveal-sync` server
 
-Status: accepted (MS/1, server only; the app side is the next task). Date: 2026-11-11.
+Status: accepted (MS/1 server; MS/2 app side, ADR 0018, added `GET /v1/devices`). Date: 2026-11-11.
 
 ## Context
 
@@ -171,7 +171,7 @@ single `Range` requests, `HEAD` for size). `404 not_found` when the server does 
 
 ### Chunked, resumable uploads
 
-1. `POST /v1/uploads` `{"sha256", "size", "kind", "fingerprint" (originals: required)}`.
+1. `POST /v1/uploads` `{"sha256", "size", "kind", "fingerprint" (originals: required; previews: must be absent)}`.
    - The blob exists already: `200 {"status": "exists"}` (an original also registers its fingerprint).
    - Otherwise `201 {"status": "created", "uploadId", "offset": 0, "chunkSize", "expiresAt"}`. If this device already
      has an unfinished upload of the same blob, that one is returned (`200 {"status": "resume", …, "offset"}`), so a
@@ -230,6 +230,7 @@ stored (moving blobs is a manual step, see the server's README).
 | --- | --- | --- |
 | `GET /v1/health` | none | `{"status": "ok", "version", "api": 1, "counts": {"devices", "photos", "versions", "blobs", "nasFiles", "pendingUploads"}}`: counts only, no names or paths |
 | `GET /v1/server` | key | `{"serverId", "serverName", "version", "api": 1, "deviceId", "limits": {…}, "storageConfigured": bool}` |
+| `GET /v1/devices` | key | `{"devices": [{"id", "name", "platform"}]}`: the paired devices that are not revoked (no keys), so a client can name the device of a conflict copy (`deviceId`) |
 | `POST /v1/pair` | pairing token | see "Pairing" |
 
 ## Limits

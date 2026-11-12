@@ -34,8 +34,13 @@ data class SourceEntity(
     val writable: Boolean,
     @ColumnInfo(name = "added_at") val addedAt: Long,
     @ColumnInfo(name = "indexed_at") val indexedAt: Long? = null,
-    /** [SourceKind.HANDOFF] is the single "Opened from other apps" source (ADR 0011); every other row is a folder. */
+    /**
+     * [SourceKind.HANDOFF] is the single "Opened from other apps" source (ADR 0011), [SourceKind.SERVER] the single
+     * source of photos only the sync server has (ADR 0018); every other row is a folder.
+     */
     @ColumnInfo(defaultValue = "FOLDER") val kind: SourceKind = SourceKind.FOLDER,
+    /** Folders: back up the originals of photos the server does not have yet (ADR 0018 "Originals backup"). */
+    @ColumnInfo(defaultValue = "1") val backup: Boolean = true,
 )
 
 /**
@@ -168,6 +173,12 @@ data class VersionEntity(
     val position: Int = 0,
     val name: String? = null,
     @ColumnInfo(name = "created_at") val createdAt: Long,
+    /**
+     * A sync conflict copy (ADR 0017 "Pushing and the conflict rule"): the UUID of the version whose losing state this
+     * is, null for an ordinary version. [copyDevice] names the device that made the losing change.
+     */
+    @ColumnInfo(name = "copy_of") val copyOf: String? = null,
+    @ColumnInfo(name = "copy_device") val copyDevice: String? = null,
 )
 
 /** The committed recipe of a version (ADR 0003 JSON, `v` inside). Absent row = the default recipe. */

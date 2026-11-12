@@ -79,3 +79,11 @@ crosshair-simple
 perspective
 line-segments
 film-strip
+cloud
+cloud-check
+cloud-arrow-up
+cloud-slash
+qr-code
+link-simple
+hard-drives
+git-branch

@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- Sync with the owner's own server (ADR 0017, ADR 0018). -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
+    <application android:networkSecurityConfig="@xml/network_security_config">
+        <!-- Originals and smart previews of photos only the sync server has, read by range (ADR 0018). Private:
+             the library, the viewer, the editor and the export open these URIs inside the app. -->
+        <provider
+            android:name="dev.hfps.reveal.sync.files.ServerFilesProvider"
+            android:authorities="${applicationId}.sync"
+            android:exported="false"
+            android:grantUriPermissions="false" />
+    </application>
+</manifest>

@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
@@ -21,38 +22,62 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.ViewModel
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewModelScope
 import androidx.navigation.NavGraphBuilder
 import androidx.navigation.compose.composable
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dev.hfps.reveal.data.export.Authorship
 import dev.hfps.reveal.data.export.ExportPreferences
 import dev.hfps.reveal.designsystem.components.Eyebrow
+import dev.hfps.reveal.designsystem.components.RevealListRow
 import dev.hfps.reveal.designsystem.components.RevealScaffold
 import dev.hfps.reveal.designsystem.components.RevealTopBar
+import dev.hfps.reveal.designsystem.icons.PhosphorRegular
 import dev.hfps.reveal.designsystem.theme.RevealTheme
+import dev.hfps.reveal.feature.settings.sync.SyncSettingsScreen
+import dev.hfps.reveal.sync.SyncRepository
 import javax.inject.Inject
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
 
-/** Settings: for now the author and copyright that exports write (docs/adr/0009, "Metadata"). */
+/** Settings: sync (ADR 0018) and the author and copyright that exports write (docs/adr/0009, "Metadata"). */
 @HiltViewModel
-class SettingsViewModel @Inject constructor(private val preferences: ExportPreferences) : ViewModel() {
+class SettingsViewModel @Inject constructor(private val preferences: ExportPreferences, sync: SyncRepository) :
+    ViewModel() {
     val authorship: Authorship get() = preferences.authorship.value
+
+    /** The paired server's name (or address), null when not paired. */
+    val server: StateFlow<String?> = sync.account
+        .map { account -> account?.let { it.serverName.ifBlank { it.url } } }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, sync.account.value?.let { it.serverName.ifBlank { it.url } })
 
     fun setAuthorship(value: Authorship) = preferences.setAuthorship(value)
 }
 
-/** Adds the settings destination. */
-fun NavGraphBuilder.settingsScreen(onBack: () -> Unit) {
-    composable<SettingsRoute> { SettingsScreen(onBack = onBack) }
+/** Adds the settings destinations (Settings and its Sync screen). */
+fun NavGraphBuilder.settingsScreen(onBack: () -> Unit, onSync: () -> Unit) {
+    composable<SettingsRoute> { SettingsScreen(onBack = onBack, onSync = onSync) }
+    composable<SyncSettingsRoute> { SyncSettingsScreen(onBack = onBack) }
 }
 
 /** Test tags of the settings screen. */
 object SettingsTags {
     const val AUTHOR = "settings_author"
     const val COPYRIGHT = "settings_copyright"
+    const val SYNC = "settings_sync"
 }
 
 @Composable
-fun SettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier, viewModel: SettingsViewModel = hiltViewModel()) {
+fun SettingsScreen(
+    onBack: () -> Unit,
+    onSync: () -> Unit,
+    modifier: Modifier = Modifier,
+    viewModel: SettingsViewModel = hiltViewModel(),
+) {
+    val server by viewModel.server.collectAsStateWithLifecycle()
     var author by rememberSaveable { mutableStateOf(viewModel.authorship.author) }
     var copyright by rememberSaveable { mutableStateOf(viewModel.authorship.copyright) }
     fun save() = viewModel.setAuthorship(Authorship(author, copyright))
@@ -69,6 +94,8 @@ fun SettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier, viewModel:
         },
         onBack = onBack,
         modifier = modifier,
+        server = server,
+        onSync = onSync,
     )
 }
 
@@ -81,6 +108,8 @@ fun SettingsContent(
     onCopyright: (String) -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
+    server: String? = null,
+    onSync: () -> Unit = {},
 ) {
     RevealScaffold(
         modifier = modifier,
@@ -93,18 +122,43 @@ fun SettingsContent(
         },
     ) {
         Column(
-            modifier = Modifier.verticalScroll(rememberScrollState()).padding(16.dp),
+            modifier = Modifier.verticalScroll(rememberScrollState()).padding(vertical = 16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Eyebrow(stringResource(R.string.settings_export))
-            Field(stringResource(R.string.settings_author), author, onAuthor, SettingsTags.AUTHOR)
-            Field(stringResource(R.string.settings_copyright), copyright, onCopyright, SettingsTags.COPYRIGHT)
-            Text(
-                stringResource(R.string.settings_authorship_note),
-                style = RevealTheme.typography.ui,
-                color = RevealTheme.colors.mutedForeground,
+            Eyebrow(stringResource(R.string.settings_section_sync), Modifier.padding(horizontal = 16.dp))
+            RevealListRow(
+                title = stringResource(R.string.settings_sync),
+                subtitle = server?.let { stringResource(R.string.settings_sync_on, it) }
+                    ?: stringResource(R.string.settings_sync_off),
+                icon = if (server == null) PhosphorRegular.Cloud else PhosphorRegular.CloudCheck,
+                onClick = onSync,
+                modifier = Modifier.testTag(SettingsTags.SYNC),
+                trailing = {
+                    Icon(PhosphorRegular.CaretRight, null, tint = RevealTheme.colors.mutedForeground)
+                },
             )
+            ExportSection(author, copyright, onAuthor, onCopyright)
         }
+    }
+}
+
+@Composable
+private fun ExportSection(
+    author: String,
+    copyright: String,
+    onAuthor: (String) -> Unit,
+    onCopyright: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(modifier.padding(horizontal = 16.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Eyebrow(stringResource(R.string.settings_export))
+        Field(stringResource(R.string.settings_author), author, onAuthor, SettingsTags.AUTHOR)
+        Field(stringResource(R.string.settings_copyright), copyright, onCopyright, SettingsTags.COPYRIGHT)
+        Text(
+            stringResource(R.string.settings_authorship_note),
+            style = RevealTheme.typography.ui,
+            color = RevealTheme.colors.mutedForeground,
+        )
     }
 }
 

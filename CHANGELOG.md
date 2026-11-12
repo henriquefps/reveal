@@ -13,6 +13,17 @@ transform and Upright), every drag at the display rate on the phone, and a real 
 ships in the repository; the app side of sync comes in 0.4.0.
 
 ### Added
+- Sync with your own `reveal-sync` server (Settings → Sync): pair by scanning the server's QR code or pasting its
+  link (the device key stays in the Android Keystore). Edits with their history, virtual copies, ratings, flags,
+  labels and the export author follow you to every paired device, in the background and within seconds while the app
+  is open; edits made elsewhere show up in the open editor. When two devices change the same photo, the other edit is
+  kept as a "Conflict" copy next to it in the library (Delete conflict copies in the selection menu).
+- The library's Server entry shows the photos only your server has (its NAS folders and other devices' photos);
+  they open in the viewer and the editor straight from the server, read in pieces and cached. Cells show where an
+  original is: also on the server, only on the server, or only as a smart preview.
+- Smart previews: a developable copy (about 2560 px) of photos only this device has, so other devices can edit them;
+  the editor opens it when the original is out of reach. Originals backup: photos only this device has are uploaded
+  once (Wi-Fi only by default, per folder), resuming where they stopped; photos the server already has never are.
 - `reveal-sync`, the self-hosted sync server (`sync-server/`, ADR 0017): pairs devices by QR code (one revocable key
   per device), syncs edits, ratings and virtual copies with a change feed that never loses an edit in a conflict (the
   other edit becomes a virtual copy), backs up originals and smart previews with resumable uploads, and indexes NAS

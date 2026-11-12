@@ -23,6 +23,7 @@ import dev.hfps.reveal.data.library.SidecarSync
 import dev.hfps.reveal.data.model.SourceKind
 import dev.hfps.reveal.data.storage.SafDocumentTree
 import dev.hfps.reveal.data.storage.StorageVolumes
+import dev.hfps.reveal.data.sync.ServerTree
 import dev.hfps.reveal.data.thumb.EditedThumbnails
 import dev.hfps.reveal.data.thumb.GpuEditedThumbnails
 import dev.hfps.reveal.data.thumb.PhotoImages
@@ -44,10 +45,8 @@ annotation class DataScope
 object DataModule {
     @Provides
     @Singleton
-    @Suppress("SpreadOperator") // once, at startup
     fun provideDatabase(@ApplicationContext context: Context): RevealDatabase =
-        Room.databaseBuilder(context, RevealDatabase::class.java, RevealDatabase.NAME)
-            .addMigrations(*RevealDatabase.MIGRATIONS)
+        RevealDatabase.configure(Room.databaseBuilder(context, RevealDatabase::class.java, RevealDatabase.NAME))
             .build()
 
     @Provides
@@ -65,10 +64,10 @@ object DataModule {
     @Provides
     @Singleton
     fun provideTrees(@ApplicationContext context: Context): DocumentTreeFactory = DocumentTreeFactory { source ->
-        if (source.kind == SourceKind.HANDOFF) {
-            HandoffTree(context.contentResolver)
-        } else {
-            SafDocumentTree(context.contentResolver, source.treeUri.toUri(), source.rootDocumentId)
+        when (source.kind) {
+            SourceKind.HANDOFF -> HandoffTree(context.contentResolver)
+            SourceKind.SERVER -> ServerTree(context.contentResolver, ServerTree.authority(context.packageName))
+            SourceKind.FOLDER -> SafDocumentTree(context.contentResolver, source.treeUri.toUri(), source.rootDocumentId)
         }
     }
 
@@ -99,7 +98,15 @@ object DataModule {
         trees: DocumentTreeFactory,
         sidecars: SidecarSync,
         @DataScope scope: CoroutineScope,
-    ): LibraryRepository = LibraryRepository(context.contentResolver, database, volumes, trees, sidecars, scope)
+    ): LibraryRepository = LibraryRepository(
+        context.contentResolver,
+        database,
+        volumes,
+        trees,
+        sidecars,
+        scope,
+        serverAuthority = ServerTree.authority(context.packageName),
+    )
 
     @Provides
     @Singleton

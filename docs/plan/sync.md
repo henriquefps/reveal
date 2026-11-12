@@ -3,8 +3,10 @@
 Status: **MS (0.4.0), after M2** (owner, 2026-11-11). Built: the content fingerprint and stable ids (see "Prepare
 now") and, in MS/1, the **server** (`sync-server/`, `reveal-sync`): the protocol is
 [ADR 0017](../adr/0017-sync-protocol.md) (HTTP API `/v1`, pairing, change feed, conflicts, chunked uploads, NAS
-indexing; OpenAPI in `sync-server/api/openapi.yaml`), self-hosting in `sync-server/README.md`. Next (MS/2): the app
-side (sync job, Settings screen, cloud states in the library).
+indexing; OpenAPI in `sync-server/api/openapi.yaml`), self-hosting in `sync-server/README.md`; in MS/2 the **app
+side** ([ADR 0018](../adr/0018-sync-in-the-app.md): `:core:sync`, Settings → Sync with QR pairing, the sync jobs,
+conflict copies in the library, the Server source with NAS photos read by range, smart previews and the originals
+backup).
 
 ## What the owner wants
 

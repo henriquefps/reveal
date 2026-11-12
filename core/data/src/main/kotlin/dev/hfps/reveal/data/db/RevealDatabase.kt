@@ -17,6 +17,10 @@ import androidx.sqlite.db.SupportSQLiteDatabase
  * | 3 | Hand-offs (ADR 0011): `sources.kind`, `photos.handoff_at`, `photos.handoff_title` |
  * | 4 | Identity (ADR 0006): `photo_files.fingerprint` |
  * | 5 | Stable ids for sync (ADR 0006): `photos.uuid`, `versions.uuid`, backfilled ([MIGRATION_4_5]) |
+ * | 6 | Sync (ADR 0018): `sync_records`, `photo_cloud`, `sync_uploads`, `sync_aliases`, `sync_inbox`, |
+ * |   | `versions.copy_of` / `copy_device`, `sources.backup` |
+ *
+ * Open it with [configure] (migrations and the sync triggers of [SyncTriggers]).
  */
 @Database(
     entities = [
@@ -29,12 +33,17 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         HistoryEntity::class,
         HistoryCursorEntity::class,
         CacheEntryEntity::class,
+        SyncRecordEntity::class,
+        PhotoCloudEntity::class,
+        SyncUploadEntity::class,
+        SyncAliasEntity::class,
+        SyncInboxEntity::class,
     ],
     version = RevealDatabase.VERSION,
     exportSchema = true,
     autoMigrations = [
         AutoMigration(from = 1, to = 2), AutoMigration(from = 2, to = 3),
-        AutoMigration(from = 3, to = 4),
+        AutoMigration(from = 3, to = 4), AutoMigration(from = 5, to = 6),
     ],
 )
 abstract class RevealDatabase : RoomDatabase() {
@@ -48,12 +57,19 @@ abstract class RevealDatabase : RoomDatabase() {
 
     abstract fun cacheDao(): CacheDao
 
+    abstract fun syncDao(): SyncDao
+
     companion object {
         const val NAME = "reveal.db"
-        const val VERSION = 5
+        const val VERSION = 6
 
         /** Every manual migration, for `Room.databaseBuilder(...).addMigrations(*MIGRATIONS)`. */
         val MIGRATIONS: Array<Migration> get() = arrayOf(MIGRATION_4_5)
+
+        /** The app's database setup for any builder (the app, tests): migrations and the sync triggers. */
+        @Suppress("SpreadOperator") // once per open
+        fun configure(builder: Builder<RevealDatabase>): Builder<RevealDatabase> =
+            builder.addMigrations(*MIGRATIONS).addCallback(SyncTriggers.callback)
 
         /**
          * A random version 4 UUID in SQL (lower-case, dashes), one per evaluated row: the backfill of existing rows.

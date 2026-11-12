@@ -57,10 +57,10 @@ sealed interface LensProfile {
  */
 class SonyLensProfile(
     override val name: String,
-    private val distortionKnots: IntArray?,
-    private val redKnots: IntArray?,
-    private val blueKnots: IntArray?,
-    private val vignettingKnots: IntArray?,
+    internal val distortionKnots: IntArray?,
+    internal val redKnots: IntArray?,
+    internal val blueKnots: IntArray?,
+    internal val vignettingKnots: IntArray?,
 ) : LensProfile {
     override val source: LensProfileSource = LensProfileSource.EMBEDDED
     override val hasDistortion: Boolean = distortionKnots != null

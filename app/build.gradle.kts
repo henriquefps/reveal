@@ -64,6 +64,7 @@ dependencies {
     implementation(projects.core.pipeline)
     implementation(projects.core.ml)
     implementation(projects.core.data)
+    implementation(projects.core.sync)
     implementation(projects.feature.library)
     implementation(projects.feature.editor)
     implementation(projects.feature.export)
@@ -82,4 +83,5 @@ dependencies {
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
     androidTestImplementation(libs.truth)
     androidTestImplementation(libs.androidx.work.runtime.ktx)
+    androidTestImplementation(libs.androidx.room.runtime)
 }

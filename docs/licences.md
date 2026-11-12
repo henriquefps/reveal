@@ -18,6 +18,9 @@ with its licence; add a row in the same change that adds the dependency, and mir
 | Guava ListenableFuture (via AndroidX) | transitive | Apache-2.0 |
 | JSR-305 annotations (`com.google.code.findbugs:jsr305`, via Dagger) | transitive | BSD-3-Clause |
 | JetBrains annotations, JSpecify (via Kotlin / AndroidX) | transitive | Apache-2.0 |
+| OkHttp 5 (`okhttp`, `okhttp-android`) and Okio (sync client, ADR 0018) | `gradle/libs.versions.toml` | Apache-2.0 |
+| AndroidX CameraX (`camera-camera2`, `camera-lifecycle`, `camera-view`; the pairing QR scanner) and `lifecycle-process` | `gradle/libs.versions.toml` | Apache-2.0 |
+| ZXing core (`com.google.zxing:core`, QR decoding without Play services) | `gradle/libs.versions.toml` | Apache-2.0 |
 | LibRaw 0.22.3 (vendored in `core/image/src/main/cpp/third_party/LibRaw`, statically linked into `librevealimage.so`) | tag and sha256 in its `VENDORED.md` | LGPL-2.1 (chosen from LGPL-2.1 / CDDL-1.0) |
 | dcraw (inside LibRaw, non-restricted parts), DCB demosaic and FBDD (J. Gozdz), X3F library (R. Karlsson), Adobe DNG SDK 1.4 pieces | via LibRaw, see its `COPYRIGHT` | dcraw: public-domain-style; DCB/FBDD, X3F: BSD-style; DNG SDK: MIT |
 | Hoard image core (`dev.hfps.image`, ported, same owner) | ADR 0004 | AGPL-3.0-or-later |

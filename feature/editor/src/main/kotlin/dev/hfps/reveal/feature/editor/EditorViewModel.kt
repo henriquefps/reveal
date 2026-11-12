@@ -20,6 +20,7 @@ import dev.hfps.reveal.data.edit.EditRepository
 import dev.hfps.reveal.data.edit.HistoryOp
 import dev.hfps.reveal.data.edit.HistoryWriter
 import dev.hfps.reveal.data.library.LibraryRepository
+import dev.hfps.reveal.data.sync.RemoteEdits
 import dev.hfps.reveal.feature.editor.edit.AsShot
 import dev.hfps.reveal.feature.editor.edit.OpticsAnalysis
 import dev.hfps.reveal.feature.editor.edit.RecipeControls
@@ -74,6 +75,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.flow.updateAndGet
 import kotlinx.coroutines.launch
@@ -137,6 +139,9 @@ class EditorViewModel @Inject constructor(
 
     init {
         open()
+        versionId?.let { id ->
+            viewModelScope.launch { RemoteEdits.versions.filter { it == id }.collect { reloadRemote(id) } }
+        }
         viewModelScope.launch {
             val history = storedHistory.await()
             val recipe = history.current
@@ -778,6 +783,18 @@ class EditorViewModel @Inject constructor(
         }
         _state.update { it.copy(edit = it.edit.copy(history = history)) }
         versionId?.let { writer.write(HistoryOp.Commit(it, history.current, history.entries[history.cursor].label)) }
+    }
+
+    /**
+     * Another device changed this version and sync applied it (ADR 0018 "Live updates"): show its history, unless a
+     * slider is held (that change commits on top, and the server settles the conflict).
+     */
+    private suspend fun reloadRemote(versionId: Long) {
+        writer.flush()
+        val stored = edits.load(versionId)
+        val edit = _state.value.edit
+        if (edit.recipe != edit.committed || stored == edit.history) return
+        show(stored.current, stored)
     }
 
     /** Shows [recipe] as both the working and the committed recipe of [history]. */

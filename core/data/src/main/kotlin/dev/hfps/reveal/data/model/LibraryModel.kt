@@ -1,7 +1,10 @@
 package dev.hfps.reveal.data.model
 
-/** What a source is: an added SAF folder, or the one source that collects photos other apps hand to Reveal. */
-enum class SourceKind { FOLDER, HANDOFF }
+/**
+ * What a source is: an added SAF folder, the one source that collects photos other apps hand to Reveal, or the one
+ * source of photos only the sync server has (its NAS folders, other devices' photos; ADR 0018).
+ */
+enum class SourceKind { FOLDER, HANDOFF, SERVER }
 
 /** Whether a source (a SAF folder) can be read right now. Stored by name in `sources.state`. */
 enum class SourceState {
@@ -55,7 +58,7 @@ enum class PhotoSort { CAPTURE_NEWEST, CAPTURE_OLDEST, NAME }
 
 /** Which photos a grid shows. */
 sealed interface LibraryScope {
-    /** Every photo of every source. */
+    /** Every photo of every source on this device (the Server source has its own entry). */
     data object All : LibraryScope
 
     /** Photos opened in the editor recently, most recent first. */
@@ -63,6 +66,9 @@ sealed interface LibraryScope {
 
     /** Photos other apps handed to Reveal (ADR 0011), most recent hand-off first. */
     data object FromApps : LibraryScope
+
+    /** Photos only the sync server has: its NAS folders and other devices' photos (ADR 0018). */
+    data object Server : LibraryScope
 
     /** One added folder. */
     data class Source(val sourceId: Long) : LibraryScope

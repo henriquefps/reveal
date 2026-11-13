@@ -122,22 +122,19 @@ class AiMasks @Inject constructor(private val service: MaskService) {
                     val out = service.mask(request(component, kind, image, key0))
                     masks[key] = AiMask(out.mask.width, out.mask.height, out.mask.values)
                     setState(key, AiMaskState.READY)
-                    Log.i(
-                        TAG,
-                        "${out.model} $kind ${if (out.fromCache) "cached" else "${out.modelMs.roundToInt()} ms"}",
-                    )
-                    waiting.remove(key)?.let { callbacks -> synchronized(callbacks) { callbacks.toList() } }
-                        ?.forEach { it() }
+                    val took = if (out.fromCache) "cached" else "${out.modelMs.roundToInt()} ms"
+                    log { Log.i(TAG, "${out.model} $kind $took") }
+                    notifyWaiting(key)
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: IllegalArgumentException) {
                     // A model that does not exist here, or cannot make the kind (MaskService.resolve).
-                    Log.w(TAG, "AI mask unavailable: ${e.message}")
+                    log { Log.w(TAG, "AI mask unavailable: ${e.message}") }
                     setState(key, AiMaskState.UNAVAILABLE)
                     notifyWaiting(key)
                 } catch (@Suppress("TooGenericExceptionCaught") e: Throwable) {
                     // Includes OutOfMemoryError and the runtime's errors: the mask stays, the editor says so.
-                    Log.w(TAG, "AI mask failed", e)
+                    log { Log.w(TAG, "AI mask failed", e) }
                     setState(key, AiMaskState.FAILED)
                     notifyWaiting(key)
                 }
@@ -190,5 +187,10 @@ class AiMasks @Inject constructor(private val service: MaskService) {
             )
 
         private const val MIN_EPS = 1e-6f
+
+        /** Logging never breaks the masks (plain JVM tests have no `android.util.Log`). */
+        private inline fun log(write: () -> Unit) {
+            runCatching(write)
+        }
     }
 }

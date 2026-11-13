@@ -52,7 +52,7 @@ internal fun MaskCreateSheet(
                 CreateTarget.NewMask -> stringResource(R.string.masks_new)
                 is CreateTarget.AddTo -> stringResource(MaskLabels.combine(target.op))
             }
-            Eyebrow(title, Modifier.padding(horizontal = 24.dp, vertical = 8.dp))
+            Eyebrow(title, Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
             MaskChoices(aiKinds, onPick)
         }
     }

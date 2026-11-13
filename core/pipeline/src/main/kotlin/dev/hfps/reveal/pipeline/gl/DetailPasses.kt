@@ -1,8 +1,12 @@
+@file:Suppress("MagicNumber")
+
 package dev.hfps.reveal.pipeline.gl
 
 import android.opengl.GLES30
 import dev.hfps.reveal.pipeline.cpu.DetailParams
 import dev.hfps.reveal.pipeline.cpu.EffectsParams
+import kotlin.math.max
+import kotlin.math.min
 
 /** A colour target: a texture and the framebuffer that renders into it. */
 internal data class GlTarget(val texture: Int, val fbo: Int)
@@ -25,6 +29,11 @@ internal data class GlTarget(val texture: Int, val fbo: Int)
  * - With a `half` target the final pass writes the 2 x 2 means (the working texture's level 1) at half resolution, for
  *   views that never read level 0.
  *
+ * - **Partial runs** (M4/P, docs/adr/0022 "Speed"): when the develop output changed only in a rectangle (a brush stroke
+ *   in progress), `dirty` redraws every stage only in that rectangle grown by the operators' reach, each pass
+ *   scissored (outside it every input is unchanged, so the kept values are still exact), and the final pass there too
+ *   unless `finalFull` (the Effects grid changed: dehaze's atmospheric light is global).
+ *
  * [invalidate] drops everything (a new develop output). The tiled renderer runs every pass, the levels fused.
  */
 internal class DetailPasses {
@@ -45,6 +54,9 @@ internal class DetailPasses {
     private var chromaResult: GlTarget? = null
     private var blurKey: Any? = null
     private var discard = false
+
+    /** The rectangle (region pixels x0, y0, x1, y1, exclusive) a partial [run] redraws; null = everything. */
+    private var scissor: IntArray? = null
 
     private val locations = HashMap<Int, HashMap<String, Int>>()
 
@@ -157,10 +169,24 @@ internal class DetailPasses {
         cache: Boolean = false,
         half: GlTarget? = null,
         masks: Any? = null,
+        dirty: IntArray? = null,
+        reach: Int = 0,
+        finalFull: Boolean = false,
     ): GlTarget {
         if (!cache) invalidate()
-        // The preview's targets are the region exactly: each pass may drop the old contents (GlSupport.discardColour).
-        discard = cache
+        val part = if (cache && dirty != null) grow(dirty, reach, region) else null
+        if (part != null) {
+            // Every active stage again, in the grown rectangle only.
+            lumKey = FORCE
+            chainKey = FORCE
+            binned = false
+            chromaKey = FORCE
+            blurKey = FORCE
+        }
+        scissor = part
+        // The preview's targets are the region exactly: each pass may drop the old contents (GlSupport.discardColour),
+        // except in a partial run, which keeps everything outside its rectangle.
+        discard = cache && part == null
         lastPasses = 0
         val chain = if (cache) t.chain else null
         // Masks (docs/adr/0022): [masks] identifies their coverage and adjustments (null without masks); per-pixel
@@ -212,6 +238,7 @@ internal class DetailPasses {
         }
         // 4. The final pass.
         val toHalf = half != null && !showMask
+        if (finalFull) scissor = null
         val out = (if (toHalf) half else output) ?: if (lum == t.lumA) t.lumB else t.lumA
         var flags = 0
         if (lum != null) flags = flags or DetailShaders.FLAG_LUM
@@ -247,15 +274,25 @@ internal class DetailPasses {
         bindUnit(UNIT_HALF_S, chromaResult?.texture ?: lab)
         bindUnit(UNIT_HALF_D, if (chromaResult != null) t.halfD.texture else lab)
         if (toHalf) {
-            draw(out.fbo, lab, (region.width + 1) / 2, (region.height + 1) / 2)
+            draw(out.fbo, lab, (region.width + 1) / 2, (region.height + 1) / 2, half = true)
         } else {
             draw(out.fbo, lab, region.width, region.height)
         }
         lastPasses++
+        scissor = null
+        GLES30.glDisable(GLES30.GL_SCISSOR_TEST)
         profile?.invoke("detail final pass")
         GlSupport.checkError("detail passes")
         return out
     }
+
+    /** [dirty] grown by [reach] on every side, within [region] (region pixels). */
+    private fun grow(dirty: IntArray, reach: Int, region: Region): IntArray = intArrayOf(
+        max(dirty[0] - reach, 0),
+        max(dirty[1] - reach, 0),
+        min(dirty[2] + reach, region.width),
+        min(dirty[3] + reach, region.height),
+    )
 
     /** The luminance levels into [t]'s luminance targets; returns the one holding `(L, acc)` of the last level. */
     private fun lumLevels(p: DetailParams, lab: Int, t: Targets, region: Region, localNoise: Boolean): GlTarget {
@@ -344,13 +381,17 @@ internal class DetailPasses {
         region: Region,
         levels: List<Int>,
     ) {
+        val part = scissor
         for ((k, i) in levels.withIndex()) {
             GLES30.glUseProgram(lumHProgram)
             bindRegion(lumHProgram, region)
             GLES30.glUniform1i(uniform(lumHProgram, "uStep"), p.lumStep[i])
             GLES30.glUniform1f(uniform(lumHProgram, "uEdge"), p.lumEdge[i])
             GLES30.glUniform1i(uniform(lumHProgram, "uChannel"), if (k == 0) 0 else (k - 1) % CHANNELS)
+            // A partial run: the horizontal axis (one target shared by every level) wider by the vertical axis's taps.
+            scissor = part?.let { grow(it, TAPS * p.lumStep[i], region) }
             draw(t.lumH.fbo, if (k == 0) lab else chain((k - 1) / CHANNELS).texture, region.width, region.height)
+            scissor = part
             GLES30.glUseProgram(lumChainProgram)
             bindRegion(lumChainProgram, region)
             GLES30.glUniform1i(uniform(lumChainProgram, "uStep"), p.lumStep[i])
@@ -372,12 +413,16 @@ internal class DetailPasses {
             GLES30.glUseProgram(downProgram)
             bindRegion(downProgram, region)
             GLES30.glUniform2i(uniform(downProgram, "uHalfOrigin"), half.x, half.y)
-            draw(t.halfD.fbo, lab, half.width, half.height)
+            draw(t.halfD.fbo, lab, half.width, half.height, half = true)
             lastPasses++
             binned = true
         }
         var src = t.halfD
         var dst = t.halfA
+        // The levels alternate between two targets, each holding another level outside a partial run's rectangle:
+        // they run whole (a quarter of the pixels; the binned copy above is exact outside the rectangle).
+        val part = scissor
+        scissor = null
         GLES30.glUseProgram(chromaProgram)
         GLES30.glUniform2i(uniform(chromaProgram, "uOrigin"), half.x, half.y)
         GLES30.glUniform2i(uniform(chromaProgram, "uImage"), half.imageWidth, half.imageHeight)
@@ -388,11 +433,12 @@ internal class DetailPasses {
             if (!p.chromaLevelActive(i)) continue
             GLES30.glUniform1i(step, p.chromaStep[i])
             GLES30.glUniform3f(chroma, p.chromaRange, p.chromaMix[i], p.chromaLuma)
-            draw(dst.fbo, src.texture, half.width, half.height)
+            draw(dst.fbo, src.texture, half.width, half.height, half = true)
             lastPasses++
             src = dst
             dst = if (src == t.halfA) t.halfB else t.halfA
         }
+        scissor = part
         return src
     }
 
@@ -431,12 +477,24 @@ internal class DetailPasses {
         GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
     }
 
-    private fun draw(fbo: Int, input: Int, width: Int, height: Int, keep: Boolean = false) {
+    private fun draw(fbo: Int, input: Int, width: Int, height: Int, keep: Boolean = false, half: Boolean = false) {
         GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, input)
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, fbo)
         if (discard && !keep) GlSupport.discardColour()
         GLES30.glViewport(0, 0, width, height)
+        val r = scissor
+        if (r == null) {
+            GLES30.glDisable(GLES30.GL_SCISSOR_TEST)
+        } else {
+            // Half-resolution texel J covers region pixels 2J and 2J + 1 (the preview's region starts at 0, 0).
+            val x0 = if (half) r[0] / HALF else r[0]
+            val y0 = if (half) r[1] / HALF else r[1]
+            val x1 = if (half) (r[2] + 1) / HALF else r[2]
+            val y1 = if (half) (r[3] + 1) / HALF else r[3]
+            GLES30.glEnable(GLES30.GL_SCISSOR_TEST)
+            GLES30.glScissor(x0, y0, x1 - x0, y1 - y0)
+        }
         GLES30.glDrawArrays(GLES30.GL_TRIANGLES, 0, FULLSCREEN_VERTICES)
     }
 
@@ -482,6 +540,13 @@ internal class DetailPasses {
     }
 
     private companion object {
+        /** Steps a level's 5-tap axis reaches on each side; pixels per half-resolution texel. */
+        const val TAPS = 2
+        const val HALF = 2
+
+        /** A cache key no parameters equal: forces a stage to run again. */
+        val FORCE = Any()
+
         // BLUR_FRAG's uMode.
         const val BLUR_LUM = 0
         const val BLUR_LAB = 1

@@ -194,7 +194,7 @@ class TiledRenderer private constructor(requestedTile: Int, private val share: E
         val prepass = plan.prepassTiles(grid)
         val tiles = plan.outputTiles()
         val prepassRuns = (if (params.highlights != null) 1 else 0) + (if (guided(params)) 1 else 0) +
-            (if (params.effects.gridActive) 1 else 0)
+            (if (params.effects.gridActive) 1 else 0) + (if (autoMask()) 1 else 0)
         val steps = tiles.size + prepassRuns * prepass.size
         var done = 0
         fun step() {
@@ -293,6 +293,7 @@ class TiledRenderer private constructor(requestedTile: Int, private val share: E
             light.guideFinish()
         }
         val t2 = System.nanoTime()
+        autoMaskColours(params, prepass, uploader, step, reconstruct)
         if (params.effects.gridActive) {
             val g = checkNotNull(light.grid)
             effects.allocate(g.width, g.height)
@@ -355,6 +356,32 @@ class TiledRenderer private constructor(requestedTile: Int, private val share: E
             masks = if (maskPlan != null) maskRegions else null,
         ).texture
     }
+
+    /**
+     * 1c'. The auto-mask dabs' reference colours (docs/adr/0022 "Brush auto-mask"): the pre-local image of every
+     * pre-pass tile, sampled under the dab centres it holds (a dab's centre may lie in another tile).
+     */
+    private fun autoMaskColours(
+        params: DevelopParams,
+        prepass: List<PixelBox>,
+        uploader: Uploader,
+        step: () -> Unit,
+        reconstruct: Boolean,
+    ) {
+        val plan = maskPlan ?: return
+        if (!autoMask()) return
+        for ((i, tile) in prepass.withIndex()) {
+            step()
+            uploader.upload(tile)
+            scenePass(tile, reconstruct)
+            maskPasses.bind(params, off = true)
+            developPass(tile, guided(params), labOut = true)
+            maskPasses.dabColours(plan, workTex, tile.x, tile.y, tile.width, tile.height, reset = i == 0)
+        }
+    }
+
+    /** True when the current masks have auto-mask brush dabs (their reference colours need a pre-pass). */
+    private fun autoMask(): Boolean = maskPlan?.brushes?.any { it.autoMask } == true
 
     /** Local highlights/shadows need the guide too (docs/adr/0022). */
     private fun guided(params: DevelopParams): Boolean =
@@ -436,6 +463,10 @@ class TiledRenderer private constructor(requestedTile: Int, private val share: E
             develop = if (params.effects.gridActive) params.withoutDetail() else null,
             vignette = params.vignette,
             masks = if (params.masks.active && params.effects.gridActive) maskEpoch else 0,
+            // The auto-mask dabs' colours: the pre-local image (everything before slot 11 but the masks) and the dabs.
+            auto = maskPlan?.takeIf { autoMask() }?.let { plan ->
+                params.withoutDetail().withoutMasks() to plan.brushes.map { it.data.toList() }
+            },
         )
         if (key != gridKey || zoomSource !== source) {
             if (light.grid?.let { it.width != source.width || it.height != source.height } != false) {
@@ -549,6 +580,7 @@ class TiledRenderer private constructor(requestedTile: Int, private val share: E
         val develop: DevelopParams?,
         val vignette: Any?,
         val masks: Int,
+        val auto: Any? = null,
     )
 
     /** The parameters and whole-image size the scene pass uses (vignetting is centred on the whole image). */

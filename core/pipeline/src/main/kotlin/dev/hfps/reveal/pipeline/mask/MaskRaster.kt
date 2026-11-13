@@ -32,11 +32,15 @@ object MaskRaster {
     data class Region(val x: Int, val y: Int, val width: Int, val height: Int)
 
     /**
-     * The brush raster of [dabs] over [region] (float16 as stored): per pixel, in dab order, painting
-     * `cov += (1 - cov) a`, erasing `cov *= 1 - a`, `a = flow (1 - sstep(inner, 1, d / r))`.
+     * The brush raster of [dabs] over [region] (float16 as stored): per pixel, in dab order, with
+     * `a = flow (1 - sstep(inner, 1, d / r)) w` and `D` the dab's density, painting `cov += max(0, D - cov) a`, erasing
+     * `cov *= 1 - a D` (D = 1: M4/A's `cov += (1 - cov) a`, `cov *= 1 - a`). `w` is 1, or for an auto-mask dab the
+     * colour similarity [autoWeight] of the pixel's pre-local colour ([pre], `(L, a, b, 0)` per pixel of the region) to
+     * the dab's reference colour ([colours], 3 floats per dab: [dabColours]).
      */
     @Suppress("NestedBlockDepth")
-    fun brush(dabs: Dabs, region: Region): FloatArray {
+    fun brush(dabs: Dabs, region: Region, pre: FloatArray? = null, colours: FloatArray? = null): FloatArray {
+        require(!dabs.autoMask || (pre != null && colours != null)) { "an auto-mask brush needs the pre-local image" }
         val w = region.width
         val out = FloatArray(w * region.height)
         val box = IntArray(4)
@@ -48,12 +52,20 @@ object MaskRaster {
             val x1 = min(box[2], region.x + w - 1)
             val y1 = min(box[3], region.y + region.height - 1)
             val o = k * Dabs.DAB_FLOATS
+            val density = d[o + 6]
+            val auto = d[o + 7] != 0f
             for (y in y0..y1) {
                 for (x in x0..x1) {
-                    val a = dabAlpha(d, o, x, y)
-                    if (a <= 0f) continue
                     val i = (y - region.y) * w + (x - region.x)
-                    out[i] = if (d[o + 5] != 0f) out[i] * (1f - a) else out[i] + (1f - out[i]) * a
+                    var a = dabAlpha(d, o, x, y)
+                    // An auto-mask dab: weighted by the colour similarity (not evaluated where the dab is 0).
+                    if (auto && a > 0f) a *= autoWeight(checkNotNull(pre), i, checkNotNull(colours), k)
+                    if (a <= 0f) continue
+                    out[i] = if (d[o + 5] != 0f) {
+                        out[i] * (1f - a * density)
+                    } else {
+                        out[i] + max(0f, density - out[i]) * a
+                    }
                 }
             }
         }
@@ -61,13 +73,44 @@ object MaskRaster {
         return out
     }
 
-    /** One dab's alpha at pixel ([x], [y]) (GLSL `dabAlpha`). */
+    /** One dab's alpha at pixel ([x], [y]) before the auto-mask weight (GLSL, `BRUSH_FRAG`). */
     fun dabAlpha(d: FloatArray, o: Int, x: Int, y: Int): Float {
         val dx = x + 0.5f - d[o]
         val dy = y + 0.5f - d[o + 1]
         val r = sqrt(dx * dx + dy * dy) / d[o + 2]
         return d[o + 4] * (1f - MaskMath.sstep(d[o + 3], 1f, r))
     }
+
+    /**
+     * The auto-mask weight (GLSL `autoWeight`): `1 - sstep(AUTO_NEAR, AUTO_FAR, dist)`, `dist` the range masks' OkLab
+     * distance between the pre-local pixel [i] of [pre] and dab [k]'s reference colour in [colours].
+     */
+    fun autoWeight(pre: FloatArray, i: Int, colours: FloatArray, k: Int): Float {
+        val dl = pre[i * 4] - colours[k * 3]
+        val da = pre[i * 4 + 1] - colours[k * 3 + 1]
+        val db = pre[i * 4 + 2] - colours[k * 3 + 2]
+        val dist = sqrt(COLOUR_L_WEIGHT * dl * dl + da * da + db * db)
+        return 1f - MaskMath.sstep(Dabs.AUTO_NEAR, Dabs.AUTO_FAR, dist)
+    }
+
+    /**
+     * Each dab's reference colour for the auto-mask: the pre-local pixel under its centre, `(clamp(floor(cx)),
+     * clamp(floor(cy)))` in the image (GLSL `DAB_COLOURS_FRAG`); [pre] covers the whole [width] x [height] image. Dabs
+     * that are not auto-mask get 0.
+     */
+    fun dabColours(dabs: Dabs, pre: FloatArray, width: Int, height: Int): FloatArray {
+        val out = FloatArray(dabs.size * 3)
+        for (k in 0 until dabs.size) {
+            val o = k * Dabs.DAB_FLOATS
+            if (dabs.data[o + 7] == 0f) continue
+            val i = dabCentre(dabs.data[o + 1], height) * width + dabCentre(dabs.data[o], width)
+            for (c in 0 until 3) out[k * 3 + c] = pre[i * 4 + c]
+        }
+        return out
+    }
+
+    /** The pixel under a dab centre coordinate [v] in an axis of [size] pixels. */
+    fun dabCentre(v: Float, size: Int): Int = floor(v).toInt().coerceIn(0, size - 1)
 
     /**
      * The coverage of every mask of [plan] over [region] (one array per coverage slot, float16 as stored). [pre] is the
@@ -80,9 +123,21 @@ object MaskRaster {
         region: Region,
         pre: FloatArray?,
         ai: List<AiMask?> = plan.ai.map { null },
-        brushes: List<FloatArray> = plan.brushes.map { brush(it, region) },
+        brushes: List<FloatArray> = plan.brushes.map { dabs ->
+            if (dabs.autoMask) {
+                require(
+                    region.x == 0 && region.y == 0 && region.width == plan.imageWidth &&
+                        region.height == plan.imageHeight,
+                ) {
+                    "an auto-mask brush on the CPU needs the whole image"
+                }
+                brush(dabs, region, pre, dabColours(dabs, checkNotNull(pre), plan.imageWidth, plan.imageHeight))
+            } else {
+                brush(dabs, region)
+            }
+        },
     ): List<FloatArray> {
-        require(!plan.needsPre || pre != null) { "a range mask needs the pre-local image" }
+        require(!plan.needsPre || pre != null) { "a range mask or an auto-mask brush needs the pre-local image" }
         val n = region.width * region.height
         return plan.components.map { components ->
             val out = FloatArray(n)

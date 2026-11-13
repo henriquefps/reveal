@@ -13,6 +13,7 @@ import dev.hfps.reveal.pipeline.recipe.MaskComponent
 import dev.hfps.reveal.pipeline.recipe.MaskOp
 import dev.hfps.reveal.pipeline.recipe.Recipe
 import dev.hfps.reveal.pipeline.recipe.StrokePoint
+import dev.hfps.reveal.pipeline.recipe.StrokePressure
 import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.sin
@@ -56,6 +57,35 @@ object MaskFixtures {
 
     private fun mask(id: String, adjustments: LocalAdjustments, vararg components: MaskComponent) =
         Mask(id, name = id, adjustments = adjustments, components = components.toList())
+
+    /** A brush with M4/B's options: density, pressure on the flow (then on the size), an auto-mask stroke. */
+    val brushOptions: Mask = Mask(
+        "j",
+        name = "j",
+        adjustments = LocalAdjustments(exposure = 0.8f, saturation = 30f),
+        components = listOf(
+            MaskComponent.Brush(
+                strokes = listOf(
+                    BrushStroke.raw(
+                        scribble(80),
+                        size = 0.12f,
+                        feather = 40f,
+                        flow = 80f,
+                        density = 60f,
+                        autoMask = true,
+                        pressure = StrokePressure.FLOW,
+                    ),
+                    BrushStroke.raw(
+                        scribble(30, 0.5),
+                        size = 0.05f,
+                        erase = true,
+                        density = 50f,
+                        pressure = StrokePressure.SIZE,
+                    ),
+                ),
+            ),
+        ),
+    )
 
     /** One recipe per component type and per local adjustment, plus combinations; (name, recipe). */
     val recipes: List<Pair<String, Recipe>> = listOf(
@@ -128,6 +158,8 @@ object MaskFixtures {
                 ),
             ),
         ),
+        // M4/B's brush options (docs/adr/0022): density, pressure on the flow or the size, the auto-mask.
+        "brush density pressure auto-mask" to Recipe(masks = listOf(brushOptions)),
         "five masks" to fiveMasks(brush),
     )
 

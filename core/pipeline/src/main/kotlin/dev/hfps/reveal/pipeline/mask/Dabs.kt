@@ -3,6 +3,7 @@
 package dev.hfps.reveal.pipeline.mask
 
 import dev.hfps.reveal.pipeline.recipe.BrushStroke
+import dev.hfps.reveal.pipeline.recipe.StrokePressure
 import kotlin.math.ceil
 import kotlin.math.floor
 import kotlin.math.max
@@ -12,12 +13,17 @@ import kotlin.math.sqrt
 /**
  * The dabs of a brush component for an image of [imageWidth] x [imageHeight] pixels (docs/adr/0022, "Brush raster"), in
  * that image's pixels: [DAB_FLOATS] floats per dab, in painting order: centre x, centre y, radius, inner radius
- * fraction (`1 - feather`), flow (0..1, pressure included), erase (1) or paint (0). The CPU reference and the GPU
- * evaluate exactly these numbers.
+ * fraction (`1 - feather`), flow (0..1, pressure included), erase (1) or paint (0), density (0..1, the most coverage a
+ * painting dab moves towards; an erasing dab removes at most that share), auto-mask (1: the dab only covers pixels of
+ * a colour close to the one under its centre, [AUTO_NEAR] / [AUTO_FAR]). The CPU reference and the GPU evaluate exactly
+ * these numbers.
  */
 class Dabs(val imageWidth: Int, val imageHeight: Int, val data: FloatArray) {
     /** Number of dabs. */
     val size: Int get() = data.size / DAB_FLOATS
+
+    /** True when some dab is an auto-mask dab (the layer then reads the pre-local image). */
+    val autoMask: Boolean by lazy { (0 until size).any { data[it * DAB_FLOATS + 7] != 0f } }
 
     /**
      * Index of the first dab that differs from [other] (both for the same image size), i.e. the length of the common
@@ -48,7 +54,15 @@ class Dabs(val imageWidth: Int, val imageHeight: Int, val data: FloatArray) {
     }
 
     companion object {
-        const val DAB_FLOATS: Int = 6
+        const val DAB_FLOATS: Int = 8
+
+        /**
+         * Auto-mask (docs/adr/0022 "Brush auto-mask"): a pixel whose pre-local OkLab colour lies within [AUTO_NEAR] of
+         * the colour under the dab's centre (the range masks' distance `sqrt(0.25 dL^2 + da^2 + db^2)`) takes the
+         * whole dab, beyond [AUTO_FAR] none, smoothstep between.
+         */
+        const val AUTO_NEAR: Float = 0.03f
+        const val AUTO_FAR: Float = 0.09f
 
         /** Dab spacing along the stroke as a fraction of the dab's diameter. */
         const val SPACING: Float = 0.15f
@@ -70,7 +84,7 @@ class Dabs(val imageWidth: Int, val imageHeight: Int, val data: FloatArray) {
          * diameter (at least [MIN_SPACING_PX]) of arc length, the pressure interpolated along each segment. Placement
          * only depends on the points before a dab, so appending points only appends dabs.
          */
-        @Suppress("LoopWithTooManyJumpStatements")
+        @Suppress("LoopWithTooManyJumpStatements", "CyclomaticComplexMethod")
         fun of(strokes: List<BrushStroke>, imageWidth: Int, imageHeight: Int): Dabs {
             val out = FloatArrayBuilder()
             val long = max(imageWidth, imageHeight).toFloat()
@@ -82,11 +96,16 @@ class Dabs(val imageWidth: Int, val imageHeight: Int, val data: FloatArray) {
                 val inner = 1f - (stroke.feather / PERCENT).coerceIn(0f, 1f)
                 val flow0 = (stroke.flow / PERCENT).coerceIn(0f, 1f)
                 val erase = if (stroke.erase) 1f else 0f
+                val density = (stroke.density / PERCENT).coerceIn(0f, 1f)
+                val auto = if (stroke.autoMask) 1f else 0f
+                val sizePressure = stroke.pressure != StrokePressure.FLOW
+                val flowPressure = stroke.pressure != StrokePressure.SIZE
+                fun radius(p: Float): Float = if (sizePressure) radius0 * pressure(p) else radius0
                 fun dab(x: Float, y: Float, p: Float) {
                     val k = pressure(p)
-                    out.add(x, y, radius0 * k, inner, flow0 * k, erase)
+                    out.add(x, y, radius(p), inner, if (flowPressure) flow0 * k else flow0, erase, density, auto)
                 }
-                fun spacing(p: Float): Float = max(SPACING * 2f * radius0 * pressure(p), MIN_SPACING_PX)
+                fun spacing(p: Float): Float = max(SPACING * 2f * radius(p), MIN_SPACING_PX)
                 var ax = points[0].x * imageWidth
                 var ay = points[0].y * imageHeight
                 var ap = points[0].pressure

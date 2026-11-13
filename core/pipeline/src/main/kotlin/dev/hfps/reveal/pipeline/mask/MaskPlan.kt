@@ -2,6 +2,7 @@
 
 package dev.hfps.reveal.pipeline.mask
 
+import dev.hfps.reveal.pipeline.recipe.BrushStroke
 import dev.hfps.reveal.pipeline.recipe.Mask
 import dev.hfps.reveal.pipeline.recipe.MaskComponent
 import dev.hfps.reveal.pipeline.recipe.MaskOp
@@ -24,8 +25,10 @@ class MaskPlan private constructor(
     val brushes: List<Dabs>,
     val ai: List<MaskComponent.Ai>,
 ) {
-    /** True when some component reads the image before local adjustments. */
-    val needsPre: Boolean get() = components.any { list -> list.any { it.type == TYPE_COLOUR || it.type == TYPE_LUMA } }
+    /** True when some component reads the image before local adjustments (a range, or an auto-mask brush). */
+    val needsPre: Boolean
+        get() = components.any { list -> list.any { it.type == TYPE_COLOUR || it.type == TYPE_LUMA } } ||
+            brushes.any { it.autoMask }
 
     /** Coverage layers (four masks each). */
     val layers: Int get() = (masks.size + SLOTS - 1) / SLOTS
@@ -54,18 +57,30 @@ class MaskPlan private constructor(
         private const val PERCENT = 100f
         private const val MIN_RADIUS = 1e-6f
 
-        /** True when [mask] has a colour or luminance range component (it reads the image before local adjustments). */
-        fun readsPre(mask: Mask): Boolean = mask.components.take(MAX_COMPONENTS).any {
-            it is MaskComponent.ColourRange || it is MaskComponent.LuminanceRange
+        /**
+         * True when [mask] has a colour or luminance range component or an auto-mask brush stroke (it reads the image
+         * before local adjustments).
+         */
+        fun readsPre(mask: Mask): Boolean = mask.components.take(MAX_COMPONENTS).any { c ->
+            c is MaskComponent.ColourRange || c is MaskComponent.LuminanceRange ||
+                (c is MaskComponent.Brush && c.strokes.any { it.autoMask })
         }
 
-        /** Packs [masks] (coverage slots in order) for an [imageWidth] x [imageHeight] image. */
-        fun of(masks: List<Mask>, imageWidth: Int, imageHeight: Int): MaskPlan {
+        /**
+         * Packs [masks] (coverage slots in order) for an [imageWidth] x [imageHeight] image; [dabsOf] makes a brush's
+         * dabs (the preview keeps them across frames: a stroke in progress then recomputes only its own).
+         */
+        fun of(
+            masks: List<Mask>,
+            imageWidth: Int,
+            imageHeight: Int,
+            dabsOf: (List<BrushStroke>) -> Dabs = { Dabs.of(it, imageWidth, imageHeight) },
+        ): MaskPlan {
             val brushes = ArrayList<Dabs>()
             val ai = ArrayList<MaskComponent.Ai>()
             val components = masks.map { mask ->
                 mask.components.take(MAX_COMPONENTS).map { c ->
-                    pack(c, imageWidth, imageHeight, brushes, ai)
+                    pack(c, imageWidth, imageHeight, brushes, ai, dabsOf)
                 }
             }
             return MaskPlan(imageWidth, imageHeight, masks, components, brushes, ai)
@@ -84,6 +99,7 @@ class MaskPlan private constructor(
             h: Int,
             brushes: MutableList<Dabs>,
             ai: MutableList<MaskComponent.Ai>,
+            dabsOf: (List<BrushStroke>) -> Dabs,
         ): PackedComponent {
             val d = FloatArray(DATA)
             val long = max(w, h).toFloat()
@@ -120,7 +136,7 @@ class MaskPlan private constructor(
                 }
 
                 is MaskComponent.Brush -> {
-                    brushes += Dabs.of(c.strokes, w, h)
+                    brushes += dabsOf(c.strokes)
                     PackedComponent(TYPE_BRUSH, op, c.invert, brushes.lastIndex, d)
                 }
 

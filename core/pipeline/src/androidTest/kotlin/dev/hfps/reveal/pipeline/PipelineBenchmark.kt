@@ -275,6 +275,7 @@ class PipelineBenchmark {
      * recipe's global exposure for comparison, then a stroke in progress: 5 points appended per frame to a fifth mask's
      * brush, each frame re-rasterising only the new dabs' bins (`REVEAL_BENCH masks ...`).
      */
+    @Suppress("LongMethod", "CyclomaticComplexMethod")
     @Test
     fun maskSliderDragAndBrushAppend(): Unit = runBlocking {
         val image = SyntheticImages.scene(WIDTH, HEIGHT)
@@ -298,15 +299,42 @@ class PipelineBenchmark {
         val drags: List<Pair<String, (Float) -> Recipe>> = listOf(
             "masks: global exposure (five masks on)" to
                 { t -> base.copy(light = base.light.copy(exposureEv = -1f + 2f * t)) },
+            // An auto-mask brush reads the pre-local image: a global drag re-rasterises its layer whole.
+            "masks: global exposure, an auto-mask brush too" to { t ->
+                base.copy(
+                    light = base.light.copy(exposureEv = -1f + 2f * t),
+                    masks = base.masks + Mask(
+                        "auto",
+                        adjustments = LocalAdjustments(saturation = 30f),
+                        components = listOf(
+                            MaskComponent.Brush(
+                                strokes = listOf(BrushStroke.raw(longStroke(0.6), size = 0.03f, autoMask = true)),
+                            ),
+                        ),
+                    ),
+                )
+            },
             "masks: drag a mask's exposure" to { t -> local { it.copy(exposure = -2f + 4f * t) } },
             "masks: drag a mask's clarity" to { t -> local { it.copy(clarity = -100f + 200f * t) } },
             "masks: drag a mask's noise" to { t -> local { it.copy(noise = 100f * t) } },
             "masks: off (same global recipe)" to { t ->
                 base.copy(masks = emptyList(), light = base.light.copy(exposureEv = -1f + 2f * t))
             },
+            // The floor of a drag that changes the develop output: the stages the masks switch on, on globally.
+            "masks: off, their Detail and Effects stages on globally (reference)" to { t ->
+                base.copy(
+                    masks = emptyList(),
+                    light = base.light.copy(exposureEv = -1f + 2f * t),
+                    detail = Detail(nrLuminance = 10f, sharpenAmount = 10f),
+                    effects = Effects(texture = 10f, clarity = 10f, dehaze = 10f),
+                )
+            },
         )
         val profile = InstrumentationRegistry.getArguments().getString("profile") == "true"
+        // `-e only <text>`: only the drags whose name contains it ("stroke": only the stroke).
+        val only = InstrumentationRegistry.getArguments().getString("only")
         for ((name, at) in drags) {
+            if (only != null && !name.contains(only)) continue
             coolDown()
             if (profile) {
                 profileDrag(name, image, frame, MaskFixtures.context, at)
@@ -315,19 +343,58 @@ class PipelineBenchmark {
             }
         }
         // A stroke in progress on a sixth mask: points appended every frame.
+        if (only != null && !"stroke".contains(only)) return@runBlocking
         val renderer = GpuDevelopRenderer.create()
         try {
             renderer.setInput(image, PROXY_SCALE)
             renderer.setMaskSource(MaskFixtures.source, "fixture")
             val drawing = longStroke(seed = 1.7)
+            var auto = false
             fun withStroke(n: Int) = base.copy(
                 masks = base.masks + Mask(
                     "stroke",
                     adjustments = LocalAdjustments(exposure = 0.5f),
                     components = listOf(
-                        MaskComponent.Brush(strokes = listOf(BrushStroke.raw(drawing.take(n), size = 0.03f))),
+                        MaskComponent.Brush(
+                            strokes = listOf(BrushStroke.raw(drawing.take(n), size = 0.03f, autoMask = auto)),
+                        ),
                     ),
                 ),
+            )
+            // The same stroke with the auto-mask on (docs/adr/0022 "Brush auto-mask"), pipelined.
+            auto = true
+            val autoGrowth = (2..drawing.size step APPEND_POINTS).map { withStroke(it) }
+            warmUp(renderer, autoGrowth.take(WARMUP_STROKE), frame)
+            renderer.benchmark(listOf(withStroke(2)), frame)
+            val autoPiped = renderer.benchmarkPipelined(autoGrowth, frame)
+            val ag = autoPiped.gpuMs.sorted()
+            Log.i(
+                TAG,
+                "masks: auto-mask stroke append pipelined (${autoGrowth.size} frames): " +
+                    "${"%.2f".format(autoPiped.msPerFrame)} ms per frame" +
+                    if (ag.isEmpty()) "" else ", GPU per frame p50 ${p(ag, 50)}, p95 ${p(ag, 95)}",
+            )
+            auto = false
+            // As the display runs it: the stroke growing frame after frame, two frames in flight (the target).
+            val growth = (2..drawing.size step APPEND_POINTS).map { withStroke(it) }
+            warmUp(renderer, growth.take(WARMUP_STROKE), frame)
+            renderer.benchmark(listOf(withStroke(2)), frame)
+            val piped = renderer.benchmarkPipelined(growth, frame)
+            val pg = piped.gpuMs.sorted()
+            val pipedMet = piped.msPerFrame <= TARGET_P50 && (
+                pg.isEmpty() || (
+                    p(pg, 50).replace(',', '.')
+                        .toFloat() <= TARGET_P50 && p(pg, 95).replace(',', '.').toFloat() <= STROKE_P95
+                    )
+                )
+            Log.i(
+                TAG,
+                "masks: stroke append pipelined (${growth.size} frames, six masks): ${"%.2f".format(
+                    piped.msPerFrame,
+                )} " +
+                    "ms per frame" + (if (pg.isEmpty()) "" else ", GPU per frame p50 ${p(pg, 50)}, p95 ${p(pg, 95)}") +
+                    (if (pipedMet) " [target met]" else " [target MISSED]") +
+                    "; partial updates ${renderer.partialUpdates}",
             )
             renderer.benchmark(listOf(withStroke(2)), frame)
             val frames = ArrayList<Float>()
@@ -512,6 +579,10 @@ class PipelineBenchmark {
         const val MS_PER_S = 1000L
         const val STROKE_POINTS = 1200
         const val APPEND_POINTS = 5
+        const val WARMUP_STROKE = 20
+
+        /** A stroke's frame target at p95 (the brief: p50 <= 8.3, p95 <= 16 ms). */
+        const val STROKE_P95 = 16f
 
         val ALL_DETAIL = Detail(nrLuminance = 40f, nrColour = 50f, sharpenAmount = 50f, sharpenMasking = 30f)
         val ALL_EFFECTS = Effects(texture = 30f, clarity = 25f, dehaze = 20f, vignetteAmount = -30f, grainAmount = 25f)

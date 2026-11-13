@@ -1,3 +1,5 @@
+@file:Suppress("MagicNumber")
+
 package dev.hfps.reveal.pipeline.gl
 
 import android.opengl.GLES30
@@ -114,15 +116,29 @@ internal class EffectsPasses {
     }
 
     /**
+     * The preview after a change of the develop output inside [rect] (image pixels x0, y0, x1, y1, exclusive) of
+     * [lab] (the whole image): the row segments of the cells it touches, then [finish].
+     */
+    fun update(lab: Int, rect: IntArray) {
+        val g = checkNotNull(grid)
+        val x0 = rect[0] / g.cell * g.cell
+        val x1 = minOf((rect[2] + g.cell - 1) / g.cell * g.cell, g.width)
+        rows(lab, x0, rect[1], x1 - x0, rect[3] - rect[1], wholeImage = true)
+        finish()
+    }
+
+    /**
      * Tiled pre-pass: the row segments of the image region ([x], [y], [width] x [height]) whose OkLab develop output
      * [lab] holds at (0, 0). [x] and [width] must be multiples of the cell size (or reach the image's right edge).
      */
-    fun rows(lab: Int, x: Int, y: Int, width: Int, height: Int) {
+    fun rows(lab: Int, x: Int, y: Int, width: Int, height: Int, wholeImage: Boolean = false) {
         val g = checkNotNull(grid)
         require(x % g.cell == 0 && (width % g.cell == 0 || x + width == g.width)) { "region not aligned to cells" }
         GLES30.glUseProgram(rowsProgram)
         GLES30.glUniform4i(GLES30.glGetUniformLocation(rowsProgram, "uGrid"), g.cell, g.width, g.height, 0)
-        GLES30.glUniform2i(GLES30.glGetUniformLocation(rowsProgram, "uOrigin"), x, y)
+        // [wholeImage]: [lab] holds the whole image (the preview's partial update, docs/adr/0022 "Speed").
+        val origin = GLES30.glGetUniformLocation(rowsProgram, "uOrigin")
+        if (wholeImage) GLES30.glUniform2i(origin, 0, 0) else GLES30.glUniform2i(origin, x, y)
         bind(0, lab)
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, rows.fbo)
         val gx0 = x / g.cell

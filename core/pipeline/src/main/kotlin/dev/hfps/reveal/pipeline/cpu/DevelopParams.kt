@@ -75,6 +75,32 @@ class DevelopParams(
         vignette = vignette, defringe = defringe, masks = masks.withoutDetail(),
     )
 
+    /**
+     * The same parameters with the masks' shapes left out (their adjustments kept): what the develop pass depends on
+     * besides the coverage (docs/adr/0022 "Speed (M4/P)").
+     */
+    fun withoutMaskShapes(): DevelopParams = if (!masks.active) {
+        this
+    } else {
+        DevelopParams(
+            wbMultipliers, cameraToWorking, exposureGain, profile, highlights, tone, colour, curve, tools, detail,
+            effects, vignette, defringe, masks.withoutShapes(),
+        )
+    }
+
+    /**
+     * The same parameters with every mask's adjustments and amount left out (ids, shapes, the global values and what
+     * the masks switch on kept): two parameters equal here differ only inside the masks whose vectors differ.
+     */
+    fun withoutMaskAdjustments(): DevelopParams = if (!masks.active) {
+        this
+    } else {
+        DevelopParams(
+            wbMultipliers, cameraToWorking, exposureGain, profile, highlights, tone, colour, curve, tools, detail,
+            effects, vignette, defringe, masks.withoutAdjustments(),
+        )
+    }
+
     /** The same parameters without masks: what the masks' pre-local image depends on (docs/adr/0022). */
     fun withoutMasks(): DevelopParams = if (!masks.active) {
         this

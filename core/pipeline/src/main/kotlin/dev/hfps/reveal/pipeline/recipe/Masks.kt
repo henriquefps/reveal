@@ -196,6 +196,11 @@ sealed class MaskComponent {
         @SerialName("kind") val kind: String = "",
         @SerialName("prompts") val prompts: List<MaskPoint> = emptyList(),
         @SerialName("refine") val refine: AiRefine? = null,
+        /**
+         * Interactive models (the subject): whether the automatic seeds (faces, body, saliency peaks) are used with
+         * the [prompts] (true) or the taps alone (false: a "subtract this object" component). M4/B, additive.
+         */
+        @SerialName("autoSeeds") val autoSeeds: Boolean = true,
     ) : MaskComponent() {
         companion object {
             const val TYPE: String = "ai"
@@ -249,7 +254,9 @@ data class AiRefine(@SerialName("radius") val radius: Float = 8f, @SerialName("e
  * M4/B (docs/adr/0022 "M4/B (editor)") added [density] (0..100, the most coverage the stroke paints towards: a painting
  * dab moves the coverage towards `density / 100` instead of 1, an erasing dab removes at most that share; 100 = the
  * M4/A behaviour) and [autoMask] (the brush's auto-mask: each dab is weighted by the colour similarity to the dab's
- * centre on the pre-local image, like the range masks). Both are additive: older strokes read 100 and false.
+ * centre on the pre-local image, like the range masks) and [pressure] (what pen pressure drives: [StrokePressure];
+ * the editor writes [StrokePressure.FLOW] or [StrokePressure.SIZE], strokes without the field keep M4/A's both). All
+ * three are additive: older strokes read 100, false and [StrokePressure.BOTH].
  */
 @Serializable
 data class BrushStroke(
@@ -260,6 +267,7 @@ data class BrushStroke(
     @SerialName("erase") val erase: Boolean = false,
     @SerialName("density") val density: Float = FULL,
     @SerialName("autoMask") val autoMask: Boolean = false,
+    @SerialName("pressure") val pressure: StrokePressure = StrokePressure.BOTH,
 ) {
     init {
         require(size.isFinite() && feather.isFinite() && flow.isFinite() && density.isFinite()) {
@@ -292,6 +300,7 @@ data class BrushStroke(
             aspect: Float = 1f,
             density: Float = FULL,
             autoMask: Boolean = false,
+            pressure: StrokePressure = StrokePressure.BOTH,
         ): BrushStroke = BrushStroke(
             StrokeCodec.encode(StrokeCodec.simplify(points, size * 0.5f, aspect)),
             size,
@@ -300,6 +309,7 @@ data class BrushStroke(
             erase,
             density,
             autoMask,
+            pressure,
         )
 
         /** A stroke from [points] as they are (quantised, not simplified): the stroke in progress. */
@@ -312,8 +322,27 @@ data class BrushStroke(
             erase: Boolean = false,
             density: Float = FULL,
             autoMask: Boolean = false,
-        ): BrushStroke = BrushStroke(StrokeCodec.encode(points), size, feather, flow, erase, density, autoMask)
+            pressure: StrokePressure = StrokePressure.BOTH,
+        ): BrushStroke =
+            BrushStroke(StrokeCodec.encode(points), size, feather, flow, erase, density, autoMask, pressure)
     }
+}
+
+/**
+ * What a stroke's pen pressure `p` scales, through `k(p) = 0.25 + 0.75 p` (docs/adr/0022 "Brush raster"): the dab
+ * radius and flow ([BOTH], M4/A), the flow only ([FLOW], the editor's default) or the radius only ([SIZE]). A finger or
+ * a mouse sends `p = 1`, so `k = 1` and the choice changes nothing.
+ */
+@Serializable
+enum class StrokePressure {
+    @SerialName("both")
+    BOTH,
+
+    @SerialName("flow")
+    FLOW,
+
+    @SerialName("size")
+    SIZE,
 }
 
 /** A stroke point: position (fractions of width and height) and pen pressure 0..1 (1 for a finger or mouse). */

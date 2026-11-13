@@ -107,20 +107,38 @@ class MasksCodecTest {
     }
 
     @Test
+    fun `an ai component's autoSeeds defaults to true and round-trips`() {
+        val ai = MaskComponent.Ai(model = "magic-touch@1", kind = "SUBJECT", prompts = listOf(MaskPoint(0.5f, 0.5f)))
+        val recipe = Recipe(masks = listOf(Mask("m", components = listOf(ai, ai.copy(autoSeeds = false)))))
+        val text = codec.encode(recipe)
+        assertThat(codec.decode(text)).isEqualTo(recipe)
+        val old = text.replace(""","autoSeeds":true""", "")
+        assertThat((codec.decode(old).masks.single().components.first() as MaskComponent.Ai).autoSeeds).isTrue()
+    }
+
+    @Test
     fun `brush density and auto-mask round-trip and default for older strokes`() {
-        val stroke = BrushStroke.raw(listOf(StrokePoint(0.1f, 0.2f)), density = 40f, autoMask = true)
+        val stroke = BrushStroke.raw(
+            listOf(StrokePoint(0.1f, 0.2f)),
+            density = 40f,
+            autoMask = true,
+            pressure = StrokePressure.FLOW,
+        )
         val recipe = Recipe(masks = listOf(Mask("m", components = listOf(MaskComponent.Brush(strokes = listOf(stroke))))))
         val json = Json.parseToJsonElement(codec.encode(recipe)).jsonObject
         val written = json["masks"]!!.jsonArray[0].jsonObject["components"]!!.jsonArray[0].jsonObject["strokes"]!!
             .jsonArray[0].jsonObject
         assertThat(written["autoMask"]!!.jsonPrimitive.content).isEqualTo("true")
         assertThat(written["density"]!!.jsonPrimitive.content).isEqualTo("40.0")
+        assertThat(written["pressure"]!!.jsonPrimitive.content).isEqualTo("flow")
         assertThat(codec.decode(codec.encode(recipe))).isEqualTo(recipe)
         // An M4/A stroke (no density, no autoMask) reads as full density without auto-mask.
         val old = codec.encode(recipe).replace(""","density":40.0""", "").replace(""","autoMask":true""", "")
+            .replace(""","pressure":"flow"""", "")
         val decoded = (codec.decode(old).masks.single().components.single() as MaskComponent.Brush).strokes.single()
         assertThat(decoded.density).isEqualTo(100f)
         assertThat(decoded.autoMask).isFalse()
+        assertThat(decoded.pressure).isEqualTo(StrokePressure.BOTH)
         // The finished stroke keeps both.
         val finished = BrushStroke.of(listOf(StrokePoint(0.1f, 0.2f), StrokePoint(0.3f, 0.2f)), density = 40f, autoMask = true)
         assertThat(finished.density).isEqualTo(40f)

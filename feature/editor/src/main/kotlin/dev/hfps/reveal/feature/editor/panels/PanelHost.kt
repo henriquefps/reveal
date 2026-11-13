@@ -35,7 +35,8 @@ import dev.hfps.reveal.pipeline.recipe.RecipeRanges
  */
 @Stable
 class SliderFocus {
-    var dragging: ControlId? by mutableStateOf(null)
+    /** The dragged slider's key: a [ControlId], or another panel's own key (a mask's local adjustment). */
+    var dragging: Any? by mutableStateOf(null)
 
     /** True while any slider is being dragged. */
     val active: Boolean get() = dragging != null
@@ -101,7 +102,7 @@ class PanelHost(
 
 /** A row that hides (fade + collapse) while a slider other than [id] is dragged; `null` = hides for any drag. */
 @Composable
-fun FocusRow(focus: SliderFocus, id: ControlId?, content: @Composable () -> Unit) {
+fun FocusRow(focus: SliderFocus, id: Any?, content: @Composable () -> Unit) {
     val dragging = focus.dragging
     AnimatedVisibility(
         visible = dragging == null || dragging == id,

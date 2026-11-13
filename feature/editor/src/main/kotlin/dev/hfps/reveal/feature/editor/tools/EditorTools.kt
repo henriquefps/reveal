@@ -4,6 +4,7 @@ import androidx.annotation.StringRes
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Stable
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import dev.hfps.reveal.designsystem.icons.PhosphorFill
 import dev.hfps.reveal.designsystem.icons.PhosphorRegular
@@ -14,6 +15,8 @@ import dev.hfps.reveal.feature.editor.canvas.PhotoController
 import dev.hfps.reveal.feature.editor.crop.CropControls
 import dev.hfps.reveal.feature.editor.crop.CropOverlay
 import dev.hfps.reveal.feature.editor.crop.CropSession
+import dev.hfps.reveal.feature.editor.masks.MaskPhotoLayer
+import dev.hfps.reveal.feature.editor.masks.MasksPanel
 import dev.hfps.reveal.feature.editor.panels.ColourPanel
 import dev.hfps.reveal.feature.editor.panels.DetailPanel
 import dev.hfps.reveal.feature.editor.panels.EffectsPanel
@@ -44,6 +47,20 @@ class ModeHost(
     val onCancel: () -> Unit,
 )
 
+/** What a panel's photo layer gets: the state, the actions and the photo (its view, the pen). */
+@Stable
+class PhotoLayerHost(val state: EditorUiState, val actions: EditorActions, val photo: PhotoController)
+
+/**
+ * What a panel draws and handles on the photo while it is open (the Masks panel's handles, brush and eyedropper):
+ * [gestures] wraps the photo's own gestures (it sees each pointer first and takes what it handles; the rest pans and
+ * zooms), [overlay] draws over the photo in the slot's coordinates and takes no input.
+ */
+class PhotoLayer(
+    val gestures: @Composable (PhotoLayerHost) -> Modifier,
+    val overlay: @Composable BoxScope.(PhotoLayerHost) -> Unit,
+)
+
 /** What selecting a tool does. Adding a tool never touches the layout: give its [EditorTool] a behaviour. */
 sealed interface ToolBehaviour {
     /**
@@ -56,6 +73,8 @@ sealed interface ToolBehaviour {
         val showAuto: Boolean = false,
         /** The content scrolls by itself (a lazy grid): the card gives it its height instead of a scroll. */
         val ownsScroll: Boolean = false,
+        /** What the panel draws and handles on the photo while it is the open tool, if anything. */
+        val photo: PhotoLayer? = null,
         val content: @Composable (PanelHost) -> Unit,
     ) : ToolBehaviour
 
@@ -165,7 +184,11 @@ object EditorTools {
             R.string.editor_tool_masks,
             PhosphorRegular.Selection,
             PhosphorFill.Selection,
-            ToolBehaviour.Unavailable,
+            ToolBehaviour.Panel(
+                R.string.editor_tool_masks,
+                group = null,
+                photo = MaskPhotoLayer.layer,
+            ) { MasksPanel(it) },
         ),
         EditorTool(
             ToolId.HEAL,

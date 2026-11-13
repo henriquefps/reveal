@@ -81,6 +81,8 @@ import dev.hfps.reveal.feature.editor.UnreadableHandoff
 import dev.hfps.reveal.feature.editor.ViewOptions
 import dev.hfps.reveal.feature.editor.edit.RecipeControls
 import dev.hfps.reveal.feature.editor.open.OpenError
+import dev.hfps.reveal.feature.editor.tools.PhotoLayer
+import dev.hfps.reveal.feature.editor.tools.PhotoLayerHost
 import dev.hfps.reveal.pipeline.HistoryLabels
 import dev.hfps.reveal.pipeline.geometry.GeometryMapping
 import dev.hfps.reveal.pipeline.gl.CompareMode
@@ -97,6 +99,7 @@ import kotlin.math.roundToInt
  * @param chromeVisible false in immersive mode: the histogram and hints hide with the rest of the chrome.
  * @param modeOverlay the active mode's overlay (Crop frame, mask pins), in frame coordinates.
  * @param onSwipe the tablet filmstrip's swipe at fit: `1` next photo, `-1` previous; `null` = no swipe.
+ * @param layer the open panel's photo layer (the Masks panel's handles and brush), if it has one.
  */
 @Suppress("LongParameterList", "LongMethod", "CyclomaticComplexMethod")
 @Composable
@@ -109,8 +112,10 @@ fun PhotoSlot(
     modifier: Modifier = Modifier,
     modeOverlay: (@Composable BoxScope.() -> Unit)? = null,
     onSwipe: ((Int) -> Unit)? = null,
+    layer: PhotoLayer? = null,
 ) {
     val phase = state.phase
+    val layerHost = layer?.let { PhotoLayerHost(state, actions, controller) }
     val scope = rememberCoroutineScope()
     val zoom = controller.zoom
     Box(
@@ -131,6 +136,12 @@ fun PhotoSlot(
                 Modifier
                     .canvasGestures(zoom, scope, onTap = onToggleChrome, onHold = actions.onShowOriginal)
                     .targetedGestures(controller, phase, state, actions)
+
+            // The open panel's layer (masks) sees each pointer first; what it leaves pans and zooms (no swipe).
+            layer != null && layerHost != null && phase is EditorPhase.Ready ->
+                Modifier
+                    .canvasGestures(zoom, scope, onTap = onToggleChrome, onHold = actions.onShowOriginal)
+                    .then(layer.gestures(layerHost))
 
             else -> Modifier.canvasGestures(
                 zoom,
@@ -170,6 +181,7 @@ fun PhotoSlot(
         if (phase is EditorPhase.Ready) {
             if (!state.view.cropping) CompareOverlay(state.view.compare, actions.onCompare)
             modeOverlay?.invoke(this)
+            if (layer != null && layerHost != null && modeOverlay == null) layer.overlay(this, layerHost)
             AnimatedVisibility(
                 visible = chromeVisible && state.view.histogram && !state.view.eyedropper && !state.view.cropping &&
                     state.view.targeted == null,

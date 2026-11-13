@@ -24,6 +24,7 @@ import dev.hfps.reveal.data.export.ExportPreferences
 import dev.hfps.reveal.data.library.ExportTarget
 import dev.hfps.reveal.data.library.LibraryRepository
 import dev.hfps.reveal.data.library.OriginalReach
+import dev.hfps.reveal.data.mask.AiMasks
 import dev.hfps.reveal.feature.export.R
 import dev.hfps.reveal.feature.export.destination.Destinations
 import dev.hfps.reveal.feature.export.engine.ExportEngine
@@ -49,6 +50,8 @@ interface ExportEntryPoint {
     fun edits(): EditRepository
 
     fun exportPreferences(): ExportPreferences
+
+    fun aiMasks(): AiMasks
 }
 
 /**
@@ -95,7 +98,15 @@ class ExportWorker(context: Context, params: WorkerParameters) : CoroutineWorker
             return finish(jobId, total)
         }
         val graph = EntryPointAccessors.fromApplication(applicationContext, ExportEntryPoint::class.java)
-        val run = Run(jobId, job, graph, ExportEngine(applicationContext), Destinations(applicationContext), renderer)
+        val run =
+            Run(
+                jobId,
+                job,
+                graph,
+                ExportEngine(applicationContext, aiMasks = graph.aiMasks()),
+                Destinations(applicationContext),
+                renderer,
+            )
         try {
             for (index in job.items.indices) {
                 if (isStopped || !exportItem(run, index)) break

@@ -10,6 +10,7 @@ import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.gestures.Orientation
+import androidx.compose.foundation.gestures.animateTo
 import androidx.compose.foundation.gestures.draggable
 import androidx.compose.foundation.gestures.rememberDraggableState
 import androidx.compose.foundation.layout.Box
@@ -71,12 +72,14 @@ import dev.hfps.reveal.feature.editor.layout.EditorLayoutKind
 import dev.hfps.reveal.feature.editor.layout.EditorTopBar
 import dev.hfps.reveal.feature.editor.layout.Filmstrip
 import dev.hfps.reveal.feature.editor.layout.FilmstripUi
+import dev.hfps.reveal.feature.editor.layout.PanelSnap
 import dev.hfps.reveal.feature.editor.layout.ToolStrip
 import dev.hfps.reveal.feature.editor.panels.PanelCardContent
 import dev.hfps.reveal.feature.editor.panels.PanelHost
 import dev.hfps.reveal.feature.editor.tools.EditorTool
 import dev.hfps.reveal.feature.editor.tools.EditorTools
 import dev.hfps.reveal.feature.editor.tools.ToolBehaviour
+import dev.hfps.reveal.feature.editor.tools.ToolId
 import dev.hfps.reveal.pipeline.gl.CompareMode
 import kotlin.math.roundToInt
 import kotlinx.coroutines.CoroutineScope
@@ -151,7 +154,8 @@ internal fun TabletLayout(t: TabletChrome, filmstrip: FilmstripUi?, layout: Edit
                     modeOverlay = mode?.let { m ->
                         { m.overlay(this, chrome.modeHost(m, state, t.actions, t.photo, vertical = true)) }
                     },
-                    onSwipe = if (filmstrip != null && mode == null) open else null,
+                    onSwipe = if (filmstrip != null && mode == null && chrome.panelLayer == null) open else null,
+                    layer = chrome.panelLayer,
                 )
                 AnimatedVisibility(
                     visible = chromeVisible && showStrip && !failed && mode == null,
@@ -300,7 +304,8 @@ internal fun DockedTabletLayout(t: TabletChrome, filmstrip: FilmstripUi?, layout
             modeOverlay = mode?.let { m ->
                 { m.overlay(this, chrome.modeHost(m, state, t.actions, t.photo, vertical = false)) }
             },
-            onSwipe = if (filmstrip != null && mode == null) open else null,
+            onSwipe = if (filmstrip != null && mode == null && chrome.panelLayer == null) open else null,
+            layer = chrome.panelLayer,
         )
         AnimatedVisibility(
             visible = chromeVisible && showStrip && !failed && mode == null,
@@ -506,9 +511,41 @@ internal fun Modifier.editorKeys(
                     val z = photo.zoom?.takeIf { chrome.activeMode == null }
                     z?.let { scope.launch { it.animateDoubleTap(it.viewCenterX, it.viewCenterY) } } != null
                 }
+
+                EditorKeyCommand.MASKS -> (chrome.activeMode == null).also { free ->
+                    if (free) {
+                        chrome.activeTool = ToolId.MASKS
+                        chrome.sidePanelOpen = true
+                        if (chrome.sheet.currentValue == PanelSnap.COLLAPSED) {
+                            scope.launch { chrome.sheet.animateTo(PanelSnap.HALF) }
+                        }
+                    }
+                }
+
+                else -> masksKey(command, s, a, chrome)
             }
         }
         .focusable()
+}
+
+/** The Masks tool's keys (only while it is the open tool): brush size, overlay, erase. */
+private fun masksKey(
+    command: EditorKeyCommand,
+    state: EditorUiState,
+    actions: EditorActions,
+    chrome: EditorChrome,
+): Boolean {
+    if (chrome.activeTool != ToolId.MASKS || chrome.activeMode != null) return false
+    val m = actions.masks
+    val brush = state.masks.brush
+    when (command) {
+        EditorKeyCommand.BRUSH_SMALLER -> m.setBrush(brush.resized(-1))
+        EditorKeyCommand.BRUSH_LARGER -> m.setBrush(brush.resized(1))
+        EditorKeyCommand.MASK_OVERLAY -> m.toggleOverlay()
+        EditorKeyCommand.BRUSH_ERASE -> m.setBrush(brush.copy(erase = !brush.erase))
+        else -> return false
+    }
+    return true
 }
 
 /** Upper bound of the rail's width, for the panel's resize range. */

@@ -18,11 +18,27 @@ enum class EditorKeyCommand {
 
     /** Fit <-> 100 % (the double tap). */
     ZOOM_100,
+
+    /** Opens the Masks tool. */
+    MASKS,
+
+    /** Masks: the brush one step smaller (`[`). */
+    BRUSH_SMALLER,
+
+    /** Masks: the brush one step larger (`]`). */
+    BRUSH_LARGER,
+
+    /** Masks: the selected mask's overlay on or off. */
+    MASK_OVERLAY,
+
+    /** Masks: the brush's erase mode on or off. */
+    BRUSH_ERASE,
 }
 
 /**
  * The editor's keyboard shortcuts on tablets with a keyboard (docs/plan/ux.md): Ctrl+Z undo, Ctrl+Shift+Z (or Ctrl+Y)
- * redo, backslash before/after, left/right arrows (and the D-pad) previous/next photo, Z zoom to 100 % and back.
+ * redo, backslash before/after, left/right arrows (and the D-pad) previous/next photo, Z zoom to 100 % and back; M opens
+ * the Masks tool, and in it `[` / `]` resize the brush, O shows the overlay, E toggles erasing (docs/adr/0022 "M4/B").
  */
 object EditorKeys {
     fun command(key: Key, ctrl: Boolean, shift: Boolean, alt: Boolean): EditorKeyCommand? = when {
@@ -43,5 +59,10 @@ object EditorKeys {
         Key.DirectionRight to EditorKeyCommand.NEXT,
         Key.DirectionLeft to EditorKeyCommand.PREVIOUS,
         Key.Z to EditorKeyCommand.ZOOM_100,
+        Key.M to EditorKeyCommand.MASKS,
+        Key.LeftBracket to EditorKeyCommand.BRUSH_SMALLER,
+        Key.RightBracket to EditorKeyCommand.BRUSH_LARGER,
+        Key.O to EditorKeyCommand.MASK_OVERLAY,
+        Key.E to EditorKeyCommand.BRUSH_ERASE,
     )
 }

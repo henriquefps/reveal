@@ -87,6 +87,7 @@ import dev.hfps.reveal.feature.editor.presets.PresetThumbnailSource
 import dev.hfps.reveal.feature.editor.tools.EditorTool
 import dev.hfps.reveal.feature.editor.tools.EditorTools
 import dev.hfps.reveal.feature.editor.tools.ModeHost
+import dev.hfps.reveal.feature.editor.tools.PhotoLayer
 import dev.hfps.reveal.feature.editor.tools.ToolBehaviour
 import dev.hfps.reveal.feature.editor.tools.ToolId
 import dev.hfps.reveal.feature.export.ui.ExportRequest
@@ -205,6 +206,8 @@ fun EditorScreen(
             },
             presetBase = viewModel::presetBase,
             presetPreview = viewModel::presetPreview,
+            masks = viewModel.maskEditor,
+            onMasksPanel = viewModel::setMasksPanel,
         )
     }
     LaunchedEffect(viewModel, context) {
@@ -258,6 +261,8 @@ fun EditorContent(
             (tool.behaviour as? ToolBehaviour.Mode)?.onActive?.invoke(actions, chrome.activeMode == tool.id)
         }
     }
+    val masksOpen = chrome.activeTool == ToolId.MASKS && chrome.activeMode == null
+    LaunchedEffect(masksOpen) { actions.onMasksPanel(masksOpen) }
     SystemBarsHidden(chrome.immersive)
     BoxWithConstraints(
         modifier = modifier
@@ -319,6 +324,10 @@ fun EditorContent(
     }
     LaunchedEffect(state.phase is EditorPhase.Ready) { chrome.focus.dragging = null }
 }
+
+/** The open panel's photo layer (the Masks panel's handles and brush); none while a mode is open. */
+internal val EditorChrome.panelLayer: PhotoLayer?
+    get() = if (activeMode != null) null else (EditorTools[activeTool].behaviour as? ToolBehaviour.Panel)?.photo
 
 /** The [ModeHost] of the active [mode]: Done and Cancel run the mode's exits and close it. */
 internal fun EditorChrome.modeHost(
@@ -464,6 +473,7 @@ private fun PortraitLayout(
                 .weight(1f)
                 .fillMaxWidth(),
             modeOverlay = mode?.let { m -> { m.overlay(this, chrome.modeHost(m, state, actions, photo, false)) } },
+            layer = chrome.panelLayer,
         )
         AnimatedVisibility(
             visible = chromeVisible && state.phase !is EditorPhase.Failed,
@@ -585,6 +595,7 @@ private fun SideLayout(
                 modeOverlay = mode?.let { m ->
                     { m.overlay(this, chrome.modeHost(m, state, actions, photo, vertical = true)) }
                 },
+                layer = chrome.panelLayer,
             )
         }
         AnimatedVisibility(

@@ -16,6 +16,8 @@ import dev.hfps.image.source.SourceInputStream
 import dev.hfps.image.source.readRange
 import dev.hfps.image.standard.StandardDecoder
 import dev.hfps.reveal.data.export.Authorship
+import dev.hfps.reveal.data.mask.AiMasks
+import dev.hfps.reveal.data.mask.MaskInputs
 import dev.hfps.reveal.data.storage.isAccessError
 import dev.hfps.reveal.feature.export.destination.DestinationUnavailableException
 import dev.hfps.reveal.feature.export.destination.Destinations
@@ -45,7 +47,9 @@ import dev.hfps.reveal.pipeline.input.PipelineInputTileSource
 import dev.hfps.reveal.pipeline.input.TileSource
 import dev.hfps.reveal.pipeline.input.UnsupportedCameraException
 import dev.hfps.reveal.pipeline.input.withLens
+import dev.hfps.reveal.pipeline.mask.MaskContext
 import dev.hfps.reveal.pipeline.preview.SmartPreviewCodec
+import dev.hfps.reveal.pipeline.recipe.MaskComponent
 import dev.hfps.reveal.pipeline.recipe.Recipe
 import java.io.File
 import java.io.IOException
@@ -97,7 +101,12 @@ data class ExportResult(
  * bitmap in their own colour space), the tiled GPU develop ([TiledRenderer]) into an output bitmap, released source,
  * encoder with metadata into the cache, then the destination. Blocking; the caller owns the renderer (one per worker).
  */
-class ExportEngine(private val context: Context, private val destinations: Destinations = Destinations(context)) {
+class ExportEngine(
+    private val context: Context,
+    private val destinations: Destinations = Destinations(context),
+    /** The AI masks (docs/adr/0022 "M4/B (editor)"); without it AI mask parts are left out. */
+    private val aiMasks: AiMasks? = null,
+) {
 
     /** Software tag of the files. */
     val software: String = "Reveal " + runCatching {
@@ -126,8 +135,11 @@ class ExportEngine(private val context: Context, private val destinations: Desti
             throw if (isAccessError(e)) ExportException(ExportFailure.SOURCE_MISSING, e) else e
         }
         val started = System.nanoTime()
+        var masks: AiMasks.Session? = null
         val (metadata, source) = input.use { image ->
             try {
+                // The AI masks' model input first, from a proxy, so it is never on the heap with the full image.
+                masks = maskSession(image, item.recipe)
                 smartPreview(image, item)?.let { return@use it }
                 val meta = readMetadata(image, item)
                 meta to openSource(image, meta.fallback)
@@ -166,7 +178,16 @@ class ExportEngine(private val context: Context, private val destinations: Desti
                 throw ExportException(ExportFailure.OUT_OF_MEMORY, e)
             }
             stats = try {
-                renderer.render(source, item.recipe, plan, OutputSettings(colour.space), sink, cancel = cancel) {
+                val context = masks?.let { MaskContext(it, MASK_PHOTO_KEY) } ?: MaskContext.NONE
+                renderer.render(
+                    source,
+                    item.recipe,
+                    plan,
+                    OutputSettings(colour.space),
+                    sink,
+                    masks = context,
+                    cancel = cancel,
+                ) {
                     progress(it * RENDER_SHARE)
                 }
             } catch (e: RenderCancelledException) {
@@ -181,6 +202,7 @@ class ExportEngine(private val context: Context, private val destinations: Desti
         } finally {
             // The full-size linear image (about 150-350 MB native) goes as soon as the render is done.
             source.close()
+            masks?.close()
         }
         val rendered = System.nanoTime()
         val bitmap = sink.bitmap
@@ -250,6 +272,19 @@ class ExportEngine(private val context: Context, private val destinations: Desti
             PipelineInputTileSource(decoded.input)
     }
 
+    /**
+     * The AI masks of [recipe]'s rendered masks (docs/adr/0022): a session on the photo's model input, or `null`
+     * when there are none (no decode then). The masks come from the cache when the editor made them for the same
+     * input, else they are computed here.
+     */
+    private fun maskSession(image: ImageInput, recipe: Recipe): AiMasks.Session? {
+        val ai = aiMasks ?: return null
+        val any = recipe.masks.any { m -> m.enabled && m.components.any { it is MaskComponent.Ai } }
+        if (!any) return null
+        val model = MaskInputs.fromImage(image) ?: return null
+        return ai.session { model }
+    }
+
     /** EXIF of the file (and of its pair's JPEG for gaps) and the photo's rating. */
     private fun readMetadata(image: ImageInput, item: ExportItem): SourceMetadata {
         val snapshot = runCatching { image.withSource { ExifSnapshot.read(BlockCachedSource(it), image.type) } }
@@ -310,6 +345,7 @@ class ExportEngine(private val context: Context, private val destinations: Desti
 
     companion object {
         private const val SMART_HEAD = 8
+        private const val MASK_PHOTO_KEY = "export"
         private const val TAG = "RevealExport"
         private const val DATE_TIME_ORIGINAL = 0x9003
         private const val NANOS_PER_MS = 1_000_000L

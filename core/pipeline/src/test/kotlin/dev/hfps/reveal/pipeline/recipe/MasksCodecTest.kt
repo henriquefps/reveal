@@ -124,7 +124,8 @@ class MasksCodecTest {
             autoMask = true,
             pressure = StrokePressure.FLOW,
         )
-        val recipe = Recipe(masks = listOf(Mask("m", components = listOf(MaskComponent.Brush(strokes = listOf(stroke))))))
+        val recipe =
+            Recipe(masks = listOf(Mask("m", components = listOf(MaskComponent.Brush(strokes = listOf(stroke))))))
         val json = Json.parseToJsonElement(codec.encode(recipe)).jsonObject
         val written = json["masks"]!!.jsonArray[0].jsonObject["components"]!!.jsonArray[0].jsonObject["strokes"]!!
             .jsonArray[0].jsonObject
@@ -140,7 +141,11 @@ class MasksCodecTest {
         assertThat(decoded.autoMask).isFalse()
         assertThat(decoded.pressure).isEqualTo(StrokePressure.BOTH)
         // The finished stroke keeps both.
-        val finished = BrushStroke.of(listOf(StrokePoint(0.1f, 0.2f), StrokePoint(0.3f, 0.2f)), density = 40f, autoMask = true)
+        val finished = BrushStroke.of(
+            listOf(StrokePoint(0.1f, 0.2f), StrokePoint(0.3f, 0.2f)),
+            density = 40f,
+            autoMask = true,
+        )
         assertThat(finished.density).isEqualTo(40f)
         assertThat(finished.autoMask).isTrue()
     }

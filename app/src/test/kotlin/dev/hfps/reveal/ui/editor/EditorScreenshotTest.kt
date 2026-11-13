@@ -32,6 +32,8 @@ import com.github.takahirom.roborazzi.captureRoboImage
 import com.github.takahirom.roborazzi.captureScreenRoboImage
 import dev.hfps.reveal.data.db.PhotoRow
 import dev.hfps.reveal.data.editor.EditorLayout
+import dev.hfps.reveal.data.mask.AiMaskState
+import dev.hfps.reveal.data.mask.AiMasks
 import dev.hfps.reveal.data.model.PhotoFormat
 import dev.hfps.reveal.data.model.PickFlag
 import dev.hfps.reveal.data.preset.GroupKind
@@ -58,6 +60,10 @@ import dev.hfps.reveal.feature.editor.edit.AsShot
 import dev.hfps.reveal.feature.editor.layout.FilmstripThumbs
 import dev.hfps.reveal.feature.editor.layout.FilmstripUi
 import dev.hfps.reveal.feature.editor.layout.PanelSnap
+import dev.hfps.reveal.feature.editor.masks.CreateTarget
+import dev.hfps.reveal.feature.editor.masks.MaskOverlayOptions
+import dev.hfps.reveal.feature.editor.masks.MasksUiState
+import dev.hfps.reveal.feature.editor.masks.PhotoTool
 import dev.hfps.reveal.feature.editor.open.OpenError
 import dev.hfps.reveal.feature.editor.panels.PasteChooserContent
 import dev.hfps.reveal.feature.editor.panels.toSliderSpec
@@ -81,6 +87,8 @@ import dev.hfps.reveal.pipeline.geometry.CropEditing
 import dev.hfps.reveal.pipeline.gl.ClippingWarnings
 import dev.hfps.reveal.pipeline.gl.CompareMode
 import dev.hfps.reveal.pipeline.gl.Histogram
+import dev.hfps.reveal.pipeline.mask.MaskPlan
+import dev.hfps.reveal.pipeline.mask.MaskRaster
 import dev.hfps.reveal.pipeline.optics.LensProfile
 import dev.hfps.reveal.pipeline.optics.SonyLensProfile
 import dev.hfps.reveal.pipeline.preset.Preset
@@ -90,6 +98,7 @@ import dev.hfps.reveal.pipeline.recipe.Aspect
 import dev.hfps.reveal.pipeline.recipe.AspectPreset
 import dev.hfps.reveal.pipeline.recipe.BandValues
 import dev.hfps.reveal.pipeline.recipe.BaseLook
+import dev.hfps.reveal.pipeline.recipe.BrushStroke
 import dev.hfps.reveal.pipeline.recipe.Colour
 import dev.hfps.reveal.pipeline.recipe.ColourGrading
 import dev.hfps.reveal.pipeline.recipe.ColourMixer
@@ -104,6 +113,10 @@ import dev.hfps.reveal.pipeline.recipe.GradeRegion
 import dev.hfps.reveal.pipeline.recipe.GradeWheel
 import dev.hfps.reveal.pipeline.recipe.HistoryAction
 import dev.hfps.reveal.pipeline.recipe.Light
+import dev.hfps.reveal.pipeline.recipe.LocalAdjustments
+import dev.hfps.reveal.pipeline.recipe.Mask
+import dev.hfps.reveal.pipeline.recipe.MaskComponent
+import dev.hfps.reveal.pipeline.recipe.MaskOp
 import dev.hfps.reveal.pipeline.recipe.Optics
 import dev.hfps.reveal.pipeline.recipe.ParametricCurve
 import dev.hfps.reveal.pipeline.recipe.Profile
@@ -111,6 +124,7 @@ import dev.hfps.reveal.pipeline.recipe.Recipe
 import dev.hfps.reveal.pipeline.recipe.RecipeGroup
 import dev.hfps.reveal.pipeline.recipe.RecipePaste
 import dev.hfps.reveal.pipeline.recipe.RecipeRanges
+import dev.hfps.reveal.pipeline.recipe.StrokePoint
 import dev.hfps.reveal.pipeline.recipe.Transform
 import dev.hfps.reveal.pipeline.recipe.Treatment
 import dev.hfps.reveal.pipeline.recipe.UprightMode
@@ -196,6 +210,43 @@ class EditorPhoneScreenshotTest : EditorScreenshotBase("phone") {
     @Test fun detail() = shoot("detail") { Editor(tool = ToolId.DETAIL) }
 
     @Test fun presets() = shoot("presets") { PresetsEditor() }
+
+    @Test fun masks() = shoot("masks") { MasksEditor() }
+
+    @Test fun masksExpanded() = shoot("masks_expanded") { MasksEditor(snap = PanelSnap.EXPANDED) }
+
+    @Test fun masksEmpty() = shoot("masks_empty") { MasksEditor(none = true) }
+
+    @Test fun masksRadial() = shoot("masks_radial") {
+        MasksEditor(
+            selected = "spot",
+            component = 0,
+            snap = PanelSnap.EXPANDED,
+            masks = MasksUiState(overlay = MaskOverlayOptions(shown = true)),
+        )
+    }
+
+    @Test fun masksBrush() = shoot("masks_brush") {
+        val brush = MasksUiState(tool = PhotoTool.BRUSH)
+        MasksEditor(selected = "brush", component = 0, snap = PanelSnap.EXPANDED, masks = brush)
+    }
+
+    @Test fun masksAiComputing() = shoot("masks_ai") {
+        val ai = Photos.masks[1].components.single() as MaskComponent.Ai
+        MasksEditor(selected = "subject", masks = MasksUiState(ai = mapOf(AiMasks.key(ai) to AiMaskState.COMPUTING)))
+    }
+
+    @Test fun masksAiFailed() = shoot("masks_ai_failed") {
+        val ai = Photos.masks[1].components.single() as MaskComponent.Ai
+        MasksEditor(selected = "subject", masks = MasksUiState(ai = mapOf(AiMasks.key(ai) to AiMaskState.FAILED)))
+    }
+
+    @Test
+    fun masksChooser() {
+        composeRule.setContent { MasksEditor(masks = MasksUiState(creating = CreateTarget.NewMask)) }
+        composeRule.waitForIdle()
+        captureScreen("masks_chooser")
+    }
 
     @Test fun presetsApplied() = shoot("presets_applied") { PresetsEditor(applied = true) }
 
@@ -364,6 +415,8 @@ class EditorPhoneScreenshotTest : EditorScreenshotBase("phone") {
 class EditorLandscapeScreenshotTest : EditorScreenshotBase("landscape") {
     @Test fun light() = shoot("light") { Editor() }
 
+    @Test fun masks() = shoot("masks") { MasksEditor() }
+
     @Test fun presets() = shoot("presets") { PresetsEditor(applied = true) }
 
     @Test fun colour() = shoot("colour") { Editor(tool = ToolId.COLOUR) }
@@ -400,6 +453,10 @@ class EditorTabletScreenshotTest : EditorScreenshotBase("tablet") {
     @Test fun light() = shoot("light") { Editor() }
 
     @Test fun presets() = shoot("presets") { PresetsEditor(applied = true) }
+
+    @Test fun masks() = shoot("masks") { MasksEditor() }
+
+    @Test fun masksRadial() = shoot("masks_radial") { MasksEditor(selected = "spot", component = 0) }
 
     @Test fun split() = shoot("split") {
         Editor(view = ViewOptions(compare = CompareMode.Split(leftRight = true, position = 0.4f)))
@@ -467,6 +524,8 @@ class EditorTabletScreenshotTest : EditorScreenshotBase("tablet") {
 @Config(sdk = [35], qualifiers = "w934dp-h1495dp-mdpi")
 class EditorTabletPortraitScreenshotTest : EditorScreenshotBase("tablet_portrait") {
     @Test fun presets() = shoot("presets") { PresetsEditor(applied = true) }
+
+    @Test fun masks() = shoot("masks") { MasksEditor() }
 
     override val strip: FilmstripUi? get() = Strip.ui
 
@@ -574,6 +633,7 @@ abstract class EditorScreenshotBase(private val size: String) {
         presets: PresetsState = PresetsState(),
         previewOnly: PreviewOnly? = null,
         phase: EditorPhase = EditorPhase.Ready(null, Photos.WIDTH, Photos.HEIGHT, 1f),
+        masks: MasksUiState = MasksUiState(),
     ) {
         val recipe = base.copy(geometry = geometry, detail = detail, effects = effects, optics = optics)
         EditorTheme {
@@ -597,6 +657,7 @@ abstract class EditorScreenshotBase(private val size: String) {
                     view = view,
                     histogram = Photos.histogram,
                     presets = presets,
+                    masks = masks,
                 ),
                 actions = EditorActions(onBack = {}, presetThumbnails = TestPresets.thumbnails),
                 initialTool = tool,
@@ -630,6 +691,29 @@ abstract class EditorScreenshotBase(private val size: String) {
             ),
         )
     }
+
+    /**
+     * The Masks panel (docs/adr/0022 "M4/B (editor)") on four masks developed by the CPU reference: [selected] mask and
+     * [component]; [masks] adds UI state (AI states, the chooser, the overlay); [none] shows the empty panel.
+     */
+    @Composable
+    protected fun MasksEditor(
+        selected: String? = "sky",
+        component: Int? = 0,
+        snap: PanelSnap = PanelSnap.HALF,
+        masks: MasksUiState = MasksUiState(),
+        none: Boolean = false,
+    ) = Editor(
+        tool = ToolId.MASKS,
+        snap = snap,
+        base = if (none) Photos.recipe else Photos.masked,
+        preview = if (none) Photos.edited else Photos.maskedEdited,
+        masks = masks.copy(
+            selected = if (none) null else selected,
+            component = if (none) null else component,
+            thumbnails = if (none) emptyMap() else Photos.maskThumbnails,
+        ),
+    )
 
     /** The editor on the colour-tools recipe, with the sub-panel behind [row] opened. */
     protected fun subPanel(name: String, tool: ToolId, row: String, bw: Boolean = false, then: () -> Unit = {}) {
@@ -784,6 +868,65 @@ private object Photos {
     val bwEdited: ImageBitmap = bitmap(CpuDevelop.render(input, bw))
 
     val edited: ImageBitmap = bitmap(editedRgba)
+
+    /** Masks of every hand-made kind (an AI mask renders nothing without a source, as in a screenshot). */
+    val masks: List<Mask> = listOf(
+        Mask(
+            "sky",
+            "Sky",
+            adjustments = LocalAdjustments(exposure = -0.8f, dehaze = 25f, colourHue = 220f, colourSaturation = 20f),
+            components = listOf(MaskComponent.Linear(x0 = 0.5f, y0 = 0.05f, x1 = 0.5f, y1 = 0.55f, feather = 100f)),
+        ),
+        Mask(
+            "subject",
+            "Subject",
+            adjustments = LocalAdjustments(exposure = 0.4f, clarity = 15f),
+            components = listOf(MaskComponent.Ai(model = "magic-touch@1", kind = "SUBJECT")),
+        ),
+        Mask(
+            "spot",
+            "Mask 3",
+            adjustments = LocalAdjustments(shadows = 40f, saturation = 20f),
+            components = listOf(
+                MaskComponent.Radial(cx = 0.6f, cy = 0.62f, rx = 0.22f, ry = 0.14f, rotation = 15f, feather = 60f),
+                MaskComponent.LuminanceRange(op = MaskOp.INTERSECT, low = 20f, high = 80f),
+            ),
+        ),
+        Mask(
+            "brush",
+            "Mask 4",
+            enabled = false,
+            adjustments = LocalAdjustments(saturation = -60f),
+            components = listOf(
+                MaskComponent.Brush(
+                    strokes = listOf(
+                        BrushStroke.of(
+                            List(24) { i -> StrokePoint(0.15f + i * 0.02f, 0.8f - 0.1f * kotlin.math.sin(i * 0.3f)) },
+                            size = 0.06f,
+                        ),
+                    ),
+                ),
+            ),
+        ),
+    )
+
+    val masked: Recipe = recipe.copy(masks = masks)
+    val maskedEdited: ImageBitmap = bitmap(CpuDevelop.render(input, masked))
+
+    /** The masks' coverage pictures, as the editor makes them (the AI one empty: no source here). */
+    val maskThumbnails: Map<String, ImageBitmap> = masks.associate { mask ->
+        val w = 96
+        val h = 64
+        val plan = MaskPlan.of(listOf(mask.copy(adjustments = LocalAdjustments(exposure = 1f))), w, h)
+        // A lightness ramp stands in for the pre-local image of the luminance range.
+        val pre = FloatArray(w * h * 4) { if (it % 4 == 0) (it / 4 % w) / w.toFloat() else 0f }
+        val cov = MaskRaster.coverage(plan, MaskRaster.Region(0, 0, w, h), pre).single()
+        val px = IntArray(w * h) { i ->
+            val v = (cov[i].coerceIn(0f, 1f) * 255).toInt()
+            (0xFF shl 24) or (v shl 16) or (v shl 8) or v
+        }
+        mask.id to Bitmap.createBitmap(px, w, h, Bitmap.Config.ARGB_8888).asImageBitmap()
+    }
 
     /** A recipe that "Evening walk" was made from. */
     val recipeForPresets = recipe.copy(light = recipe.light.copy(contrast = 30f, shadows = 50f))

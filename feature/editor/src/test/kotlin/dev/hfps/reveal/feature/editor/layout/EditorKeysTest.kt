@@ -24,6 +24,16 @@ class EditorKeysTest {
     }
 
     @Test
+    fun masksKeys() {
+        assertThat(cmd(Key.M)).isEqualTo(EditorKeyCommand.MASKS)
+        assertThat(cmd(Key.LeftBracket)).isEqualTo(EditorKeyCommand.BRUSH_SMALLER)
+        assertThat(cmd(Key.RightBracket)).isEqualTo(EditorKeyCommand.BRUSH_LARGER)
+        assertThat(cmd(Key.O)).isEqualTo(EditorKeyCommand.MASK_OVERLAY)
+        assertThat(cmd(Key.E)).isEqualTo(EditorKeyCommand.BRUSH_ERASE)
+        assertThat(cmd(Key.E, ctrl = true)).isNull()
+    }
+
+    @Test
     fun otherCombinationsDoNothing() {
         assertThat(cmd(Key.Z, alt = true)).isNull()
         assertThat(cmd(Key.Z, shift = true)).isNull()

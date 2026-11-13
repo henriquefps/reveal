@@ -7,6 +7,16 @@ All notable changes to Reveal are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- Masks in the editor (M4/B): the Masks tool lists the photo's masks as coverage thumbnails with "+", and each mask's
+  parts and local adjustments (Light, Colour, Effects, Detail). Create Subject, Sky, Background, People and its parts
+  (hair, face skin, body skin, skin, clothes, eyes, irises, lips, teeth, eyebrows), linear and radial gradients, a
+  brush, colour and luminance ranges; combine parts with add / subtract / intersect and invert; rename, duplicate,
+  invert, reorder (long-press drag) and delete masks. Gradients have on-photo handles that follow crop, rotation,
+  lens corrections and zoom; the brush paints live (size, feather, flow, density, erase, auto mask) with S Pen
+  pressure (flow or size), the pen's eraser end and its side button; the colour range has an eyedropper, the
+  luminance range a luminance map, the subject taps to add or remove. A tinted or black-and-white overlay shows the
+  selected mask (`O`), automatically while drawing. Every change is one named history step; masks are pasted with
+  the Masks group (replacing the photo's masks). Keyboard: `M`, `[`, `]`, `O`, `E`. Exports render AI masks too.
 - Masks in the develop pipeline (no editor UI yet): linear and radial gradients, brush strokes, colour and luminance
   ranges and AI masks, combined with add / subtract / intersect and invert, each with the local adjustments
   (temperature, tint, exposure, contrast, highlights, shadows, whites, blacks, texture, clarity, dehaze, hue,

@@ -30,6 +30,8 @@ import dev.hfps.reveal.data.handoff.HandoffApps
 import dev.hfps.reveal.data.handoff.HandoffPreviewer
 import dev.hfps.reveal.data.handoff.SenderApp
 import dev.hfps.reveal.data.library.LibraryRepository
+import dev.hfps.reveal.data.mask.AiMasks
+import dev.hfps.reveal.data.mask.MaskInputs
 import dev.hfps.reveal.data.preset.PresetEvent
 import dev.hfps.reveal.data.preset.PresetFilesIo
 import dev.hfps.reveal.data.preset.PresetRepository
@@ -37,6 +39,10 @@ import dev.hfps.reveal.data.sync.RemoteEdits
 import dev.hfps.reveal.feature.editor.edit.AsShot
 import dev.hfps.reveal.feature.editor.edit.OpticsAnalysis
 import dev.hfps.reveal.feature.editor.edit.RecipeControls
+import dev.hfps.reveal.feature.editor.masks.MaskEditor
+import dev.hfps.reveal.feature.editor.masks.MasksUiState
+import dev.hfps.reveal.feature.editor.masks.PreLocalImage
+import dev.hfps.reveal.feature.editor.masks.maskKindName
 import dev.hfps.reveal.feature.editor.open.OpenError
 import dev.hfps.reveal.feature.editor.open.OpenEvent
 import dev.hfps.reveal.feature.editor.open.OpenException
@@ -49,6 +55,7 @@ import dev.hfps.reveal.feature.editor.presets.PresetThumbnails
 import dev.hfps.reveal.feature.editor.presets.PreviewInput
 import dev.hfps.reveal.feature.editor.tools.ToolId
 import dev.hfps.reveal.feature.export.ui.ExportRequest
+import dev.hfps.reveal.ml.MaskKind
 import dev.hfps.reveal.pipeline.PipelineInput
 import dev.hfps.reveal.pipeline.auto.AutoAnalyser
 import dev.hfps.reveal.pipeline.auto.AutoBlackWhite
@@ -58,6 +65,7 @@ import dev.hfps.reveal.pipeline.auto.PhotoFeatures
 import dev.hfps.reveal.pipeline.auto.SourceColours
 import dev.hfps.reveal.pipeline.auto.TargetedAdjust
 import dev.hfps.reveal.pipeline.cpu.AutoWhiteBalance
+import dev.hfps.reveal.pipeline.cpu.OkLab
 import dev.hfps.reveal.pipeline.cpu.WbAnalysis
 import dev.hfps.reveal.pipeline.cpu.WhiteBalanceModel
 import dev.hfps.reveal.pipeline.cpu.WhiteBalancePicker
@@ -131,6 +139,7 @@ class EditorViewModel @Inject constructor(
     private val presets: PresetRepository,
     private val smartCorrection: SmartCorrection,
     private val handoffPreviews: HandoffPreviewer,
+    private val aiMasks: AiMasks,
 ) : ViewModel() {
     private val route: EditorRoute = savedStateHandle.toRoute<EditorRoute>()
 
@@ -165,6 +174,94 @@ class EditorViewModel @Inject constructor(
     private val _state =
         MutableStateFlow(EditorUiState(fileName = route.uri?.let { opener.displayNameOrEmpty(it.toUri()) }.orEmpty()))
     val state: StateFlow<EditorUiState> = _state.asStateFlow()
+
+    // ------------------------------------------------------------------ masks (docs/adr/0022 "M4/B (editor)")
+
+    /** The Masks tool's verbs ([EditorActions.masks]). */
+    internal val maskEditor: MaskEditor = MaskEditor(
+        viewModelScope,
+        object : MaskEditor.Host {
+            override val ui: EditorUiState get() = _state.value
+
+            override fun updateMasks(change: (MasksUiState) -> MasksUiState) =
+                _state.update { it.copy(masks = change(it.masks)) }
+
+            override fun edit(change: (Recipe) -> Recipe) = this@EditorViewModel.edit(change)
+
+            override fun commit() = this@EditorViewModel.commit()
+
+            override fun renderer(): GpuDevelopRenderer? = this@EditorViewModel.renderer()
+
+            override fun aiSession(): AiMasks.Session? = maskSession
+
+            override suspend fun preLocal(): PreLocalImage? = preLocalImage()
+
+            override fun defaultName(): String = context.getString(R.string.masks_default_name)
+
+            override fun kindName(kind: MaskKind): String = context.getString(maskKindName(kind))
+
+            override fun copyName(name: String): String = context.getString(R.string.masks_copy_name, name)
+        },
+    )
+
+    /** The Masks panel is on screen or not (the overlay and the photo tools work only then). */
+    fun setMasksPanel(open: Boolean) {
+        maskEditor.panelOpen = open
+    }
+
+    /** This photo's AI masks (docs/adr/0021): the model input is rendered from [maskInput] when first needed. */
+    @Volatile
+    private var maskSession: AiMasks.Session? = null
+
+    /**
+     * Keeps the proxy area-averaged to the model input's size (about 8 MB, linear; the proxy itself is dropped after
+     * the upload) and opens the photo's AI mask session, whose states the panel shows.
+     */
+    private suspend fun prepareMasks(input: PipelineInput) {
+        val small = withContext(Dispatchers.Default) { MaskInputs.downscale(input) }
+        val session = aiMasks.session { withContext(Dispatchers.Default) { MaskInputs.render(small) } }
+        maskSession = session
+        viewModelScope.launch {
+            session.states.collect { states ->
+                _state.update { it.copy(masks = it.masks.copy(ai = states)) }
+                maskEditor.scheduleThumbnails()
+            }
+        }
+    }
+
+    /**
+     * The photo before local adjustments in OkLab (the colour and luminance range tools): Auto's sample rendered with
+     * the recipe without masks, Detail, Effects and geometry, cached until one of those inputs changes.
+     */
+    @Suppress("ReturnCount", "MagicNumber")
+    private suspend fun preLocalImage(): PreLocalImage? {
+        val sample = autoInputs?.sample ?: return null
+        val r = _state.value.edit.recipe
+        val key = r.copy(
+            masks = emptyList(),
+            geometry = Geometry(),
+            detail = Recipe.DEFAULT.detail,
+            effects = Recipe.DEFAULT.effects,
+        )
+        preLocalCache?.let { (k, v) -> if (k == key) return v }
+        val image = withContext(Dispatchers.Default) {
+            val rgb = dev.hfps.reveal.pipeline.cpu.CpuDevelop.renderLinear(sample, key)
+            val lab = FloatArray(rgb.size)
+            val out = FloatArray(3)
+            for (i in 0 until sample.width * sample.height) {
+                OkLab.fromRgb(rgb[i * 3], rgb[i * 3 + 1], rgb[i * 3 + 2], out)
+                lab[i * 3] = out[0]
+                lab[i * 3 + 1] = out[1]
+                lab[i * 3 + 2] = out[2]
+            }
+            PreLocalImage(sample.width, sample.height, lab)
+        }
+        preLocalCache = key to image
+        _state.update { it.copy(masks = it.masks.copy(preLocal = image)) }
+        return image
+    }
+
+    private var preLocalCache: Pair<Recipe, PreLocalImage>? = null
 
     /** The version's persisted history (after any write still queued from a previous visit). */
     private val storedHistory: Deferred<EditHistory> = viewModelScope.async {
@@ -229,6 +326,7 @@ class EditorViewModel @Inject constructor(
                     PresetThumbnails(small, full.coerceAtLeast(1f))
                 }
                 prepareOptics(input)
+                prepareMasks(input)
                 val ready = gpu.await()
                 // The renderer starts on the stored recipe (attach() pushes it).
                 storedHistory.await()
@@ -242,6 +340,9 @@ class EditorViewModel @Inject constructor(
                 }
                 EditorMetrics.recipes = { _state.value.edit.let { it.recipe to it.committed } }
                 EditorMetrics.history = { _state.value.edit.history }
+                EditorMetrics.masks = { _state.value.masks }
+                EditorMetrics.proxySize = input.width to input.height
+                EditorMetrics.applyRecipe = { r -> editAndCommit { r } }
                 photoInput = colourOnly(input)
                 _state.update {
                     it.copy(
@@ -932,6 +1033,7 @@ class EditorViewModel @Inject constructor(
         versionId?.let {
             writer.write(HistoryOp.Commit(it, history.current, history.entries[history.cursor].label, onlyIfEmpty))
         }
+        if (edit.history.current.masks != history.current.masks) maskEditor.scheduleThumbnails()
     }
 
     /**
@@ -950,6 +1052,7 @@ class EditorViewModel @Inject constructor(
     private fun show(recipe: Recipe, history: EditHistory) {
         _state.update { it.copy(edit = it.edit.copy(recipe = recipe, history = history)) }
         renderer()?.setRecipe(recipe)
+        maskEditor.onRecipeShown()
     }
 
     private fun updateView(change: (ViewOptions) -> ViewOptions) {
@@ -967,17 +1070,26 @@ class EditorViewModel @Inject constructor(
         renderer.setGeometryEditing(current.view.cropping)
         renderer.onHistogram = { histogram -> _state.update { it.copy(histogram = histogram) } }
         renderer.histogramEnabled = current.view.histogram
+        maskSession?.let { renderer.setMaskSource(it, MASK_PHOTO_KEY) }
+        maskEditor.pushOverlay()
+        maskEditor.scheduleThumbnails()
     }
 
     @OptIn(ExperimentalCoroutinesApi::class)
     override fun onCleared() {
         handoffPreviews.editorClosed()
         cancel.cancel()
+        maskSession?.close()
+        // The models hold tens of MB on the GPU each (docs/adr/0021): freed when the editor closes.
+        @Suppress("OPT_IN_USAGE")
+        kotlinx.coroutines.GlobalScope.launch(Dispatchers.Default) { aiMasks.release() }
         renderer()?.onHistogram = null
         EditorMetrics.renderer = null
         EditorMetrics.setControl = null
         EditorMetrics.recipes = null
         EditorMetrics.history = null
+        EditorMetrics.masks = null
+        EditorMetrics.applyRecipe = null
         thumbnails?.close()
         thumbnails = null
         // Closes the renderer once it exists (a creation cancelled half-way closes itself).
@@ -1258,6 +1370,9 @@ class EditorViewModel @Inject constructor(
 
         /** "No version" for queries that exclude the current one. */
         const val NO_VERSION = -1L
+
+        /** The renderer's photo key for the AI masks (the session keys its cache by the model input's content). */
+        const val MASK_PHOTO_KEY = "editor"
 
         const val EVENT_BUFFER = 8
     }

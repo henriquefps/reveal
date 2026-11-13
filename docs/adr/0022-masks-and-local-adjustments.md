@@ -242,3 +242,108 @@ the orchestrator's.
 - Open for M4/B: the panel, mask list, pins and handles, the brush's auto-mask (a stroke flag that multiplies each dab
   by a colour similarity to the dab centre, evaluated on the pre-local image like the range masks), whether paste needs
   per-mask choices, and history coalescing of stroke-in-progress updates. Open for M4/C: `AiMaskSource` in `:core:ml`.
+
+## Amendment: M4/B (editor)
+
+Status: accepted (M4/B). Date: 2026-11-13. The Masks tool of the editor, its answers to the questions above, and the
+recipe fields it added. Code: `:feature:editor` `masks/` (UI, gestures, the view model's half `MaskEditor`), `:core:data`
+`mask/` (`AiMasks`, `MaskInputs`), `:feature:export` (AI masks in exports).
+
+**Recipe additions (additive, `PIPELINE_VERSION` unchanged).** `BrushStroke.density` (0..100, default 100: a painting
+dab moves the coverage towards `density/100`, `cov += max(0, d − cov) · a`; an erasing dab removes at most that share,
+`cov *= 1 − a · d`), `BrushStroke.autoMask` (default false: each dab weighted by the colour similarity to the dab
+centre on the pre-local image), `BrushStroke.pressure` (`both` default = M4/A's `k(p)` on radius and flow, `flow` or
+`size`: what pen pressure scales; the editor writes `flow` by default) and `MaskComponent.Ai.autoSeeds` (default true:
+the subject's automatic seeds with the taps; false = the taps alone, for "remove an object"). Strokes without the
+fields render exactly as before. The engine side of density, auto-mask and pressure is M4/P's (`mask/Dabs`, the brush
+raster); until it lands they are stored and the brush renders as M4/A did.
+
+**The tool is a panel with a photo layer, not a mode.** ux.md drew Masks as a mode; in practice the panel needs the
+whole card (the mask list, the parts, four groups of local sliders) and the tool strip stays useful (Light next to a
+mask, Undo), so Masks is a `ToolBehaviour.Panel` that carries a `PhotoLayer`: gestures that see each pointer before
+the canvas (handles, brush, eyedropper and subject taps take what they handle; everything else pans and zooms) and an
+overlay drawn over the photo. Selecting another tool hides the handles and the overlay; the masks stay in the recipe.
+The panel's reset is per mask ("Reset this mask's adjustments": every local slider to 0 and the amount to 100 %), not
+a group reset that would delete every mask.
+
+**Layout.** The masks are a horizontal row of 56 dp coverage thumbnails with "+" at the top of the panel (ux.md
+"Masks"); the selected mask below: name (tap = rename), eye, overlay toggle, ⋯ (rename, duplicate, invert, move
+left/right, delete with a confirmation), Amount, the parts (type icon, how it combines, AI status, invert, remove;
+the selected part's op as chips), "Add / Subtract / Intersect" + a type, the selected part's own controls, then the
+local adjustments grouped Light (exposure, contrast, highlights, shadows, whites, blacks), Colour (temperature,
+tint, hue, saturation, colour hue with a hue track, colour strength with a saturation track), Effects (texture,
+clarity, dehaze), Detail (sharpness, noise). An empty panel shows the choices directly. Phone portrait, landscape,
+tablet side panel and docked panel use the same panel (only the strip changed in the other goldens).
+
+**Creating.** AI kinds as `MaskService` offers them (Subject, Sky, Background; People opens People, Hair, Face skin,
+Body skin, Skin, Clothes, Eyes, Irises, Lips, Teeth, Eyebrows), shapes (linear, radial, brush) and ranges (colour,
+luminance). A new AI component records `MaskService.modelFor(kind)` and `RefineDefaults.of(kind)`; it is named after
+its kind ("Sky", "Sky 2"), the others "Mask n" (lowest free number); at most `MaskParams.MAX_MASKS` (32) masks.
+
+**AI masks.** `AiMasks` (`:core:data`, Hilt singleton over `MaskService`) gives each photo a `Session` that is the
+renderer's `AiMaskSource`: a map lookup per frame; a miss starts the computation once (`MaskRequest` from the
+component: kind, `model`, prompts, `autoSeeds || prompts empty`, refine) and every `onReady` given meanwhile is called
+when the mask arrives. The editor keeps the proxy area-averaged to the model input's size at open (`MaskInputs
+.downscale`, 8 MB) and renders the model input when a mask is first needed (`MaskInputs.render`: default recipe on the
+CPU, sRGB, quantised to 8 bits, `MaskInputs.VERSION` = 1). The photo key of the masks cache is the model input's
+content (`img:` + SHA-256 of its 8-bit pixels): no database lookup, the same photo gives the same key on any device,
+and a hand-off without a library row works too. States per component: computing (a progress bar on the part and its
+thumbnail; the first run compiles the model, about a second on the GPU), ready, failed (the mask is kept and renders
+without the part; "Try again"), unavailable (a kind or model this app does not have: kept verbatim, skipped, said so;
+never a crash). A new AI component is requested at once, before any slider makes the renderer ask. Exports: when a
+rendered mask has an AI part, `ExportEngine` decodes a 2400 px proxy first (never on the heap with the full image),
+renders its model input and passes a session to `TiledRenderer.render(…, masks)`; its key is its own input's content,
+so an export may recompute a mask the editor made from its proxy (a slightly different decode). Edited and preset
+thumbnails still render without AI parts (open: they would need a cache-only lookup).
+
+**Handles.** All gesture and drawing maths is in the isotropic image plane (`MaskHandles`, JVM-tested) and reaches
+the screen through `MaskView`: image fraction -> proxy pixel -> the geometry operator's plane through the inverse of
+the lens and Transform warp (Newton's method on `Warp.source`, finite-difference Jacobian, 1e-3 px) -> output
+(`GeometryMapping.toOutput`) -> slot through the zoom. So handles follow crop, straighten, turns, flips, lens
+corrections, Transform and zoom. Linear: the pin moves it, the start and end lines move along the axis (the other line
+stays, the feather keeps its share), the centre line turns it around the pin. Radial: pin, two radius handles each
+way, a rotation knob above, the feather handle on the dashed inner ellipse; Inside/Outside chips. Grab radius 28 dp for
+a finger, 16 dp for a pen; a hovering pen highlights the handle and names it in a tooltip.
+
+**Brush.** Size (long-edge %), feather, flow, density, paint/erase, auto mask, and "Pen pressure: Flow / Size". A
+stroke is drawn live: `BrushStroke.raw` of the points so far replaces the last stroke every move (historical pointer
+positions included), so the dab list only grows and the renderer re-rasterises only new bins; on lift `BrushStroke.of`
+(simplified) replaces it and the stroke is **one** history step (strokes in progress are never committed, which is the
+coalescing ADR 0022 left open). A second finger cancels the stroke (the user is zooming). The pen's eraser end
+(`TOOL_TYPE_ERASER`) and its held side button (`BUTTON_STYLUS_PRIMARY`) erase; once a pen is seen, fingers only pan
+and zoom (`PhotoController.penSeen`, ADR 0016). The cursor shows the dab size and where the feather starts, under the
+finger while painting and under the hovering pen.
+
+**Ranges.** Colour range: a new one starts with the eyedropper on; a tap adds the mean OkLab colour of a 3 x 3 block
+of the pre-local image (Auto's analysis sample rendered on the CPU with the recipe without masks, Detail, Effects and
+geometry), at most five; Range and Smoothness sliders; Clear. Luminance range: Darkest / Brightest / Falloff, a bar
+showing the band, and a luminance map (the pre-local lightness in grey, the band tinted, drawn through the geometry
+without the small lens warp).
+
+**Overlay.** The selected mask through `setMaskOverlay`: shown while a stroke, a handle drag or a mask slider is in
+progress, and all the time when the overlay toggle (or `O`) is on; colour (six swatches) and opacity, or black and
+white. Only while the Masks panel is the open tool.
+
+**Invert (⋯ menu).** With one part it flips its invert flag. With several, De Morgan on the combination (the first part
+inverted; a later `add v` becomes `subtract v`, `subtract v` becomes `add v`, `intersect v` becomes `add (1 − v)`):
+exact for hard-edged or non-overlapping parts (`MaskEditsTest` checks `1 − coverage` on the CPU raster), within a
+quarter where soft edges overlap (max vs product), and applying it twice gives the same coverage. A mask-level invert
+flag would need the engine; this keeps M4/A's combination rules unchanged.
+
+**History, copy and paste.** Create, delete, rename, show/hide, a part added/removed/recombined/inverted, a handle or
+slider release, a stroke, a sample, a tap: one step each, labelled by `RecipeDiff` (`MASK_ADD`, `MASK_REMOVE`,
+`MASK_RENAME`, `MASK_SHOW/HIDE`, `MASK_SHAPE`, `MASK_ADJUST`, `MASK_ORDER`). Undo, redo, the history list and reopening
+restore masks; a selection that no longer exists is dropped. Paste: the chooser's Masks group **replaces** the
+photo's masks with the copied ones (like every other group; idempotent, so pasting twice does not duplicate them);
+masks stay out of the default groups (M4/A).
+
+**Keyboard.** `M` opens the Masks tool; in it `[` / `]` resize the brush (about 15 % a step), `O` toggles the overlay,
+`E` toggles erasing.
+
+**Tests.** JVM: `MaskEditsTest` (edits, names, limits, invert exactness against `MaskRaster`), `MaskViewTest` (round
+trips through crop/turn/flip/straighten and the Transform warp, handle drags and hit tests, pen pressure, the
+luminance map), `AiMasksTest` (the session with a fake model: once, ready, unavailable, failed, retry; request
+mapping; the model input and its key), `MasksCodecTest`. Goldens: `phone_masks*`, `landscape_masks`, `tablet_masks*`,
+`tablet_portrait_masks`. Instrumented: `MasksFlowTest` (each hand-made type, history, reopen; subject, hair, eyes on a
+public-domain portrait; sky on a public-domain landscape; a newer app's mask), `MaskPenTest` (injected stylus events:
+pressure, eraser end, side button, fingers pan once a pen is seen).

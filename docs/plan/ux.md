@@ -92,9 +92,18 @@ slightly lighter than the surround, with the hfps hairline border and radius.
   parametric/point switch, add point by tap, drag to move, drag off the edge to remove, fine drag.
 - **Colour wheels:** wheel with a draggable puck for hue/saturation, luminance slider below; switch
   between the 3-way view and one large wheel.
-- **Masks:** the mask list is a horizontal row of thumbnails above the panel; the selected mask's
-  components and adjustments in the panel; overlay toggle; brush size by pinch with the brush
-  selected, size/feather/flow chips.
+- **Masks** (as built in M4/B, docs/adr/0022 "M4/B (editor)"): a panel, not a mode (the tool strip
+  stays). At its top the masks as a row of coverage thumbnails and "+" (an empty panel lists the
+  choices: Subject, Sky, Background, People and its parts; linear, radial, brush; colour and
+  luminance range). The selected mask: name (tap to rename), eye, overlay toggle, ⋯ (rename,
+  duplicate, invert, move, delete); Amount; its parts (type, how each combines, invert, remove;
+  Add / Subtract / Intersect another); the selected part's controls; the local sliders grouped
+  Light, Colour, Effects, Detail; "Reset this mask's adjustments". On the photo: gradient handles
+  (pin, lines, radii, rotation knob, feather), the brush cursor, the eyedropper and subject taps,
+  all following crop, rotation and zoom. Brush: size/feather/flow/density sliders, Paint/Erase,
+  Auto mask, pen pressure → flow or size; the S Pen's eraser end and side button erase, and once a
+  pen is used the finger pans/zooms. The overlay (tint or black and white) shows while drawing or
+  dragging, or always with the toggle / `O`. Brush size by `[` `]` (pinch stays zoom).
 - **Presets:** horizontal groups of large thumbnails rendered with the current photo, strength slider
   below the selected one, long-press for edit/rename/delete/favourite.
 - **Before/after:** hold the ◐ button or the photo; long-press ◐ for split / side-by-side modes.

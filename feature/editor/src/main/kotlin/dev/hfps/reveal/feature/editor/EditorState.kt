@@ -4,6 +4,8 @@ import androidx.compose.runtime.Immutable
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.ImageBitmap
 import dev.hfps.reveal.feature.editor.edit.AsShot
+import dev.hfps.reveal.feature.editor.masks.MaskActions
+import dev.hfps.reveal.feature.editor.masks.MasksUiState
 import dev.hfps.reveal.feature.editor.open.OpenError
 import dev.hfps.reveal.feature.editor.presets.PresetThumbnailSource
 import dev.hfps.reveal.feature.editor.presets.PresetsState
@@ -171,6 +173,8 @@ data class EditorUiState(
     val presets: PresetsState = PresetsState(),
     /** Non-null when the photo opened from its smart preview: the editor says so (exports are at preview size). */
     val previewOnly: PreviewOnly? = null,
+    /** The Masks tool (docs/adr/0022 "M4/B (editor)"): selection, brush, overlay, AI states. */
+    val masks: MasksUiState = MasksUiState(),
 ) {
     val ready: Boolean get() = phase is EditorPhase.Ready
 }
@@ -307,4 +311,8 @@ class EditorActions(
     val presetBase: () -> Recipe? = { null },
     /** A preset at full strength on a base recipe, as previews show it. */
     val presetPreview: (Preset, Recipe) -> Recipe = { preset, base -> preset.apply(base) },
+    // ------------------------------------------------------------------ masks (docs/adr/0022 "M4/B (editor)")
+    val masks: MaskActions = MaskActions.NONE,
+    /** The Masks panel is on screen (`true`) or not: the overlay and the photo tools work only while it is. */
+    val onMasksPanel: (Boolean) -> Unit = {},
 )

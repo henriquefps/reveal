@@ -9,6 +9,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
@@ -61,6 +62,19 @@ class PhotoController {
     /** Where a pen hovers over the photo (slot pixels) while a tool shows hover feedback, `null` otherwise. */
     var penHover: Offset? by mutableStateOf(null)
 
+    /**
+     * Counts view changes (zoom, pan, frame): overlays drawn in image coordinates (the Masks panel's handles) read it
+     * to redraw when the view moves ([zoom] itself is plain maths, not snapshot state).
+     */
+    var viewTick: Int by mutableIntStateOf(0)
+        private set
+
+    /** The brush cursor's centre (slot pixels) while a finger or pen paints a mask, `null` otherwise. */
+    var brushCursor: Offset? by mutableStateOf(null)
+
+    /** The stroke in progress erases (the pen's eraser end, its button, or erase mode). */
+    var brushErasing: Boolean by mutableStateOf(false)
+
     /** The eyedropper's finger and loupe position, in slot pixels. */
     val loupe: LoupeState = LoupeState()
 
@@ -112,7 +126,10 @@ class PhotoController {
         renderer = r
         // A still photo (no renderer: screenshot tests) gets a zoom too, so overlays have a view to draw in.
         zoom = ready?.let {
-            ZoomState(hundredPercentScale = it.hundredPercentScale, onChange = { v -> r?.setView(v) }).also { z ->
+            ZoomState(hundredPercentScale = it.hundredPercentScale, onChange = { v ->
+                r?.setView(v)
+                viewTick++
+            }).also { z ->
                 z.setImageSize(it.width, it.height)
             }
         }
@@ -158,6 +175,7 @@ class PhotoController {
         val next = ViewFrame(b.left, b.top, b.width, b.height)
         if (next == frame) return
         frame = next
+        viewTick++
         renderer?.setFrame(next)
         zoom?.setViewSize(b.width.roundToInt(), b.height.roundToInt())
         applyPending()

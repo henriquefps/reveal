@@ -16,6 +16,10 @@ import dev.hfps.reveal.pipeline.export.PixelBox
 import dev.hfps.reveal.pipeline.export.PixelSize
 import dev.hfps.reveal.pipeline.geometry.GeometryMapping
 import dev.hfps.reveal.pipeline.input.TileSource
+import dev.hfps.reveal.pipeline.mask.AiMask
+import dev.hfps.reveal.pipeline.mask.MaskContext
+import dev.hfps.reveal.pipeline.mask.MaskParams
+import dev.hfps.reveal.pipeline.mask.MaskPlan
 import dev.hfps.reveal.pipeline.recipe.Recipe
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -121,6 +125,24 @@ class TiledRenderer private constructor(requestedTile: Int, private val share: E
     private val halfTex = IntArray(3)
     private val halfFbo = IntArray(3)
     private val effects = EffectsPasses()
+    private val maskPasses = MaskPasses()
+
+    /** The masks of the current render (docs/adr/0022), or null without masks. */
+    private var maskPlan: MaskPlan? = null
+    private var maskAi: List<AiMask?> = emptyList()
+    private var maskRegions = 0
+
+    /** AI masks of the zoom tiles (set by `ZoomTiles`); an export passes its own to [render]. */
+    @Volatile
+    var maskContext: MaskContext = MaskContext.NONE
+
+    /** Changes when an AI mask arrives (the zoom's grids are rebuilt); set by `ZoomTiles`. */
+    @Volatile
+    var maskEpoch: Int = 0
+
+    /** Called (any thread) when an AI mask the zoom asked for becomes ready. */
+    @Volatile
+    var onAiReady: (() -> Unit)? = null
 
     /**
      * Develops [source] with [recipe] as [plan] says and streams the output to [sink]. Blocking (runs on the renderer's
@@ -128,6 +150,7 @@ class TiledRenderer private constructor(requestedTile: Int, private val share: E
      *
      * @param high true writes unquantised encoded floats to [TileSink.acceptHigh] (10/16-bit encoders) instead of
      *   dithered 8-bit.
+     * @param masks the AI masks' source and photo key (docs/adr/0022); the render waits for masks not ready yet.
      */
     @Suppress("LongParameterList")
     fun render(
@@ -137,6 +160,7 @@ class TiledRenderer private constructor(requestedTile: Int, private val share: E
         output: OutputSettings,
         sink: TileSink,
         high: Boolean = false,
+        masks: MaskContext = MaskContext.NONE,
         cancel: () -> Boolean = { false },
         progress: (Float) -> Unit = {},
     ): TiledRenderStats = onGl {
@@ -145,7 +169,7 @@ class TiledRenderer private constructor(requestedTile: Int, private val share: E
         require(plan.reach >= DevelopParams.from(source.colour, recipe).reach) {
             "plan apron ${plan.reach} below the reach of defringe, Detail and Effects"
         }
-        renderOnGl(source, recipe, plan, output, sink, high, cancel, progress)
+        renderOnGl(source, recipe, plan, output, sink, high, cancel, progress, masks)
     }
 
     @Suppress("LongParameterList", "LongMethod")
@@ -158,15 +182,18 @@ class TiledRenderer private constructor(requestedTile: Int, private val share: E
         high: Boolean,
         cancel: () -> Boolean,
         progress: (Float) -> Unit,
+        masks: MaskContext,
     ): TiledRenderStats {
         ensureOutputTarget(high)
         gridKey = null
         val params = DevelopParams.from(source.colour, recipe)
         sceneImage = source.width to source.height
+        // An export waits for its AI masks (the editor asked for them first; docs/adr/0022).
+        prepareMasks(params, source, masks, wait = true)
         val grid = light.allocate(source.width, source.height)
         val prepass = plan.prepassTiles(grid)
         val tiles = plan.outputTiles()
-        val prepassRuns = (if (params.highlights != null) 1 else 0) + (if (params.tone.localActive) 1 else 0) +
+        val prepassRuns = (if (params.highlights != null) 1 else 0) + (if (guided(params)) 1 else 0) +
             (if (params.effects.gridActive) 1 else 0)
         val steps = tiles.size + prepassRuns * prepass.size
         var done = 0
@@ -190,6 +217,7 @@ class TiledRenderer private constructor(requestedTile: Int, private val share: E
             if (input != null) {
                 uploader.upload(input)
                 scenePass(input, reconstruct)
+                maskRegion(input, params)
                 stage = developRegion(input, params, source.width, source.height)
             }
             // Slot 13: the geometry box from the developed region (black where it reads nothing); also cuts the
@@ -255,7 +283,7 @@ class TiledRenderer private constructor(requestedTile: Int, private val share: E
         }
         val t1 = System.nanoTime()
         uploadParams(params, reconstruct)
-        if (params.tone.localActive) {
+        if (guided(params)) {
             for (tile in prepass) {
                 step()
                 uploader.upload(tile)
@@ -272,7 +300,8 @@ class TiledRenderer private constructor(requestedTile: Int, private val share: E
                 step()
                 uploader.upload(tile)
                 scenePass(tile, reconstruct)
-                developPass(tile, params.tone.localActive, labOut = true)
+                maskRegion(tile, params)
+                developPass(tile, guided(params), labOut = true)
                 effects.rows(workTex, tile.x, tile.y, tile.width, tile.height)
             }
             effects.finish()
@@ -298,7 +327,7 @@ class TiledRenderer private constructor(requestedTile: Int, private val share: E
     private fun developRegion(region: PixelBox, params: DevelopParams, imageWidth: Int, imageHeight: Int): Int {
         val fringe = params.defringe
         val local = params.localActive
-        developPass(region, params.tone.localActive, labOut = local || fringe.active)
+        developPass(region, guided(params), labOut = local || fringe.active)
         val area = DetailPasses.Region(region.x, region.y, region.width, region.height, imageWidth, imageHeight)
         if (fringe.active) {
             // Defringe (slot 10b, docs/adr/0015) into the scene texture, free once the develop stage has read it.
@@ -323,7 +352,65 @@ class TiledRenderer private constructor(requestedTile: Int, private val share: E
             ),
             output = null,
             region = area,
+            masks = if (maskPlan != null) maskRegions else null,
         ).texture
+    }
+
+    /** Local highlights/shadows need the guide too (docs/adr/0022). */
+    private fun guided(params: DevelopParams): Boolean =
+        params.tone.localActive || params.masks.needs(MaskParams.NEED_TONE_LOCAL)
+
+    /**
+     * The masks of [params] for this render (docs/adr/0022): the plan for the whole image and the AI masks ([wait]:
+     * an export blocks until its source has them, up to [AI_WAIT_S] seconds; the zoom skips those not ready and is
+     * told when they are).
+     */
+    private fun prepareMasks(params: DevelopParams, source: TileSource, context: MaskContext, wait: Boolean) {
+        if (!params.masks.active) {
+            maskPlan = null
+            maskAi = emptyList()
+            return
+        }
+        val plan = MaskPlan.of(params.masks.masks, source.width, source.height)
+        maskPlan = plan
+        maskAi = plan.ai.map { component ->
+            val ready = java.util.concurrent.CountDownLatch(1)
+            val mask = context.ai(component, source.width, source.height) {
+                ready.countDown()
+                if (!wait) onAiReady?.invoke()
+            }
+            if (mask != null || !wait || context.source === dev.hfps.reveal.pipeline.mask.AiMaskSource.NONE) {
+                mask
+            } else {
+                ready.await(AI_WAIT_S, java.util.concurrent.TimeUnit.SECONDS)
+                context.ai(component, source.width, source.height)
+            }
+        }
+    }
+
+    /**
+     * The coverage of [region] (after its scene pass): the pre-local develop into the work texture when a range mask
+     * reads it, then the brush layers and the coverage of the region; binds the masks for the develop and Detail
+     * passes.
+     */
+    private fun maskRegion(region: PixelBox, params: DevelopParams) {
+        val plan = maskPlan
+        if (plan == null) {
+            maskPasses.bind(params, off = true)
+            return
+        }
+        maskRegions++
+        var pre = 0
+        if (plan.needsPre) {
+            maskPasses.bind(params, off = true)
+            developPass(region, guided(params), labOut = true)
+            pre = workTex
+        }
+        maskPasses.coverage(
+            plan, region.x, region.y, region.width, region.height, pre, maskRegions, maskAi, cache = false,
+            capacity = tileSize,
+        )
+        maskPasses.bind(params)
     }
 
     // ------------------------------------------------------------------ zoom tiles (docs/adr/0012)
@@ -337,16 +424,18 @@ class TiledRenderer private constructor(requestedTile: Int, private val share: E
         var start = System.nanoTime()
         val params = DevelopParams.from(source.colour, recipe)
         sceneImage = source.width to source.height
+        prepareMasks(params, source, maskContext, wait = false)
         val key = ZoomGridKey(
             source = System.identityHashCode(source),
             wb = params.wbMultipliers.toList(),
             matrix = params.cameraToWorking.toList(),
             exposure = params.exposureGain,
             highlights = params.highlights,
-            local = params.tone.localActive,
+            local = guided(params),
             // The Effects grid is built from the develop output: everything before slot 11 (never the amounts).
             develop = if (params.effects.gridActive) params.withoutDetail() else null,
             vignette = params.vignette,
+            masks = if (params.masks.active && params.effects.gridActive) maskEpoch else 0,
         )
         if (key != gridKey || zoomSource !== source) {
             if (light.grid?.let { it.width != source.width || it.height != source.height } != false) {
@@ -400,8 +489,10 @@ class TiledRenderer private constructor(requestedTile: Int, private val share: E
         val region = ExportPlan.grow(core, border + params.reach, source.width, source.height)
         require(region.width <= tileSize && region.height <= tileSize) { "tile region exceeds $tileSize" }
         uploadParams(params, gridReconstruct)
+        prepareMasks(params, source, maskContext, wait = false)
         Uploader(source).upload(region)
         scenePass(region, gridReconstruct)
+        maskRegion(region, params)
         val result = developRegion(region, params, source.width, source.height)
         ensureAtlasTargets(atlas)
         GLES30.glUseProgram(copyProgram)
@@ -457,6 +548,7 @@ class TiledRenderer private constructor(requestedTile: Int, private val share: E
         val local: Boolean,
         val develop: DevelopParams?,
         val vignette: Any?,
+        val masks: Int,
     )
 
     /** The parameters and whole-image size the scene pass uses (vignetting is centred on the whole image). */
@@ -719,6 +811,8 @@ class TiledRenderer private constructor(requestedTile: Int, private val share: E
         GLES30.glBindBufferBase(GLES30.GL_UNIFORM_BUFFER, LIGHT_BINDING, lightUbo)
         GLES30.glBindBufferBase(GLES30.GL_UNIFORM_BUFFER, ColourShaders.BINDING, lookUbo)
         tools = ColourToolShaders.Gl(developProgram)
+        maskPasses.init()
+        attachMasks(developProgram, develop = true)
         light.init()
         detail.init()
         effects.init()
@@ -855,6 +949,7 @@ class TiledRenderer private constructor(requestedTile: Int, private val share: E
             onGl {
                 if (::info.isInitialized) {
                     deleteTiles()
+                    maskPasses.release()
                     light.release()
                     detail.release()
                     effects.release()
@@ -910,6 +1005,9 @@ class TiledRenderer private constructor(requestedTile: Int, private val share: E
 
     companion object {
         private const val DEVELOP_BINDING = 0
+
+        /** Longest an export waits for one AI mask from its source. */
+        private const val AI_WAIT_S = 120L
         private const val LIGHT_BINDING = 2
         private const val RGBA = 4
         private const val UPLOAD_ROWS = 64

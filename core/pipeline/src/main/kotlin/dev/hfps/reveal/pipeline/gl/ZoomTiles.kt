@@ -9,6 +9,7 @@ import android.util.Log
 import dev.hfps.reveal.pipeline.cpu.DevelopParams
 import dev.hfps.reveal.pipeline.geometry.GeometryMapping
 import dev.hfps.reveal.pipeline.input.TileSource
+import dev.hfps.reveal.pipeline.mask.MaskContext
 import dev.hfps.reveal.pipeline.recipe.Geometry
 import dev.hfps.reveal.pipeline.recipe.Optics
 import dev.hfps.reveal.pipeline.recipe.Recipe
@@ -117,6 +118,13 @@ internal class ZoomTiles(
     private var wanted: List<Int> = emptyList()
     private val waiters = ArrayList<() -> Boolean>()
 
+    /** Where the tiles' AI masks come from (docs/adr/0022); set by the renderer. */
+    var maskContext: MaskContext = MaskContext.NONE
+
+    /** Bumped when an AI mask arrives: the tiles develop again. */
+    var maskEpoch: Int = 0
+    private var genEpoch = 0
+
     /** Pane used for scheduling when there is no window (offscreen tests and benchmarks). */
     var testPane: TilePane? = null
 
@@ -203,8 +211,9 @@ internal class ZoomTiles(
         geometry = recipe.geometry
         optics = recipe.optics
         val params = DevelopParams.from(src.colour, recipe)
-        if (params != genParams) {
+        if (params != genParams || (params.masks.active && maskEpoch != genEpoch)) {
             genParams = params
+            genEpoch = maskEpoch
             genRecipe = recipe
             generation++
             genChangedAt = now
@@ -340,9 +349,14 @@ internal class ZoomTiles(
         val slotX = (slot % SLOTS_X) * ZoomGrid.SLOT
         val slotY = (slot / SLOTS_X) * ZoomGrid.SLOT
         val atlasTex = atlas
+        val masks = maskContext
+        val epoch = maskEpoch
         executor.execute {
             var tileMs = -1L
             var prepareMs = 0L
+            w.maskContext = masks
+            w.maskEpoch = epoch
+            w.onAiReady = { handler.post { if (!released) aiReady() } }
             try {
                 prepareMs = w.prepareZoom(src, recipe)
                 w.waitFence(fence)
@@ -363,7 +377,11 @@ internal class ZoomTiles(
         inFlight = true
         val gen = generation
         val recipe = genRecipe
+        val masks = maskContext
+        val epoch = maskEpoch
         executor.execute {
+            w.maskContext = masks
+            w.maskEpoch = epoch
             val ms = runCatching { w.prepareZoom(src, recipe) }.onFailure { Log.w(TAG, "zoom grids failed", it) }
             handler.post {
                 if (released) return@post
@@ -376,6 +394,12 @@ internal class ZoomTiles(
     }
 
     private var preparedGeneration = -1
+
+    /** An AI mask a tile asked for is ready: develop the tiles again. */
+    private fun aiReady() {
+        maskEpoch++
+        requestFrame()
+    }
 
     private fun onTileDone(key: Int, tile: Tile, gen: Int, tileMs: Long, prepareMs: Long) {
         if (released) return

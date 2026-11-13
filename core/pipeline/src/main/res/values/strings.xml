@@ -155,6 +155,14 @@
     <string name="history_transform_scale">Transform scale %1$s</string>
     <string name="history_transform_offset_x">Offset X %1$s</string>
     <string name="history_transform_offset_y">Offset Y %1$s</string>
+    <string name="history_mask_add">Add mask %1$s</string>
+    <string name="history_mask_remove">Delete mask %1$s</string>
+    <string name="history_mask_rename">Rename mask to %1$s</string>
+    <string name="history_mask_show">Show mask %1$s</string>
+    <string name="history_mask_hide">Hide mask %1$s</string>
+    <string name="history_mask_shape">Edit mask %1$s</string>
+    <string name="history_mask_adjust">Adjust mask %1$s</string>
+    <string name="history_mask_order">Reorder masks</string>
     <string name="upright_off">Off</string>
     <string name="upright_auto">Auto</string>
     <string name="upright_level">Level</string>

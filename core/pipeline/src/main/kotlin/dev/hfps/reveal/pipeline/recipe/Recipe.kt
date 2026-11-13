@@ -532,13 +532,6 @@ data class Aspect(
     }
 }
 
-/** A local adjustment mask (definition in image coordinates: brush strokes, gradients, model id + parameters). */
-@Serializable
-data class Mask(
-    /** Stable identifier of the mask within the recipe. */
-    @SerialName("id") val id: String = "",
-)
-
 /** A heal/clone spot (source, destination, radius, in image coordinates). */
 @Serializable
 data class Heal(

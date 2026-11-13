@@ -121,6 +121,7 @@ object HistoryLabels {
     private val NO_VALUE_LABELS: Map<HistoryField, Int> = mapOf(
         HistoryField.FLIP_H to R.string.history_flip_h,
         HistoryField.FLIP_V to R.string.history_flip_v,
+        HistoryField.MASK_ORDER to R.string.history_mask_order,
     )
 
     private val ENUM_FIELDS: Map<HistoryField, Pair<String, Int>> = mapOf(
@@ -259,6 +260,13 @@ object HistoryLabels {
         HistoryField.TRANSFORM_SCALE to R.string.history_transform_scale,
         HistoryField.TRANSFORM_OFFSET_X to R.string.history_transform_offset_x,
         HistoryField.TRANSFORM_OFFSET_Y to R.string.history_transform_offset_y,
+        HistoryField.MASK_ADD to R.string.history_mask_add,
+        HistoryField.MASK_REMOVE to R.string.history_mask_remove,
+        HistoryField.MASK_RENAME to R.string.history_mask_rename,
+        HistoryField.MASK_SHOW to R.string.history_mask_show,
+        HistoryField.MASK_HIDE to R.string.history_mask_hide,
+        HistoryField.MASK_SHAPE to R.string.history_mask_shape,
+        HistoryField.MASK_ADJUST to R.string.history_mask_adjust,
     )
 
     private val VALUE_NAMES: Map<String, Int> = mapOf(

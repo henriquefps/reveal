@@ -2,6 +2,7 @@
 
 package dev.hfps.reveal.pipeline.cpu
 
+import dev.hfps.reveal.pipeline.mask.MaskParams
 import dev.hfps.reveal.pipeline.recipe.Effects
 import dev.hfps.reveal.pipeline.recipe.RecipeRanges
 import kotlin.math.floor
@@ -36,10 +37,16 @@ data class EffectsParams(
     val dehazeOmega: Float = 0f,
     val dehazeBeta: Float = 0f,
     val post: PostParams = PostParams.NONE,
+    /** The texture blur's attenuation at this render's scale (a mask's local texture uses it). */
+    val textureAtt: Float = 1f,
+    /** Masks change texture, clarity or dehaze somewhere (docs/adr/0022): their passes run. */
+    val localTexture: Boolean = false,
+    val localClarity: Boolean = false,
+    val localDehaze: Boolean = false,
 ) {
-    val textureActive: Boolean get() = textureGain != 0f
-    val clarityActive: Boolean get() = clarityGain != 0f
-    val dehazeActive: Boolean get() = dehazeOmega != 0f || dehazeBeta != 0f
+    val textureActive: Boolean get() = textureGain != 0f || localTexture
+    val clarityActive: Boolean get() = clarityGain != 0f || localClarity
+    val dehazeActive: Boolean get() = dehazeOmega != 0f || dehazeBeta != 0f || localDehaze
 
     /** Clarity or dehaze: the low-resolution grid is needed. */
     val gridActive: Boolean get() = clarityActive || dehazeActive
@@ -50,24 +57,24 @@ data class EffectsParams(
     /** The texture blur's reach in rendered pixels (0 when texture is off). */
     val textureReach: Int get() = if (textureActive) textureBlur.size - 1 else 0
 
-    /** The texture change for the band [t] (GLSL `textureDelta`). */
-    fun textureDelta(t: Float): Float = textureGain * t * (textureEdge2 / (textureEdge2 + t * t))
+    /** The texture change for the band [t] (GLSL `textureDelta`), with the gain [gain] (a mask's per-pixel one). */
+    fun textureDelta(t: Float, gain: Float = textureGain): Float = gain * t * (textureEdge2 / (textureEdge2 + t * t))
 
     /** Clarity on the lightness [l] with the edge-aware base [b] (GLSL `clarity`). */
-    fun clarity(l: Float, b: Float): Float {
+    fun clarity(l: Float, b: Float, gain: Float = clarityGain): Float {
         val w = min(max(4f * b * (1f - b), 0f), 1f)
         val d = l - b
-        return l + clarityGain * w * d * (CLARITY_EDGE2 / (CLARITY_EDGE2 + d * d))
+        return l + gain * w * d * (CLARITY_EDGE2 / (CLARITY_EDGE2 + d * d))
     }
 
     /** Dehaze of the linear [rgb] in place with the haze share [hRaw] and the atmospheric light [air] (GLSL). */
-    fun dehaze(rgb: FloatArray, hRaw: Float, air: FloatArray) {
+    fun dehaze(rgb: FloatArray, hRaw: Float, air: FloatArray, omega: Float = dehazeOmega, beta: Float = dehazeBeta) {
         val h = min(max(hRaw, 0f), 1f)
-        if (dehazeOmega > 0f) {
-            val t = max(1f - dehazeOmega * h, DEHAZE_T0)
+        if (omega > 0f) {
+            val t = max(1f - omega * h, DEHAZE_T0)
             for (c in 0 until 3) rgb[c] = (rgb[c] - air[c]) / t + air[c]
         } else {
-            val f = dehazeBeta * (HAZE_BASE + (1f - HAZE_BASE) * h)
+            val f = beta * (HAZE_BASE + (1f - HAZE_BASE) * h)
             for (c in 0 until 3) rgb[c] = rgb[c] + (air[c] - rgb[c]) * f
         }
     }
@@ -110,19 +117,24 @@ data class EffectsParams(
         val NONE: EffectsParams = EffectsParams()
 
         /** Resolves [effects] for a render where one pixel covers [pixelScale] full-resolution pixels. */
-        fun from(effects: Effects, pixelScale: Float): EffectsParams {
+        fun from(effects: Effects, pixelScale: Float, needs: Int = 0): EffectsParams {
             val r = RecipeRanges
             val ps = max(1f, pixelScale)
             val texture = r.texture.clamp(effects.texture) / PERCENT
             val (blur, attenuation) = DetailParams.gaussian(TEXTURE_SIGMA / ps)
             val dehaze = r.dehaze.clamp(effects.dehaze) / PERCENT
+            val localTexture = needs and MaskParams.NEED_TEXTURE != 0
             return EffectsParams(
                 textureGain = texture * (if (texture > 0f) TEXTURE_BOOST else TEXTURE_SMOOTH) * attenuation,
-                textureBlur = if (texture != 0f) blur else emptyList(),
+                textureBlur = if (texture != 0f || localTexture) blur else emptyList(),
                 clarityGain = r.clarity.clamp(effects.clarity) / PERCENT * CLARITY_GAIN,
                 dehazeOmega = if (dehaze > 0f) dehaze * DEHAZE_OMEGA else 0f,
                 dehazeBeta = if (dehaze < 0f) -dehaze * DEHAZE_ADD else 0f,
                 post = PostParams.from(effects),
+                textureAtt = attenuation,
+                localTexture = localTexture,
+                localClarity = needs and MaskParams.NEED_CLARITY != 0,
+                localDehaze = needs and MaskParams.NEED_DEHAZE != 0,
             )
         }
     }

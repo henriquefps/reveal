@@ -103,19 +103,24 @@ uniform int uLabOut;
 out vec4 outColor;
 
 """ + ColourShaders.BLOCK + ColourShaders.FUNCTIONS + ColourToolShaders.BLOCK + ColourToolShaders.FUNCTIONS +
-        LightShaders.TONE + Q16 + """
+        LightShaders.TONE + Q16 + MaskShaders.MASKS + MaskShaders.DEVELOP + MaskShaders.DEVELOP_MAIN + """
 void main() {
     ivec2 p = ivec2(gl_FragCoord.xy);
     vec3 c = texelFetch(uScene, p, 0).rgb;
-    if (tone.z != 0.0) {
-        c = localTone(c, p + uOrigin);
+    if (maskInfo.x > 0) {
+        // Masks (docs/adr/0022): the local adjustments at their slots, per pixel.
+        c = developMasked(c, p);
+    } else {
+        if (tone.z != 0.0) {
+            c = localTone(c, p + uOrigin);
+        }
+        c = profileLook(c);
+        if (tone.w != 0.0) {
+            c = globalTone(c);
+        }
+        c = toneCurve(c);
+        c = colourStage(c);
     }
-    c = profileLook(c);
-    if (tone.w != 0.0) {
-        c = globalTone(c);
-    }
-    c = toneCurve(c);
-    c = colourStage(c);
     outColor = uLabOut == 1 ? vec4(q16(toOkLab(c)), 0.0) : vec4(c, 1.0);
 }
 """
@@ -188,9 +193,15 @@ layout(std140) uniform Output {
     vec4 warpRow2;
     uvec4 warpFlags;         // x = 1 warp on, y = 1 lens table on, z = 1 channels differ (CA)
     vec4 tileWarpNorm;       // as warpNorm for the full-resolution image
+    // Mask overlay (docs/adr/0022): colour = rgb linear working space, a = opacity; info = on, layer, channel, mode
+    // (0 colour, 1 greyscale).
+    vec4 overlayColour;
+    ivec4 overlayInfo;
+    vec4 overlayCell;        // the coverage layer's cell origin (texels) and the coverage texture's size
 };
 
 uniform sampler2D uStage;
+uniform sampler2D uOverlay;   // the masks' coverage (MaskPasses), sampled at the image point
 uniform sampler2D uLensLut;    // LensWarp table: rgb = per-channel radial scale
 uniform sampler2D uAtlas;      // zoom tiles: RGBA16F slots, levels 0-1
 uniform sampler2D uTileIndex;  // zoom tiles: RGBA8 per tile, rg = slot, b = fade-in alpha, a = ready
@@ -294,6 +305,7 @@ void main() {
     bool insideOutput = all(greaterThanEqual(op, vec2(0.0))) && all(lessThanEqual(op, vec2(geomX.w, geomY.w)));
     vec2 ip = vec2(dot(geomX.xy, op) + geomX.z, dot(geomY.xy, op) + geomY.z);
     bool insideImage = all(greaterThanEqual(ip, vec2(0.0))) && all(lessThanEqual(ip, image.xy));
+    vec2 maskPoint = ip;
     vec3 c;
     if (warpFlags.x != 0u) {
         // GeometryOp with a warp: the plane point to each channel's source point (green decides inside/outside).
@@ -303,6 +315,7 @@ void main() {
         bool front = warpSource(ip, warpNorm, warpRow0.xyz, warpRow1.xyz, warpRow2.xyz, warpFlags.y != 0u,
             uLensLut, sR, sG, sB);
         insideImage = insideImage && front && all(greaterThanEqual(sG, vec2(0.0))) && all(lessThanEqual(sG, image.xy));
+        maskPoint = sG;
         if (warpFlags.z != 0u) {
             c = vec3(sampleStage(sR).r, sampleStage(sG).g, sampleStage(sB).b);
         } else {
@@ -342,6 +355,18 @@ void main() {
                     : sampleTile(fp, t, idx);
                 c = mix(c, tc, idx.b);
             }
+        }
+    }
+    if (overlayInfo.x != 0 && insideImage) {
+        // The mask's coverage at the image point (display only: bilinear at an explicit LOD 0).
+        // Clamped half a texel inside the image: the bilinear footprint never reads the next layer's cell.
+        vec2 uv = (overlayCell.xy + clamp(maskPoint, vec2(0.5), image.xy - 0.5)) / overlayCell.zw;
+        float m = textureLod(uOverlay, uv, 0.0)[overlayInfo.z];
+        if (overlayInfo.w == 1) {
+            // Greyscale: the displayed value is the coverage (sRGB decoded into linear light).
+            c = vec3(m <= 0.04045 ? m / 12.92 : pow((m + 0.055) / 1.055, 2.4));
+        } else {
+            c = mix(c, overlayColour.rgb, overlayColour.a * m);
         }
     }
     if (post1.w != 0.0) {

@@ -4,8 +4,11 @@ import android.util.Log
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import dev.hfps.reveal.pipeline.gl.GpuDevelopRenderer
+import dev.hfps.reveal.pipeline.mask.Dabs
+import dev.hfps.reveal.pipeline.mask.MaskContext
 import dev.hfps.reveal.pipeline.recipe.BandValues
 import dev.hfps.reveal.pipeline.recipe.BaseLook
+import dev.hfps.reveal.pipeline.recipe.BrushStroke
 import dev.hfps.reveal.pipeline.recipe.Colour
 import dev.hfps.reveal.pipeline.recipe.ColourGrading
 import dev.hfps.reveal.pipeline.recipe.ColourMixer
@@ -16,10 +19,14 @@ import dev.hfps.reveal.pipeline.recipe.Effects
 import dev.hfps.reveal.pipeline.recipe.Geometry
 import dev.hfps.reveal.pipeline.recipe.GradeWheel
 import dev.hfps.reveal.pipeline.recipe.Light
+import dev.hfps.reveal.pipeline.recipe.LocalAdjustments
+import dev.hfps.reveal.pipeline.recipe.Mask
+import dev.hfps.reveal.pipeline.recipe.MaskComponent
 import dev.hfps.reveal.pipeline.recipe.Optics
 import dev.hfps.reveal.pipeline.recipe.ParametricCurve
 import dev.hfps.reveal.pipeline.recipe.Profile
 import dev.hfps.reveal.pipeline.recipe.Recipe
+import dev.hfps.reveal.pipeline.recipe.StrokePoint
 import dev.hfps.reveal.pipeline.recipe.Transform
 import dev.hfps.reveal.pipeline.recipe.WhiteBalance
 import dev.hfps.reveal.pipeline.synthetic.SyntheticImages
@@ -254,11 +261,110 @@ class PipelineBenchmark {
         val profile = InstrumentationRegistry.getArguments().getString("profile") == "true"
         for ((name, frame, at) in drags) {
             if (profile) {
-                profileDrag(name, image, frame, at)
+                profileDrag(name, image, frame, recipeAt = at)
             } else {
                 drag(name, image, PROXY_SCALE, frame, target = true, recipeAt = at)
             }
         }
+    }
+
+    /**
+     * Masks (docs/adr/0022): five masks, one of each type (linear, radial, a brush of 2,000+ dabs, luminance + colour
+     * range, AI from a fake source), every local adjustment somewhere, on the proxy of a 24 MP photo shown fitted
+     * (`-e frame`). Drags of a mask's exposure, clarity and noise (the shapes stay cached: no coverage pass), the same
+     * recipe's global exposure for comparison, then a stroke in progress: 5 points appended per frame to a fifth mask's
+     * brush, each frame re-rasterising only the new dabs' bins (`REVEAL_BENCH masks ...`).
+     */
+    @Test
+    fun maskSliderDragAndBrushAppend(): Unit = runBlocking {
+        val image = SyntheticImages.scene(WIDTH, HEIGHT)
+        val stroke = longStroke()
+        val brush = MaskComponent.Brush(strokes = listOf(BrushStroke.raw(stroke, size = 0.02f, feather = 50f)))
+        val base = MaskFixtures.fiveMasks(brush)
+        val dabs = Dabs.of(brush.strokes, WIDTH, HEIGHT).size
+        Log.i(TAG, "masks: brush of ${stroke.size} points, $dabs dabs at ${WIDTH}x$HEIGHT")
+        val frame = frameArgument()
+        fun local(change: (LocalAdjustments) -> LocalAdjustments) = base.copy(
+            masks = base.masks.mapIndexed { i, m ->
+                if (i ==
+                    0
+                ) {
+                    m.copy(adjustments = change(m.adjustments))
+                } else {
+                    m
+                }
+            },
+        )
+        val drags: List<Pair<String, (Float) -> Recipe>> = listOf(
+            "masks: global exposure (five masks on)" to
+                { t -> base.copy(light = base.light.copy(exposureEv = -1f + 2f * t)) },
+            "masks: drag a mask's exposure" to { t -> local { it.copy(exposure = -2f + 4f * t) } },
+            "masks: drag a mask's clarity" to { t -> local { it.copy(clarity = -100f + 200f * t) } },
+            "masks: drag a mask's noise" to { t -> local { it.copy(noise = 100f * t) } },
+            "masks: off (same global recipe)" to { t ->
+                base.copy(masks = emptyList(), light = base.light.copy(exposureEv = -1f + 2f * t))
+            },
+        )
+        val profile = InstrumentationRegistry.getArguments().getString("profile") == "true"
+        for ((name, at) in drags) {
+            coolDown()
+            if (profile) {
+                profileDrag(name, image, frame, MaskFixtures.context, at)
+            } else {
+                drag(name, image, PROXY_SCALE, frame, target = true, masks = MaskFixtures.context, recipeAt = at)
+            }
+        }
+        // A stroke in progress on a sixth mask: points appended every frame.
+        val renderer = GpuDevelopRenderer.create()
+        try {
+            renderer.setInput(image, PROXY_SCALE)
+            renderer.setMaskSource(MaskFixtures.source, "fixture")
+            val drawing = longStroke(seed = 1.7)
+            fun withStroke(n: Int) = base.copy(
+                masks = base.masks + Mask(
+                    "stroke",
+                    adjustments = LocalAdjustments(exposure = 0.5f),
+                    components = listOf(
+                        MaskComponent.Brush(strokes = listOf(BrushStroke.raw(drawing.take(n), size = 0.03f))),
+                    ),
+                ),
+            )
+            renderer.benchmark(listOf(withStroke(2)), frame)
+            val frames = ArrayList<Float>()
+            val coverage = ArrayList<Float>()
+            val bins = ArrayList<Int>()
+            var n = 2
+            while (n < drawing.size) {
+                n = minOf(n + APPEND_POINTS, drawing.size)
+                frames += renderer.benchmark(listOf(withStroke(n)), frame).single()
+                val stats = renderer.maskStats
+                coverage += stats.ms
+                bins += stats.brushBins
+            }
+            val f = frames.sorted()
+            val c = coverage.sorted()
+            Log.i(
+                TAG,
+                "masks: stroke append ($APPEND_POINTS points a frame, ${frames.size} frames, six masks): frame " +
+                    "p50 ${p(
+                        f,
+                        50,
+                    )}, p95 ${p(f, 95)} ms; brush + coverage update p50 ${p(c, 50)}, p95 ${p(c, 95)} ms; " +
+                    "bins per frame mean ${"%.1f".format(bins.average())}",
+            )
+        } finally {
+            renderer.close()
+        }
+    }
+
+    /** A long wandering stroke (fractions of the image) giving 2,000+ dabs at size 0.02 on the proxy. */
+    private fun longStroke(seed: Double = 0.0): List<StrokePoint> = List(STROKE_POINTS) { i ->
+        val t = i / STROKE_POINTS.toDouble()
+        StrokePoint(
+            (0.1 + 0.8 * t + 0.05 * kotlin.math.sin(t * 40 + seed)).toFloat(),
+            (0.5 + 0.35 * kotlin.math.sin(t * 9 * kotlin.math.PI + seed)).toFloat(),
+            (0.6 + 0.4 * kotlin.math.cos(t * 23)).toFloat(),
+        )
     }
 
     private fun noisy() = SyntheticImages.noisyCard(WIDTH, HEIGHT, seed = 5)
@@ -309,11 +415,13 @@ class PipelineBenchmark {
         name: String,
         image: PipelineInput,
         frame: Pair<Int, Int>? = null,
+        masks: MaskContext? = null,
         recipeAt: (Float) -> Recipe,
     ) {
         val renderer = GpuDevelopRenderer.create()
         try {
             renderer.setInput(image, PROXY_SCALE)
+            masks?.let { renderer.setMaskSource(it.source, it.photoKey) }
             val sweep = List(FRAMES) { recipeAt(it.toFloat() / (FRAMES - 1)) }
             warmUp(renderer, sweep, frame)
             renderer.profileWithTimers = InstrumentationRegistry.getArguments().getString("timers") != "false"
@@ -342,12 +450,14 @@ class PipelineBenchmark {
         pixelScale: Float = 1f,
         frame: Pair<Int, Int>? = null,
         target: Boolean = false,
+        masks: MaskContext? = null,
         recipeAt: (Float) -> Recipe,
     ) {
         val renderer = GpuDevelopRenderer.create()
         try {
             val uploadStart = System.nanoTime()
             renderer.setInput(image, pixelScale)
+            masks?.let { renderer.setMaskSource(it.source, it.photoKey) }
             renderer.benchmark(listOf(Recipe()), frame)
             val uploadMs = (System.nanoTime() - uploadStart) / 1e6
             val sweep = List(FRAMES) { recipeAt(it.toFloat() / (FRAMES - 1)) }
@@ -400,6 +510,8 @@ class PipelineBenchmark {
         const val TARGET_P50 = 8.3f
         const val TARGET_P95 = 12f
         const val MS_PER_S = 1000L
+        const val STROKE_POINTS = 1200
+        const val APPEND_POINTS = 5
 
         val ALL_DETAIL = Detail(nrLuminance = 40f, nrColour = 50f, sharpenAmount = 50f, sharpenMasking = 30f)
         val ALL_EFFECTS = Effects(texture = 30f, clarity = 25f, dehaze = 20f, vignetteAmount = -30f, grainAmount = 25f)

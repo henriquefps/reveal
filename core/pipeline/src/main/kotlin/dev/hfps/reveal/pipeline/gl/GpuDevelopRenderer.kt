@@ -23,7 +23,12 @@ import dev.hfps.reveal.pipeline.geometry.GeometryMapping
 import dev.hfps.reveal.pipeline.geometry.Warp
 import dev.hfps.reveal.pipeline.input.TileSource
 import dev.hfps.reveal.pipeline.input.colourOnly
+import dev.hfps.reveal.pipeline.mask.AiMaskSource
+import dev.hfps.reveal.pipeline.mask.MaskContext
+import dev.hfps.reveal.pipeline.mask.MaskParams
+import dev.hfps.reveal.pipeline.mask.MaskPlan
 import dev.hfps.reveal.pipeline.recipe.Geometry
+import dev.hfps.reveal.pipeline.recipe.Mask
 import dev.hfps.reveal.pipeline.recipe.Recipe
 import dev.hfps.reveal.pipeline.zoom.PixelAlignment
 import dev.hfps.reveal.pipeline.zoom.ZoomGrid
@@ -85,6 +90,7 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         val loupe: Loupe? = null,
         val geometryEditing: Boolean = false,
         val detailMask: Boolean = false,
+        val maskOverlay: MaskOverlay? = null,
     )
 
     @Volatile
@@ -124,7 +130,7 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
     private var effectsGridValid = false
     private val defringe = DefringePasses()
     private var fringeTarget: GlTarget? = null
-    private var developed: Pair<DevelopParams, Boolean>? = null
+    private var developed: Triple<DevelopParams, Boolean, Int>? = null
     private var stageMask = false
     private val zoom = ZoomTiles(handler, ::requestFrame) { egl.eglContext }
     private var sceneTex = 0
@@ -160,6 +166,24 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
     private val lensLut = WarpShaders.LutTexture()
     private val vignetteLut = WarpShaders.LutTexture()
     private val profiler = PassProfiler()
+    private val masks = MaskPasses()
+    private var maskContext = MaskContext.NONE
+    private var maskPlan: MaskPlan? = null
+    private var maskPlanKey: List<Mask>? = null
+
+    /** Bumped whenever the rendered masks' coverage changes (develop and Detail caches key on it). */
+    private var masksVersion = 0
+    private var stageMasksVersion = 0
+    private var preTarget: GlTarget? = null
+
+    /** The overlay's mask when it is not one of the rendered masks (its coverage gets the slot after them). */
+    private var overlayExtra: Mask? = null
+    private var preKey: Any? = null
+    private var preVersion = 0
+
+    /** Bumped when an AI mask arrives (the zoom tiles re-develop). */
+    @Volatile
+    private var aiEpoch = 0
     private var histogramDirty = false
     private var histogramPosted = false
     private var histogramPollPosted = false
@@ -233,7 +257,11 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         val image = checkNotNull(input) { "no input" }
         val req = request.get()
         val params = image.params(req.recipe)
-        if (params.withoutPost() != stageParams || stageMask || stageHalf != halfStage) {
+        overlayExtra = overlayId(req)?.let { id ->
+            req.recipe.masks.firstOrNull { it.id == id }?.takeIf { m -> params.masks.masks.none { it.id == m.id } }
+        }
+        prepareMasks(params)
+        if (stageStale(params, false, halfStage) || stageHalf != halfStage) {
             runStage1(params, half = halfStage)
         }
         val mapping = image.mapping(req.recipe)
@@ -250,6 +278,7 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
             mapping = mapping,
             tiles = zoom.uniforms(view, mapping),
             post = shownPost(req),
+            overlay = overlayUniforms(req),
         )
         val pixels = ByteBuffer.allocateDirect(width * height * RGBA)
         GLES30.glReadPixels(0, 0, width, height, GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, pixels)
@@ -367,6 +396,51 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
      */
     fun setDetailMask(show: Boolean) {
         update { it.copy(detailMask = show) }
+    }
+
+    /**
+     * Shows one mask's coverage over the photo (docs/adr/0022, "Overlay"): [MaskOverlay.Mode.COLOUR] blends its colour
+     * at its opacity times the coverage, [MaskOverlay.Mode.GREYSCALE] shows the coverage alone as grey. The mask is
+     * found by id in the recipe; its coverage is computed even when it adjusts nothing or is hidden. `null` hides it.
+     * On-screen only. Coalesced.
+     */
+    fun setMaskOverlay(overlay: MaskOverlay?) {
+        update { it.copy(maskOverlay = overlay) }
+    }
+
+    /**
+     * Where AI mask components come from (docs/adr/0022, "AI masks") and the photo's key for it; [AiMaskSource.NONE]
+     * skips them. A mask that becomes ready later renders on the next frame (and the zoom tiles re-develop).
+     */
+    fun setMaskSource(source: AiMaskSource, photoKey: String) {
+        handler.post {
+            maskContext = MaskContext(source, photoKey)
+            zoom.maskContext = maskContext
+            zoom.maskEpoch++
+            maskPlanKey = null
+            masksVersion++
+            requestFrame()
+        }
+    }
+
+    /** What the last coverage update did (brush bins, layers, time); for the benchmark. */
+    val maskStats: MaskStats
+        get() = masks.lastStats.let {
+            MaskStats(it.brushBins, it.brushFull, it.coverageLayers, it.nanos / NANOS_PER_MS)
+        }
+
+    /**
+     * The coverage of the mask [maskId] of [recipe] at the proxy's size (row-major, top row first), as the develop pass
+     * reads it; null when the recipe has no such mask. Tests.
+     */
+    suspend fun readCoverage(recipe: Recipe, maskId: String): FloatArray? = onGl {
+        val image = checkNotNull(input) { "no input" }
+        val params = image.params(recipe)
+        overlayExtra = recipe.masks.firstOrNull { it.id == maskId }
+        prepareMasks(params)
+        val plan = maskPlan ?: return@onGl null
+        val slot = plan.masks.indexOfFirst { it.id == maskId }
+        if (slot < 0) null else masks.readCoverage(slot)
     }
 
     /** Turns the on-screen clipping overlays on or off (see [ClippingWarnings]). Coalesced. */
@@ -621,9 +695,14 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
             req.view,
         ) + listOfNotNull(req.loupe?.let { CompareLayout.loupePane(it, width, height) })
         if (panes.any { it.original }) ensureOriginal(image)
-        val params = image.params(if (req.showOriginal) Recipe.DEFAULT else req.recipe)
+        val shownRecipe = if (req.showOriginal) Recipe.DEFAULT else req.recipe
+        val params = image.params(shownRecipe)
         val mask = req.detailMask && !req.showOriginal
         profiler.mark("params (CPU)")
+        overlayExtra = overlayId(req)?.let { id ->
+            shownRecipe.masks.firstOrNull { it.id == id }?.takeIf { m -> params.masks.masks.none { it.id == m.id } }
+        }
+        prepareMasks(params)
         val tilesOn = tilesShown(req)
         val half = halfViewOnly(panes, mapping, tilesOn, req)
         if (stageStale(params, mask, half)) {
@@ -658,12 +737,23 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
      * The post-crop vignette and grain of what the window shows: none for the original, the crop mode's plane (the
      * frame is being edited) or the sharpening mask.
      */
+    @Suppress("ComplexCondition")
     private fun shownPost(req: Request): PostParams = if (req.showOriginal || req.geometryEditing ||
-        req.detailMask
+        req.detailMask || req.maskOverlay?.mode == MaskOverlay.Mode.GREYSCALE
     ) {
         PostParams.NONE
     } else {
         PostParams.from(req.recipe.effects)
+    }
+
+    /** The overlay of [req] when its mask has a coverage slot now (docs/adr/0022, "Overlay"). */
+    @Suppress("ReturnCount")
+    private fun overlayUniforms(req: Request): OverlayUniforms? {
+        val overlay = req.maskOverlay ?: return null
+        if (overlayId(req) == null || masks.coverageTexture == 0) return null
+        val slot = maskPlan?.masks?.indexOfFirst { it.id == overlay.maskId }?.takeIf { it >= 0 } ?: return null
+        val (cell, channel) = masks.overlayCell(slot) ?: return null
+        return OverlayUniforms(cell, channel, overlay.mode, MaskOverlay.linearColour(overlay.colour), overlay.opacity)
     }
 
     /** Zoom tiles show unless the photo shows the original, the crop mode's plane or the sharpening mask. */
@@ -696,7 +786,9 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         val params = all.withoutPost()
         val localOn = params.localActive || showMask
         val fringeOn = params.defringe.active
-        val develop = params.withoutDetail() to localOn
+        // The coverage the develop pass reads (cached in MaskPasses; the overlay's mask keeps its slot after them).
+        prepareMasks(params)
+        val develop = Triple(params.withoutDetail(), localOn, masksVersion)
         val region = DetailPasses.Region(0, 0, image.width, image.height, image.width, image.height)
         if (develop != developed) {
             runDevelop(params, localOn || fringeOn)
@@ -712,6 +804,7 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         }
         if (localOn) runLocal(params, showMask, half, region, fringeOn)
         stageParams = params
+        stageMasksVersion = masksVersion
         stageMask = showMask
         stageHalf = localOn && half && !showMask && stageHalfFbo != 0
         stageMipsValid = false
@@ -723,7 +816,8 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
      */
     private fun stageStale(params: DevelopParams, mask: Boolean, half: Boolean): Boolean {
         val needsLevel0 = stageHalf && !half
-        return params.withoutPost() != stageParams || mask != stageMask || needsLevel0
+        return params.withoutPost() != stageParams || mask != stageMask || needsLevel0 ||
+            masksVersion != stageMasksVersion
     }
 
     /**
@@ -771,6 +865,9 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
     ) {
         val image = checkNotNull(input) { "no input" }
         val lab = checkNotNull(if (fringeOn) fringeTarget else labTarget).texture
+        // The masks' values for slots 11-12: a drag of a mask's Detail or Effects slider keeps the develop output, so
+        // the block and the adjustment table must be uploaded here too (docs/adr/0022).
+        masks.bind(params)
         val e = if (showMask) EffectsParams.NONE else params.effects
         if (e.gridActive && !effectsGridValid) {
             effects.allocate(image.width, image.height)
@@ -789,6 +886,12 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
             showMask = showMask,
             cache = true,
             half = if (half && stageHalfFbo != 0) GlTarget(stageTex, stageHalfFbo) else null,
+            // The luminance levels depend on the masks' noise only (and their coverage): another local drag keeps them.
+            masks = if (params.masks.active) {
+                Triple(params.masks.masks.map { it.id }, params.masks.noiseColumn(), masksVersion)
+            } else {
+                null
+            },
         )
         lastLocalPasses = detail.lastPasses
     }
@@ -802,6 +905,18 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
     private fun runDevelop(params: DevelopParams, labOut: Boolean) {
         val image = checkNotNull(input) { "no input" }
         if (labOut) ensureDetailTargets(image)
+        val guided = prepareScene(params)
+        masks.bind(params)
+        developPass(if (labOut) checkNotNull(labTarget).fbo else stageFbo, labOut, guided)
+        profiler.mark("develop pass")
+    }
+
+    /**
+     * The scene texture and the local-tone guide of [params] (each kept while what it depends on is unchanged) and the
+     * develop stage's uniforms; returns whether the guide is in use.
+     */
+    private fun prepareScene(params: DevelopParams): Boolean {
+        val image = checkNotNull(input) { "no input" }
         val hp = params.highlights
         val reconstruct = hp != null && image.needsReconstruction
         if (reconstruct) {
@@ -817,7 +932,7 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         uploadUbo(lookUbo, ColourShaders.lookBlock(params))
         tools.upload(params)
         // The scene texture and the guide depend only on what reaches scene-linear light (white balance, matrix,
-        // exposure, reconstruction): a drag of a tone slider re-runs only the develop pass.
+        // exposure, reconstruction): a drag of a tone slider re-runs only the develop pass. Masks never reach it.
         val scene = SceneKey(
             params.wbMultipliers.toList(),
             params.cameraToWorking.toList(),
@@ -838,25 +953,96 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
             sceneKey = scene
             guideValid = false
         }
-        if (params.tone.localActive && !guideValid) {
+        // Local highlights/shadows need the guide too (docs/adr/0022).
+        val guided = params.tone.localActive || params.masks.needs(MaskParams.NEED_TONE_LOCAL)
+        if (guided && !guideValid) {
             light.guide(sceneTex)
             guideValid = true
             profiler.mark("guided filter")
         }
-        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, if (labOut) checkNotNull(labTarget).fbo else stageFbo)
+        return guided
+    }
+
+    /** The develop pass into [fbo] (the uniforms and the masks' block are uploaded). */
+    private fun developPass(fbo: Int, labOut: Boolean, guided: Boolean) {
+        val image = checkNotNull(input) { "no input" }
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, fbo)
         GlSupport.discardColour()
         GLES30.glViewport(0, 0, image.width, image.height)
         GLES30.glUseProgram(developProgram)
         GLES30.glUniform1i(GLES30.glGetUniformLocation(developProgram, "uLabOut"), if (labOut) 1 else 0)
-        val local = params.tone.localActive
         bindTextures(
             sceneTex,
-            if (local) light.coefTexture else sceneTex,
-            if (local) light.momentsTexture else sceneTex,
+            if (guided) light.coefTexture else sceneTex,
+            if (guided) light.momentsTexture else sceneTex,
         )
         GLES30.glDrawArrays(GLES30.GL_TRIANGLES, 0, 3)
         GlSupport.checkError("develop stage")
-        profiler.mark("develop pass")
+    }
+
+    /**
+     * The overlay mask's id when the window shows one (not for the original, the crop plane or the sharpening mask).
+     */
+    private fun overlayId(req: Request): String? =
+        req.maskOverlay?.maskId?.takeIf { !req.showOriginal && !req.geometryEditing && !req.detailMask }
+
+    /**
+     * The coverage of [params]' rendered masks, plus the overlay's mask ([overlayExtra]) when it is not one of them
+     * (docs/adr/0022): the brush layers, the AI masks from the source, the pre-local image when a range mask reads it
+     * (a develop pass without masks into its own OkLab texture, kept while the global parameters are), then the
+     * coverage passes ([MaskPasses] keeps what did not change). Bumps [masksVersion] when the coverage changed.
+     */
+    private fun prepareMasks(params: DevelopParams) {
+        val image = checkNotNull(input) { "no input" }
+        val rendered = params.masks.masks
+        val extra = overlayExtra?.takeIf { m -> rendered.none { it.id == m.id } }
+        val list = if (extra != null) rendered + extra else rendered
+        if (list != maskPlanKey) {
+            maskPlan = if (list.isEmpty()) null else MaskPlan.of(list, image.width, image.height)
+            maskPlanKey = list
+        }
+        val plan = maskPlan
+        if (plan == null) {
+            if (masks.coverageTexture != 0) {
+                masks.coverage(MaskPlan.of(emptyList(), image.width, image.height), 0, 0, 0, 0, 0, 0, emptyList(), true)
+                masksVersion++
+            }
+            return
+        }
+        var pre = 0
+        if (plan.needsPre) {
+            val target = preTarget ?: run {
+                val tex = newTexture(1, image.width, image.height, GLES30.GL_NEAREST, GLES30.GL_NEAREST)
+                GlTarget(tex, newFramebuffer(tex)).also { preTarget = it }
+            }
+            val key = params.withoutDetail().withoutMasks()
+            if (key != preKey) {
+                val guided = prepareScene(params)
+                masks.bind(params, off = true)
+                developPass(target.fbo, labOut = true, guided = guided)
+                profiler.mark("mask pre-local pass")
+                preKey = key
+                preVersion++
+            }
+            pre = target.texture
+        }
+        val epoch = aiEpoch
+        val ai = plan.ai.map { component ->
+            maskContext.ai(component, image.width, image.height) {
+                handler.post {
+                    if (aiEpoch == epoch) {
+                        aiEpoch++
+                        zoom.maskEpoch++
+                    }
+                    maskPlanKey = null
+                    requestFrame()
+                }
+            }
+        }
+        if (masks.coverage(plan, 0, 0, image.width, image.height, pre, preVersion, ai, cache = true)) {
+            masksVersion++
+            profiler.mark("mask coverage")
+        }
     }
 
     /** The textures of slots 11 and 12 at the proxy size, allocated the first time they run on this image. */
@@ -918,7 +1104,7 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, unit0)
     }
 
-    @Suppress("LongParameterList")
+    @Suppress("LongParameterList", "CyclomaticComplexMethod")
     private fun drawOutput(
         image: UploadedImage,
         paneView: ViewTransform,
@@ -931,6 +1117,7 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         mapping: GeometryMapping = GeometryMapping.identity(image.width, image.height),
         tiles: TileUniforms? = null,
         post: PostParams = PostParams.NONE,
+        overlay: OverlayUniforms? = null,
     ) {
         val view = alignedView(paneView, width, height, mapping, tiles)
         val aligned = mapping.axisAligned
@@ -951,10 +1138,11 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
             outputUbo,
             outputBlock(
                 image.width, image.height, view, width, height, settings, surround, clipping.bits, mapping, tiles,
-                post, boxLevel,
+                post, boxLevel, overlay,
             ),
         )
         if (tiles != null) zoom.bind(tiles.nearest)
+        if (overlay != null) masks.bindCoverage()
         lensLut.upload(mapping.warp?.lens?.table)
         GLES30.glActiveTexture(GLES30.GL_TEXTURE0 + LENS_UNIT)
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, lensLut.texture)
@@ -1100,6 +1288,10 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         GLES30.glBindBufferBase(GLES30.GL_UNIFORM_BUFFER, LIGHT_BINDING, lightUbo)
         GLES30.glBindBufferBase(GLES30.GL_UNIFORM_BUFFER, ColourShaders.BINDING, lookUbo)
         tools = ColourToolShaders.Gl(developProgram)
+        masks.init()
+        attachMasks(developProgram, develop = true)
+        GLES30.glUseProgram(outputProgram)
+        GLES30.glUniform1i(GLES30.glGetUniformLocation(outputProgram, "uOverlay"), MaskShaders.COVERAGE_UNIT)
         light.init()
         detail.init()
         effects.init()
@@ -1238,6 +1430,16 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
     private fun deleteImageTextures() {
         releaseCompareAndReadbacks()
         deleteDetailTargets()
+        masks.releaseImage()
+        preTarget?.let {
+            GLES30.glDeleteTextures(1, intArrayOf(it.texture), 0)
+            GLES30.glDeleteFramebuffers(1, intArrayOf(it.fbo), 0)
+        }
+        preTarget = null
+        preKey = null
+        maskPlan = null
+        maskPlanKey = null
+        masksVersion++
         GLES30.glDeleteTextures(4, intArrayOf(sourceTex, stageTex, readTex, sceneTex), 0)
         GLES30.glDeleteFramebuffers(4, intArrayOf(stageFbo, readFbo, sceneFbo, stageHalfFbo), 0)
         sceneTex = 0
@@ -1258,6 +1460,7 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         zoom.release()
         profiler.release()
         deleteImageTextures()
+        masks.release()
         light.release()
         detail.release()
         effects.release()
@@ -1319,6 +1522,7 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
                 mapping = mapping,
                 tiles = if (tilesOn && !pane.original) zoom.uniforms(pane.view, mapping) else null,
                 post = if (pane.original) PostParams.NONE else shownPost(req),
+                overlay = if (pane.original) null else overlayUniforms(req),
             )
         }
         GLES30.glDisable(GLES30.GL_SCISSOR_TEST)
@@ -1545,6 +1749,7 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
             tiles: TileUniforms? = null,
             post: PostParams = PostParams.NONE,
             boxLevel: Int = 0,
+            overlay: OverlayUniforms? = null,
         ): ByteBuffer {
             val b = ByteBuffer.allocateDirect(OUTPUT_BLOCK_FLOATS * Float.SIZE_BYTES).order(ByteOrder.nativeOrder())
             putMat4(b, OutputTransformOp.workingToOutput(settings.space).toFloatArray())
@@ -1570,8 +1775,23 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
             putTiles(b, tiles)
             putPost(b, post, mapping, tiles)
             putWarp(b, mapping.warp, tiles?.full?.warp)
+            putOverlay(b, overlay)
             b.flip()
             return b
+        }
+
+        /**
+         * The mask overlay (docs/adr/0022): colour (linear working space, opacity), info (on, -, channel, mode), the
+         * coverage layer's cell (origin, texture size).
+         */
+        private fun putOverlay(b: ByteBuffer, o: OverlayUniforms?) {
+            if (o == null) {
+                repeat(OVERLAY_BLOCK_FLOATS) { b.putInt(0) }
+                return
+            }
+            b.putFloat(o.colour[0]).putFloat(o.colour[1]).putFloat(o.colour[2]).putFloat(o.opacity)
+            b.putInt(1).putInt(0).putInt(o.channel).putInt(if (o.mode == MaskOverlay.Mode.GREYSCALE) 1 else 0)
+            o.cell.forEach { b.putFloat(it) }
         }
 
         /** The warp part of the output block (docs/adr/0015): norms, homography rows, flags, full-res norm. */
@@ -1628,7 +1848,9 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         private const val TILE_BLOCK_FLOATS = 24
         private const val POST_BLOCK_FLOATS = 16
         private const val WARP_BLOCK_FLOATS = 24
-        private const val OUTPUT_BLOCK_FLOATS = 44 + TILE_BLOCK_FLOATS + POST_BLOCK_FLOATS + WARP_BLOCK_FLOATS
+        private const val OVERLAY_BLOCK_FLOATS = 12
+        private const val OUTPUT_BLOCK_FLOATS =
+            44 + TILE_BLOCK_FLOATS + POST_BLOCK_FLOATS + WARP_BLOCK_FLOATS + OVERLAY_BLOCK_FLOATS
         private const val FADE_TICK_MS = 16L
         private const val FENCE_TIMEOUT_NS = 2_000_000_000L
         private const val GL_TIME_ELAPSED_EXT = 0x88BF
@@ -1739,3 +1961,46 @@ internal fun bindVignette(
 
 /** Texture unit of the lens tables (vignetting in the scene pass, the lens warp in the output passes). */
 internal const val LENS_UNIT: Int = 5
+
+/**
+ * A mask's coverage shown over the photo (docs/adr/0022, "Overlay"): the mask [maskId] of the recipe, in [mode]; COLOUR
+ * blends [colour] (opaque sRGB `0xRRGGBB`) at [opacity] (0..1) times the coverage, GREYSCALE shows the coverage alone.
+ */
+data class MaskOverlay(
+    val maskId: String,
+    val mode: Mode = Mode.COLOUR,
+    val colour: Int = DEFAULT_COLOUR,
+    val opacity: Float = DEFAULT_OPACITY,
+) {
+    enum class Mode { COLOUR, GREYSCALE }
+
+    companion object {
+        /** A saturated red, like other editors' mask overlays. */
+        const val DEFAULT_COLOUR: Int = 0xFF2A2A
+        const val DEFAULT_OPACITY: Float = 0.5f
+
+        /** [rgb] (sRGB `0xRRGGBB`) in the working space (linear Rec.2020). */
+        internal fun linearColour(rgb: Int): FloatArray {
+            fun lin(v: Int): Double {
+                val e = v / 255.0
+                return if (e <= 0.04045) e / 12.92 else StrictMath.pow((e + 0.055) / 1.055, 2.4)
+            }
+            val m = dev.hfps.reveal.pipeline.cpu.ColorSpaces.REC2020.fromXyz *
+                dev.hfps.reveal.pipeline.cpu.ColorSpaces.SRGB.toXyz
+            val v = m.times(lin(rgb shr 16 and 0xff), lin(rgb shr 8 and 0xff), lin(rgb and 0xff))
+            return FloatArray(3) { v[it].toFloat() }
+        }
+    }
+}
+
+/** What the output pass needs of a [MaskOverlay]: the coverage cell and channel, mode, linear colour and opacity. */
+internal class OverlayUniforms(
+    val cell: FloatArray,
+    val channel: Int,
+    val mode: MaskOverlay.Mode,
+    val colour: FloatArray,
+    val opacity: Float,
+)
+
+/** What the last mask coverage update did (`GpuDevelopRenderer.maskStats`). */
+data class MaskStats(val brushBins: Int, val brushFull: Int, val coverageLayers: Int, val ms: Float)

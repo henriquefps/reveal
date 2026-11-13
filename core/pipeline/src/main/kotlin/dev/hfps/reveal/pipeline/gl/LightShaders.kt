@@ -136,6 +136,16 @@ vec3 localTone(vec3 c, ivec2 p) {
     return c * exp2(b2 - base);
 }
 
+// LocalToneOp.applyShifted (masks, docs/adr/0022): the guide sampled with l (the pixel before the local gain), the
+// base shifted by that gain's log-luminance change, per-pixel stops hs (highlights) and ss (shadows).
+vec3 localToneAt(vec3 c, float l, ivec2 p, float hs, float ss, float shift) {
+    vec2 ab = sampleCoef(p, l);
+    float base = ab.x * l + ab.y + shift;
+    float b1 = base + ss * shadowWeight(base);
+    float b2 = b1 + hs * highlightWeight(b1);
+    return c * exp2(b2 - base);
+}
+
 float hermite(float t, float y0, float y1, float m0, float m1) {
     float t2 = t * t;
     float t3 = t2 * t;
@@ -154,16 +164,22 @@ float contrastCurve(float p, float g) {
     return hermite((p - p0) / (1.0 - p0), p0, 1.0, g * (1.0 - p0), e * (1.0 - p0));
 }
 
-vec3 globalTone(vec3 c) {
+// GlobalToneOp.pixel with the constants g (contrast gamma), wh (whites shift), bl (blacks shift): masks pass their
+// per-pixel totals (docs/adr/0022).
+vec3 globalToneWith(vec3 c, float g, float wh, float bl) {
     float yc = max(luma(c), 0.0);
     float p = pow(yc, ${f(1f / 3f)});
-    float p1 = contrastCurve(p, tone2.x);
-    float p2 = p1 + tone2.y * sstep(tone2.w, 1.0, p1);
-    float q = max(p2 + tone2.z * (1.0 - sstep(0.0, tone2.w, p2)), 0.0);
+    float p1 = contrastCurve(p, g);
+    float p2 = p1 + wh * sstep(tone2.w, 1.0, p1);
+    float q = max(p2 + bl * (1.0 - sstep(0.0, tone2.w, p2)), 0.0);
     float y2 = q * q * q;
     float gain = min(y2 / max(yc, ${f(GlobalToneOp.YMIN)}), ${f(GlobalToneOp.GMAX)});
     float add = max(y2 - yc * gain, 0.0);
     return c * gain + add;
+}
+
+vec3 globalTone(vec3 c) {
+    return globalToneWith(c, tone2.x, tone2.y, tone2.z);
 }
 """
 

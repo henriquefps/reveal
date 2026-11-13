@@ -119,6 +119,45 @@ class ZoomTilesTest {
     }
 
     /**
+     * Masks at 100 % (docs/adr/0022): the tiles develop the masks at full resolution (brush, ranges, the fake AI
+     * source), match the CPU reference of the full image and are bit-identical to the export of the same pixels.
+     */
+    @Test
+    fun maskedTilesMatchTheCpuAndTheExport() = runBlocking {
+        renderer.setMaskSource(MaskFixtures.source, "fixture")
+        val masked = MaskFixtures.fiveMasks().copy(light = edit.light, detail = edit.detail)
+        renderer.setRecipe(masked)
+        val view = ViewTransform(K, 256f, 256f)
+        val stats = withTimeout(TIMEOUT_MS) { renderer.awaitZoom(view, PANE_W, PANE_H) }
+        assertThat(stats.shown).isEqualTo(4)
+        val shot = renderer.renderView(view, PANE_W, PANE_H, OutputSettings(dither = false))
+        val x0 = ZoomGrid.TILE - PANE_W / 2
+        val y0 = ZoomGrid.TILE - PANE_H / 2
+        val cpu = CpuDevelop.render(full, masked, OutputSettings(dither = false), masks = MaskFixtures.context)
+        val export = exportFull(masked)
+        var worst = 0
+        var sum = 0L
+        var differ = 0
+        for (y in 0 until PANE_H) {
+            for (x in 0 until PANE_W) {
+                for (c in 0 until 3) {
+                    val a = shot[(y * PANE_W + x) * 4 + c].toInt() and 0xff
+                    val i = ((y + y0) * FULL_W + x + x0) * 4 + c
+                    val d = abs(a - (cpu[i].toInt() and 0xff))
+                    worst = maxOf(worst, d)
+                    sum += d
+                    if (shot[(y * PANE_W + x) * 4 + c] != export[i]) differ++
+                }
+            }
+        }
+        val mean = sum.toDouble() / (PANE_W * PANE_H * 3)
+        Log.i(TAG, "masks 100 % vs CPU: max $worst levels, mean $mean; vs export $differ values differ")
+        assertThat(worst).isAtMost(MAX_LEVELS)
+        assertThat(mean).isAtMost(MEAN_LEVELS)
+        assertThat(differ).isEqualTo(0)
+    }
+
+    /**
      * The worst 100 % view (docs/adr/0012 "Pixel alignment at 1:1"): screen pixel centres exactly on full-resolution
      * pixel edges, where `floor` would follow the GPU's last-bit rounding and duplicate or skip rows (the Tab S9
      * Ultra's Adreno 740 did after a double-tap). The renderer aligns the view: the pane is the export shifted by one
@@ -274,6 +313,7 @@ class ZoomTilesTest {
                         }
                     }
                 },
+                masks = MaskFixtures.context,
             )
             return pixels
         } finally {

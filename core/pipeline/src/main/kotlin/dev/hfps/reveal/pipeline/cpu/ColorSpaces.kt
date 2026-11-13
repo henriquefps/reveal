@@ -37,7 +37,7 @@ object ColorSpaces {
     val REC2020: Rgb = Rgb(Xy(0.708, 0.292), Xy(0.170, 0.797), Xy(0.131, 0.046), D65)
 
     /** Bradford cone response matrix (XYZ to sharpened RGB). */
-    private val bradford = Mat3(
+    internal val bradford = Mat3(
         0.8951, 0.2664, -0.1614,
         -0.7502, 1.7135, 0.0367,
         0.0389, -0.0685, 1.0296,

@@ -90,8 +90,11 @@ internal class DetailPasses {
             GLES30.glUseProgram(p)
             GLES30.glUniform1i(uniform(p, "uSrc"), 0)
         }
+        attachMasks(lumVProgram)
+        attachMasks(shrinkProgram)
         GLES30.glUseProgram(lumVProgram)
         GLES30.glUniform1i(uniform(lumVProgram, "uPrev"), 1)
+        GLES30.glUniform1i(uniform(lumVProgram, "uLab"), 2)
         GLES30.glUseProgram(shrinkProgram)
         GLES30.glUniform1i(uniform(shrinkProgram, "uChain0"), 1)
         GLES30.glUniform1i(uniform(shrinkProgram, "uChain1"), 2)
@@ -106,6 +109,7 @@ internal class DetailPasses {
      */
     private fun finalProgram(flags: Int): Int = finalPrograms.getOrPut(flags) {
         val program = GlSupport.compile(Shaders.FULLSCREEN_VERT, DetailShaders.finalFrag(flags))
+        attachMasks(program)
         GLES30.glUseProgram(program)
         GLES30.glUniform1i(uniform(program, "uSrc"), 0)
         for ((name, unit) in listOf(
@@ -152,19 +156,32 @@ internal class DetailPasses {
         showMask: Boolean = false,
         cache: Boolean = false,
         half: GlTarget? = null,
+        masks: Any? = null,
     ): GlTarget {
         if (!cache) invalidate()
         // The preview's targets are the region exactly: each pass may drop the old contents (GlSupport.discardColour).
         discard = cache
         lastPasses = 0
         val chain = if (cache) t.chain else null
+        // Masks (docs/adr/0022): [masks] identifies their coverage and adjustments (null without masks); per-pixel
+        // thresholds when a mask changes the luminance noise reduction.
+        val localNoise = masks != null && p.localNoise
         // 1. Luminance levels: the preview keeps the smoothing chain and shrinks it in one pass; tiles run them fused.
-        val lumParams = if (p.lumActive) Triple(p.lumStep, p.lumTau, p.lumEdge) else null
+        val lumParams = if (p.lumActive) {
+            listOf(
+                p.lumStep,
+                p.lumTau,
+                p.lumEdge,
+                if (localNoise) masks else null,
+            )
+        } else {
+            null
+        }
         if (lumParams != lumKey) {
             lumResult = when {
                 lumParams == null -> null
-                chain != null -> chainLevels(p, lab, t, chain, region)
-                else -> lumLevels(p, lab, t, region)
+                chain != null -> chainLevels(p, lab, t, chain, region, localNoise)
+                else -> lumLevels(p, lab, t, region, localNoise)
             }
             if (lumParams != null) profile?.invoke("detail luminance levels")
             lumKey = lumParams
@@ -205,6 +222,7 @@ internal class DetailPasses {
         if (grid != null && e.clarityActive) flags = flags or DetailShaders.FLAG_CLARITY
         if (grid != null && e.dehazeActive) flags = flags or DetailShaders.FLAG_DEHAZE
         if (toHalf) flags = flags or DetailShaders.FLAG_HALF
+        if (masks != null && !showMask) flags = flags or DetailShaders.FLAG_LOCAL
         val finalProgram = finalProgram(flags)
         GLES30.glUseProgram(finalProgram)
         bindRegion(finalProgram, region)
@@ -240,12 +258,13 @@ internal class DetailPasses {
     }
 
     /** The luminance levels into [t]'s luminance targets; returns the one holding `(L, acc)` of the last level. */
-    private fun lumLevels(p: DetailParams, lab: Int, t: Targets, region: Region): GlTarget {
+    private fun lumLevels(p: DetailParams, lab: Int, t: Targets, region: Region, localNoise: Boolean): GlTarget {
         var src = lab
         var first = true
         var dst = t.lumA
         var spare = t.lumB
         var result = t.lumA
+        val last = (0 until DetailParams.LEVELS).lastOrNull { p.lumLevelActive(it) }
         for (i in 0 until DetailParams.LEVELS) {
             if (!p.lumLevelActive(i)) continue
             GLES30.glUseProgram(lumHProgram)
@@ -259,8 +278,12 @@ internal class DetailPasses {
             GLES30.glUniform1i(uniform(lumVProgram, "uStep"), p.lumStep[i])
             GLES30.glUniform1f(uniform(lumVProgram, "uEdge"), p.lumEdge[i])
             GLES30.glUniform1f(uniform(lumVProgram, "uTau"), p.lumTau[i])
+            GLES30.glUniform1f(uniform(lumVProgram, "uTauUnit"), p.lumUnit.getOrElse(i) { 0f })
+            GLES30.glUniform1i(uniform(lumVProgram, "uLocal"), if (localNoise) 1 else 0)
+            GLES30.glUniform1i(uniform(lumVProgram, "uLast"), if (i == last) 1 else 0)
             GLES30.glUniform1i(uniform(lumVProgram, "uFirst"), if (first) 1 else 0)
             bindUnit(1, src)
+            bindUnit(2, lab)
             draw(dst.fbo, t.lumH.texture, region.width, region.height)
             lastPasses += 2
             result = dst
@@ -278,7 +301,15 @@ internal class DetailPasses {
      * depend on the noise and the pixel scale, never on the sliders) and one pass with every level's shrinkage into
      * [t]'s `lumA`, equal to [lumLevels] value for value.
      */
-    private fun chainLevels(p: DetailParams, lab: Int, t: Targets, chain: (Int) -> GlTarget, region: Region): GlTarget {
+    @Suppress("LongParameterList")
+    private fun chainLevels(
+        p: DetailParams,
+        lab: Int,
+        t: Targets,
+        chain: (Int) -> GlTarget,
+        region: Region,
+        localNoise: Boolean,
+    ): GlTarget {
         val levels = (0 until DetailParams.LEVELS).filter { p.lumLevelActive(it) }
         val key = levels.map { p.lumStep[it] to p.lumEdge[it] }
         if (key != chainKey) {
@@ -290,6 +321,12 @@ internal class DetailPasses {
         GLES30.glUniform1i(uniform(shrinkProgram, "uLevels"), levels.size)
         val taus = FloatArray(DetailParams.LEVELS) { k -> levels.getOrNull(k)?.let { p.lumTau[it] } ?: 1f }
         GLES30.glUniform1fv(uniform(shrinkProgram, "uTau"), taus.size, taus, 0)
+        val units = FloatArray(DetailParams.LEVELS) { k ->
+            levels.getOrNull(k)?.let { p.lumUnit.getOrElse(it) { 0f } }
+                ?: 0f
+        }
+        GLES30.glUniform1fv(uniform(shrinkProgram, "uTauUnit"), units.size, units, 0)
+        GLES30.glUniform1i(uniform(shrinkProgram, "uLocal"), if (localNoise) 1 else 0)
         bindUnit(1, chain(0).texture)
         bindUnit(2, if (levels.size > CHANNELS) chain(1).texture else lab)
         draw(t.lumA.fbo, lab, region.width, region.height)

@@ -5,7 +5,7 @@ Start with `docs/plan/README.md` (the brief), then `docs/plan/` and `docs/adr/`.
 
 ## Rules (until the code exists, the plan is the source of truth)
 
-- UI follows `docs/plan/ux.md`: the `hfps-app-ui` identity translated to Compose; the editor is
+- UI follows `docs/plan/ux.md`: the hfps identity (`hfps-kit` skill) translated to Compose; the editor is
   always dark with a zero-chroma photo surround.
 - No hard-coded UI strings: `values/strings.xml` and `values-pt-rBR/strings.xml` together.
 - Every pipeline operator has a CPU reference (JVM-tested) and the GPU result matches it.
@@ -46,7 +46,7 @@ ANDROID_SERIAL=emulator-<port> ./gradlew :app:connectedDebugAndroidTest :core:pi
 Generated design-system files (regenerate, never hand-edit; both scripts have `--check`):
 
 ```sh
-python3 scripts/theme/convert_theme.py ~/.agents/skills/hfps-app-ui/assets/theme.css   # RevealTokens.kt + WCAG pairs (fails on regression)
+python3 scripts/theme/convert_theme.py ~/.agents/skills/hfps-kit/brand/theme.css   # RevealTokens.kt + WCAG pairs (fails on regression)
 python3 scripts/icons/generate_icons.py                                                 # PhosphorRegular.kt / PhosphorFill.kt (fetches the pinned npm release)
 ```
 

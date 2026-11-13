@@ -14,7 +14,7 @@ you do not report to the session that wrote this plan. The owner is Henrique; wr
   (`orca orchestration worker-start --spec-file <spec> --worktree new-child --base-branch origin/main
   --agent claude`; Opus for multi-area work, `--model claude-sonnet-5-5` for small, well-defined
   tasks), every worker ends in a PR that you **review seriously** (read the diff, run it, look at the
-  screenshots against `ux.md` and the `hfps-app-ui` skill), then merge it yourself, `git pull
+  screenshots against `ux.md` and the `hfps-kit` skill), then merge it yourself, `git pull
   --ff-only` the main checkout, remove the worktree and delete the branches.
 - Write each worker spec as a file (goal, context to read, build list, testing, "Done =" with
   screenshots and checks). Workers write PR bodies in their own worktree, never a shared `/tmp`.
@@ -52,6 +52,6 @@ message Hoard needs; no status reports.
 
 ## Useful skills
 
-`hfps-app-ui` (visual identity, translate to Compose), `hfps-repo-assets` (app icon, social preview;
+`hfps-kit` (visual identity: `android/GUIDE.md` for Compose; `repo-assets/GUIDE.md` for the app icon, social preview;
 draw the icon in the Designer with the `designer` skill so the owner can edit it), `orca-cli`,
 `orchestration`, `skv`, `remote-ssh`, `messaging-orca-agents`.

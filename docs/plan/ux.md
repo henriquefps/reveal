@@ -1,8 +1,8 @@
 # Reveal: layout, visual style and interaction
 
 Reveal is native (Kotlin + Jetpack Compose), but it must look like a sibling of the owner's web and
-Capacitor apps (Hoard, Finances, the Designer), which follow the **`hfps-app-ui`** skill
-(`~/.agents/skills/hfps-app-ui/SKILL.md`, tokens in `assets/theme.css`). Read that skill before any
+Capacitor apps (Hoard, Finances, the Designer), which follow the **`hfps-kit`** skill
+(`~/.agents/skills/hfps-kit/react/GUIDE.md`, tokens in `brand/theme.css`; Compose: `android/GUIDE.md`). Read that skill before any
 UI work and translate it to Compose with the rules below. Install Hoard 1.7.x from
 `~/Documents/my-apps/hoard-release/` on an emulator to see the family look on Android.
 

@@ -261,7 +261,7 @@ class PipelineBenchmark {
         val profile = InstrumentationRegistry.getArguments().getString("profile") == "true"
         for ((name, frame, at) in drags) {
             if (profile) {
-                profileDrag(name, image, frame, at)
+                profileDrag(name, image, frame, recipeAt = at)
             } else {
                 drag(name, image, PROXY_SCALE, frame, target = true, recipeAt = at)
             }
@@ -305,9 +305,14 @@ class PipelineBenchmark {
                 base.copy(masks = emptyList(), light = base.light.copy(exposureEv = -1f + 2f * t))
             },
         )
+        val profile = InstrumentationRegistry.getArguments().getString("profile") == "true"
         for ((name, at) in drags) {
             coolDown()
-            drag(name, image, PROXY_SCALE, frame, target = true, masks = MaskFixtures.context, recipeAt = at)
+            if (profile) {
+                profileDrag(name, image, frame, MaskFixtures.context, at)
+            } else {
+                drag(name, image, PROXY_SCALE, frame, target = true, masks = MaskFixtures.context, recipeAt = at)
+            }
         }
         // A stroke in progress on a sixth mask: points appended every frame.
         val renderer = GpuDevelopRenderer.create()
@@ -410,11 +415,13 @@ class PipelineBenchmark {
         name: String,
         image: PipelineInput,
         frame: Pair<Int, Int>? = null,
+        masks: MaskContext? = null,
         recipeAt: (Float) -> Recipe,
     ) {
         val renderer = GpuDevelopRenderer.create()
         try {
             renderer.setInput(image, PROXY_SCALE)
+            masks?.let { renderer.setMaskSource(it.source, it.photoKey) }
             val sweep = List(FRAMES) { recipeAt(it.toFloat() / (FRAMES - 1)) }
             warmUp(renderer, sweep, frame)
             renderer.profileWithTimers = InstrumentationRegistry.getArguments().getString("timers") != "false"

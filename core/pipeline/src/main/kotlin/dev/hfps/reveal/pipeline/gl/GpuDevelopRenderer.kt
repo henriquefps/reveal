@@ -752,7 +752,8 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         val overlay = req.maskOverlay ?: return null
         if (overlayId(req) == null || masks.coverageTexture == 0) return null
         val slot = maskPlan?.masks?.indexOfFirst { it.id == overlay.maskId }?.takeIf { it >= 0 } ?: return null
-        return OverlayUniforms(slot, overlay.mode, MaskOverlay.linearColour(overlay.colour), overlay.opacity)
+        val (cell, channel) = masks.overlayCell(slot) ?: return null
+        return OverlayUniforms(cell, channel, overlay.mode, MaskOverlay.linearColour(overlay.colour), overlay.opacity)
     }
 
     /** Zoom tiles show unless the photo shows the original, the crop mode's plane or the sharpening mask. */
@@ -864,6 +865,9 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
     ) {
         val image = checkNotNull(input) { "no input" }
         val lab = checkNotNull(if (fringeOn) fringeTarget else labTarget).texture
+        // The masks' values for slots 11-12: a drag of a mask's Detail or Effects slider keeps the develop output, so
+        // the block and the adjustment table must be uploaded here too (docs/adr/0022).
+        masks.bind(params)
         val e = if (showMask) EffectsParams.NONE else params.effects
         if (e.gridActive && !effectsGridValid) {
             effects.allocate(image.width, image.height)
@@ -882,7 +886,12 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
             showMask = showMask,
             cache = true,
             half = if (half && stageHalfFbo != 0) GlTarget(stageTex, stageHalfFbo) else null,
-            masks = if (params.masks.active) params.masks to masksVersion else null,
+            // The luminance levels depend on the masks' noise only (and their coverage): another local drag keeps them.
+            masks = if (params.masks.active) {
+                Triple(params.masks.masks.map { it.id }, params.masks.noiseColumn(), masksVersion)
+            } else {
+                null
+            },
         )
         lastLocalPasses = detail.lastPasses
     }
@@ -1772,7 +1781,8 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         }
 
         /**
-         * The mask overlay (docs/adr/0022): colour (linear working space, opacity), info (on, layer, channel, mode).
+         * The mask overlay (docs/adr/0022): colour (linear working space, opacity), info (on, -, channel, mode), the
+         * coverage layer's cell (origin, texture size).
          */
         private fun putOverlay(b: ByteBuffer, o: OverlayUniforms?) {
             if (o == null) {
@@ -1780,8 +1790,8 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
                 return
             }
             b.putFloat(o.colour[0]).putFloat(o.colour[1]).putFloat(o.colour[2]).putFloat(o.opacity)
-            b.putInt(1).putInt(o.slot / MaskPlan.SLOTS).putInt(o.slot % MaskPlan.SLOTS)
-                .putInt(if (o.mode == MaskOverlay.Mode.GREYSCALE) 1 else 0)
+            b.putInt(1).putInt(0).putInt(o.channel).putInt(if (o.mode == MaskOverlay.Mode.GREYSCALE) 1 else 0)
+            o.cell.forEach { b.putFloat(it) }
         }
 
         /** The warp part of the output block (docs/adr/0015): norms, homography rows, flags, full-res norm. */
@@ -1838,7 +1848,7 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         private const val TILE_BLOCK_FLOATS = 24
         private const val POST_BLOCK_FLOATS = 16
         private const val WARP_BLOCK_FLOATS = 24
-        private const val OVERLAY_BLOCK_FLOATS = 8
+        private const val OVERLAY_BLOCK_FLOATS = 12
         private const val OUTPUT_BLOCK_FLOATS =
             44 + TILE_BLOCK_FLOATS + POST_BLOCK_FLOATS + WARP_BLOCK_FLOATS + OVERLAY_BLOCK_FLOATS
         private const val FADE_TICK_MS = 16L
@@ -1983,8 +1993,14 @@ data class MaskOverlay(
     }
 }
 
-/** What the output pass needs of a [MaskOverlay]: the coverage slot, mode, linear colour and opacity. */
-internal class OverlayUniforms(val slot: Int, val mode: MaskOverlay.Mode, val colour: FloatArray, val opacity: Float)
+/** What the output pass needs of a [MaskOverlay]: the coverage cell and channel, mode, linear colour and opacity. */
+internal class OverlayUniforms(
+    val cell: FloatArray,
+    val channel: Int,
+    val mode: MaskOverlay.Mode,
+    val colour: FloatArray,
+    val opacity: Float,
+)
 
 /** What the last mask coverage update did (`GpuDevelopRenderer.maskStats`). */
 data class MaskStats(val brushBins: Int, val brushFull: Int, val coverageLayers: Int, val ms: Float)

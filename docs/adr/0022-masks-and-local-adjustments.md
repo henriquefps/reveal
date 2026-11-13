@@ -16,7 +16,7 @@ source interface), `cpu/LocalAdjustOps.kt` (the local operators' CPU reference),
 A mask is a list of **components** (linear and radial gradients, brush strokes, colour range, luminance range, AI)
 combined in order (add / subtract / intersect, each optionally inverted) into a **coverage** in 0..1 per pixel, in
 upright image coordinates before crop and transform, and a set of **local adjustments** scaled by the mask's amount.
-Coverage is evaluated once per mask definition into a float16 texture (one RGBA16F array layer per four masks) and
+Coverage is evaluated once per mask definition into a float16 texture (one RGBA16F layer per four masks) and
 cached; brush strokes are rasterised deterministically (no hardware blending) into their own float16 layers and a stroke
 in progress only re-rasterises the bins its new dabs touch. Every local adjustment is **the global operator it mirrors,
 at a per-pixel amount**: the shader that already runs that operator adds `Σ coverage_i · local_i` to the global slider
@@ -126,7 +126,11 @@ the bins the new dabs touch (`MaskPasses`, scissored), then the coverage of that
 intermediates explicitly (`q16`, ADR 0012); 11 bits of mantissa give 0.0005 steps near full coverage where R8 gives
 0.004 (a ±4 EV feathered gradient would step by 0.016 EV, visible as banding on skies), and R8 would need the driver's
 rounding of float writes, which the parity rules avoid. Memory: 31 MB per four masks at a 2400 x 1600 proxy, 32 MB per
-layer at a 2048 export tile.
+layer at a 2048 export tile. **Layers are cells of one 2D texture**
+(side by side, then in rows, within `GL_MAX_TEXTURE_SIZE`; `MaskPasses.LayerGrid`), for the coverage, the brush rasters
+and the AI masks alike, never a 2D array texture: the Android emulator's GL translator rejects a 2D array wider than its
+3D limit (2048), and the editor's proxy is 2400-3000 px wide. The shaders add the layer's cell origin to their
+`texelFetch`es; the overlay clamps its bilinear sample half a texel inside the cell.
 
 **AI masks** (`mask/AiMaskSource.kt`): the engine never runs a model. It asks `AiMaskSource.mask(request, onReady)`
 with the photo key, the `Ai` component and the size of the image being rendered; the source returns an `AiMask`
@@ -180,7 +184,7 @@ texture) when a global parameter changes; both are cached otherwise.
 ## Everywhere the same
 
 - **Preview** (`GpuDevelopRenderer`): `MaskPasses` keeps the brush layers, the AI textures (by request), the pre-local
-  OkLab texture (range masks only) and the coverage array, each keyed by what it depends on; `UploadedImage.params`
+  OkLab texture (range masks only) and the coverage layers, each keyed by what it depends on; `UploadedImage.params`
   keeps the global constants across a mask drag (`DevelopParams.withMasks`).
 - **Zoom tiles** (`ZoomTiles` → `TiledRenderer.developTile`) and **export** (`TiledRenderer.render`): per tile (and per
   grid pre-pass tile when the Effects grid or a range mask needs the develop output) the brush bins of that region, the
@@ -211,11 +215,25 @@ exports a masked recipe in tiles like the preview (no seams), `ZoomTilesTest` de
 `PipelineBenchmark#maskSliderDragAndBrushAppend` measures a five-mask recipe (one of each type, a 2,000-dab brush): a
 local slider drag's frame time and the time to append dabs to a stroke in progress.
 
-**Measured so far** (M4/A, emulator x86_64 SwiftShader, 320 x 214 synthetic scene): a stroke in progress re-rasterises
-1-5 of its 64 px bins per update (1-4 ms for brush + coverage, against 106 ms for the first full raster) and ends
-bit-identical to a fresh render of the whole stroke. The emulator's GL stack then wedged (system_server died; after a
-clean restart every GPU test, including unchanged ones, blocked in `eglCreateContext`), so the parity, tiled, zoom and
-benchmark numbers are still to be measured on the phone; this section is updated with them.
+**Measured** (M4/A, the Android emulator on an Apple M4 Pro Mac, arm64, `EMULATOR_GPU=host`: **not the phone**;
+the phone numbers come later). `GpuParityTest#masksMatchCpuReference` (nine mask recipes on four images): worst error
+0.14 of the tolerance, 8-bit difference at most 3 levels. Coverage on the GPU vs the CPU: at most 4.9e-4 (AI), 2.4e-4
+(radial, combined), 3e-5 (brush). Masked export: 256 px tiles bit-identical to one tile, 1 level from the preview (16
+values) and 3 from the CPU; masked zoom tiles at 100 %: 1 level from the CPU (mean 0.07), bit-identical to the export.
+`PipelineBenchmark#maskSliderDragAndBrushAppend` (2400 x 1600 proxy shown 1080 x 720, five masks, a 2,467-dab brush):
+
+| Drag | Pipelined ms / frame | Latency p50 ms (glFinish per frame) |
+| --- | --- | --- |
+| A mask's exposure (develop, Effects grid and Detail chain re-run) | 6.05 | 7.30 |
+| A mask's clarity (only the Detail final pass and its blurs) | 1.37 | 3.07 |
+| A mask's noise (shrinkage, blurs, final pass) | 2.69 | 3.64 |
+| Global exposure, the same five masks on | 7.93 | 9.16 |
+| The same global recipe without masks | 0.70 | 1.75 |
+| A stroke in progress, 5 points a frame (six masks) | — | 10.14 (p95 11.03); brush + coverage update 0.91 (p95 1.18), 4.4 bins a frame |
+
+`everyToolOnSliderDrags` (no masks) is unchanged: every slider meets the target (0.22-1.63 ms pipelined). The emulator's
+host GPU is far faster than the S24's Adreno 750, so the ratios matter more than the milliseconds; the phone run is
+the orchestrator's.
 
 ## Consequences
 

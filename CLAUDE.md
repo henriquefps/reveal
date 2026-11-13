@@ -635,7 +635,8 @@ H)` packs the shapes for one image size (`PackedComponent`, `Dabs` per brush, AI
 (`LocalField` sums, `LocalWhiteBalance` table, `LocalTotals`, `LocalColourOp`, `LocalDevelop`), the masked branches of
 `CpuDevelop.renderLinear(…, masks: MaskContext)` and `DetailOp`. GPU: `gl/MaskShaders.kt` (the small `Masks` block +
 adjustment table texture: never big arrays in a uniform block), `gl/MaskPasses.kt` (brush layers re-rasterised per 64 px
-bin, coverage array RGBA16F, 4 masks per layer, cached in the preview), `Shaders.DEVELOP_FRAG` `developMasked`, Detail's
+bin, coverage RGBA16F, 4 masks per layer, layers as cells of one 2D texture (`LayerGrid`: never a 2D array, the
+emulator caps those at 2048), cached in the preview), `Shaders.DEVELOP_FRAG` `developMasked`, Detail's
 `FLAG_LOCAL` / per-pixel thresholds. Every program that includes `MaskShaders.MASKS` must call `attachMasks`. A new local
 adjustment = a `LocalAdjustment` + field, a `V_` slot (and `G_` if it adds to a global), the CPU total and operator, the
 GLSL line, a case in `LocalAdjustOpsTest` (full mask = global slider) and in `MaskFixtures`.

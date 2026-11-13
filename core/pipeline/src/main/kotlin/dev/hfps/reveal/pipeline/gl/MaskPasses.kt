@@ -17,9 +17,13 @@ import kotlin.math.max
 import kotlin.math.min
 
 /**
- * The masks on the GL thread (docs/adr/0022): the brush layers, the AI layers, the coverage array of one region and the
- * `Masks` uniform block with the adjustment table, for the develop pass and Detail's passes. One instance per GL
+ * The masks on the GL thread (docs/adr/0022): the brush layers, the AI layers, the coverage layers of one region and
+ * the `Masks` uniform block with the adjustment table, for the develop pass and Detail's passes. One instance per GL
  * context: the preview keeps everything between frames (`cache`), the tiled renderer redoes it per tile.
+ *
+ * **Layers are cells of one 2D texture** ([LayerGrid]: side by side, then in rows, within `GL_MAX_TEXTURE_SIZE`), never
+ * a 2D array texture: some drivers (the Android emulator's GL translator) cap a 2D array's width and height at the 3D
+ * texture limit (2048), smaller than the editor's proxy.
  *
  * **Caching** (the preview): a brush layer whose dabs are unchanged is kept; one whose dab list grew or changed at the
  * end (a stroke in progress) re-evaluates only the 64 x 64 bins the changed dabs reach, scissored; the coverage is
@@ -36,30 +40,28 @@ internal class MaskPasses {
     private var dabsTex = 0
     private var binsTex = 0
     private var indexTex = 0
-    private var dummyArray = 0
     private var dummy2d = 0
+    private var maxSize = 0
 
     private var regionWidth = 0
     private var regionHeight = 0
     private var allocWidth = 0
     private var allocHeight = 0
     private var coverageTex = 0
-    private var coverageLayers = 0
-    private val coverageFbos = ArrayList<Int>()
+    private var coverageFbo = 0
+    private var coverageGrid: LayerGrid? = null
     private var brushTex = 0
-    private var brushLayers = 0
-    private val brushFbos = ArrayList<Int>()
+    private var brushFbo = 0
+    private var brushGrid: LayerGrid? = null
     private var aiTex = 0
-    private var aiLayers = 0
-    private var aiWidth = 0
-    private var aiHeight = 0
+    private var aiGrid: LayerGrid? = null
 
     private var brushDabs: Array<Dabs?> = emptyArray()
     private var aiShown: List<AiMask?> = emptyList()
     private var coverageKey: Any? = null
     private val locations = HashMap<Int, HashMap<String, Int>>()
 
-    /** The coverage array of the last [coverage] call (0 when none). */
+    /** The coverage texture of the last [coverage] call (0 when none); its layers are [coverageGrid]'s cells. */
     var coverageTexture: Int = 0
         private set
 
@@ -74,6 +76,9 @@ internal class MaskPasses {
         locations.getOrPut(program) { HashMap() }.getOrPut(name) { GLES30.glGetUniformLocation(program, name) }
 
     fun init() {
+        val limit = IntArray(1)
+        GLES30.glGetIntegerv(GLES30.GL_MAX_TEXTURE_SIZE, limit, 0)
+        maxSize = limit[0]
         coverageProgram = GlSupport.compile(Shaders.FULLSCREEN_VERT, MaskShaders.COVERAGE_FRAG)
         brushProgram = GlSupport.compile(Shaders.FULLSCREEN_VERT, MaskShaders.BRUSH_FRAG)
         GLES30.glUseProgram(coverageProgram)
@@ -89,7 +94,7 @@ internal class MaskPasses {
         GLES30.glGenBuffers(1, ids, 0)
         ubo = ids[0]
         GLES30.glBindBufferBase(GLES30.GL_UNIFORM_BUFFER, MaskShaders.BINDING, ubo)
-        uploadBlock(MaskParams.NONE, 0, 1f, 1f)
+        uploadBlock(MaskParams.NONE, 0, 1f, 1f, null)
         adjustTex = dataTexture()
         shapesTex = dataTexture()
         dabsTex = dataTexture()
@@ -104,7 +109,6 @@ internal class MaskPasses {
         upload2d(adjustTex, GLES30.GL_RGBA32F, GLES30.GL_RGBA, 1, 1, FloatArray(RGBA))
         dummy2d = dataTexture()
         upload2d(dummy2d, GLES30.GL_RGBA32F, GLES30.GL_RGBA, 1, 1, FloatArray(RGBA))
-        dummyArray = arrayTexture(GLES30.GL_RGBA16F, 1, 1, 1, GLES30.GL_NEAREST)
         bindDevelopUnits(null)
         GlSupport.checkError("mask setup")
     }
@@ -117,7 +121,7 @@ internal class MaskPasses {
     fun bind(params: DevelopParams, off: Boolean = false) {
         val m = params.masks
         val count = if (off || coverageTexture == 0) 0 else m.masks.size
-        uploadBlock(m, count, params.detail.sharpenAtt, params.effects.textureAtt)
+        uploadBlock(m, count, params.detail.sharpenAtt, params.effects.textureAtt, coverageGrid)
         if (count > 0) {
             val adjust = FloatArray(count * MaskParams.VECTOR)
             m.adjust.copyInto(adjust, 0, 0, adjust.size)
@@ -128,10 +132,7 @@ internal class MaskPasses {
 
     private fun bindDevelopUnits(coverage: Int?) {
         GLES30.glActiveTexture(GLES30.GL_TEXTURE0 + MaskShaders.COVERAGE_UNIT)
-        GLES30.glBindTexture(
-            GLES30.GL_TEXTURE_2D_ARRAY,
-            coverage ?: if (coverageTexture != 0) coverageTexture else dummyArray,
-        )
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, coverage ?: if (coverageTexture != 0) coverageTexture else dummy2d)
         GLES30.glActiveTexture(GLES30.GL_TEXTURE0 + MaskShaders.ADJUST_UNIT)
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, adjustTex)
         GLES30.glActiveTexture(GLES30.GL_TEXTURE0 + MaskShaders.WB_UNIT)
@@ -139,16 +140,29 @@ internal class MaskPasses {
         GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
     }
 
-    /** Binds the coverage array on [MaskShaders.COVERAGE_UNIT] (the output pass's overlay). */
+    /** Binds the coverage texture on [MaskShaders.COVERAGE_UNIT] (the output pass's overlay). */
     fun bindCoverage() {
         GLES30.glActiveTexture(GLES30.GL_TEXTURE0 + MaskShaders.COVERAGE_UNIT)
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D_ARRAY, if (coverageTexture != 0) coverageTexture else dummyArray)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, if (coverageTexture != 0) coverageTexture else dummy2d)
         GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
     }
 
-    private fun uploadBlock(m: MaskParams, count: Int, sharpenAtt: Float, textureAtt: Float) {
+    /**
+     * Where coverage slot [slot] lives for the overlay: (cell origin x, y, texture width, height) in texels, and its
+     * channel; null without coverage.
+     */
+    @Suppress("ReturnCount")
+    fun overlayCell(slot: Int): Pair<FloatArray, Int>? {
+        val g = coverageGrid ?: return null
+        if (coverageTexture == 0) return null
+        val (ox, oy) = g.origin(slot / MaskPlan.SLOTS)
+        return floatArrayOf(ox.toFloat(), oy.toFloat(), g.width.toFloat(), g.height.toFloat()) to slot % MaskPlan.SLOTS
+    }
+
+    private fun uploadBlock(m: MaskParams, count: Int, sharpenAtt: Float, textureAtt: Float, grid: LayerGrid?) {
         val b = ByteBuffer.allocateDirect(BLOCK_FLOATS * Float.SIZE_BYTES).order(ByteOrder.nativeOrder())
         b.putInt(count).putInt(m.needs).putInt(0).putInt(0)
+        b.putInt(grid?.cellWidth ?: 1).putInt(grid?.cellHeight ?: 1).putInt(grid?.columns ?: 1).putInt(0)
         for (i in 0 until MaskParams.GLOBALS) {
             b.putFloat(
                 when (i) {
@@ -306,20 +320,24 @@ internal class MaskPasses {
      * Rasterises brush [layer]: every bin, or the runs of [changed] bins per bin row (scissored). Returns bins drawn.
      */
     private fun rasterBins(layer: Int, binned: DabBins, changed: ChangedBins?): Int {
+        val (lx, ly) = checkNotNull(brushGrid).origin(layer)
         GLES30.glUseProgram(brushProgram)
         GLES30.glUniform2i(uniform(brushProgram, "uOrigin"), binned.x, binned.y)
+        GLES30.glUniform2i(uniform(brushProgram, "uLayerOrigin"), lx, ly)
         bind2d(UNIT_A, dabsTex)
         bind2d(UNIT_B, binsTex)
         bind2d(UNIT_C, indexTex)
-        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, brushFbos[layer])
-        GLES30.glViewport(0, 0, binned.width, binned.height)
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, brushFbo)
+        GLES30.glViewport(lx, ly, binned.width, binned.height)
+        GLES30.glEnable(GLES30.GL_SCISSOR_TEST)
         if (changed == null) {
+            GLES30.glScissor(lx, ly, binned.width, binned.height)
             GLES30.glDrawArrays(GLES30.GL_TRIANGLES, 0, 3)
+            GLES30.glDisable(GLES30.GL_SCISSOR_TEST)
             GlSupport.checkError("brush raster")
             return binned.binsX * binned.binsY
         }
         var drawn = 0
-        GLES30.glEnable(GLES30.GL_SCISSOR_TEST)
         for (j in 0 until binned.binsY) {
             var i = 0
             while (i < binned.binsX) {
@@ -331,7 +349,12 @@ internal class MaskPasses {
                 while (i < binned.binsX && changed.flags[j * binned.binsX + i]) i++
                 val x0 = start * DabBins.BIN
                 val y0 = j * DabBins.BIN
-                GLES30.glScissor(x0, y0, min(i * DabBins.BIN, binned.width) - x0, min(DabBins.BIN, binned.height - y0))
+                GLES30.glScissor(
+                    lx + x0,
+                    ly + y0,
+                    min(i * DabBins.BIN, binned.width) - x0,
+                    min(DabBins.BIN, binned.height - y0),
+                )
                 GLES30.glDrawArrays(GLES30.GL_TRIANGLES, 0, 3)
                 drawn += i - start
             }
@@ -366,27 +389,24 @@ internal class MaskPasses {
         upload2d(indexTex, GLES30.GL_R32F, GLES30.GL_RED, w, indexRows, indexData)
     }
 
-    @Suppress("ComplexCondition")
     private fun uploadAi(ai: List<AiMask?>) {
         val ready = ai.filterNotNull()
         val w = max(ready.maxOfOrNull { it.width } ?: 1, 1)
         val h = max(ready.maxOfOrNull { it.height } ?: 1, 1)
-        val layers = max(ai.size, 1)
-        if (aiTex == 0 || w != aiWidth || h != aiHeight || layers != aiLayers) {
+        val grid = LayerGrid.of(w, h, max(ai.size, 1), maxSize)
+        if (aiTex == 0 || grid != aiGrid) {
             if (aiTex != 0) GLES30.glDeleteTextures(1, intArrayOf(aiTex), 0)
-            aiTex = arrayTexture(GLES30.GL_R32F, w, h, layers, GLES30.GL_NEAREST)
-            aiWidth = w
-            aiHeight = h
-            aiLayers = layers
+            aiTex = gridTexture(GLES30.GL_R32F, grid, GLES30.GL_NEAREST)
+            aiGrid = grid
         }
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D_ARRAY, aiTex)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, aiTex)
         GLES30.glPixelStorei(GLES30.GL_UNPACK_ALIGNMENT, 1)
         for ((layer, mask) in ai.withIndex()) {
             if (mask == null) continue
-            val buffer = FloatBuffer.wrap(mask.values)
-            GLES30.glTexSubImage3D(
-                GLES30.GL_TEXTURE_2D_ARRAY, 0, 0, 0, layer, mask.width, mask.height, 1, GLES30.GL_RED,
-                GLES30.GL_FLOAT, buffer,
+            val (ox, oy) = grid.origin(layer)
+            GLES30.glTexSubImage2D(
+                GLES30.GL_TEXTURE_2D, 0, ox, oy, mask.width, mask.height, GLES30.GL_RED, GLES30.GL_FLOAT,
+                FloatBuffer.wrap(mask.values),
             )
         }
         GlSupport.checkError("ai layers")
@@ -421,20 +441,41 @@ internal class MaskPasses {
         upload2d(shapesTex, GLES30.GL_RGBA32F, GLES30.GL_RGBA, texels, rows, data)
     }
 
+    @Suppress("CyclomaticComplexMethod")
     private fun drawCoverage(plan: MaskPlan, x: Int, y: Int, pre: Int, rect: IntArray?) {
         GLES30.glUseProgram(coverageProgram)
         GLES30.glUniform2i(uniform(coverageProgram, "uOrigin"), x, y)
         bind2d(UNIT_A, if (pre != 0) pre else dummy2d)
-        bindArray(UNIT_B, if (brushTex != 0) brushTex else dummyArray)
-        bindArray(UNIT_C, if (aiTex != 0) aiTex else dummyArray)
+        bind2d(UNIT_B, if (brushTex != 0) brushTex else dummy2d)
+        bind2d(UNIT_C, if (aiTex != 0) aiTex else dummy2d)
         bind2d(UNIT_D, shapesTex)
+        val bg = brushGrid
+        GLES30.glUniform3i(
+            uniform(coverageProgram, "uBrushGrid"),
+            bg?.cellWidth ?: 1,
+            bg?.cellHeight ?: 1,
+            bg?.columns ?: 1,
+        )
+        val ag = aiGrid
+        GLES30.glUniform3i(
+            uniform(coverageProgram, "uAiGrid"),
+            ag?.cellWidth ?: 1,
+            ag?.cellHeight ?: 1,
+            ag?.columns ?: 1,
+        )
+        val grid = checkNotNull(coverageGrid)
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, coverageFbo)
+        GLES30.glEnable(GLES30.GL_SCISSOR_TEST)
         val first = IntArray(plan.masks.size)
         for (i in 1 until plan.masks.size) first[i] = first[i - 1] + plan.components[i - 1].size
-        if (rect != null) {
-            GLES30.glEnable(GLES30.GL_SCISSOR_TEST)
-            GLES30.glScissor(rect[0], rect[1], rect[2] - rect[0], rect[3] - rect[1])
-        }
         for (layer in 0 until plan.layers) {
+            val (lx, ly) = grid.origin(layer)
+            if (rect != null) {
+                GLES30.glScissor(lx + rect[0], ly + rect[1], rect[2] - rect[0], rect[3] - rect[1])
+            } else {
+                GLES30.glScissor(lx, ly, regionWidth, regionHeight)
+            }
+            GLES30.glUniform2i(uniform(coverageProgram, "uLayerOrigin"), lx, ly)
             val slots = IntArray(MaskPlan.SLOTS * RGBA)
             for (s in 0 until MaskPlan.SLOTS) {
                 val m = layer * MaskPlan.SLOTS + s
@@ -444,12 +485,10 @@ internal class MaskPasses {
                 }
             }
             GLES30.glUniform4iv(uniform(coverageProgram, "uShapeMasks"), MaskPlan.SLOTS, slots, 0)
-            GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, coverageFbos[layer])
-            GLES30.glViewport(0, 0, regionWidth, regionHeight)
-            if (rect == null) GlSupport.discardColour()
+            GLES30.glViewport(lx, ly, regionWidth, regionHeight)
             GLES30.glDrawArrays(GLES30.GL_TRIANGLES, 0, 3)
         }
-        if (rect != null) GLES30.glDisable(GLES30.GL_SCISSOR_TEST)
+        GLES30.glDisable(GLES30.GL_SCISSOR_TEST)
         GlSupport.checkError("mask coverage")
         coverageTexture = coverageTex
     }
@@ -459,29 +498,33 @@ internal class MaskPasses {
      */
     fun readCoverage(slot: Int): FloatArray {
         val pixels = FloatBuffer.allocate(regionWidth * regionHeight * RGBA)
-        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, coverageFbos[slot / MaskPlan.SLOTS])
-        GLES30.glReadPixels(0, 0, regionWidth, regionHeight, GLES30.GL_RGBA, GLES30.GL_FLOAT, pixels)
+        val (ox, oy) = checkNotNull(coverageGrid).origin(slot / MaskPlan.SLOTS)
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, coverageFbo)
+        GLES30.glReadPixels(ox, oy, regionWidth, regionHeight, GLES30.GL_RGBA, GLES30.GL_FLOAT, pixels)
         GlSupport.checkError("coverage readback")
         return FloatArray(regionWidth * regionHeight) { pixels.get(it * RGBA + slot % MaskPlan.SLOTS) }
     }
 
     private fun ensureCoverageLayers(layers: Int) {
-        if (coverageTex != 0 && coverageLayers >= layers) return
-        deleteArray(coverageTex, coverageFbos)
-        val capacity = capacity(layers)
-        coverageTex = arrayTexture(GLES30.GL_RGBA16F, allocWidth, allocHeight, capacity, GLES30.GL_LINEAR)
-        coverageLayers = capacity
-        for (l in 0 until capacity) coverageFbos += layerFbo(coverageTex, l)
+        val g = coverageGrid
+        if (coverageTex != 0 && g != null && g.capacity >= layers) return
+        deleteTarget(coverageTex, coverageFbo)
+        val grid = LayerGrid.of(allocWidth, allocHeight, capacity(layers), maxSize)
+        coverageTex = gridTexture(GLES30.GL_RGBA16F, grid, GLES30.GL_LINEAR)
+        coverageFbo = targetFbo(coverageTex)
+        coverageGrid = grid
         coverageKey = null
     }
 
+    @Suppress("ComplexCondition")
     private fun ensureBrushLayers(layers: Int) {
-        if (layers == 0 || (brushTex != 0 && brushLayers >= layers)) return
-        deleteArray(brushTex, brushFbos)
-        val capacity = capacity(layers)
-        brushTex = arrayTexture(GLES30.GL_R16F, allocWidth, allocHeight, capacity, GLES30.GL_NEAREST)
-        brushLayers = capacity
-        for (l in 0 until capacity) brushFbos += layerFbo(brushTex, l)
+        val g = brushGrid
+        if (layers == 0 || (brushTex != 0 && g != null && g.capacity >= layers)) return
+        deleteTarget(brushTex, brushFbo)
+        val grid = LayerGrid.of(allocWidth, allocHeight, capacity(layers), maxSize)
+        brushTex = gridTexture(GLES30.GL_R16F, grid, GLES30.GL_NEAREST)
+        brushFbo = targetFbo(brushTex)
+        brushGrid = grid
         brushDabs = emptyArray()
     }
 
@@ -491,33 +534,40 @@ internal class MaskPasses {
         return c
     }
 
-    private fun layerFbo(texture: Int, layer: Int): Int {
+    private fun targetFbo(texture: Int): Int {
         val id = IntArray(1)
         GLES30.glGenFramebuffers(1, id, 0)
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, id[0])
-        GLES30.glFramebufferTextureLayer(GLES30.GL_FRAMEBUFFER, GLES30.GL_COLOR_ATTACHMENT0, texture, 0, layer)
+        GLES30.glFramebufferTexture2D(
+            GLES30.GL_FRAMEBUFFER,
+            GLES30.GL_COLOR_ATTACHMENT0,
+            GLES30.GL_TEXTURE_2D,
+            texture,
+            0,
+        )
         val status = GLES30.glCheckFramebufferStatus(GLES30.GL_FRAMEBUFFER)
         if (status !=
             GLES30.GL_FRAMEBUFFER_COMPLETE
         ) {
-            throw GlException("mask layer incomplete: 0x${status.toString(16)}")
+            throw GlException("mask layers incomplete: 0x${status.toString(16)}")
         }
         return id[0]
     }
 
-    private fun deleteArray(texture: Int, fbos: MutableList<Int>) {
+    private fun deleteTarget(texture: Int, fbo: Int) {
         if (texture != 0) GLES30.glDeleteTextures(1, intArrayOf(texture), 0)
-        if (fbos.isNotEmpty()) GLES30.glDeleteFramebuffers(fbos.size, fbos.toIntArray(), 0)
-        fbos.clear()
+        if (fbo != 0) GLES30.glDeleteFramebuffers(1, intArrayOf(fbo), 0)
     }
 
     private fun releaseRegion() {
-        deleteArray(coverageTex, coverageFbos)
-        deleteArray(brushTex, brushFbos)
+        deleteTarget(coverageTex, coverageFbo)
+        deleteTarget(brushTex, brushFbo)
         coverageTex = 0
-        coverageLayers = 0
+        coverageFbo = 0
+        coverageGrid = null
         brushTex = 0
-        brushLayers = 0
+        brushFbo = 0
+        brushGrid = null
         coverageTexture = 0
     }
 
@@ -537,7 +587,8 @@ internal class MaskPasses {
         releaseImage()
         if (aiTex != 0) GLES30.glDeleteTextures(1, intArrayOf(aiTex), 0)
         aiTex = 0
-        val textures = intArrayOf(adjustTex, wbTex, shapesTex, dabsTex, binsTex, indexTex, dummyArray, dummy2d)
+        aiGrid = null
+        val textures = intArrayOf(adjustTex, wbTex, shapesTex, dabsTex, binsTex, indexTex, dummy2d)
         GLES30.glDeleteTextures(textures.size, textures, 0)
         GLES30.glDeleteBuffers(1, intArrayOf(ubo), 0)
         GLES30.glDeleteProgram(coverageProgram)
@@ -562,15 +613,16 @@ internal class MaskPasses {
         GLES30.glTexImage2D(GLES30.GL_TEXTURE_2D, 0, internal, w, h, 0, format, GLES30.GL_FLOAT, FloatBuffer.wrap(data))
     }
 
-    private fun arrayTexture(format: Int, w: Int, h: Int, layers: Int, filter: Int): Int {
+    private fun gridTexture(format: Int, grid: LayerGrid, filter: Int): Int {
         val id = IntArray(1)
         GLES30.glGenTextures(1, id, 0)
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D_ARRAY, id[0])
-        GLES30.glTexStorage3D(GLES30.GL_TEXTURE_2D_ARRAY, 1, format, max(w, 1), max(h, 1), layers)
-        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D_ARRAY, GLES30.GL_TEXTURE_MIN_FILTER, filter)
-        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D_ARRAY, GLES30.GL_TEXTURE_MAG_FILTER, filter)
-        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D_ARRAY, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
-        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D_ARRAY, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, id[0])
+        GLES30.glTexStorage2D(GLES30.GL_TEXTURE_2D, 1, format, grid.width, grid.height)
+        GlSupport.checkError("mask layers ${grid.width}x${grid.height}")
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, filter)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, filter)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
         return id[0]
     }
 
@@ -580,20 +632,14 @@ internal class MaskPasses {
         GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
     }
 
-    private fun bindArray(unit: Int, texture: Int) {
-        GLES30.glActiveTexture(GLES30.GL_TEXTURE0 + unit)
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D_ARRAY, texture)
-        GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
-    }
-
     private fun union(a: IntArray, b: IntArray): IntArray =
         intArrayOf(min(a[0], b[0]), min(a[1], b[1]), max(a[2], b[2]), max(a[3], b[3]))
 
     private companion object {
         const val RGBA = 4
 
-        /** `Masks` block: ivec4 + 3 vec4. */
-        const val BLOCK_FLOATS = 16
+        /** `Masks` block: 2 ivec4 + 3 vec4. */
+        const val BLOCK_FLOATS = 20
 
         // The coverage and brush passes' inputs: Detail's units (rebound before every Detail pass), never the curve
         // table's (3) or the lens table's (5), which the tiled renderer binds once per render.
@@ -619,4 +665,32 @@ internal fun attachMasks(program: Int, develop: Boolean = false) {
     GLES30.glUniform1i(GLES30.glGetUniformLocation(program, "uCoverage"), MaskShaders.COVERAGE_UNIT)
     GLES30.glUniform1i(GLES30.glGetUniformLocation(program, "uMaskAdj"), MaskShaders.ADJUST_UNIT)
     if (develop) GLES30.glUniform1i(GLES30.glGetUniformLocation(program, "uLocalWb"), MaskShaders.WB_UNIT)
+}
+
+/**
+ * Layers of [cellWidth] x [cellHeight] texels as cells of one 2D texture: [columns] side by side, then rows; [capacity]
+ * cells in all. Layer `l` starts at texel ([origin]).
+ */
+internal data class LayerGrid(val cellWidth: Int, val cellHeight: Int, val columns: Int, val rows: Int) {
+    val width: Int get() = cellWidth * columns
+    val height: Int get() = cellHeight * rows
+    val capacity: Int get() = columns * rows
+
+    fun origin(layer: Int): Pair<Int, Int> = (layer % columns) * cellWidth to (layer / columns) * cellHeight
+
+    companion object {
+        /** The narrowest grid of [layers] cells that fits [maxSize] (the driver's `GL_MAX_TEXTURE_SIZE`). */
+        fun of(cellWidth: Int, cellHeight: Int, layers: Int, maxSize: Int): LayerGrid {
+            val w = max(cellWidth, 1)
+            val h = max(cellHeight, 1)
+            val columns = (maxSize / w).coerceIn(1, max(layers, 1))
+            val rows = (max(layers, 1) + columns - 1) / columns
+            if (rows * h >
+                maxSize
+            ) {
+                throw GlException("$layers mask layers of ${w}x$h exceed the texture limit $maxSize")
+            }
+            return LayerGrid(w, h, columns, rows)
+        }
+    }
 }

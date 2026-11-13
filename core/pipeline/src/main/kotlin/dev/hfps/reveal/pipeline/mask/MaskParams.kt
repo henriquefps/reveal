@@ -36,8 +36,17 @@ class MaskParams(val masks: List<Mask>, val adjust: FloatArray, val global: Floa
         for (m in masks.indices) for (v in DETAIL_VECTOR) a[m * VECTOR + v] = 0f
         val g = global.copyOf()
         for (i in DETAIL_GLOBALS) g[i] = 0f
-        return MaskParams(masks, a, g, needs and DETAIL_NEEDS.inv())
+        // The masks themselves without those adjustments too: the develop output does not depend on them (a key).
+        val developMasks = masks.map {
+            it.copy(
+                adjustments = it.adjustments.copy(texture = 0f, clarity = 0f, dehaze = 0f, sharpness = 0f, noise = 0f),
+            )
+        }
+        return MaskParams(developMasks, a, g, needs and DETAIL_NEEDS.inv())
     }
+
+    /** Every rendered mask's noise reduction value and the global amount it adds to (Detail's luminance key). */
+    fun noiseColumn(): List<Float> = masks.indices.map { adjust[it * VECTOR + V_NOISE] } + global[G_NOISE]
 
     /** True when a mask's shape reads the image before local adjustments (a colour or luminance range). */
     val needsPre: Boolean get() = masks.any { MaskPlan.readsPre(it) }

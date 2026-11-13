@@ -197,10 +197,11 @@ layout(std140) uniform Output {
     // (0 colour, 1 greyscale).
     vec4 overlayColour;
     ivec4 overlayInfo;
+    vec4 overlayCell;        // the coverage layer's cell origin (texels) and the coverage texture's size
 };
 
 uniform sampler2D uStage;
-uniform highp sampler2DArray uOverlay;   // the masks' coverage (MaskPasses), sampled at the image point
+uniform sampler2D uOverlay;   // the masks' coverage (MaskPasses), sampled at the image point
 uniform sampler2D uLensLut;    // LensWarp table: rgb = per-channel radial scale
 uniform sampler2D uAtlas;      // zoom tiles: RGBA16F slots, levels 0-1
 uniform sampler2D uTileIndex;  // zoom tiles: RGBA8 per tile, rg = slot, b = fade-in alpha, a = ready
@@ -358,8 +359,9 @@ void main() {
     }
     if (overlayInfo.x != 0 && insideImage) {
         // The mask's coverage at the image point (display only: bilinear at an explicit LOD 0).
-        vec2 uv = clamp(maskPoint, vec2(0.5), image.xy - 0.5) / image.xy;
-        float m = textureLod(uOverlay, vec3(uv, float(overlayInfo.y)), 0.0)[overlayInfo.z];
+        // Clamped half a texel inside the image: the bilinear footprint never reads the next layer's cell.
+        vec2 uv = (overlayCell.xy + clamp(maskPoint, vec2(0.5), image.xy - 0.5)) / overlayCell.zw;
+        float m = textureLod(uOverlay, uv, 0.0)[overlayInfo.z];
         if (overlayInfo.w == 1) {
             // Greyscale: the displayed value is the coverage (sRGB decoded into linear light).
             c = vec3(m <= 0.04045 ? m / 12.92 : pow((m + 0.055) / 1.055, 2.4));

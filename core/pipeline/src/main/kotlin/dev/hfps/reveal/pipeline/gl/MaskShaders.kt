@@ -69,9 +69,10 @@ float storeCoverage(float v) {
     const val MASKS: String = """
 layout(std140) uniform Masks {
     ivec4 maskInfo;                   // x = rendered masks, y = MaskParams.needs
+    ivec4 maskGrid;                   // coverage layers (MaskPasses.LayerGrid): cell width, cell height, columns
     vec4 maskGlobal[3];               // MaskParams.global (G_ order); [2].zw = sharpening, texture attenuation
 };
-uniform highp sampler2DArray uCoverage;
+uniform highp sampler2D uCoverage;    // four masks per layer, layers as cells of one texture
 uniform highp sampler2D uMaskAdj;
 
 // LocalField.sum: s = Σ coverage_m · adjust_m in mask order; false when no mask covers p (s is then 0).
@@ -81,7 +82,9 @@ bool localSum(ivec2 p, out vec4 s[5]) {
     }
     bool any = false;
     for (int m = 0; m < maskInfo.x; m++) {
-        float c = texelFetch(uCoverage, ivec3(p, m >> 2), 0)[m & 3];
+        int layer = m >> 2;
+        ivec2 cell = ivec2((layer % maskGrid.z) * maskGrid.x, (layer / maskGrid.z) * maskGrid.y);
+        float c = texelFetch(uCoverage, cell + p, 0)[m & 3];
         if (c == 0.0) {
             continue;
         }
@@ -231,13 +234,15 @@ vec3 developMasked(vec3 c, ivec2 p) {
 precision highp float;
 precision highp int;
 precision highp sampler2D;
-precision highp sampler2DArray;
 
 uniform ivec4 uShapeMasks[4];                  // per slot of the layer: x = first component, y = count
 uniform highp sampler2D uShapes;               // row i: head (type, op, invert, layer), data 0..19, AI (ratio x, y, size)
 uniform sampler2D uPre;                        // the pre-local image in OkLab (region)
-uniform highp sampler2DArray uBrush;           // brush rasters (region)
-uniform highp sampler2DArray uAi;              // AI masks (R32F, from texel 0)
+uniform sampler2D uBrush;                      // brush rasters (region), layers as cells: uBrushGrid
+uniform sampler2D uAi;                         // AI masks (R32F, from each cell's texel 0), cells: uAiGrid
+uniform ivec3 uBrushGrid;                      // cell width, cell height, columns
+uniform ivec3 uAiGrid;
+uniform ivec2 uLayerOrigin;                    // the coverage layer's cell being drawn
 uniform ivec2 uOrigin;
 out vec4 outColor;
 """ + Shaders.Q16 + COMMON + """
@@ -249,6 +254,10 @@ ivec4 shapeHead(int i) {
     return ivec4(texelFetch(uShapes, ivec2(0, i), 0));
 }
 
+ivec2 cellOf(ivec3 grid, int layer) {
+    return ivec2((layer % grid.z) * grid.x, (layer / grid.z) * grid.y);
+}
+
 // MaskRaster.sampleAi: bilinear with explicit weights, taps clamped to the mask.
 float sampleAi(int i, int layer, ivec2 q) {
     vec4 info = texelFetch(uShapes, ivec2(${SHAPE_TEXELS - 1}, i), 0);
@@ -257,10 +266,11 @@ float sampleAi(int i, int layer, ivec2 q) {
     vec2 t = uv - f;
     ivec2 i0 = ivec2(f);
     ivec2 hi = ivec2(info.zw) - 1;
-    float a = texelFetch(uAi, ivec3(clamp(i0, ivec2(0), hi), layer), 0).r;
-    float b = texelFetch(uAi, ivec3(clamp(i0 + ivec2(1, 0), ivec2(0), hi), layer), 0).r;
-    float d = texelFetch(uAi, ivec3(clamp(i0 + ivec2(0, 1), ivec2(0), hi), layer), 0).r;
-    float e = texelFetch(uAi, ivec3(clamp(i0 + ivec2(1, 1), ivec2(0), hi), layer), 0).r;
+    ivec2 cell = cellOf(uAiGrid, layer);
+    float a = texelFetch(uAi, cell + clamp(i0, ivec2(0), hi), 0).r;
+    float b = texelFetch(uAi, cell + clamp(i0 + ivec2(1, 0), ivec2(0), hi), 0).r;
+    float d = texelFetch(uAi, cell + clamp(i0 + ivec2(0, 1), ivec2(0), hi), 0).r;
+    float e = texelFetch(uAi, cell + clamp(i0 + ivec2(1, 1), ivec2(0), hi), 0).r;
     float top = a + (b - a) * t.x;
     float bottom = d + (e - d) * t.x;
     return top + (bottom - top) * t.y;
@@ -281,7 +291,7 @@ bool componentValue(int i, ivec2 p, vec3 pre, out float v) {
         float inside = 1.0 - maskStep(shape(i, 6), 1.0, sqrt(u * u + w * w));
         v = shape(i, 7) != 0.0 ? inside : 1.0 - inside;
     } else if (head.x == ${MaskPlan.TYPE_BRUSH}) {
-        v = texelFetch(uBrush, ivec3(p, head.w), 0).r;
+        v = texelFetch(uBrush, cellOf(uBrushGrid, head.w) + p, 0).r;
     } else if (head.x == ${MaskPlan.TYPE_COLOUR}) {
         float best = 3.4028235e38;
         int n = int(shape(i, 0));
@@ -327,7 +337,7 @@ float maskCoverage(int slot, ivec2 p, vec3 pre) {
 }
 
 void main() {
-    ivec2 p = ivec2(gl_FragCoord.xy);
+    ivec2 p = ivec2(gl_FragCoord.xy) - uLayerOrigin;
     vec3 pre = texelFetch(uPre, p, 0).xyz;
     outColor = vec4(maskCoverage(0, p, pre), maskCoverage(1, p, pre), maskCoverage(2, p, pre),
         maskCoverage(3, p, pre));
@@ -348,6 +358,7 @@ uniform sampler2D uDabs;
 uniform sampler2D uBins;
 uniform sampler2D uIndex;
 uniform ivec2 uOrigin;
+uniform ivec2 uLayerOrigin;    // the brush layer's cell
 out vec4 outColor;
 """ + Shaders.Q16 + COMMON + """
 ivec2 dataAt(int k) {
@@ -355,7 +366,7 @@ ivec2 dataAt(int k) {
 }
 
 void main() {
-    ivec2 p = ivec2(gl_FragCoord.xy);
+    ivec2 p = ivec2(gl_FragCoord.xy) - uLayerOrigin;
     vec2 bin = texelFetch(uBins, p / ${dev.hfps.reveal.pipeline.mask.DabBins.BIN}, 0).xy;
     int offset = int(bin.x);
     int count = int(bin.y);

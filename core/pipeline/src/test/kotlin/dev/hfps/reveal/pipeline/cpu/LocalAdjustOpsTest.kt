@@ -281,6 +281,31 @@ class LocalAdjustOpsTest {
     }
 
     @Test
+    fun `the renderers' parameter views keep the masks`() {
+        // The GPU preview renders from withoutPost() and keys its caches on withoutDetail(): both must carry the masks
+        // (a regression made the preview drop every mask while the CPU, the tiles and the coverage were right).
+        val recipe = Recipe(
+            effects = Effects(vignetteAmount = -30f),
+            masks = listOf(masked(LocalAdjustments(exposure = 1f, texture = 20f))),
+        )
+        val params = DevelopParams.from(scene, recipe)
+        assertThat(params.masks.active).isTrue()
+        assertThat(params.withoutPost().masks).isEqualTo(params.masks)
+        assertThat(DevelopParams.from(scene, recipe.copy(effects = Effects())).withoutPost().masks.active).isTrue()
+        assertThat(params.withoutDetail().masks.masks.map { it.id to it.components })
+            .isEqualTo(params.masks.masks.map { it.id to it.components })
+        // A drag of a mask's Detail or Effects slider keeps the develop key (the develop output stays cached) ...
+        val clarity = recipe.copy(masks = listOf(masked(LocalAdjustments(exposure = 1f, texture = 20f, clarity = 60f))))
+        assertThat(DevelopParams.from(scene, clarity).withoutDetail()).isEqualTo(params.withoutDetail())
+        // ... and a drag of its exposure does not.
+        val exposure = recipe.copy(masks = listOf(masked(LocalAdjustments(exposure = 2f, texture = 20f))))
+        assertThat(DevelopParams.from(scene, exposure).withoutDetail()).isNotEqualTo(params.withoutDetail())
+        assertThat(params.withoutMasks().masks.active).isFalse()
+        val base = DevelopParams.from(scene, recipe.withoutLocal())
+        assertThat(base.withLocal(scene, recipe, 1f)).isEqualTo(params)
+    }
+
+    @Test
     fun `reach covers the neighbourhoods masks switch on`() {
         val base = DevelopParams.reach(Recipe())
         assertThat(base).isEqualTo(0)

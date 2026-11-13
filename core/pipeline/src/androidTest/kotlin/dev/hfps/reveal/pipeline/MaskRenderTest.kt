@@ -146,6 +146,39 @@ class MaskRenderTest {
     }
 
     @Test
+    fun aDragOfAMasksDetailSliderKeepsTheDevelopOutputAndRendersTheNewValue() = runBlocking {
+        val shape = MaskComponent.Radial(cx = 0.4f, cy = 0.5f, rx = 0.3f, feather = 50f)
+        fun recipe(clarity: Float, noise: Float, sharpness: Float) = Recipe(
+            masks = listOf(
+                Mask(
+                    "d",
+                    adjustments = LocalAdjustments(
+                        exposure = 0.3f,
+                        clarity = clarity,
+                        noise = noise,
+                        sharpness = sharpness,
+                    ),
+                    components = listOf(shape),
+                ),
+            ),
+        )
+        renderer.renderLinear(recipe(10f, 10f, 10f))
+        // Only slots 11-12 change: the develop output is kept, the Detail passes must read the new values.
+        for ((c, n, sh) in listOf(Triple(70f, 10f, 10f), Triple(70f, 60f, 10f), Triple(-40f, 60f, -60f))) {
+            val edit = recipe(c, n, sh)
+            val gpu = renderer.renderLinear(edit)
+            val cpu = CpuDevelop.renderLinear(image, edit, masks = MaskFixtures.context)
+            var worst = 0f
+            for (i in cpu.indices) {
+                val scale = maxOf(abs(cpu[i - i % 3]), abs(cpu[i - i % 3 + 1]), abs(cpu[i - i % 3 + 2]))
+                worst = maxOf(worst, abs(cpu[i] - gpu[i]) / (DETAIL_ABS + DETAIL_REL * scale))
+            }
+            Log.i(TAG, "detail drag clarity $c noise $n sharpness $sh: worst error / tolerance $worst")
+            assertThat(worst).isAtMost(1f)
+        }
+    }
+
+    @Test
     fun theOverlayShowsTheCoverage() = runBlocking {
         val recipe = Recipe(
             masks = listOf(
@@ -196,5 +229,9 @@ class MaskRenderTest {
         /** Float16 storage of the coverage, fp32 transcendental differences. */
         const val COVERAGE_TOLERANCE = 2e-3f
         const val LINEAR_TOLERANCE = 2e-2f
+
+        // GpuParityTest's Detail tolerance (docs/adr/0012).
+        const val DETAIL_ABS = 4e-3f
+        const val DETAIL_REL = 3e-2f
     }
 }

@@ -281,26 +281,19 @@ vec3 developMasked(vec3 c, ivec2 p) {
 }
 """
 
-    /**
-     * One coverage layer (`MaskRaster.coverage`): the four masks of the layer from their packed components, each
-     * combined from 0 and stored as float16 in its channel. Region pixel `p` is image pixel `uOrigin + p`.
-     */
-    val COVERAGE_FRAG: String = """#version 300 es
-precision highp float;
-precision highp int;
-precision highp sampler2D;
-
+    /** The coverage pass's own inputs (the component table, the brush and AI layers, the layer being drawn). */
+    private const val COVERAGE_INPUTS: String = """
 uniform ivec4 uShapeMasks[4];                  // per slot of the layer: x = first component, y = count
 uniform highp sampler2D uShapes;               // row i: head (type, op, invert, layer), data 0..19, AI (ratio x, y, size)
-uniform sampler2D uPre;                        // the pre-local image in OkLab (region)
 uniform sampler2D uBrush;                      // brush rasters (region), layers as cells: uBrushGrid
 uniform sampler2D uAi;                         // AI masks (R32F, from each cell's texel 0), cells: uAiGrid
 uniform ivec3 uBrushGrid;                      // cell width, cell height, columns
 uniform ivec3 uAiGrid;
 uniform ivec2 uLayerOrigin;                    // the coverage layer's cell being drawn
-uniform ivec2 uOrigin;
-out vec4 outColor;
-""" + Shaders.Q16 + COMMON + """
+"""
+
+    /** `MaskRaster.value` and the combination (needs `uOrigin`, [COMMON] and `q16`). */
+    private val COVERAGE_FUNCTIONS: String = COMMON + """
 float shape(int i, int k) {
     return texelFetch(uShapes, ivec2(1 + (k >> 2), i), 0)[k & 3];
 }
@@ -391,6 +384,22 @@ float maskCoverage(int slot, ivec2 p, vec3 pre) {
     return storeCoverage(cov);
 }
 
+"""
+
+    /**
+     * One coverage layer (`MaskRaster.coverage`): the four masks of the layer from their packed components, each
+     * combined from 0 and stored as float16 in its channel, from the pre-local
+     * texture `uPre`. Region pixel `p` is image pixel `uOrigin + p`.
+     */
+    val COVERAGE_FRAG: String = """#version 300 es
+precision highp float;
+precision highp int;
+precision highp sampler2D;
+
+uniform sampler2D uPre;                        // the pre-local image in OkLab (region)
+uniform ivec2 uOrigin;
+out vec4 outColor;
+""" + COVERAGE_INPUTS + Shaders.Q16 + COVERAGE_FUNCTIONS + """
 void main() {
     ivec2 p = ivec2(gl_FragCoord.xy) - uLayerOrigin;
     vec3 pre = texelFetch(uPre, p, 0).xyz;
@@ -398,6 +407,26 @@ void main() {
         maskCoverage(3, p, pre));
 }
 """
+
+    /**
+     * The preview's range coverage fused with the pre-local develop (docs/adr/0022 "Speed (M4/P)"): the pixel's
+     * pre-local colour is computed here (`Shaders.developGlobal` on the scene texture, OkLab, float16 as the develop
+     * pass stores it) instead of being read from a texture a separate pass wrote. Same values, one full-resolution pass
+     * fewer per global change. Lazy: it reads `Shaders`, which reads this object.
+     */
+    val FUSED_COVERAGE_FRAG: String by lazy {
+        Shaders.DEVELOP_DECLARATIONS + """
+out vec4 outColor;
+""" + COVERAGE_INPUTS + Shaders.DEVELOP_FUNCTIONS + COVERAGE_FUNCTIONS + """
+void main() {
+    ivec2 p = ivec2(gl_FragCoord.xy) - uLayerOrigin;
+    vec3 c = texelFetch(uScene, p, 0).rgb;
+    vec3 pre = q16(toOkLab(developGlobal(c, p + uOrigin)));
+    outColor = vec4(maskCoverage(0, p, pre), maskCoverage(1, p, pre), maskCoverage(2, p, pre),
+        maskCoverage(3, p, pre));
+}
+"""
+    }
 
     /** `MaskRaster.autoWeight`: the colour similarity of an auto-mask dab. */
     val AUTO: String = """

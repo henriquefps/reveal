@@ -86,6 +86,34 @@ void main() {
 }
 """
 
+    /** The develop stage's blocks and inputs (shared with the masks' fused range coverage, `MaskShaders`). */
+    val DEVELOP_DECLARATIONS: String = HEADER + DEVELOP_BLOCK + LightShaders.COMMON + """
+uniform sampler2D uScene;
+uniform sampler2D uCoef;
+uniform sampler2D uMoments;
+uniform ivec2 uOrigin;   // see SCENE_FRAG
+"""
+
+    /**
+     * The develop stage's functions and `developGlobal`: slots 5b-9 without masks at image position `q` (the develop
+     * pass's unmasked path, and the pre-local image of the masks, docs/adr/0022).
+     */
+    val DEVELOP_FUNCTIONS: String = ColourShaders.BLOCK + ColourShaders.FUNCTIONS + ColourToolShaders.BLOCK +
+        ColourToolShaders.FUNCTIONS + LightShaders.TONE + Q16 + """
+vec3 developGlobal(vec3 c, ivec2 q) {
+    if (tone.z != 0.0) {
+        c = localTone(c, q);
+    }
+    c = profileLook(c);
+    if (tone.w != 0.0) {
+        c = globalTone(c);
+    }
+    c = toneCurve(c);
+    c = colourStage(c);
+    return c;
+}
+"""
+
     /**
      * Stage 2, develop (slots 5b-9): highlights/shadows on scene-linear light, the profile (base look, slot 6,
      * [ColourShaders]), contrast/whites/blacks and the tone curve on display-referred light, then vibrance/saturation,
@@ -93,17 +121,12 @@ void main() {
      * and writes the working-space texture (RGBA16F, mip-mapped) the output pass reads, or, when the Detail operator
      * runs, its OkLab input ([DetailShaders]).
      */
-    val DEVELOP_FRAG: String = HEADER + DEVELOP_BLOCK + LightShaders.COMMON + """
-uniform sampler2D uScene;
-uniform sampler2D uCoef;
-uniform sampler2D uMoments;
-uniform ivec2 uOrigin;   // see SCENE_FRAG
+    val DEVELOP_FRAG: String = DEVELOP_DECLARATIONS + """
 // 1 when the Detail operator (slot 11, DetailShaders) follows: write OkLab with a zero luminance accumulator in a.
 uniform int uLabOut;
 out vec4 outColor;
 
-""" + ColourShaders.BLOCK + ColourShaders.FUNCTIONS + ColourToolShaders.BLOCK + ColourToolShaders.FUNCTIONS +
-        LightShaders.TONE + Q16 + MaskShaders.MASKS + MaskShaders.DEVELOP + MaskShaders.DEVELOP_MAIN + """
+""" + DEVELOP_FUNCTIONS + MaskShaders.MASKS + MaskShaders.DEVELOP + MaskShaders.DEVELOP_MAIN + """
 void main() {
     ivec2 p = ivec2(gl_FragCoord.xy);
     vec3 c = texelFetch(uScene, p, 0).rgb;
@@ -111,15 +134,7 @@ void main() {
         // Masks (docs/adr/0022): the local adjustments at their slots, per pixel.
         c = developMasked(c, p);
     } else {
-        if (tone.z != 0.0) {
-            c = localTone(c, p + uOrigin);
-        }
-        c = profileLook(c);
-        if (tone.w != 0.0) {
-            c = globalTone(c);
-        }
-        c = toneCurve(c);
-        c = colourStage(c);
+        c = developGlobal(c, p + uOrigin);
     }
     outColor = uLabOut == 1 ? vec4(q16(toOkLab(c)), 0.0) : vec4(c, 1.0);
 }

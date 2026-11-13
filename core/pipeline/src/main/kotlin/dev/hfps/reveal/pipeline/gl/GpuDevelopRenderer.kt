@@ -202,6 +202,12 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
     /** The overlay's mask when it is not one of the rendered masks (its coverage gets the slot after them). */
     private var overlayExtra: Mask? = null
     private var preKey: Any? = null
+
+    /** The parameters the pre-local image of the masks was last made for (bumps [preVersion] when they change). */
+    private var preParams: Any? = null
+
+    /** The masks' range coverage fused with the pre-local develop (`MaskShaders.FUSED_COVERAGE_FRAG`). */
+    private var fusedCoverageProgram = 0
     private var preVersion = 0
 
     /** Bumped when an AI mask arrives (the zoom tiles re-develop). */
@@ -1065,23 +1071,7 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
             }
             return
         }
-        var pre = 0
-        if (plan.needsPre) {
-            val target = preTarget ?: run {
-                val tex = newTexture(1, image.width, image.height, GLES30.GL_NEAREST, GLES30.GL_NEAREST)
-                GlTarget(tex, newFramebuffer(tex)).also { preTarget = it }
-            }
-            val key = params.withoutDetail().withoutMasks()
-            if (key != preKey) {
-                val guided = prepareScene(params)
-                masks.bind(params, off = true)
-                developPass(target.fbo, labOut = true, guided = guided)
-                profiler.mark("mask pre-local pass")
-                preKey = key
-                preVersion++
-            }
-            pre = target.texture
-        }
+        val (pre, fused) = if (plan.needsPre) preLocal(params, plan, image) else 0 to null
         val epoch = aiEpoch
         val ai = plan.ai.map { component ->
             maskContext.ai(component, image.width, image.height) {
@@ -1095,7 +1085,7 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
                 }
             }
         }
-        if (masks.coverage(plan, 0, 0, image.width, image.height, pre, preVersion, ai, cache = true)) {
+        if (masks.coverage(plan, 0, 0, image.width, image.height, pre, preVersion, ai, cache = true, fused = fused)) {
             masksChanged(masks.lastStats.dirty)
             profiler.mark("mask coverage")
         }
@@ -1163,6 +1153,44 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
                 maxOf(maskChange[2], rect[2]),
                 maxOf(maskChange[3], rect[3]),
             )
+        }
+    }
+
+    /**
+     * The masks' pre-local image (docs/adr/0022): its texture and nothing to prepare when an auto-mask brush reads it
+     * (a develop pass without masks into its own OkLab texture, kept while the global parameters are), else no texture
+     * and the preparation of the fused range coverage. Bumps [preVersion] when the global parameters change.
+     */
+    private fun preLocal(params: DevelopParams, plan: MaskPlan, image: UploadedImage): Pair<Int, (() -> Unit)?> {
+        val key = params.withoutDetail().withoutMasks()
+        if (key != preParams) {
+            preParams = key
+            preVersion++
+        }
+        if (plan.brushes.none { it.autoMask }) {
+            // The range masks compute the pre-local colour in their coverage pass (docs/adr/0022 "Speed (M4/P)").
+            return 0 to {
+                val guided = prepareScene(params)
+                bindTextures(
+                    sceneTex,
+                    if (guided) light.coefTexture else sceneTex,
+                    if (guided) light.momentsTexture else sceneTex,
+                )
+            }
+        } else {
+            // An auto-mask brush reads the pre-local image too: it is rendered into its own texture.
+            val target = preTarget ?: run {
+                val tex = newTexture(1, image.width, image.height, GLES30.GL_NEAREST, GLES30.GL_NEAREST)
+                GlTarget(tex, newFramebuffer(tex)).also { preTarget = it }
+            }
+            if (key != preKey) {
+                val guided = prepareScene(params)
+                masks.bind(params, off = true)
+                developPass(target.fbo, labOut = true, guided = guided)
+                profiler.mark("mask pre-local pass")
+                preKey = key
+            }
+            return target.texture to null
         }
     }
 
@@ -1412,6 +1440,7 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         tools = ColourToolShaders.Gl(developProgram)
         masks.init()
         attachMasks(developProgram, develop = true)
+        compileFusedCoverage()
         GLES30.glUseProgram(outputProgram)
         GLES30.glUniform1i(GLES30.glGetUniformLocation(outputProgram, "uOverlay"), MaskShaders.COVERAGE_UNIT)
         light.init()
@@ -1424,6 +1453,29 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         GLES30.glBindVertexArray(vao)
         GlSupport.checkError("renderer setup")
         probeFloatTarget()
+    }
+
+    /** The masks' fused range coverage: the develop stage's blocks and inputs, then [MaskPasses.attachFused]. */
+    private fun compileFusedCoverage() {
+        fusedCoverageProgram = GlSupport.compile(Shaders.FULLSCREEN_VERT, MaskShaders.FUSED_COVERAGE_FRAG)
+        bindBlock(fusedCoverageProgram, "Develop", DEVELOP_BINDING, "uScene")
+        bindBlock(fusedCoverageProgram, "Light", LIGHT_BINDING, "uCoef", unit = 1)
+        GLES30.glUniform1i(GLES30.glGetUniformLocation(fusedCoverageProgram, "uMoments"), 2)
+        GLES30.glUniformBlockBinding(
+            fusedCoverageProgram,
+            GLES30.glGetUniformBlockIndex(fusedCoverageProgram, "Look"),
+            ColourShaders.BINDING,
+        )
+        GLES30.glUniformBlockBinding(
+            fusedCoverageProgram,
+            GLES30.glGetUniformBlockIndex(fusedCoverageProgram, "Tools"),
+            ColourToolShaders.BINDING,
+        )
+        GLES30.glUniform1i(
+            GLES30.glGetUniformLocation(fusedCoverageProgram, "uCurve"),
+            ColourToolShaders.CURVE_UNIT,
+        )
+        masks.attachFused(fusedCoverageProgram)
     }
 
     /** Proves a RGBA16F texture is renderable on this driver, with a clear message when it is not. */
@@ -1560,6 +1612,7 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         }
         preTarget = null
         preKey = null
+        preParams = null
         maskPlan = null
         maskPlanKey = null
         dabsCache = emptyMap()
@@ -1596,6 +1649,7 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         GLES30.glDeleteVertexArrays(1, intArrayOf(vao), 0)
         GLES30.glDeleteProgram(sceneProgram)
         GLES30.glDeleteProgram(developProgram)
+        GLES30.glDeleteProgram(fusedCoverageProgram)
         GLES30.glDeleteProgram(outputProgram)
     }
 

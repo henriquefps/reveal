@@ -39,6 +39,16 @@ internal class MaskPasses {
     private var coverageProgram = 0
     private var brushProgram = 0
     private var coloursProgram = 0
+
+    /**
+     * The fused range coverage (`MaskShaders.FUSED_COVERAGE_FRAG`, compiled and attached to the develop stage's blocks
+     * by the preview renderer: [attachFused]); 0 without. [fuseNow]: the current [coverage] call uses it.
+     */
+    private var fusedProgram = 0
+    private var fuseNow = false
+
+    /** Binds the scene, the guide and the develop uniforms for the fused pass; called once, before its first draw. */
+    private var prepareFused: (() -> Unit)? = null
     private var ubo = 0
     private var developUbo = 0
     private var detailUbo = 0
@@ -150,6 +160,19 @@ internal class MaskPasses {
     }
 
     /**
+     * Takes the fused range-coverage [program] (its develop blocks bound by the caller): [coverage] with `fused` then
+     * computes the pre-local colour in the coverage pass; `fused` binds the scene, guide and develop uniforms (units
+     * 0-3) and is called only when a layer that reads the pre-local image is drawn.
+     */
+    fun attachFused(program: Int) {
+        fusedProgram = program
+        GLES30.glUseProgram(program)
+        GLES30.glUniform1i(uniform(program, "uBrush"), UNIT_B)
+        GLES30.glUniform1i(uniform(program, "uAi"), UNIT_C)
+        GLES30.glUniform1i(uniform(program, "uShapes"), UNIT_D)
+    }
+
+    /**
      * Uploads the `Masks` block and the develop and Detail rows of [params] (the first [MaskParams.masks] slots of the
      * coverage; each only when it changed) and binds the coverage (or a stand-in) and the white-balance gains on their
      * units. With [off] the block says no mask renders (the pre-local develop pass).
@@ -258,8 +281,11 @@ internal class MaskPasses {
         ai: List<AiMask?>,
         cache: Boolean,
         capacity: Int = 0,
+        fused: (() -> Unit)? = null,
     ): Boolean {
         val start = System.nanoTime()
+        fuseNow = fused != null && fusedProgram != 0
+        prepareFused = fused
         if (plan.masks.isEmpty()) {
             coverageTexture = 0
             coverageKey = null
@@ -611,54 +637,50 @@ internal class MaskPasses {
      * Draws the coverage layers into [rect] of the region (null = all of it); with [only], only the masks it marks (the
      * other channels keep their values, the layers without a marked mask are skipped). Returns the layers drawn.
      */
-    @Suppress("CyclomaticComplexMethod", "LongParameterList")
+    @Suppress("CyclomaticComplexMethod", "LongParameterList", "LongMethod")
     private fun drawCoverage(plan: MaskPlan, x: Int, y: Int, pre: Int, rect: IntArray?, only: BooleanArray?): Int {
-        GLES30.glUseProgram(coverageProgram)
-        GLES30.glUniform2i(uniform(coverageProgram, "uOrigin"), x, y)
+        val drawsPre = plan.masks.indices.any { m -> only?.get(m) != false && MaskPlan.readsPre(plan.masks[m]) }
+        if (fuseNow && drawsPre) prepareFused?.invoke()
+        prepareFused = null
         bind2d(UNIT_A, if (pre != 0) pre else dummy2d)
         bind2d(UNIT_B, if (brushTex != 0) brushTex else dummy2d)
         bind2d(UNIT_C, if (aiTex != 0) aiTex else dummy2d)
         bind2d(UNIT_D, shapesTex)
-        val bg = brushGrid
-        GLES30.glUniform3i(
-            uniform(coverageProgram, "uBrushGrid"),
-            bg?.cellWidth ?: 1,
-            bg?.cellHeight ?: 1,
-            bg?.columns ?: 1,
-        )
-        val ag = aiGrid
-        GLES30.glUniform3i(
-            uniform(coverageProgram, "uAiGrid"),
-            ag?.cellWidth ?: 1,
-            ag?.cellHeight ?: 1,
-            ag?.columns ?: 1,
-        )
         val grid = checkNotNull(coverageGrid)
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, coverageFbo)
         GLES30.glEnable(GLES30.GL_SCISSOR_TEST)
         val first = IntArray(plan.masks.size)
         for (i in 1 until plan.masks.size) first[i] = first[i - 1] + plan.components[i - 1].size
         var drawn = 0
+        var current = 0
         for (layer in 0 until plan.layers) {
             val slots = IntArray(MaskPlan.SLOTS * RGBA)
             val write = BooleanArray(MaskPlan.SLOTS)
+            var readsPre = false
             for (s in 0 until MaskPlan.SLOTS) {
                 val m = layer * MaskPlan.SLOTS + s
                 if (m < plan.masks.size && (only == null || only[m])) {
                     slots[s * RGBA] = first[m]
                     slots[s * RGBA + 1] = plan.components[m].size
                     write[s] = true
+                    readsPre = readsPre || MaskPlan.readsPre(plan.masks[m])
                 }
             }
             if (only != null && write.none { it }) continue
+            // A layer whose masks read the pre-local image computes it itself when fused (no pre texture).
+            val program = if (fuseNow && readsPre) fusedProgram else coverageProgram
+            if (program != current) {
+                useCoverageProgram(program, x, y)
+                current = program
+            }
             val (lx, ly) = grid.origin(layer)
             if (rect != null) {
                 GLES30.glScissor(lx + rect[0], ly + rect[1], rect[2] - rect[0], rect[3] - rect[1])
             } else {
                 GLES30.glScissor(lx, ly, regionWidth, regionHeight)
             }
-            GLES30.glUniform2i(uniform(coverageProgram, "uLayerOrigin"), lx, ly)
-            GLES30.glUniform4iv(uniform(coverageProgram, "uShapeMasks"), MaskPlan.SLOTS, slots, 0)
+            GLES30.glUniform2i(uniform(program, "uLayerOrigin"), lx, ly)
+            GLES30.glUniform4iv(uniform(program, "uShapeMasks"), MaskPlan.SLOTS, slots, 0)
             GLES30.glViewport(lx, ly, regionWidth, regionHeight)
             if (only != null) GLES30.glColorMask(write[0], write[1], write[2], write[3])
             GLES30.glDrawArrays(GLES30.GL_TRIANGLES, 0, 3)
@@ -669,6 +691,15 @@ internal class MaskPasses {
         GlSupport.checkError("mask coverage")
         coverageTexture = coverageTex
         return drawn
+    }
+
+    private fun useCoverageProgram(program: Int, x: Int, y: Int) {
+        GLES30.glUseProgram(program)
+        GLES30.glUniform2i(uniform(program, "uOrigin"), x, y)
+        val bg = brushGrid
+        GLES30.glUniform3i(uniform(program, "uBrushGrid"), bg?.cellWidth ?: 1, bg?.cellHeight ?: 1, bg?.columns ?: 1)
+        val ag = aiGrid
+        GLES30.glUniform3i(uniform(program, "uAiGrid"), ag?.cellWidth ?: 1, ag?.cellHeight ?: 1, ag?.columns ?: 1)
     }
 
     /**

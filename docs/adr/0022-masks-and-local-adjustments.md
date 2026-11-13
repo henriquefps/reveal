@@ -299,6 +299,13 @@ or within their tolerances; partial updates are bit-identical to a fresh render,
   run whole. Not used with defringe, the sharpening-mask view, or when the view switches between level 0 and level 1.
 - Range masks: a global change re-evaluates only the masks that read the pre-local image (other channels kept with
   the colour mask; layers without such a mask skipped).
+- **Fused range coverage.** In the preview a coverage layer that holds a colour or luminance range computes the
+  pre-local colour itself (`MaskShaders.FUSED_COVERAGE_FRAG`: `Shaders.developGlobal`, the develop pass's unmasked
+  path, then `q16(toOkLab(c))`, exactly what the separate pass stored) instead of reading a texture the pre-local pass
+  wrote: one full-resolution pass and one RGBA16F texture fewer per global change (profiler clock: pre-local 3.5 +
+  coverage 3.4 ms -> 5.8 ms fused; pipelined 19.1 -> 18.3 ms). An auto-mask brush still needs the pre-local texture
+  (its dabs' reference colours and every pixel's), so with one the separate pass runs as before; tiles and the
+  export keep it too.
 - Profiling: `mask plan (CPU)` and `mask coverage` sections; the benchmark gained a reference drag (the same Detail and
   Effects stages on globally, no masks), an auto-mask brush, the stroke measured pipelined, and `-e only <text>`.
 
@@ -307,15 +314,15 @@ Detail and Effects stages the masks switch on set globally):
 
 | Drag (tablet, Adreno 740) | main (M4/A) | M4/P pipelined | GPU per frame p50 / p95 |
 | --- | --- | --- | --- |
-| A mask's exposure (sky, linear: 55 % of the image) | 21.9 | **10.25** | 9.36 / 9.41 |
-| A mask's noise | 10.3 | **6.45** | 5.87 / 7.50 |
-| A mask's clarity | 5.1 | **3.23** | 2.72 / 5.56 |
-| Global exposure, five masks on | 27.3 | **19.14** | 18.08 / 18.18 |
-| Global exposure, an auto-mask brush too | - | 23.76 | 23.06 / 23.12 |
-| Reference: no masks, the same Detail and Effects stages on globally | - | 10.80 | 9.95 / 11.27 |
-| Global exposure, masks off, no Detail/Effects (unchanged) | 2.5 | 2.98 | 2.37 / 5.07 |
-| A stroke in progress, 5 points a frame, six masks | p50 46 / p95 84 (serialised) | **4.85** | 3.63 / 7.97 |
-| The same stroke with the auto-mask | - | 4.83 | 1.81 / 6.81 |
+| A mask's exposure (sky, linear: 55 % of the image) | 21.9 | **10.15** | 9.34 / 9.43 |
+| A mask's noise | 10.3 | **6.50** | 5.87 / 7.15 |
+| A mask's clarity | 5.1 | **3.26** | 2.72 / 5.57 |
+| Global exposure, five masks on | 27.3 | **18.26** (19.14 before the fused range coverage) | 17.58 / 17.67 |
+| Global exposure, an auto-mask brush too (no fusion: the brush reads the pre texture) | - | 24.38 | 23.02 / 23.09 |
+| Reference: no masks, the same Detail and Effects stages on globally | - | 10.97 | 9.94 / 11.37 |
+| Global exposure, masks off, no Detail/Effects (unchanged) | 2.5 | 2.89 | 2.36 / 5.07 |
+| A stroke in progress, 5 points a frame, six masks | p50 46 / p95 84 (serialised) | **4.78** | 3.77 / 6.92 |
+| The same stroke with the auto-mask | - | 4.81 | 3.75 / 6.88 |
 
 Serialised (`glFinish` per frame, the GPU at a low clock), the stroke is p50 31 / p95 41 ms (was 46 / 84) of which
 7 ms p50 is the GL thread's CPU for the brush and coverage update (dab binning and uploads, debug build).
@@ -329,9 +336,12 @@ update then runs every pass of the drag over the mask's box only. Results are fr
 must re-run the develop pass and every Detail and Effects stage over 3.84 MP. Without any mask, those stages alone
 cost 10.8 ms pipelined on the Adreno 740: the 8.3 ms target is below what the same drag costs with no masks at all.
 With masks the global drag adds the pre-local pass, the range masks' coverage and the masks' own operators (local
-tone, white balance, colour: measured by switching each off, 1.2, 0.3 and 0.7 ms). The levers left are outside the
-masks: the Detail stages at half resolution at the fit view (ADR 0012 "M2/P", next levers), or fusing the pre-local
-pass and the range coverage into one pass.
+tone, white balance, colour: measured by switching each off, 1.2, 0.3 and 0.7 ms). The fusion of the pre-local pass
+and the range coverage is done (above). The next lever is outside the masks and is a product decision, because it
+changes the fit view's pixels: run the Detail stages (luminance chain, shrinkage, blurs) at half resolution when the
+view reads level 1 only (ADR 0012 "M2/P", next levers). Estimate from the profile: those passes are about 13.5 of the
+41.5 profiler-ms of the global drag, about 5-6 ms of its 18 pipelined; a quarter of the pixels would save roughly 3-4
+ms (global drag about 14-15 ms, the no-mask reference about 7 ms), still above 8.3 for the global drag with masks.
 
 ## Consequences
 

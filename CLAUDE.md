@@ -676,7 +676,9 @@ progress or a mask's slider drag is a **partial stage-1 update** (`GpuDevelopRen
 coverage rectangle, or `MaskBounds` of the masks whose vectors changed; develop pass scissored, `DetailPasses.run(dirty,
 reach, finalFull)`, `EffectsPasses.update`), bit-identical to a fresh render (`MaskRenderTest
 #partialUpdatesEqualAFreshRender`: keep it passing when you add a pass; a pass whose target is shared between levels
-must be widened or run whole). Range masks: a global change redraws only the masks that read the pre-local image.
+must be widened or run whole). Range masks: a global change redraws only the masks that read the pre-local image, and in the preview their
+coverage pass computes the pre-local colour itself (`MaskShaders.FUSED_COVERAGE_FRAG` + `Shaders.developGlobal`, the
+same code as the develop pass's unmasked path; `MaskPasses.attachFused`); an auto-mask brush keeps the pre texture.
 
 AI masks: the engine asks `mask/AiMaskSource` (M4/C implements it in `:core:ml`); `GpuDevelopRenderer.setMaskSource`,
 `TiledRenderer.render(…, masks = MaskContext(source, key))` (an export waits for its masks), the zoom tiles re-develop

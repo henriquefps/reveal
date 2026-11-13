@@ -346,7 +346,9 @@ class TiledRendererTest {
      */
     @Test
     fun maskedTilesStitchAndMatchThePreviewAndTheCpu() = runBlocking {
-        val edit = MaskFixtures.fiveMasks().copy(light = recipe.light, detail = Detail(sharpenAmount = 30f))
+        // The five masks and a brush with M4/B's options (an auto-mask stroke: its dab colours come from a pre-pass).
+        val edit = MaskFixtures.fiveMasks().let { it.copy(masks = it.masks + MaskFixtures.brushOptions) }
+            .copy(light = recipe.light, detail = Detail(sharpenAmount = 30f))
         val reach = DevelopParams.reach(edit)
         assertThat(reach).isGreaterThan(0)
         fun maskPlan(tile: Int, geometry: Geometry = Geometry()) =

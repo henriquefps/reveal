@@ -83,7 +83,7 @@ float smoothV(ivec2 p) {
      * total luminance amount (-1 = the global thresholds) and whether that total is 0 (the pixel keeps its input
      * lightness).
      */
-    private val SHRINK = MaskShaders.MASKS + MaskShaders.TOTALS + """
+    private val SHRINK = MaskShaders.MASKS + MaskShaders.DETAIL_SUM + MaskShaders.TOTALS + """
 uniform int uLocal;        // 1 = masks change the luminance noise reduction somewhere
 float shrinkAdd(float acc, float d, float tau) {
     float keep = d * d / max(d * d + tau * tau, ${ColourShaders.glslFloat(
@@ -97,9 +97,10 @@ float noiseScale(ivec2 p, out bool none) {
     if (uLocal == 0) {
         return -1.0;
     }
-    vec4 s[5];
-    if (localSum(p, s) && s[3].z != 0.0) {
-        float total = clamp(maskGlobal[2].y + s[3].z, 0.0, 100.0);
+    vec4 e0;
+    vec4 e1;
+    if (localDetailSum(p, e0, e1) && e1.x != 0.0) {
+        float total = clamp(maskGlobal[2].y + e1.x, 0.0, 100.0);
         none = total == 0.0;
         return totalNoiseScale(total);
     }
@@ -301,7 +302,7 @@ void main() {
      * 50 % or less read nothing finer: docs/adr/0012, "M2/P").
      */
     private val FINAL_FRAG: String = HEADER + ColourShaders.OKLAB + EffectsShaders.APPLY + MaskShaders.MASKS +
-        MaskShaders.TOTALS + """
+        MaskShaders.DETAIL_SUM + MaskShaders.TOTALS + """
 uniform sampler2D uLum;        // (L, acc) of the last luminance level
 uniform sampler2D uBlur;       // (G_sharpen, G_texture)
 uniform sampler2D uHalfS;      // colour levels' result, half resolution (L, a, b)
@@ -390,23 +391,24 @@ vec3 finalAt(ivec2 p, vec2 sUp, vec2 dUp) {
     float omega = uEffects.y;
     float beta = uEffects.z;
     if (local) {
-        vec4 s[5];
-        if (localSum(p, s)) {
-            if (s[3].y != 0.0) {
-                float total = maskGlobal[2].x + s[3].y;
+        vec4 e0;
+        vec4 e1;
+        if (localDetailSum(p, e0, e1)) {
+            if (e0.w != 0.0) {
+                float total = maskGlobal[2].x + e0.w;
                 sharpenGain = totalSharpenGain(total, maskGlobal[2].z);
                 soften = totalSoften(total);
             }
-            if (s[2].x != 0.0) {
-                textureGain = totalTextureGain(maskGlobal[1].y + s[2].x, maskGlobal[2].w);
+            if (e0.x != 0.0) {
+                textureGain = totalTextureGain(maskGlobal[1].y + e0.x, maskGlobal[2].w);
             }
-            if (s[2].y != 0.0) {
-                clarityGain = totalUnit(maskGlobal[1].z + s[2].y) * ${ColourShaders.glslFloat(
+            if (e0.y != 0.0) {
+                clarityGain = totalUnit(maskGlobal[1].z + e0.y) * ${ColourShaders.glslFloat(
             dev.hfps.reveal.pipeline.cpu.EffectsParams.CLARITY_GAIN,
         )};
             }
-            if (s[2].z != 0.0) {
-                float u = totalUnit(maskGlobal[1].w + s[2].z);
+            if (e0.z != 0.0) {
+                float u = totalUnit(maskGlobal[1].w + e0.z);
                 omega = u > 0.0 ? u * ${ColourShaders.glslFloat(
             dev.hfps.reveal.pipeline.cpu.EffectsParams.DEHAZE_OMEGA,
         )} : 0.0;

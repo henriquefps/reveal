@@ -110,9 +110,9 @@ class MaskRasterTest {
         // Spacing: 0.15 of the diameter at the dab's pressure.
         val d = all.data
         for (k in 1 until all.size) {
-            val dx = d[k * 6] - d[(k - 1) * 6]
-            val dy = d[k * 6 + 1] - d[(k - 1) * 6 + 1]
-            val spacing = maxOf(Dabs.SPACING * 2 * d[(k - 1) * 6 + 2], Dabs.MIN_SPACING_PX)
+            val dx = d[k * Dabs.DAB_FLOATS] - d[(k - 1) * Dabs.DAB_FLOATS]
+            val dy = d[k * Dabs.DAB_FLOATS + 1] - d[(k - 1) * Dabs.DAB_FLOATS + 1]
+            val spacing = maxOf(Dabs.SPACING * 2 * d[(k - 1) * Dabs.DAB_FLOATS + 2], Dabs.MIN_SPACING_PX)
             assertThat(sqrt(dx * dx + dy * dy)).isAtMost(spacing * 1.001f + 1e-4f)
         }
     }

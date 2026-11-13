@@ -655,13 +655,30 @@ adjustment vectors `V_*`, the global values `G_*`, `NEED_*` bits) lives in `Deve
 H)` packs the shapes for one image size (`PackedComponent`, `Dabs` per brush, AI layers). CPU reference:
 `MaskRaster` (components, combination, brush raster, `MaskMath.store` = float16), `cpu/LocalAdjustOps.kt`
 (`LocalField` sums, `LocalWhiteBalance` table, `LocalTotals`, `LocalColourOp`, `LocalDevelop`), the masked branches of
-`CpuDevelop.renderLinear(…, masks: MaskContext)` and `DetailOp`. GPU: `gl/MaskShaders.kt` (the small `Masks` block +
-adjustment table texture: never big arrays in a uniform block), `gl/MaskPasses.kt` (brush layers re-rasterised per 64 px
-bin, coverage RGBA16F, 4 masks per layer, layers as cells of one 2D texture (`LayerGrid`: never a 2D array, the
-emulator caps those at 2048), cached in the preview), `Shaders.DEVELOP_FRAG` `developMasked`, Detail's
-`FLAG_LOCAL` / per-pixel thresholds. Every program that includes `MaskShaders.MASKS` must call `attachMasks`. A new local
-adjustment = a `LocalAdjustment` + field, a `V_` slot (and `G_` if it adds to a global), the CPU total and operator, the
-GLSL line, a case in `LocalAdjustOpsTest` (full mask = global slider) and in `MaskFixtures`.
+`CpuDevelop.renderLinear(…, masks: MaskContext)` and `DetailOp`. GPU: `gl/MaskShaders.kt` (the small `Masks` block,
+the adjustment rows in `MaskDevelop` (vector rows 0-2, `localDevelopSum`) and `MaskDetail` (rows 3-4,
+`localDetailSum`): keep both blocks small, SwiftShader counts uniform blocks against the default-uniform limit),
+`gl/MaskPasses.kt` (brush layers re-rasterised per 64 px bin, coverage RGBA16F, 4 masks per layer, layers as cells of one
+2D texture (`LayerGrid`: never a 2D array, the emulator caps those at 2048), cached in the preview), `Shaders.DEVELOP_FRAG`
+`developMasked`, Detail's `FLAG_LOCAL` / per-pixel thresholds. Every program that includes `MaskShaders.MASKS` must call
+`attachMasks`. A new local adjustment = a `LocalAdjustment` + field, a `V_` slot in the right rows (develop 0-11, Detail
+12-19; and `G_` if it adds to a global), the CPU total and operator, the GLSL line, a case in `LocalAdjustOpsTest` (full
+mask = global slider) and in `MaskFixtures`.
+
+Brush options (M4/B fields, engine M4/P): `BrushStroke.density` (`cov += max(0, D - cov) a`, erase `cov *= 1 - a D`),
+`pressure` (`StrokePressure` both / flow / size: what `k(p)` scales in `Dabs.of`), `autoMask` (each dab weighted by
+the OkLab distance of the pre-local pixel to the pre-local pixel under its centre, `Dabs.AUTO_NEAR/AUTO_FAR`; reference
+colours `MaskRaster.dabColours` / `MaskShaders.DAB_COLOURS_FRAG`, filled by a pre-pass over every tile in
+`TiledRenderer`). A dab is 8 floats (`Dabs.DAB_FLOATS`).
+
+Speed (M4/P, ADR 0022 "Speed"): the plan is keyed on ids + components (dabs cached per stroke list); a stroke in
+progress or a mask's slider drag is a **partial stage-1 update** (`GpuDevelopRenderer.partialRect`: the changed
+coverage rectangle, or `MaskBounds` of the masks whose vectors changed; develop pass scissored, `DetailPasses.run(dirty,
+reach, finalFull)`, `EffectsPasses.update`), bit-identical to a fresh render (`MaskRenderTest
+#partialUpdatesEqualAFreshRender`: keep it passing when you add a pass; a pass whose target is shared between levels
+must be widened or run whole). Range masks: a global change redraws only the masks that read the pre-local image, and in the preview their
+coverage pass computes the pre-local colour itself (`MaskShaders.FUSED_COVERAGE_FRAG` + `Shaders.developGlobal`, the
+same code as the develop pass's unmasked path; `MaskPasses.attachFused`); an auto-mask brush keeps the pre texture.
 
 AI masks: the engine asks `mask/AiMaskSource` (M4/C implements it in `:core:ml`); `GpuDevelopRenderer.setMaskSource`,
 `TiledRenderer.render(…, masks = MaskContext(source, key))` (an export waits for its masks), the zoom tiles re-develop
@@ -669,10 +686,11 @@ when one arrives. Overlay for M4/B: `GpuDevelopRenderer.setMaskOverlay(MaskOverl
 opacity))`; `readCoverage(recipe, id)` and `maskStats` for tests.
 
 ```sh
-./gradlew :core:pipeline:testDebugUnitTest --tests '*mask*' --tests '*LocalAdjustOpsTest*' --tests '*MasksCodecTest*' --tests '*RecipeDiffTest*'
+./gradlew :core:pipeline:testDebugUnitTest --tests '*mask*' --tests '*LocalAdjustOpsTest*' --tests '*MasksCodecTest*' --tests '*RecipeDiffTest*'   # + BrushOptionsTest
 adb -s <serial> shell am instrument -w -e class dev.hfps.reveal.pipeline.MaskRenderTest,dev.hfps.reveal.pipeline.GpuParityTest#masksMatchCpuReference dev.hfps.reveal.pipeline.test/androidx.test.runner.AndroidJUnitRunner
 adb -s <serial> shell am instrument -w -e class dev.hfps.reveal.pipeline.TiledRendererTest#maskedTilesStitchAndMatchThePreviewAndTheCpu,dev.hfps.reveal.pipeline.ZoomTilesTest#maskedTilesMatchTheCpuAndTheExport dev.hfps.reveal.pipeline.test/androidx.test.runner.AndroidJUnitRunner
 adb -s <serial> shell am instrument -w -e class dev.hfps.reveal.pipeline.PipelineBenchmark#maskSliderDragAndBrushAppend dev.hfps.reveal.pipeline.test/androidx.test.runner.AndroidJUnitRunner
+#   -e profile true (per-pass GPU timers), -e only <text> (drags whose name contains it; "stroke" = the strokes only)
 adb -s <serial> logcat -d -s REVEAL_MASKS REVEAL_PARITY REVEAL_EXPORT REVEAL_ZOOM REVEAL_BENCH
 ```
 

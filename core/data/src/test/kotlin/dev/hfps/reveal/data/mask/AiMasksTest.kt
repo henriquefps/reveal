@@ -86,11 +86,11 @@ class AiMasksTest {
     fun `a model that fails leaves the mask failed until retried`() = runBlocking {
         val loader = Loader(fail = true)
         val session = AiMasks(MaskService(loader)).session { image }
-        val told = CountDownLatch(1)
         session.request(sky)
-        assertThat(session.mask(request(sky)) { told.countDown() }).isNull()
-        assertThat(told.await(30, TimeUnit.SECONDS)).isTrue()
-        assertThat(session.states.value[AiMasks.key(sky)]).isEqualTo(AiMaskState.FAILED)
+        assertThat(session.mask(request(sky)) {}).isNull()
+        // The run may fail before or after mask() registers its callback: wait for the state, not the callback.
+        val states = withTimeout(30_000) { session.states.first { it[AiMasks.key(sky)] == AiMaskState.FAILED } }
+        assertThat(states[AiMasks.key(sky)]).isEqualTo(AiMaskState.FAILED)
         session.retry()
         assertThat(session.states.value[AiMasks.key(sky)]).isNull()
         session.close()

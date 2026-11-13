@@ -36,9 +36,15 @@ All notable changes to Reveal are documented here. The format follows
   output), with the same masks as the published model; edge refinement now runs fully on the GPU too, with per-kind
   settings (finer for hair, wider for skies with branches).
 - Debug builds: the mask lab offers the face parts (eyes, irises, lips, teeth, eyebrows).
+- Brush strokes in the mask engine: density (the most a stroke paints), pen pressure on the flow, the size or both,
+  and the auto-mask (a stroke only covers colours like the one under the brush), the same in the preview, at 100 % and
+  in exports; docs/adr/0022.
 
 ### Changed
 - Pasting edits and "Previous" leave masks out unless you choose them (a mask's shape belongs to its photo, like a crop).
+- Masks are much faster on the GPU (measured on a Galaxy Tab S9 Ultra): painting a stroke redraws only where it
+  paints and runs at the display rate, a mask's slider redraws only where the mask reaches, and global sliders with
+  masks on no longer recompute the masks that do not depend on them; the output is unchanged.
 
 ## [0.5.5] - 2026-11-12
 

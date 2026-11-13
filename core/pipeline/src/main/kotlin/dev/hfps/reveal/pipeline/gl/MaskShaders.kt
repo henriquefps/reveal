@@ -33,9 +33,6 @@ internal object MaskShaders {
     /** Texture unit of the local white balance's gain table (develop pass). */
     const val WB_UNIT: Int = 7
 
-    /** Texture unit of the masks' adjustment table (develop and Detail passes). */
-    const val ADJUST_UNIT: Int = 4
-
     /** Texels per row of the coverage pass's component table: head, five data texels, the AI layer's info. */
     const val SHAPE_TEXELS: Int = 7
 
@@ -61,10 +58,18 @@ float storeCoverage(float v) {
 }
 """
 
+    /** Uniform block binding of `MaskDevelop` (the develop rows of every rendered mask's vector). */
+    const val DEVELOP_ROWS_BINDING: Int = 7
+
+    /** Uniform block binding of `MaskDetail` (the Detail rows). */
+    const val DETAIL_ROWS_BINDING: Int = 8
+
     /**
      * The `Masks` block (small: never a big array in a uniform block, SwiftShader counts them against the
-     * default-uniform limit), the adjustment table on [ADJUST_UNIT] (RGBA32F, texel (k, m) = vec4 `k` of mask `m`'s
-     * vector), the coverage array and `localSum`.
+     * default-uniform limit), the coverage texture and the per-layer coverage fetch. M4/P: the adjustment vectors are
+     * no longer a texture read 5 times per mask and pixel; the develop pass reads its rows from [DEVELOP_SUM]'s block,
+     * Detail's passes theirs from [DETAIL_SUM]'s (each at most 32 x 3 or 32 x 2 vec4), and the coverage is fetched once
+     * per layer of four masks.
      */
     const val MASKS: String = """
 layout(std140) uniform Masks {
@@ -73,24 +78,71 @@ layout(std140) uniform Masks {
     vec4 maskGlobal[3];               // MaskParams.global (G_ order); [2].zw = sharpening, texture attenuation
 };
 uniform highp sampler2D uCoverage;    // four masks per layer, layers as cells of one texture
-uniform highp sampler2D uMaskAdj;
 
-// LocalField.sum: s = Σ coverage_m · adjust_m in mask order; false when no mask covers p (s is then 0).
-bool localSum(ivec2 p, out vec4 s[5]) {
-    for (int k = 0; k < 5; k++) {
-        s[k] = vec4(0.0);
-    }
+vec4 coverageLayer(ivec2 p, int layer) {
+    ivec2 cell = ivec2((layer % maskGrid.z) * maskGrid.x, (layer / maskGrid.z) * maskGrid.y);
+    return texelFetch(uCoverage, cell + p, 0);
+}
+"""
+
+    /**
+     * `LocalField.sum` for the develop rows (`MaskParams` rows 0-2: white balance, exposure, contrast; highlights,
+     * shadows, whites, blacks; saturation, hue, colour tint) in mask order; false when no mask covers p.
+     */
+    val DEVELOP_SUM: String = """
+layout(std140) uniform MaskDevelop {
+    vec4 maskDev[${MaskParams.MAX_MASKS * MaskParams.DEVELOP_ROWS}];
+};
+
+bool localDevelopSum(ivec2 p, out vec4 s0, out vec4 s1, out vec4 s2) {
+    s0 = vec4(0.0);
+    s1 = vec4(0.0);
+    s2 = vec4(0.0);
     bool any = false;
-    for (int m = 0; m < maskInfo.x; m++) {
-        int layer = m >> 2;
-        ivec2 cell = ivec2((layer % maskGrid.z) * maskGrid.x, (layer / maskGrid.z) * maskGrid.y);
-        float c = texelFetch(uCoverage, cell + p, 0)[m & 3];
-        if (c == 0.0) {
-            continue;
+    int n = maskInfo.x;
+    for (int l = 0; l * 4 < n; l++) {
+        vec4 cov = coverageLayer(p, l);
+        for (int j = 0; j < 4; j++) {
+            int m = l * 4 + j;
+            float c = cov[j];
+            if (m >= n || c == 0.0) {
+                continue;
+            }
+            any = true;
+            s0 += c * maskDev[3 * m];
+            s1 += c * maskDev[3 * m + 1];
+            s2 += c * maskDev[3 * m + 2];
         }
-        any = true;
-        for (int k = 0; k < 5; k++) {
-            s[k] += c * texelFetch(uMaskAdj, ivec2(k, m), 0);
+    }
+    return any;
+}
+"""
+
+    /**
+     * `LocalField.sum` for the Detail rows (`MaskParams` rows 3-4: texture, clarity, dehaze, sharpness; noise); false
+     * when no mask covers p.
+     */
+    val DETAIL_SUM: String = """
+layout(std140) uniform MaskDetail {
+    vec4 maskDet[${MaskParams.MAX_MASKS * MaskParams.DETAIL_ROWS}];
+};
+
+bool localDetailSum(ivec2 p, out vec4 e0, out vec4 e1) {
+    e0 = vec4(0.0);
+    e1 = vec4(0.0);
+    bool any = false;
+    int n = maskInfo.x;
+    for (int l = 0; l * 4 < n; l++) {
+        vec4 cov = coverageLayer(p, l);
+        for (int j = 0; j < 4; j++) {
+            int m = l * 4 + j;
+            float c = cov[j];
+            if (m >= n || c == 0.0) {
+                continue;
+            }
+            any = true;
+            e0 += c * maskDet[2 * m];
+            e1 += c * maskDet[2 * m + 1];
         }
     }
     return any;
@@ -125,7 +177,7 @@ float totalNoiseScale(float t) {
     /**
      * Local white balance and the local colour step (the develop pass; needs `toOkLab`, `fromOkLab`, VS_ constants).
      */
-    val DEVELOP: String = TOTALS + """
+    val DEVELOP: String = DEVELOP_SUM + TOTALS + """
 uniform highp sampler2D uLocalWb;   // LocalWhiteBalance.table: (temperature node, tint node) -> rgb cone gains
 
 const mat3 LWB_TO_CONE = ${mat3(LocalWhiteBalance.toCone)};
@@ -149,31 +201,32 @@ vec3 localWhiteBalance(vec3 c, float t, float n) {
     return LWB_FROM_CONE * ((LWB_TO_CONE * c) * g);
 }
 
-// LocalColourOp.apply: local saturation (VibranceSaturationOp.gain, vibrance 0), hue rotation, colour tint.
-vec3 localColour(vec3 c, vec4 s[5]) {
+// LocalColourOp.apply: local saturation (VibranceSaturationOp.gain, vibrance 0), hue rotation, colour tint;
+// s2 = (saturation, hue, tint a, tint b).
+vec3 localColour(vec3 c, vec4 s2) {
     vec3 lab = toOkLab(c);
     float a = lab.y;
     float b = lab.z;
-    if (s[2].w != 0.0) {
+    if (s2.x != 0.0) {
         float ch = sqrt(a * a + b * b);
         if (ch > 1e-7) {
-            float sat = clamp(s[2].w, -100.0, 100.0) / 100.0;
+            float sat = clamp(s2.x, -100.0, 100.0) / 100.0;
             float q = ch / VS_C_SOFT;
             float k = sat <= 0.0 ? 1.0 + sat : 1.0 + sat / (1.0 + q * q);
             a *= k;
             b *= k;
         }
     }
-    if (s[3].x != 0.0) {
-        float theta = radians(clamp(s[3].x, -180.0, 180.0));
+    if (s2.y != 0.0) {
+        float theta = radians(clamp(s2.y, -180.0, 180.0));
         float cs = cos(theta);
         float sn = sin(theta);
         float ra = a * cs - b * sn;
         b = a * sn + b * cs;
         a = ra;
     }
-    a += lab.x * s[4].x;
-    b += lab.x * s[4].y;
+    a += lab.x * s2.z;
+    b += lab.x * s2.w;
     return fromOkLab(vec3(lab.x, a, b));
 }
 
@@ -190,62 +243,57 @@ const float GT_BLACKS = ${glslFloat(GlobalToneOp.BLACKS_RANGE.toFloat())};
      */
     const val DEVELOP_MAIN: String = """
 vec3 developMasked(vec3 c, ivec2 p) {
-    vec4 s[5];
-    bool masked = localSum(p, s);
+    vec4 s0;
+    vec4 s1;
+    vec4 s2;
+    bool masked = localDevelopSum(p, s0, s1, s2);
     float l0 = logLuminance(c);
     float shift = 0.0;
-    if (masked && (s[0].x != 0.0 || s[0].y != 0.0 || s[0].z != 0.0)) {
-        if (s[0].x != 0.0 || s[0].y != 0.0) {
-            c = localWhiteBalance(c, s[0].x, s[0].y);
+    if (masked && (s0.x != 0.0 || s0.y != 0.0 || s0.z != 0.0)) {
+        if (s0.x != 0.0 || s0.y != 0.0) {
+            c = localWhiteBalance(c, s0.x, s0.y);
         }
-        if (s[0].z != 0.0) {
-            c = c * exp2(clamp(s[0].z, -4.0, 4.0));
+        if (s0.z != 0.0) {
+            c = c * exp2(clamp(s0.z, -4.0, 4.0));
         }
         shift = logLuminance(c) - l0;
     }
-    bool toneLocal = masked && (s[1].x != 0.0 || s[1].y != 0.0);
+    bool toneLocal = masked && (s1.x != 0.0 || s1.y != 0.0);
     if (tone.z != 0.0 || toneLocal) {
-        float hs = toneLocal && s[1].x != 0.0 ? totalUnit(maskGlobal[0].y + s[1].x) * LT_HIGHLIGHT_STOPS : tone.x;
-        float ss = toneLocal && s[1].y != 0.0 ? totalUnit(maskGlobal[0].z + s[1].y) * LT_SHADOW_STOPS : tone.y;
+        float hs = toneLocal && s1.x != 0.0 ? totalUnit(maskGlobal[0].y + s1.x) * LT_HIGHLIGHT_STOPS : tone.x;
+        float ss = toneLocal && s1.y != 0.0 ? totalUnit(maskGlobal[0].z + s1.y) * LT_SHADOW_STOPS : tone.y;
         c = localToneAt(c, l0, p + uOrigin, hs, ss, shift);
     }
     c = profileLook(c);
-    bool toneGlobal = masked && (s[0].w != 0.0 || s[1].z != 0.0 || s[1].w != 0.0);
+    bool toneGlobal = masked && (s0.w != 0.0 || s1.z != 0.0 || s1.w != 0.0);
     if (tone.w != 0.0 || toneGlobal) {
-        float g = toneGlobal && s[0].w != 0.0 ? exp2(totalUnit(maskGlobal[0].x + s[0].w) * GT_CONTRAST_LOG2) : tone2.x;
-        float wh = toneGlobal && s[1].z != 0.0 ? totalUnit(maskGlobal[0].w + s[1].z) * GT_WHITES : tone2.y;
-        float bl = toneGlobal && s[1].w != 0.0 ? totalUnit(maskGlobal[1].x + s[1].w) * GT_BLACKS : tone2.z;
+        float g = toneGlobal && s0.w != 0.0 ? exp2(totalUnit(maskGlobal[0].x + s0.w) * GT_CONTRAST_LOG2) : tone2.x;
+        float wh = toneGlobal && s1.z != 0.0 ? totalUnit(maskGlobal[0].w + s1.z) * GT_WHITES : tone2.y;
+        float bl = toneGlobal && s1.w != 0.0 ? totalUnit(maskGlobal[1].x + s1.w) * GT_BLACKS : tone2.z;
         c = globalToneWith(c, g, wh, bl);
     }
     c = toneCurve(c);
     c = colourStage(c);
-    if (masked && (s[2].w != 0.0 || s[3].x != 0.0 || s[4].x != 0.0 || s[4].y != 0.0)) {
-        c = localColour(c, s);
+    if (masked && (s2.x != 0.0 || s2.y != 0.0 || s2.z != 0.0 || s2.w != 0.0)) {
+        c = localColour(c, s2);
     }
     return c;
 }
 """
 
-    /**
-     * One coverage layer (`MaskRaster.coverage`): the four masks of the layer from their packed components, each
-     * combined from 0 and stored as float16 in its channel. Region pixel `p` is image pixel `uOrigin + p`.
-     */
-    val COVERAGE_FRAG: String = """#version 300 es
-precision highp float;
-precision highp int;
-precision highp sampler2D;
-
+    /** The coverage pass's own inputs (the component table, the brush and AI layers, the layer being drawn). */
+    private const val COVERAGE_INPUTS: String = """
 uniform ivec4 uShapeMasks[4];                  // per slot of the layer: x = first component, y = count
 uniform highp sampler2D uShapes;               // row i: head (type, op, invert, layer), data 0..19, AI (ratio x, y, size)
-uniform sampler2D uPre;                        // the pre-local image in OkLab (region)
 uniform sampler2D uBrush;                      // brush rasters (region), layers as cells: uBrushGrid
 uniform sampler2D uAi;                         // AI masks (R32F, from each cell's texel 0), cells: uAiGrid
 uniform ivec3 uBrushGrid;                      // cell width, cell height, columns
 uniform ivec3 uAiGrid;
 uniform ivec2 uLayerOrigin;                    // the coverage layer's cell being drawn
-uniform ivec2 uOrigin;
-out vec4 outColor;
-""" + Shaders.Q16 + COMMON + """
+"""
+
+    /** `MaskRaster.value` and the combination (needs `uOrigin`, [COMMON] and `q16`). */
+    private val COVERAGE_FUNCTIONS: String = COMMON + """
 float shape(int i, int k) {
     return texelFetch(uShapes, ivec2(1 + (k >> 2), i), 0)[k & 3];
 }
@@ -336,6 +384,22 @@ float maskCoverage(int slot, ivec2 p, vec3 pre) {
     return storeCoverage(cov);
 }
 
+"""
+
+    /**
+     * One coverage layer (`MaskRaster.coverage`): the four masks of the layer from their packed components, each
+     * combined from 0 and stored as float16 in its channel, from the pre-local
+     * texture `uPre`. Region pixel `p` is image pixel `uOrigin + p`.
+     */
+    val COVERAGE_FRAG: String = """#version 300 es
+precision highp float;
+precision highp int;
+precision highp sampler2D;
+
+uniform sampler2D uPre;                        // the pre-local image in OkLab (region)
+uniform ivec2 uOrigin;
+out vec4 outColor;
+""" + COVERAGE_INPUTS + Shaders.Q16 + COVERAGE_FUNCTIONS + """
 void main() {
     ivec2 p = ivec2(gl_FragCoord.xy) - uLayerOrigin;
     vec3 pre = texelFetch(uPre, p, 0).xyz;
@@ -345,9 +409,45 @@ void main() {
 """
 
     /**
-     * A brush layer (`MaskRaster.brush`): per pixel the dabs of its bin in order, painting `cov += (1 - cov) a`,
-     * erasing `cov *= 1 - a`; stored as float16. Dab `k` is texels `2k`, `2k + 1` of [uDabs] (centre x, y, radius,
-     * inner; flow, erase), bins hold (offset, count) into [uIndex].
+     * The preview's range coverage fused with the pre-local develop (docs/adr/0022 "Speed (M4/P)"): the pixel's
+     * pre-local colour is computed here (`Shaders.developGlobal` on the scene texture, OkLab, float16 as the develop
+     * pass stores it) instead of being read from a texture a separate pass wrote. Same values, one full-resolution pass
+     * fewer per global change. Lazy: it reads `Shaders`, which reads this object.
+     */
+    val FUSED_COVERAGE_FRAG: String by lazy {
+        Shaders.DEVELOP_DECLARATIONS + """
+out vec4 outColor;
+""" + COVERAGE_INPUTS + Shaders.DEVELOP_FUNCTIONS + COVERAGE_FUNCTIONS + """
+void main() {
+    ivec2 p = ivec2(gl_FragCoord.xy) - uLayerOrigin;
+    vec3 c = texelFetch(uScene, p, 0).rgb;
+    vec3 pre = q16(toOkLab(developGlobal(c, p + uOrigin)));
+    outColor = vec4(maskCoverage(0, p, pre), maskCoverage(1, p, pre), maskCoverage(2, p, pre),
+        maskCoverage(3, p, pre));
+}
+"""
+    }
+
+    /** `MaskRaster.autoWeight`: the colour similarity of an auto-mask dab. */
+    val AUTO: String = """
+float autoWeight(vec3 pre, vec3 ref) {
+    float dl = pre.x - ref.x;
+    float da = pre.y - ref.y;
+    float db = pre.z - ref.z;
+    float dist = sqrt(${glslFloat(MaskPlan.COLOUR_L_WEIGHT)} * dl * dl + da * da + db * db);
+    return 1.0 - maskStep(${glslFloat(dev.hfps.reveal.pipeline.mask.Dabs.AUTO_NEAR)}, ${glslFloat(
+        dev.hfps.reveal.pipeline.mask.Dabs.AUTO_FAR,
+    )}, dist);
+}
+"""
+
+    /**
+     * A brush layer (`MaskRaster.brush`): per pixel the dabs of its bin in order,
+     * `a = flow (1 - sstep(inner, 1, d / r))` (times `autoWeight` for an auto-mask dab), painting
+     * `cov += max(0, D - cov) a`, erasing `cov *= 1 - a D` (`D` the density); stored as float16. Dab `k` is texels
+     * `2k`, `2k + 1` of `uDabs` (centre x, y, radius, inner; flow, erase, density, auto), bins hold (offset, count)
+     * into `uIndex`; an auto-mask dab's reference colour is texel `k` of `uDabColours` from row `uColourRow`
+     * ([DAB_COLOURS_FRAG]), the pixel's colour `uPre` (the region's pre-local OkLab).
      */
     val BRUSH_FRAG: String = """#version 300 es
 precision highp float;
@@ -357,10 +457,14 @@ precision highp sampler2D;
 uniform sampler2D uDabs;
 uniform sampler2D uBins;
 uniform sampler2D uIndex;
+uniform sampler2D uPre;
+uniform sampler2D uDabColours;
+uniform int uColourRow;
+uniform int uAuto;             // 1 when the layer has auto-mask dabs
 uniform ivec2 uOrigin;
 uniform ivec2 uLayerOrigin;    // the brush layer's cell
 out vec4 outColor;
-""" + Shaders.Q16 + COMMON + """
+""" + Shaders.Q16 + COMMON + AUTO + """
 ivec2 dataAt(int k) {
     return ivec2(k % $DATA_WIDTH, k / $DATA_WIDTH);
 }
@@ -371,6 +475,7 @@ void main() {
     int offset = int(bin.x);
     int count = int(bin.y);
     vec2 q = vec2(p + uOrigin) + 0.5;
+    vec3 pre = uAuto != 0 ? texelFetch(uPre, p, 0).xyz : vec3(0.0);
     float cov = 0.0;
     for (int j = 0; j < count; j++) {
         int k = int(texelFetch(uIndex, dataAt(offset + j), 0).r);
@@ -382,9 +487,57 @@ void main() {
         if (a <= 0.0) {
             continue;
         }
-        cov = d1.y != 0.0 ? cov * (1.0 - a) : cov + (1.0 - cov) * a;
+        if (d1.w != 0.0) {
+            a *= autoWeight(pre, texelFetch(uDabColours, dataAt(k) + ivec2(0, uColourRow), 0).xyz);
+            if (a <= 0.0) {
+                continue;
+            }
+        }
+        cov = d1.y != 0.0 ? cov * (1.0 - a * d1.z) : cov + max(0.0, d1.z - cov) * a;
     }
     outColor = vec4(storeCoverage(cov), 0.0, 0.0, 1.0);
+}
+"""
+
+    /**
+     * The auto-mask dabs' reference colours (`MaskRaster.dabColours`): texel `k` (from row [uRow]) gets the pre-local
+     * pixel under dab `k`'s centre when that pixel lies in the region [uPre] covers; other texels are left as they are
+     * (discarded), so the tiled renderer fills them over its pre-pass tiles.
+     */
+    val DAB_COLOURS_FRAG: String = """#version 300 es
+precision highp float;
+precision highp int;
+precision highp sampler2D;
+
+uniform sampler2D uDabs;
+uniform sampler2D uPre;
+uniform int uCount;
+uniform int uRow;
+uniform ivec2 uOrigin;     // the region's origin in the image
+uniform ivec2 uSize;       // the region's size
+uniform ivec2 uImage;      // the image's size
+out vec4 outColor;
+
+ivec2 dataAt(int k) {
+    return ivec2(k % $DATA_WIDTH, k / $DATA_WIDTH);
+}
+
+void main() {
+    ivec2 t = ivec2(gl_FragCoord.xy) - ivec2(0, uRow);
+    int k = t.y * $DATA_WIDTH + t.x;
+    if (k >= uCount) {
+        discard;
+    }
+    vec4 d0 = texelFetch(uDabs, dataAt(2 * k), 0);
+    vec4 d1 = texelFetch(uDabs, dataAt(2 * k + 1), 0);
+    if (d1.w == 0.0) {
+        discard;
+    }
+    ivec2 c = clamp(ivec2(floor(d0.xy)), ivec2(0), uImage - 1) - uOrigin;
+    if (any(lessThan(c, ivec2(0))) || any(greaterThanEqual(c, uSize))) {
+        discard;
+    }
+    outColor = vec4(texelFetch(uPre, c, 0).xyz, 1.0);
 }
 """
 

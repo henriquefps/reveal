@@ -13,6 +13,8 @@ import dev.hfps.reveal.pipeline.mask.AiMaskSource
 import dev.hfps.reveal.pipeline.mask.MaskPlan
 import dev.hfps.reveal.pipeline.mask.MaskRaster
 import dev.hfps.reveal.pipeline.recipe.BrushStroke
+import dev.hfps.reveal.pipeline.recipe.Detail
+import dev.hfps.reveal.pipeline.recipe.Effects
 import dev.hfps.reveal.pipeline.recipe.LocalAdjustments
 import dev.hfps.reveal.pipeline.recipe.Mask
 import dev.hfps.reveal.pipeline.recipe.MaskComponent
@@ -116,6 +118,64 @@ class MaskRenderTest {
         } finally {
             fresh.close()
         }
+    }
+
+    /**
+     * docs/adr/0022 "Speed (M4/P)": a stroke in progress (fit view: level 1 only) and drags of a mask's adjustments
+     * redraw only a rectangle of the develop output and of every Detail and Effects stage; what they leave equals a
+     * fresh render bit for bit.
+     */
+    @Test
+    fun partialUpdatesEqualAFreshRender() = runBlocking {
+        val points = MaskFixtures.scribble(300)
+        val base = MaskFixtures.fiveMasks().let {
+            it.copy(
+                detail = Detail(nrLuminance = 15f, nrColour = 20f, sharpenAmount = 30f),
+                effects = Effects(texture = 10f, clarity = 20f, dehaze = 10f),
+            )
+        }
+        fun withStroke(n: Int) = base.copy(
+            masks = base.masks + Mask(
+                "stroke",
+                adjustments = LocalAdjustments(exposure = 0.6f, noise = 30f, saturation = -20f),
+                components = listOf(
+                    MaskComponent.Brush(strokes = listOf(BrushStroke.raw(points.take(n), size = 0.05f))),
+                ),
+            ),
+        )
+        fun withSpot(ev: Float, n: Int = points.size) = withStroke(n).let { r ->
+            r.copy(
+                masks = r.masks.map {
+                    if (it.id ==
+                        "spot"
+                    ) {
+                        it.copy(adjustments = it.adjustments.copy(exposure = ev))
+                    } else {
+                        it
+                    }
+                },
+            )
+        }
+        val before = renderer.partialUpdates
+        // Fitted at a third: the final pass writes level 1 only.
+        for (n in 10..points.size step 20) renderer.benchmark(listOf(withStroke(n)), 110 to 74)
+        renderer.renderLinear(withStroke(points.size))
+        for (ev in listOf(-1f, -0.5f, 0.3f, 1f)) renderer.renderLinear(withSpot(ev))
+        val partial = renderer.partialUpdates - before
+        val incremental = renderer.renderLinear(withSpot(1f))
+        val fresh = GpuDevelopRenderer.create()
+        val reference = try {
+            fresh.upload(image)
+            fresh.setMaskSource(MaskFixtures.source, "fixture")
+            fresh.renderLinear(withSpot(1f))
+        } finally {
+            fresh.close()
+        }
+        var worst = 0f
+        for (i in reference.indices) worst = maxOf(worst, abs(reference[i] - incremental[i]))
+        Log.i(TAG, "partial updates: $partial, max |incremental - fresh| $worst")
+        assertThat(partial).isAtLeast(15)
+        assertThat(worst).isEqualTo(0f)
     }
 
     @Test

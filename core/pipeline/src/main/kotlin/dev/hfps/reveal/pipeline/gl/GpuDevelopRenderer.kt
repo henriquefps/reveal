@@ -24,9 +24,12 @@ import dev.hfps.reveal.pipeline.geometry.Warp
 import dev.hfps.reveal.pipeline.input.TileSource
 import dev.hfps.reveal.pipeline.input.colourOnly
 import dev.hfps.reveal.pipeline.mask.AiMaskSource
+import dev.hfps.reveal.pipeline.mask.Dabs
+import dev.hfps.reveal.pipeline.mask.MaskBounds
 import dev.hfps.reveal.pipeline.mask.MaskContext
 import dev.hfps.reveal.pipeline.mask.MaskParams
 import dev.hfps.reveal.pipeline.mask.MaskPlan
+import dev.hfps.reveal.pipeline.recipe.BrushStroke
 import dev.hfps.reveal.pipeline.recipe.Geometry
 import dev.hfps.reveal.pipeline.recipe.Mask
 import dev.hfps.reveal.pipeline.recipe.Recipe
@@ -169,16 +172,42 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
     private val masks = MaskPasses()
     private var maskContext = MaskContext.NONE
     private var maskPlan: MaskPlan? = null
-    private var maskPlanKey: List<Mask>? = null
+    private var maskPlanKey: Any? = null
+
+    /** Brush dabs by stroke list for the proxy (a stroke in progress recomputes only its own; docs/adr/0022 M4/P). */
+    private var dabsCache: Map<List<BrushStroke>, Dabs> = emptyMap()
 
     /** Bumped whenever the rendered masks' coverage changes (develop and Detail caches key on it). */
     private var masksVersion = 0
+
+    /**
+     * Where the coverage changed since the working texture was last developed (docs/adr/0022 "Speed (M4/P)"):
+     * [NO_CHANGE], a rectangle (image pixels x0, y0, x1, y1, exclusive: a stroke in progress), or [FULL_CHANGE].
+     */
+    private var maskChange: IntArray = NO_CHANGE
+
+    /** The develop key of the working texture without the masks' shapes (a partial update needs it unchanged). */
+    private var developedShapeFree: Any? = null
+
+    /** Whether the working texture's last render wrote level 1 only (a partial update must do the same). */
+    private var developedHalf = false
+
+    /** Partial stage-1 updates so far (tests). */
+    @Volatile
+    var partialUpdates: Int = 0
+        private set
     private var stageMasksVersion = 0
     private var preTarget: GlTarget? = null
 
     /** The overlay's mask when it is not one of the rendered masks (its coverage gets the slot after them). */
     private var overlayExtra: Mask? = null
     private var preKey: Any? = null
+
+    /** The parameters the pre-local image of the masks was last made for (bumps [preVersion] when they change). */
+    private var preParams: Any? = null
+
+    /** The masks' range coverage fused with the pre-local develop (`MaskShaders.FUSED_COVERAGE_FRAG`). */
+    private var fusedCoverageProgram = 0
     private var preVersion = 0
 
     /** Bumped when an AI mask arrives (the zoom tiles re-develop). */
@@ -418,7 +447,7 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
             zoom.maskContext = maskContext
             zoom.maskEpoch++
             maskPlanKey = null
-            masksVersion++
+            masksChanged(null)
             requestFrame()
         }
     }
@@ -781,6 +810,7 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
      * built from it; [DetailPasses] caches its own intermediates, so a Detail or Effects drag re-runs only the passes
      * that depend on the dragged slider.
      */
+    @Suppress("CyclomaticComplexMethod", "LongMethod")
     private fun runStage1(all: DevelopParams, showMask: Boolean = false, half: Boolean = false) {
         val image = checkNotNull(input) { "no input" }
         val params = all.withoutPost()
@@ -790,7 +820,26 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         prepareMasks(params)
         val develop = Triple(params.withoutDetail(), localOn, masksVersion)
         val region = DetailPasses.Region(0, 0, image.width, image.height, image.width, image.height)
-        if (develop != developed) {
+        val shapeFree = Pair(params.withoutDetail().withoutMaskShapes(), localOn)
+        val halfNow = localOn && half && !showMask && stageHalfFbo != 0
+        // Only the coverage changed, inside a rectangle (a stroke in progress): the develop pass and slots 11-12 run
+        // there only (docs/adr/0022 "Speed (M4/P)"); the working texture outside it is still exact.
+        // Or only some masks' adjustments changed (a drag of a mask's slider): the box their coverage can reach.
+        val canPartial = develop != developed && !fringeOn && !showMask && !stageMask && halfNow == developedHalf &&
+            stageParams != null && developedShapeFree != null
+        val partial = if (canPartial) partialRect(params, shapeFree) else null
+        maskChange = NO_CHANGE
+        var gridChanged = false
+        if (partial != null) {
+            partialUpdates++
+            runDevelop(params, localOn, partial)
+            developed = develop
+            if (localOn && params.effects.gridActive && effectsGridValid) {
+                effects.update(checkNotNull(labTarget).texture, partial)
+                gridChanged = true
+                profiler.mark("effects grid")
+            }
+        } else if (develop != developed) {
             runDevelop(params, localOn || fringeOn)
             if (fringeOn) {
                 // Defringe (slot 10b, docs/adr/0015) on the OkLab develop output: OkLab again when Detail follows.
@@ -802,7 +851,9 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
             detail.invalidate()
             effectsGridValid = false
         }
-        if (localOn) runLocal(params, showMask, half, region, fringeOn)
+        if (localOn) runLocal(params, showMask, half, region, fringeOn, partial, gridChanged)
+        developedShapeFree = shapeFree
+        developedHalf = halfNow
         stageParams = params
         stageMasksVersion = masksVersion
         stageMask = showMask
@@ -856,12 +907,15 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         panes.all { it.original || it.view.scale <= HALF_VIEW_SCALE }
 
     /** Slots 11 and 12 into the working texture (level 1 only with [half]); see [runStage1]. */
+    @Suppress("LongParameterList")
     private fun runLocal(
         params: DevelopParams,
         showMask: Boolean,
         half: Boolean,
         region: DetailPasses.Region,
         fringeOn: Boolean,
+        dirty: IntArray? = null,
+        gridChanged: Boolean = false,
     ) {
         val image = checkNotNull(input) { "no input" }
         val lab = checkNotNull(if (fringeOn) fringeTarget else labTarget).texture
@@ -869,10 +923,12 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         // the block and the adjustment table must be uploaded here too (docs/adr/0022).
         masks.bind(params)
         val e = if (showMask) EffectsParams.NONE else params.effects
+        var finalFull = gridChanged
         if (e.gridActive && !effectsGridValid) {
             effects.allocate(image.width, image.height)
             effects.build(lab)
             effectsGridValid = true
+            finalFull = true
             profiler.mark("effects grid")
         }
         detail.run(
@@ -892,6 +948,9 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
             } else {
                 null
             },
+            dirty = dirty,
+            reach = params.reach,
+            finalFull = finalFull,
         )
         lastLocalPasses = detail.lastPasses
     }
@@ -902,12 +961,12 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         private set
 
     /** Scene stage, Light passes and the develop stage: into the stage texture, or OkLab for the Detail passes. */
-    private fun runDevelop(params: DevelopParams, labOut: Boolean) {
+    private fun runDevelop(params: DevelopParams, labOut: Boolean, rect: IntArray? = null) {
         val image = checkNotNull(input) { "no input" }
         if (labOut) ensureDetailTargets(image)
         val guided = prepareScene(params)
         masks.bind(params)
-        developPass(if (labOut) checkNotNull(labTarget).fbo else stageFbo, labOut, guided)
+        developPass(if (labOut) checkNotNull(labTarget).fbo else stageFbo, labOut, guided, rect)
         profiler.mark("develop pass")
     }
 
@@ -964,10 +1023,15 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
     }
 
     /** The develop pass into [fbo] (the uniforms and the masks' block are uploaded). */
-    private fun developPass(fbo: Int, labOut: Boolean, guided: Boolean) {
+    private fun developPass(fbo: Int, labOut: Boolean, guided: Boolean, rect: IntArray? = null) {
         val image = checkNotNull(input) { "no input" }
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, fbo)
-        GlSupport.discardColour()
+        if (rect == null) {
+            GlSupport.discardColour()
+        } else {
+            GLES30.glEnable(GLES30.GL_SCISSOR_TEST)
+            GLES30.glScissor(rect[0], rect[1], rect[2] - rect[0], rect[3] - rect[1])
+        }
         GLES30.glViewport(0, 0, image.width, image.height)
         GLES30.glUseProgram(developProgram)
         GLES30.glUniform1i(GLES30.glGetUniformLocation(developProgram, "uLabOut"), if (labOut) 1 else 0)
@@ -977,6 +1041,7 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
             if (guided) light.momentsTexture else sceneTex,
         )
         GLES30.glDrawArrays(GLES30.GL_TRIANGLES, 0, 3)
+        if (rect != null) GLES30.glDisable(GLES30.GL_SCISSOR_TEST)
         GlSupport.checkError("develop stage")
     }
 
@@ -997,35 +1062,16 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         val rendered = params.masks.masks
         val extra = overlayExtra?.takeIf { m -> rendered.none { it.id == m.id } }
         val list = if (extra != null) rendered + extra else rendered
-        if (list != maskPlanKey) {
-            maskPlan = if (list.isEmpty()) null else MaskPlan.of(list, image.width, image.height)
-            maskPlanKey = list
-        }
+        updateMaskPlan(list, image.width, image.height)
         val plan = maskPlan
         if (plan == null) {
             if (masks.coverageTexture != 0) {
                 masks.coverage(MaskPlan.of(emptyList(), image.width, image.height), 0, 0, 0, 0, 0, 0, emptyList(), true)
-                masksVersion++
+                masksChanged(null)
             }
             return
         }
-        var pre = 0
-        if (plan.needsPre) {
-            val target = preTarget ?: run {
-                val tex = newTexture(1, image.width, image.height, GLES30.GL_NEAREST, GLES30.GL_NEAREST)
-                GlTarget(tex, newFramebuffer(tex)).also { preTarget = it }
-            }
-            val key = params.withoutDetail().withoutMasks()
-            if (key != preKey) {
-                val guided = prepareScene(params)
-                masks.bind(params, off = true)
-                developPass(target.fbo, labOut = true, guided = guided)
-                profiler.mark("mask pre-local pass")
-                preKey = key
-                preVersion++
-            }
-            pre = target.texture
-        }
+        val (pre, fused) = if (plan.needsPre) preLocal(params, plan, image) else 0 to null
         val epoch = aiEpoch
         val ai = plan.ai.map { component ->
             maskContext.ai(component, image.width, image.height) {
@@ -1039,9 +1085,112 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
                 }
             }
         }
-        if (masks.coverage(plan, 0, 0, image.width, image.height, pre, preVersion, ai, cache = true)) {
-            masksVersion++
+        if (masks.coverage(plan, 0, 0, image.width, image.height, pre, preVersion, ai, cache = true, fused = fused)) {
+            masksChanged(masks.lastStats.dirty)
             profiler.mark("mask coverage")
+        }
+    }
+
+    /** Where a partial stage-1 update redraws (see [runStage1]); null = everything. */
+    private fun partialRect(params: DevelopParams, shapeFree: Any): IntArray? {
+        val change = maskChange
+        return when {
+            change === NO_CHANGE -> adjustedBox(params)
+            change !== FULL_CHANGE && shapeFree == developedShapeFree -> change
+            else -> null
+        }
+    }
+
+    /** The plan of [list]; it depends on the shapes only: a drag of a mask's adjustments keeps it (and its dabs). */
+    private fun updateMaskPlan(list: List<Mask>, width: Int, height: Int) {
+        val planKey = list.map { it.id to it.components }
+        if (planKey == maskPlanKey) return
+        val used = HashMap<List<BrushStroke>, Dabs>()
+        maskPlan = if (list.isEmpty()) {
+            null
+        } else {
+            MaskPlan.of(list, width, height) { strokes ->
+                used.getOrPut(strokes) { dabsCache[strokes] ?: Dabs.of(strokes, width, height) }
+            }
+        }
+        dabsCache = used
+        maskPlanKey = planKey
+        profiler.mark("mask plan (CPU)")
+    }
+
+    /**
+     * When [params] differ from the working texture's only by some masks' adjustments (same masks, shapes, global
+     * values and Detail/Effects parameters), the box their coverage can reach ([MaskBounds]); else null.
+     */
+    @Suppress("ReturnCount")
+    private fun adjustedBox(params: DevelopParams): IntArray? {
+        val old = stageParams ?: return null
+        val plan = maskPlan ?: return null
+        val a = params.masks
+        val b = old.masks
+        if (!a.active || a.masks.map { it.id } != b.masks.map { it.id }) return null
+        if (params.withoutMaskAdjustments() != old.withoutMaskAdjustments()) return null
+        var box = IntArray(4)
+        for (m in a.masks.indices) {
+            val o = m * MaskParams.VECTOR
+            val same = (0 until MaskParams.VECTOR).all { a.adjust[o + it] == b.adjust[o + it] }
+            if (!same) box = MaskBounds.union(box, MaskBounds.of(plan, m))
+        }
+        return box
+    }
+
+    /** [masksVersion] moves on; [rect] is where the coverage changed (null: anywhere). */
+    private fun masksChanged(rect: IntArray?) {
+        masksVersion++
+        maskChange = when {
+            rect == null || maskChange === FULL_CHANGE -> FULL_CHANGE
+
+            maskChange === NO_CHANGE -> rect.copyOf()
+
+            else -> intArrayOf(
+                minOf(maskChange[0], rect[0]),
+                minOf(maskChange[1], rect[1]),
+                maxOf(maskChange[2], rect[2]),
+                maxOf(maskChange[3], rect[3]),
+            )
+        }
+    }
+
+    /**
+     * The masks' pre-local image (docs/adr/0022): its texture and nothing to prepare when an auto-mask brush reads it
+     * (a develop pass without masks into its own OkLab texture, kept while the global parameters are), else no texture
+     * and the preparation of the fused range coverage. Bumps [preVersion] when the global parameters change.
+     */
+    private fun preLocal(params: DevelopParams, plan: MaskPlan, image: UploadedImage): Pair<Int, (() -> Unit)?> {
+        val key = params.withoutDetail().withoutMasks()
+        if (key != preParams) {
+            preParams = key
+            preVersion++
+        }
+        if (plan.brushes.none { it.autoMask }) {
+            // The range masks compute the pre-local colour in their coverage pass (docs/adr/0022 "Speed (M4/P)").
+            return 0 to {
+                val guided = prepareScene(params)
+                bindTextures(
+                    sceneTex,
+                    if (guided) light.coefTexture else sceneTex,
+                    if (guided) light.momentsTexture else sceneTex,
+                )
+            }
+        } else {
+            // An auto-mask brush reads the pre-local image too: it is rendered into its own texture.
+            val target = preTarget ?: run {
+                val tex = newTexture(1, image.width, image.height, GLES30.GL_NEAREST, GLES30.GL_NEAREST)
+                GlTarget(tex, newFramebuffer(tex)).also { preTarget = it }
+            }
+            if (key != preKey) {
+                val guided = prepareScene(params)
+                masks.bind(params, off = true)
+                developPass(target.fbo, labOut = true, guided = guided)
+                profiler.mark("mask pre-local pass")
+                preKey = key
+            }
+            return target.texture to null
         }
     }
 
@@ -1091,6 +1240,7 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         fringeTarget = null
         chainTargets.clear()
         developed = null
+        developedShapeFree = null
         effectsGridValid = false
         detail.invalidate()
     }
@@ -1290,6 +1440,7 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         tools = ColourToolShaders.Gl(developProgram)
         masks.init()
         attachMasks(developProgram, develop = true)
+        compileFusedCoverage()
         GLES30.glUseProgram(outputProgram)
         GLES30.glUniform1i(GLES30.glGetUniformLocation(outputProgram, "uOverlay"), MaskShaders.COVERAGE_UNIT)
         light.init()
@@ -1302,6 +1453,29 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         GLES30.glBindVertexArray(vao)
         GlSupport.checkError("renderer setup")
         probeFloatTarget()
+    }
+
+    /** The masks' fused range coverage: the develop stage's blocks and inputs, then [MaskPasses.attachFused]. */
+    private fun compileFusedCoverage() {
+        fusedCoverageProgram = GlSupport.compile(Shaders.FULLSCREEN_VERT, MaskShaders.FUSED_COVERAGE_FRAG)
+        bindBlock(fusedCoverageProgram, "Develop", DEVELOP_BINDING, "uScene")
+        bindBlock(fusedCoverageProgram, "Light", LIGHT_BINDING, "uCoef", unit = 1)
+        GLES30.glUniform1i(GLES30.glGetUniformLocation(fusedCoverageProgram, "uMoments"), 2)
+        GLES30.glUniformBlockBinding(
+            fusedCoverageProgram,
+            GLES30.glGetUniformBlockIndex(fusedCoverageProgram, "Look"),
+            ColourShaders.BINDING,
+        )
+        GLES30.glUniformBlockBinding(
+            fusedCoverageProgram,
+            GLES30.glGetUniformBlockIndex(fusedCoverageProgram, "Tools"),
+            ColourToolShaders.BINDING,
+        )
+        GLES30.glUniform1i(
+            GLES30.glGetUniformLocation(fusedCoverageProgram, "uCurve"),
+            ColourToolShaders.CURVE_UNIT,
+        )
+        masks.attachFused(fusedCoverageProgram)
     }
 
     /** Proves a RGBA16F texture is renderable on this driver, with a clear message when it is not. */
@@ -1346,6 +1520,7 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         input = UploadedImage(image.width, image.height, image.colourOnly(), grid, reconstruct, pixelScale)
         stageParams = null
         developed = null
+        developedShapeFree = null
         reconKey = null
         sceneKey = null
         guideValid = false
@@ -1437,9 +1612,11 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         }
         preTarget = null
         preKey = null
+        preParams = null
         maskPlan = null
         maskPlanKey = null
-        masksVersion++
+        dabsCache = emptyMap()
+        masksChanged(null)
         GLES30.glDeleteTextures(4, intArrayOf(sourceTex, stageTex, readTex, sceneTex), 0)
         GLES30.glDeleteFramebuffers(4, intArrayOf(stageFbo, readFbo, sceneFbo, stageHalfFbo), 0)
         sceneTex = 0
@@ -1472,6 +1649,7 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         GLES30.glDeleteVertexArrays(1, intArrayOf(vao), 0)
         GLES30.glDeleteProgram(sceneProgram)
         GLES30.glDeleteProgram(developProgram)
+        GLES30.glDeleteProgram(fusedCoverageProgram)
         GLES30.glDeleteProgram(outputProgram)
     }
 
@@ -1672,6 +1850,10 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
     }
 
     companion object {
+        /** [maskChange] values: no change, and a change anywhere. */
+        private val NO_CHANGE = IntArray(0)
+        private val FULL_CHANGE = IntArray(0)
+
         private const val DEVELOP_BINDING = 0
         private const val OUTPUT_BINDING = 1
         private const val LIGHT_BINDING = 2

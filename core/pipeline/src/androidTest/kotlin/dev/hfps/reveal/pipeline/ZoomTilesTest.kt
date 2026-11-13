@@ -125,7 +125,8 @@ class ZoomTilesTest {
     @Test
     fun maskedTilesMatchTheCpuAndTheExport() = runBlocking {
         renderer.setMaskSource(MaskFixtures.source, "fixture")
-        val masked = MaskFixtures.fiveMasks().copy(light = edit.light, detail = edit.detail)
+        val masked = MaskFixtures.fiveMasks().let { it.copy(masks = it.masks + MaskFixtures.brushOptions) }
+            .copy(light = edit.light, detail = edit.detail)
         renderer.setRecipe(masked)
         val view = ViewTransform(K, 256f, 256f)
         val stats = withTimeout(TIMEOUT_MS) { renderer.awaitZoom(view, PANE_W, PANE_H) }

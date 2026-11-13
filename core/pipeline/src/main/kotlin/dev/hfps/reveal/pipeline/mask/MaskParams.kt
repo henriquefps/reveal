@@ -4,6 +4,7 @@ package dev.hfps.reveal.pipeline.mask
 
 import dev.hfps.reveal.pipeline.cpu.GradingParams
 import dev.hfps.reveal.pipeline.recipe.LocalAdjustment
+import dev.hfps.reveal.pipeline.recipe.LocalAdjustments
 import dev.hfps.reveal.pipeline.recipe.Mask
 import dev.hfps.reveal.pipeline.recipe.Recipe
 import dev.hfps.reveal.pipeline.recipe.RecipeRanges
@@ -45,6 +46,22 @@ class MaskParams(val masks: List<Mask>, val adjust: FloatArray, val global: Floa
         return MaskParams(developMasks, a, g, needs and DETAIL_NEEDS.inv())
     }
 
+    /** These parameters with every mask's adjustments and amount left out (a key; [needs] kept). */
+    fun withoutAdjustments(): MaskParams = if (!active) {
+        this
+    } else {
+        MaskParams(
+            masks.map { it.copy(adjustments = LocalAdjustments(), amount = 0f) },
+            FloatArray(adjust.size),
+            global,
+            needs,
+        )
+    }
+
+    /** These parameters with every mask's components left out (a key: the coverage is tracked on its own). */
+    fun withoutShapes(): MaskParams =
+        if (!active) this else MaskParams(masks.map { it.copy(components = emptyList()) }, adjust, global, needs)
+
     /** Every rendered mask's noise reduction value and the global amount it adds to (Detail's luminance key). */
     fun noiseColumn(): List<Float> = masks.indices.map { adjust[it * VECTOR + V_NOISE] } + global[G_NOISE]
 
@@ -67,7 +84,8 @@ class MaskParams(val masks: List<Mask>, val adjust: FloatArray, val global: Floa
         /** Floats of one mask's adjustment vector (five vec4). */
         const val VECTOR: Int = 20
 
-        // Indices of the adjustment vector.
+        // Indices of the adjustment vector: rows 0-2 (vec4) are what the develop pass reads, rows 3-4 what Detail's
+        // passes read (M4/P: each pass gets only its rows, from a small uniform block; docs/adr/0022 "Speed").
         const val V_TEMPERATURE = 0
         const val V_TINT = 1
         const val V_EXPOSURE = 2
@@ -76,15 +94,19 @@ class MaskParams(val masks: List<Mask>, val adjust: FloatArray, val global: Floa
         const val V_SHADOWS = 5
         const val V_WHITES = 6
         const val V_BLACKS = 7
-        const val V_TEXTURE = 8
-        const val V_CLARITY = 9
-        const val V_DEHAZE = 10
-        const val V_SATURATION = 11
-        const val V_HUE = 12
-        const val V_SHARPNESS = 13
-        const val V_NOISE = 14
-        const val V_TINT_A = 16
-        const val V_TINT_B = 17
+        const val V_SATURATION = 8
+        const val V_HUE = 9
+        const val V_TINT_A = 10
+        const val V_TINT_B = 11
+        const val V_TEXTURE = 12
+        const val V_CLARITY = 13
+        const val V_DEHAZE = 14
+        const val V_SHARPNESS = 15
+        const val V_NOISE = 16
+
+        /** vec4 rows of a mask's vector the develop pass reads (0 until this) and Detail's passes (the rest). */
+        const val DEVELOP_ROWS: Int = 3
+        const val DETAIL_ROWS: Int = 2
 
         /** Floats of [global] (three vec4). */
         const val GLOBALS: Int = 12

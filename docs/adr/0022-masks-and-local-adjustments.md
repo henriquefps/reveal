@@ -122,6 +122,27 @@ bins, built on the CPU), never with blending: the result is deterministic and eq
 whatever the driver. Appending points only appends dabs (placement is prefix-stable), so the renderer re-evaluates only
 the bins the new dabs touch (`MaskPasses`, scissored), then the coverage of that layer in the same rectangle.
 
+**Brush options (M4/B fields, engine M4/P).** A stroke has `density` (0..100, default 100), `pressure`
+(`both` default, `flow`, `size`) and `autoMask` (default false); all additive (old strokes read the defaults and render
+bit for bit as before, `BrushOptionsTest`). With `D = density / 100` a painting dab does `cov += max(0, D - cov) a` (it
+moves the coverage towards `D`, never lowers it) and an erasing dab `cov *= 1 - a D` (it removes at most that share);
+`D = 1` is exactly the M4/A formula. `pressure` says what `k(p)` scales: `both` the radius and the flow (M4/A), `flow`
+the flow only (the radius and so the spacing stay at `size`), `size` the radius only. A dab is 8 floats (`Dabs`:
+centre, radius, inner; flow, erase, density, auto), two RGBA32F texels on the GPU.
+
+**Brush auto-mask.** A dab of an `autoMask` stroke only covers pixels of a colour close to the one under its centre:
+`a = a · (1 − sstep(AUTO_NEAR, AUTO_FAR, dist))` with the range masks' OkLab distance
+`dist = sqrt(0.25 ΔL² + Δa² + Δb²)` between the pixel's pre-local colour and the dab's **reference colour**, the
+pre-local pixel under the dab centre, `(clamp(floor(cx)), clamp(floor(cy)))` in the image being rendered
+(`Dabs.AUTO_NEAR` = 0.03, `AUTO_FAR` = 0.09: a little tighter than a colour range at 50 / 50, so a stroke along an edge
+stops at it but follows a gradient within a surface). It reads the same pre-local image as the range masks (so it
+never depends on other masks), and an auto-mask brush makes `MaskPlan.needsPre` true. The reference colours are a
+small texture (one texel per dab, `MaskShaders.DAB_COLOURS_FRAG`): the preview takes them from its pre-local texture
+(the whole image); a tiled render (zoom, export) fills them in a pre-pass over every pre-pass tile (scene,
+pre-local develop, then the dabs whose centre lies in that tile), like the Effects grid, because a dab's centre may lie
+in another tile. CPU reference: `MaskRaster.dabColours` and `brush(…, pre, colours)`. An auto-mask layer depends on
+the pre-local image, so a global drag re-rasterises it whole (as it re-evaluates a range mask).
+
 **Precision: float16 (RGBA16F layers), not R8.** The pipeline already requires renderable float16 and rounds stored
 intermediates explicitly (`q16`, ADR 0012); 11 bits of mantissa give 0.0005 steps near full coverage where R8 gives
 0.004 (a ±4 EV feathered gradient would step by 0.016 EV, visible as banding on skies), and R8 would need the driver's
@@ -235,13 +256,101 @@ values) and 3 from the CPU; masked zoom tiles at 100 %: 1 level from the CPU (me
 host GPU is far faster than the S24's Adreno 750, so the ratios matter more than the milliseconds; the phone run is
 the orchestrator's.
 
+## Speed (M4/P)
+
+The orchestrator measured M4/A on the owner's Galaxy Tab S9 Ultra (Adreno 740; `PipelineBenchmark
+#maskSliderDragAndBrushAppend`, 2400 x 1600 proxy fitted to 1080 x 720, five masks, every Detail and Effects stage
+some mask switches on): a global exposure drag 27.3 ms per frame pipelined (2.5 without masks), a mask's exposure
+21.9, noise 10.3, clarity 5.1; a stroke in progress p50 46 / p95 84 ms (serialised). The emulator showed 1.4-8 ms for
+the same: never trust emulator frame times here.
+
+**Profile before** (GPU timer queries, `-e profile true`, ms per pass at the profiler's lower clock; mask exposure drag):
+develop pass 13.3 (2.7 without masks), Effects grid 2.5, Detail luminance chain 4.4, shrinkage 5.3, blurs 3.0, final
+pass 7.2. The first section after the masks' preparation also cost 10-12 ms of **CPU** per frame. Where it went:
+
+1. **CPU, every frame**: `MaskPlan.of` was keyed on the whole masks (adjustments included), so every adjustment drag
+   rebuilt the plan and every brush's dabs (2,467 dabs) and compared them; the coverage key held the strokes, so a
+   stroke in progress always redrew every coverage layer whole (the "only the changed bins" path never ran).
+2. **Adjustment fetches**: `localSum` read each mask's five-vec4 vector from a texture per pixel: 25-30 texel fetches
+   per pixel with five masks, in the develop pass, the shrinkage and the final pass (about 3 ms of the develop pass).
+3. **Everything downstream re-ran for a local change**: a stroke or a mask's slider changes a part of the image, but
+   the develop pass, the Effects grid, the luminance chain, the shrinkage, the blurs and the final pass ran over the
+   whole image.
+4. **Global drags with range masks** re-ran the pre-local pass and all coverage layers (only the range masks read it).
+
+**Changes** (no pixel changes: the golden CRCs, `GpuParityTest`, `TiledRendererTest` and `ZoomTilesTest` are unchanged
+or within their tolerances; partial updates are bit-identical to a fresh render, `MaskRenderTest
+#partialUpdatesEqualAFreshRender`):
+
+- The plan is keyed on the masks' ids and components only, and the preview keeps the dabs per stroke list (a stroke
+  in progress recomputes only its own). The coverage key leaves the strokes out (their layers report the bins that
+  changed), so a stroke redraws its bins and the coverage in their rectangle.
+- The adjustment vector is reordered (`MaskParams.V_`: rows 0-2 for the develop pass, rows 3-4 for Detail's) and served
+  from two small uniform blocks, `MaskDevelop` (32 x 3 vec4) and `MaskDetail` (32 x 2 vec4), uploaded only when their
+  contents change; the coverage is fetched once per layer of four masks. (Sizes keep the develop shader's uniform
+  blocks under ES 3.0's 224-vec4 minimum, for SwiftShader.)
+- **Partial stage-1 updates.** When only the coverage changed inside a rectangle (a stroke in progress), or only some
+  masks' adjustments changed (a drag of a mask's slider: the box their coverage can reach, `MaskBounds`), the develop
+  pass runs scissored to that rectangle and every Detail and Effects pass to the rectangle grown by their reach
+  (`DevelopParams.reach`); the Effects grid updates the row segments of the cells it touches (`EffectsPasses.update`)
+  and then the final pass runs whole (dehaze's atmospheric light is global). Outside the rectangle every input is
+  unchanged, so what is kept is exact; two details make it so: each luminance level's horizontal pass (one target
+  shared by the levels) runs wider by its vertical taps, and the half-resolution colour levels (two ping-pong targets)
+  run whole. Not used with defringe, the sharpening-mask view, or when the view switches between level 0 and level 1.
+- Range masks: a global change re-evaluates only the masks that read the pre-local image (other channels kept with
+  the colour mask; layers without such a mask skipped).
+- **Fused range coverage.** In the preview a coverage layer that holds a colour or luminance range computes the
+  pre-local colour itself (`MaskShaders.FUSED_COVERAGE_FRAG`: `Shaders.developGlobal`, the develop pass's unmasked
+  path, then `q16(toOkLab(c))`, exactly what the separate pass stored) instead of reading a texture the pre-local pass
+  wrote: one full-resolution pass and one RGBA16F texture fewer per global change (profiler clock: pre-local 3.5 +
+  coverage 3.4 ms -> 5.8 ms fused; pipelined 19.1 -> 18.3 ms). An auto-mask brush still needs the pre-local texture
+  (its dabs' reference colours and every pixel's), so with one the separate pass runs as before; tiles and the
+  export keep it too.
+- Profiling: `mask plan (CPU)` and `mask coverage` sections; the benchmark gained a reference drag (the same Detail and
+  Effects stages on globally, no masks), an auto-mask brush, the stroke measured pipelined, and `-e only <text>`.
+
+**After** (tablet, same benchmark, pipelined ms per frame and GPU per frame p50 / p95; "reference" = no masks, the
+Detail and Effects stages the masks switch on set globally):
+
+| Drag (tablet, Adreno 740) | main (M4/A) | M4/P pipelined | GPU per frame p50 / p95 |
+| --- | --- | --- | --- |
+| A mask's exposure (sky, linear: 55 % of the image) | 21.9 | **10.15** | 9.34 / 9.43 |
+| A mask's noise | 10.3 | **6.50** | 5.87 / 7.15 |
+| A mask's clarity | 5.1 | **3.26** | 2.72 / 5.57 |
+| Global exposure, five masks on | 27.3 | **18.26** (19.14 before the fused range coverage) | 17.58 / 17.67 |
+| Global exposure, an auto-mask brush too (no fusion: the brush reads the pre texture) | - | 24.38 | 23.02 / 23.09 |
+| Reference: no masks, the same Detail and Effects stages on globally | - | 10.97 | 9.94 / 11.37 |
+| Global exposure, masks off, no Detail/Effects (unchanged) | 2.5 | 2.89 | 2.36 / 5.07 |
+| A stroke in progress, 5 points a frame, six masks | p50 46 / p95 84 (serialised) | **4.78** | 3.77 / 6.92 |
+| The same stroke with the auto-mask | - | 4.81 | 3.75 / 6.88 |
+
+Serialised (`glFinish` per frame, the GPU at a low clock), the stroke is p50 31 / p95 41 ms (was 46 / 84) of which
+7 ms p50 is the GL thread's CPU for the brush and coverage update (dab binning and uploads, debug build).
+`everyToolOnSliderDrags` (no masks) is unchanged and meets every target (1.4-6.3 ms pipelined, GPU p95 <= 10.8).
+Profile with the uniform blocks, before the partial updates (mask exposure drag, profiler clock, whole image):
+develop pass 12.9 against 4.6 for the reference's unmasked one; switching each masked operator off measured local tone
+1.2, colour 0.7 and white balance 0.3 ms of GPU per frame, so what is left is the operators' own work. The partial
+update then runs every pass of the drag over the mask's box only. Results are from the tablet; the phone was not used.
+
+**Out of reach, and why.** A drag that changes the develop output of the whole image (a global slider with masks on)
+must re-run the develop pass and every Detail and Effects stage over 3.84 MP. Without any mask, those stages alone
+cost 10.8 ms pipelined on the Adreno 740: the 8.3 ms target is below what the same drag costs with no masks at all.
+With masks the global drag adds the pre-local pass, the range masks' coverage and the masks' own operators (local
+tone, white balance, colour: measured by switching each off, 1.2, 0.3 and 0.7 ms). The fusion of the pre-local pass
+and the range coverage is done (above). The next lever is outside the masks and is a product decision, because it
+changes the fit view's pixels: run the Detail stages (luminance chain, shrinkage, blurs) at half resolution when the
+view reads level 1 only (ADR 0012 "M2/P", next levers). Estimate from the profile: those passes are about 13.5 of the
+41.5 profiler-ms of the global drag, about 5-6 ms of its 18 pipelined; a quarter of the pixels would save roughly 3-4
+ms (global drag about 14-15 ms, the no-mask reference about 7 ms), still above 8.3 for the global drag with masks.
+
 ## Consequences
 
 - `PIPELINE_VERSION` stays 10 (no change without masks).
 - `RecipePaste.DEFAULT_GROUPS` no longer contains `MASKS`.
-- Open for M4/B: the panel, mask list, pins and handles, the brush's auto-mask (a stroke flag that multiplies each dab
-  by a colour similarity to the dab centre, evaluated on the pre-local image like the range masks), whether paste needs
-  per-mask choices, and history coalescing of stroke-in-progress updates. Open for M4/C: `AiMaskSource` in `:core:ml`.
+- Open for M4/B: the panel, mask list, pins and handles, whether paste needs per-mask choices, and history coalescing
+  of stroke-in-progress updates (answered in the amendment below). The brush's density, pressure mode and auto-mask
+  are evaluated by the engine (M4/P, "Brush options" and "Brush auto-mask" above). Open for M4/C: `AiMaskSource` in
+  `:core:ml`.
 
 ## Amendment: M4/B (editor)
 
@@ -256,7 +365,7 @@ centre on the pre-local image), `BrushStroke.pressure` (`both` default = M4/A's 
 `size`: what pen pressure scales; the editor writes `flow` by default) and `MaskComponent.Ai.autoSeeds` (default true:
 the subject's automatic seeds with the taps; false = the taps alone, for "remove an object"). Strokes without the
 fields render exactly as before. The engine side of density, auto-mask and pressure is M4/P's (`mask/Dabs`, the brush
-raster); until it lands they are stored and the brush renders as M4/A did.
+raster; "Brush options" and "Brush auto-mask" above).
 
 **The tool is a panel with a photo layer, not a mode.** ux.md drew Masks as a mode; in practice the panel needs the
 whole card (the mask list, the parts, four groups of local sliders) and the tool strip stays useful (Light next to a

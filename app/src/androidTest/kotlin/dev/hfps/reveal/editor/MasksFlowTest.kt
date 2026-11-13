@@ -59,6 +59,7 @@ class MasksFlowTest {
     private val masks: MasksUiState get() = checkNotNull(EditorMetrics.masks).invoke()
     private val selected: Mask get() = committed.masks.first { it.id == masks.selected }
 
+    @Suppress("LongMethod")
     @Test
     fun everyHandMadeTypeIsCreatedEditedUndoneAndKept() {
         val uri = TestPhotos.insert(TestPhotos.uniqueName("reveal-masks.jpg"), "image/jpeg", TestPhotos.syntheticJpeg())
@@ -97,7 +98,9 @@ class MasksFlowTest {
                 assertThat(brush.strokes.single().decoded.size).isAtLeast(2)
                 click(MaskTags.BRUSH_ERASE)
                 swipeOnPhoto(Offset(0.4f, 0.5f), Offset(0.6f, 0.5f))
-                compose.waitUntil(TIMEOUT_MS) { (selected.components.single() as MaskComponent.Brush).strokes.size == 2 }
+                compose.waitUntil(TIMEOUT_MS) {
+                    (selected.components.single() as MaskComponent.Brush).strokes.size == 2
+                }
                 assertThat((selected.components.single() as MaskComponent.Brush).strokes.last().erase).isTrue()
 
                 // Colour range: the eyedropper is on for a new one; a tap adds a sample.
@@ -158,7 +161,7 @@ class MasksFlowTest {
 
     @Test
     fun theSubjectHairAndEyesOfAPortrait() {
-        val uri = TestPhotos.insert(TestPhotos.uniqueName("reveal-masks-portrait.jpg"), "image/jpeg", asset("studio-portrait.jpg"))
+        val uri = photo("reveal-masks-portrait.jpg", asset("studio-portrait.jpg"))
         try {
             open(uri) {
                 click(EditorTags.tool(ToolId.MASKS))
@@ -210,7 +213,7 @@ class MasksFlowTest {
 
     @Test
     fun aMaskFromANewerAppOpensAndSaysItIsUnavailable() {
-        val uri = TestPhotos.insert(TestPhotos.uniqueName("reveal-masks-newer.jpg"), "image/jpeg", TestPhotos.syntheticJpeg())
+        val uri = photo("reveal-masks-newer.jpg", TestPhotos.syntheticJpeg())
         try {
             open(uri) {
                 val newer = Mask(
@@ -223,7 +226,8 @@ class MasksFlowTest {
                         MaskComponent.Ai(model = "future@1", kind = "TAIL"),
                     ),
                 )
-                compose.runOnIdle { checkNotNull(EditorMetrics.applyRecipe).invoke(committed.copy(masks = listOf(newer))) }
+                val apply = checkNotNull(EditorMetrics.applyRecipe)
+                compose.runOnIdle { apply(committed.copy(masks = listOf(newer))) }
                 click(EditorTags.tool(ToolId.MASKS))
                 click(MaskTags.mask(0))
                 compose.waitUntil(TIMEOUT_MS) {
@@ -231,7 +235,8 @@ class MasksFlowTest {
                 }
                 // The status line is inside the part's (merged) row.
                 compose.waitUntil(TIMEOUT_MS) {
-                    compose.onAllNodesWithTag(MaskTags.AI_STATUS, useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()
+                    compose.onAllNodesWithTag(MaskTags.AI_STATUS, useUnmergedTree = true)
+                        .fetchSemanticsNodes().isNotEmpty()
                 }
                 // The photo still renders and the unknown parts round-trip.
                 assertThat(committed.masks.single().components[1]).isInstanceOf(MaskComponent.Unknown::class.java)
@@ -243,6 +248,9 @@ class MasksFlowTest {
     }
 
     // ------------------------------------------------------------------ helpers
+
+    private fun photo(name: String, bytes: ByteArray): Uri =
+        TestPhotos.insert(TestPhotos.uniqueName(name), "image/jpeg", bytes)
 
     private fun asset(name: String): ByteArray =
         InstrumentationRegistry.getInstrumentation().context.assets.open("masks/$name").use { it.readBytes() }
@@ -263,7 +271,9 @@ class MasksFlowTest {
         compose.waitUntilAtLeastOneExists(hasTestTag(MaskTags.CHOOSER), TIMEOUT_MS)
         if (people) click(MaskTags.choice("people-group"))
         click(MaskTags.choice(kind))
-        compose.waitUntil(TIMEOUT_MS) { committed.masks.size == count + 1 && masks.selected == committed.masks.last().id }
+        compose.waitUntil(TIMEOUT_MS) {
+            committed.masks.size == count + 1 && masks.selected == committed.masks.last().id
+        }
     }
 
     /** Waits until the selected mask's AI parts are ready (the first run compiles the model). */

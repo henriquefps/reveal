@@ -1,3 +1,5 @@
+@file:Suppress("CyclomaticComplexMethod")
+
 package dev.hfps.reveal.feature.editor.masks
 
 import androidx.annotation.StringRes

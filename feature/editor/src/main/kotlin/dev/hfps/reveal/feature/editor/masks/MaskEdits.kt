@@ -1,3 +1,5 @@
+@file:Suppress("ReturnCount")
+
 package dev.hfps.reveal.feature.editor.masks
 
 import dev.hfps.reveal.ml.MaskKind

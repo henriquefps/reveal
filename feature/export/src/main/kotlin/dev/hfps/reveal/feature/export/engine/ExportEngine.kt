@@ -277,6 +277,7 @@ class ExportEngine(
      * when there are none (no decode then). The masks come from the cache when the editor made them for the same
      * input, else they are computed here.
      */
+    @Suppress("ReturnCount")
     private fun maskSession(image: ImageInput, recipe: Recipe): AiMasks.Session? {
         val ai = aiMasks ?: return null
         val any = recipe.masks.any { m -> m.enabled && m.components.any { it is MaskComponent.Ai } }

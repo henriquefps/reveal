@@ -1,4 +1,4 @@
-@file:Suppress("TooManyFunctions")
+@file:Suppress("TooManyFunctions", "ReturnCount", "MagicNumber", "LoopWithTooManyJumpStatements")
 
 package dev.hfps.reveal.feature.editor.masks
 
@@ -71,7 +71,7 @@ import kotlin.math.roundToInt
  */
 object MaskPhotoLayer {
     val layer: PhotoLayer = PhotoLayer(
-        gestures = { host -> maskGestures(host) },
+        gestures = { host -> Modifier.maskGestures(host) },
         overlay = { host -> MaskOverlayLayer(host) },
     )
 }
@@ -96,11 +96,11 @@ private fun selectedComponent(state: EditorUiState): Pair<Int, MaskComponent>? {
 
 @Suppress("LongMethod", "CyclomaticComplexMethod", "ReturnCount")
 @Composable
-private fun maskGestures(host: PhotoLayerHost): Modifier {
+private fun Modifier.maskGestures(host: PhotoLayerHost): Modifier {
     val controller = host.photo
     val current by rememberUpdatedState(host)
     val slop = LocalViewConfiguration.current.touchSlop
-    return Modifier
+    return this
         .penHover(controller) { at ->
             controller.penHover = at
             if (at != null) controller.penSeen = true

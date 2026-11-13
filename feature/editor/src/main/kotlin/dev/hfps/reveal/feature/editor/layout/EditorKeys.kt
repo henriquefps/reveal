@@ -37,8 +37,9 @@ enum class EditorKeyCommand {
 
 /**
  * The editor's keyboard shortcuts on tablets with a keyboard (docs/plan/ux.md): Ctrl+Z undo, Ctrl+Shift+Z (or Ctrl+Y)
- * redo, backslash before/after, left/right arrows (and the D-pad) previous/next photo, Z zoom to 100 % and back; M opens
- * the Masks tool, and in it `[` / `]` resize the brush, O shows the overlay, E toggles erasing (docs/adr/0022 "M4/B").
+ * redo, backslash before/after, left/right arrows (and the D-pad) previous/next photo, Z zoom to 100 % and back; M
+ * opens the Masks tool, and in it `[` / `]` resize the brush, O shows the overlay, E toggles erasing (docs/adr/0022
+ * "M4/B").
  */
 object EditorKeys {
     fun command(key: Key, ctrl: Boolean, shift: Boolean, alt: Boolean): EditorKeyCommand? = when {

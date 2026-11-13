@@ -233,6 +233,7 @@ class EditorViewModel @Inject constructor(
      * The photo before local adjustments in OkLab (the colour and luminance range tools): Auto's sample rendered with
      * the recipe without masks, Detail, Effects and geometry, cached until one of those inputs changes.
      */
+    @Suppress("ReturnCount", "MagicNumber")
     private suspend fun preLocalImage(): PreLocalImage? {
         val sample = autoInputs?.sample ?: return null
         val r = _state.value.edit.recipe

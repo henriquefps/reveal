@@ -1,4 +1,4 @@
-@file:Suppress("TooManyFunctions")
+@file:Suppress("TooManyFunctions", "MagicNumber", "LongMethod")
 
 package dev.hfps.reveal.feature.editor.masks
 

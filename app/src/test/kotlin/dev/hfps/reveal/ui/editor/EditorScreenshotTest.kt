@@ -99,11 +99,6 @@ import dev.hfps.reveal.pipeline.recipe.AspectPreset
 import dev.hfps.reveal.pipeline.recipe.BandValues
 import dev.hfps.reveal.pipeline.recipe.BaseLook
 import dev.hfps.reveal.pipeline.recipe.BrushStroke
-import dev.hfps.reveal.pipeline.recipe.LocalAdjustments
-import dev.hfps.reveal.pipeline.recipe.Mask
-import dev.hfps.reveal.pipeline.recipe.MaskComponent
-import dev.hfps.reveal.pipeline.recipe.MaskOp
-import dev.hfps.reveal.pipeline.recipe.StrokePoint
 import dev.hfps.reveal.pipeline.recipe.Colour
 import dev.hfps.reveal.pipeline.recipe.ColourGrading
 import dev.hfps.reveal.pipeline.recipe.ColourMixer
@@ -118,6 +113,10 @@ import dev.hfps.reveal.pipeline.recipe.GradeRegion
 import dev.hfps.reveal.pipeline.recipe.GradeWheel
 import dev.hfps.reveal.pipeline.recipe.HistoryAction
 import dev.hfps.reveal.pipeline.recipe.Light
+import dev.hfps.reveal.pipeline.recipe.LocalAdjustments
+import dev.hfps.reveal.pipeline.recipe.Mask
+import dev.hfps.reveal.pipeline.recipe.MaskComponent
+import dev.hfps.reveal.pipeline.recipe.MaskOp
 import dev.hfps.reveal.pipeline.recipe.Optics
 import dev.hfps.reveal.pipeline.recipe.ParametricCurve
 import dev.hfps.reveal.pipeline.recipe.Profile
@@ -125,6 +124,7 @@ import dev.hfps.reveal.pipeline.recipe.Recipe
 import dev.hfps.reveal.pipeline.recipe.RecipeGroup
 import dev.hfps.reveal.pipeline.recipe.RecipePaste
 import dev.hfps.reveal.pipeline.recipe.RecipeRanges
+import dev.hfps.reveal.pipeline.recipe.StrokePoint
 import dev.hfps.reveal.pipeline.recipe.Transform
 import dev.hfps.reveal.pipeline.recipe.Treatment
 import dev.hfps.reveal.pipeline.recipe.UprightMode
@@ -227,7 +227,8 @@ class EditorPhoneScreenshotTest : EditorScreenshotBase("phone") {
     }
 
     @Test fun masksBrush() = shoot("masks_brush") {
-        MasksEditor(selected = "brush", component = 0, snap = PanelSnap.EXPANDED, masks = MasksUiState(tool = PhotoTool.BRUSH))
+        val brush = MasksUiState(tool = PhotoTool.BRUSH)
+        MasksEditor(selected = "brush", component = 0, snap = PanelSnap.EXPANDED, masks = brush)
     }
 
     @Test fun masksAiComputing() = shoot("masks_ai") {

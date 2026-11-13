@@ -1,3 +1,5 @@
+@file:Suppress("MagicNumber")
+
 package dev.hfps.reveal.feature.editor.masks
 
 import androidx.compose.ui.geometry.Offset

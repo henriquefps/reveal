@@ -29,7 +29,7 @@ class AiMasksTest {
 
         override fun load(model: PinnedModel): InferenceEngine {
             loads++
-            if (fail) throw IllegalStateException("no GPU memory")
+            check(!fail) { "no GPU memory" }
             return object : InferenceEngine {
                 override val backend = Backend.CPU
 

@@ -1,3 +1,5 @@
+@file:Suppress("ReturnCount", "MagicNumber", "NestedBlockDepth", "LoopWithTooManyJumpStatements")
+
 package dev.hfps.reveal.feature.editor.masks
 
 import android.graphics.Bitmap

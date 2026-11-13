@@ -529,6 +529,7 @@ internal fun Modifier.editorKeys(
 }
 
 /** The Masks tool's keys (only while it is the open tool): brush size, overlay, erase. */
+@Suppress("ReturnCount")
 private fun masksKey(
     command: EditorKeyCommand,
     state: EditorUiState,

@@ -13,7 +13,7 @@ import kotlin.math.abs
 import kotlin.math.hypot
 import org.junit.Test
 
-/** Masks on screen: image fractions through the geometry and the zoom, handle drags, pressure (docs/adr/0022 "M4/B"). */
+/** Masks on screen: image fractions through the geometry and zoom, handle drags, pressure (docs/adr/0022 "M4/B"). */
 class MaskViewTest {
     private val w = 3000
     private val h = 2000
@@ -101,14 +101,22 @@ class MaskViewTest {
         val wider = MaskHandles.dragRadial(c, HandleId.RADIUS_X, f.toIso(0.2f, 0f), f.toIso(0.3f, 0.02f), v)
         assertThat(wider.rx).isWithin(1e-5f).of(0.3f)
         assertThat(wider.ry).isEqualTo(0.1f)
-        val turned = MaskHandles.dragRadial(c, HandleId.ROTATE, f.centre + Offset(0f, -0.2f), f.centre + Offset(0.2f, 0f), v)
+        val turned = MaskHandles.dragRadial(
+            c,
+            HandleId.ROTATE,
+            f.centre + Offset(0f, -0.2f),
+            f.centre + Offset(0.2f, 0f),
+            v,
+        )
         assertThat(turned.rotation).isWithin(1e-3f).of(90f)
         val soft = MaskHandles.dragRadial(c, HandleId.FEATHER, f.centre, f.toIso(0.2f * 0.25f, 0f), v)
         assertThat(soft.feather).isWithin(1e-3f).of(75f)
         val moved = MaskHandles.dragRadial(c, HandleId.CENTRE, f.centre, f.centre + Offset(0.1f, 0f), v)
         assertThat(moved.cx).isWithin(1e-5f).of(0.6f)
         // Never smaller than the minimum.
-        assertThat(MaskHandles.dragRadial(c, HandleId.RADIUS_Y, f.centre, f.centre, v).ry).isEqualTo(MaskHandles.MIN_RADIUS)
+        assertThat(
+            MaskHandles.dragRadial(c, HandleId.RADIUS_Y, f.centre, f.centre, v).ry,
+        ).isEqualTo(MaskHandles.MIN_RADIUS)
     }
 
     @Test

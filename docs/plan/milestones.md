@@ -62,5 +62,4 @@ AI denoise, on-device inpainting model for larger removals, HDR merge, panorama,
 import, HDR (Ultra HDR / gain map) export, a Hoard-side shared `:core:image` dependency, an AI editing assistant that turns a prompt into a recipe patch
 (idea noted in `ai-assistant.md`; not a priority).
 
-Distribution (paid one-time on Google Play, open source, bring your own server; a hosted sync/AI subscription
-much later): `distribution.md`.
+Distribution: the business plan is the owner's and private; what it asks of the code is in `distribution.md`.

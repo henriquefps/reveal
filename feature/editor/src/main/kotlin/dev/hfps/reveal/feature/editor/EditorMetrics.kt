@@ -74,6 +74,15 @@ object EditorMetrics {
 
     /** For tests only: the edit's history (steps, cursor, labels). */
     @Volatile var history: (() -> dev.hfps.reveal.pipeline.recipe.EditHistory)? = null
+
+    /** For tests only: the proxy's size (what `readCoverage` returns). */
+    @Volatile var proxySize: Pair<Int, Int>? = null
+
+    /** For tests only: the Masks tool's UI state (selection, AI states, brush). */
+    @Volatile var masks: (() -> dev.hfps.reveal.feature.editor.masks.MasksUiState)? = null
+
+    /** For tests only: makes [Recipe] the working recipe and commits it (one step), like a paste. */
+    @Volatile var applyRecipe: ((Recipe) -> Unit)? = null
         internal set
 
     /** For measurements only: selects a tool of the strip, as a tap would (frame tests run without a Compose rule). */

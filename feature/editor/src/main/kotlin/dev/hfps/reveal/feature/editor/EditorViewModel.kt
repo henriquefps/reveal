@@ -339,6 +339,9 @@ class EditorViewModel @Inject constructor(
                 }
                 EditorMetrics.recipes = { _state.value.edit.let { it.recipe to it.committed } }
                 EditorMetrics.history = { _state.value.edit.history }
+                EditorMetrics.masks = { _state.value.masks }
+                EditorMetrics.proxySize = input.width to input.height
+                EditorMetrics.applyRecipe = { r -> editAndCommit { r } }
                 photoInput = colourOnly(input)
                 _state.update {
                     it.copy(
@@ -1084,6 +1087,8 @@ class EditorViewModel @Inject constructor(
         EditorMetrics.setControl = null
         EditorMetrics.recipes = null
         EditorMetrics.history = null
+        EditorMetrics.masks = null
+        EditorMetrics.applyRecipe = null
         thumbnails?.close()
         thumbnails = null
         // Closes the renderer once it exists (a creation cancelled half-way closes itself).

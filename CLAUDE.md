@@ -676,6 +676,26 @@ adb -s <serial> shell am instrument -w -e class dev.hfps.reveal.pipeline.Pipelin
 adb -s <serial> logcat -d -s REVEAL_MASKS REVEAL_PARITY REVEAL_EXPORT REVEAL_ZOOM REVEAL_BENCH
 ```
 
+Editor (M4/B, ADR 0022 "M4/B (editor)"): the Masks tool is a `ToolBehaviour.Panel` with a `PhotoLayer` (gestures that
+see each pointer before the canvas + an overlay; `PhotoSlot(layer = chrome.panelLayer)`). `feature/editor/masks/`:
+`MaskEdits` (pure recipe edits; invert = De Morgan), `MaskView` (image fraction <-> slot through `GeometryMapping`,
+the warp inverted by Newton), `MaskHandles` (linear/radial drags in the isotropic plane), `MaskEditor` (the view
+model's half: every `MaskActions` verb, strokes `raw` per move and `of` + one commit on lift, overlay, thumbnails via
+`readCoverage`), `MasksPanel`, `MaskSheets` (chooser, ⋯), `MaskPhotoLayer` (handles, brush with pen pressure/eraser/
+side button, eyedropper, subject taps, luminance map), `MaskLabels` (`MaskTags` for tests). State: `EditorUiState.masks`
+(`MasksUiState`), actions `EditorActions.masks`. AI: `:core:data` `mask/AiMasks` (Hilt; `Session` = the renderer's
+`AiMaskSource`, states per `AiMasks.key`) and `MaskInputs` (model input ≤ 1024 px, `VERSION`, content key);
+`ExportEngine(aiMasks = …)` renders AI parts in exports. Recipe fields of M4/B: `BrushStroke.density/autoMask/pressure`,
+`MaskComponent.Ai.autoSeeds` (engine side of the brush fields: M4/P). Test hooks: `EditorMetrics.masks`,
+`applyRecipe`, `proxySize`.
+
+```sh
+./gradlew :feature:editor:testDebugUnitTest --tests '*masks*' && ./gradlew :core:data:testDebugUnitTest --tests '*AiMasksTest*'
+# GPU + models: the tablet (x86_64 emulators wedge on the editor's GL); the AI cases run the real models
+adb -s <serial> shell am instrument -w -e class dev.hfps.reveal.editor.MasksFlowTest,dev.hfps.reveal.editor.MaskPenTest dev.hfps.reveal.debug.test/androidx.test.runner.AndroidJUnitRunner
+adb -s <serial> logcat -d -s RevealAiMasks
+```
+
 ## `:core:image` harness (ADR 0004)
 
 ```sh

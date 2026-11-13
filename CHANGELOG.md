@@ -6,6 +6,8 @@ All notable changes to Reveal are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-11-13
+
 ### Added
 - Masks in the editor (M4/B): the Masks tool lists the photo's masks as coverage thumbnails with "+", and each mask's
   parts and local adjustments (Light, Colour, Effects, Detail). Create Subject, Sky, Background, People and its parts
@@ -24,7 +26,7 @@ All notable changes to Reveal are documented here. The format follows
   docs/adr/0022.
 - Debug builds only: a "Mask lab" in the editor's More ⋯ menu runs the candidate on-device mask models (people and
   their parts, sky, subject by tap or automatically) on the open photo and tints the mask, with edge refinement and
-  timings, to judge them before M4's masks. Release builds are unchanged (no models, no ML runtime).
+  timings, to judge them before M4's masks.
 - `:core:ml`: on-device mask models through LiteRT, pinned model files fetched at build time, guided-filter edge
   refinement (CPU reference and GPU pass); the choice of models is in docs/adr/0021.
 - M4/C, groundwork for AI masks (no editor UI yet): release builds now carry the on-device mask runtime and four

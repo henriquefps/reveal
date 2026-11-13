@@ -23,8 +23,8 @@ fun interface AiMaskSource {
 
 /**
  * What the renderer asks for: the AI [component] of the photo [photoKey] (the source's cache key, e.g. its content
- * fingerprint), for an upright image of [imageWidth] x [imageHeight] pixels (the source may answer at any resolution: the
- * engine resamples).
+ * fingerprint), for an upright image of [imageWidth] x [imageHeight] pixels (the source may answer at any resolution:
+ * the engine resamples).
  */
 data class AiMaskRequest(
     val photoKey: String,

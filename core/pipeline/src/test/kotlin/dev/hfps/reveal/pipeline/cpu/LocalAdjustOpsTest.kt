@@ -121,6 +121,7 @@ class LocalAdjustOpsTest {
         }
     }
 
+    @Suppress("NestedBlockDepth")
     @Test
     fun `pixels no mask covers are unchanged`() {
         val everything = LocalAdjustments(
@@ -149,8 +150,8 @@ class LocalAdjustOpsTest {
             }
             assertThat(half.toList()).isNotEqualTo(plain.toList())
         }
-        // Neighbourhood adjustments (sharpness, noise, texture) with the global ones off: pixels farther than their reach
-        // from the mask are bit-identical too (their total is 0: the levels keep the input lightness exactly).
+        // Neighbourhood adjustments (sharpness, noise, texture) with the global ones off: pixels farther than their
+        // reach from the mask are bit-identical too (their total is 0: the levels keep the input lightness exactly).
         val detail = LocalAdjustments(sharpness = 60f, noise = 50f, texture = 40f)
         val plain = render(noisy, Recipe(detail = Detail(nrColour = 30f)))
         val half = render(noisy, Recipe(detail = Detail(nrColour = 30f), masks = listOf(masked(detail, leftHalf))))
@@ -175,7 +176,9 @@ class LocalAdjustOpsTest {
         assertThat(halfAmount.toList()).isEqualTo(one.toList())
         val twoMasks = render(
             scene,
-            Recipe(masks = listOf(masked(LocalAdjustments(exposure = 0.5f)), masked(LocalAdjustments(exposure = 0.5f)))),
+            Recipe(
+                masks = listOf(masked(LocalAdjustments(exposure = 0.5f)), masked(LocalAdjustments(exposure = 0.5f))),
+            ),
         )
         assertThat(twoMasks.toList()).isEqualTo(one.toList())
         // A disabled mask or amount 0 renders nothing.
@@ -213,13 +216,17 @@ class LocalAdjustOpsTest {
     fun `negative sharpness softens`() {
         val plain = render(noisy, Recipe())
         val soft = render(noisy, Recipe(masks = listOf(masked(LocalAdjustments(sharpness = -100f)))))
-        assertThat(highFrequency(soft, noisy.width, noisy.height)).isLessThan(highFrequency(plain, noisy.width, noisy.height) * 0.8)
+        assertThat(
+            highFrequency(soft, noisy.width, noisy.height),
+        ).isLessThan(highFrequency(plain, noisy.width, noisy.height) * 0.8)
         // -100 local on +60 global: still softer than the original (the total is -40).
         val mixed = render(
             noisy,
             Recipe(detail = Detail(sharpenAmount = 60f), masks = listOf(masked(LocalAdjustments(sharpness = -100f)))),
         )
-        assertThat(highFrequency(mixed, noisy.width, noisy.height)).isLessThan(highFrequency(plain, noisy.width, noisy.height))
+        assertThat(
+            highFrequency(mixed, noisy.width, noisy.height),
+        ).isLessThan(highFrequency(plain, noisy.width, noisy.height))
     }
 
     private fun highFrequency(rgb: FloatArray, w: Int, h: Int): Double {
@@ -277,7 +284,11 @@ class LocalAdjustOpsTest {
     fun `reach covers the neighbourhoods masks switch on`() {
         val base = DevelopParams.reach(Recipe())
         assertThat(base).isEqualTo(0)
-        for (a in listOf(LocalAdjustments(sharpness = 20f), LocalAdjustments(noise = 20f), LocalAdjustments(texture = 20f))) {
+        for (a in listOf(
+            LocalAdjustments(sharpness = 20f),
+            LocalAdjustments(noise = 20f),
+            LocalAdjustments(texture = 20f),
+        )) {
             assertThat(DevelopParams.reach(Recipe(masks = listOf(masked(a))))).isGreaterThan(0)
         }
         // Per-pixel adjustments need no apron.
@@ -295,9 +306,18 @@ class LocalAdjustOpsTest {
             light = Light(contrast = 15f),
             detail = Detail(sharpenAmount = 30f),
             masks = listOf(
-                masked(LocalAdjustments(exposure = -0.6f, dehaze = 30f, temperature = -15f), MaskComponent.Linear(y1 = 0.6f)),
-                masked(LocalAdjustments(shadows = 40f, clarity = 30f), MaskComponent.Radial(cx = 0.3f, cy = 0.7f, rx = 0.2f)),
-                masked(LocalAdjustments(saturation = 40f, sharpness = -50f), MaskComponent.Brush(strokes = listOf(stroke))),
+                masked(
+                    LocalAdjustments(exposure = -0.6f, dehaze = 30f, temperature = -15f),
+                    MaskComponent.Linear(y1 = 0.6f),
+                ),
+                masked(
+                    LocalAdjustments(shadows = 40f, clarity = 30f),
+                    MaskComponent.Radial(cx = 0.3f, cy = 0.7f, rx = 0.2f),
+                ),
+                masked(
+                    LocalAdjustments(saturation = 40f, sharpness = -50f),
+                    MaskComponent.Brush(strokes = listOf(stroke)),
+                ),
                 masked(
                     LocalAdjustments(hue = 25f, noise = 40f),
                     MaskComponent.LuminanceRange(low = 60f, high = 100f, falloff = 10f),

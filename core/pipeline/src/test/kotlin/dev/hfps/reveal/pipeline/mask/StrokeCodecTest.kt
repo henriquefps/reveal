@@ -46,7 +46,8 @@ class StrokeCodecTest {
     @Test
     fun `a 5000-point stroke is compact JSON`() {
         val stroke = BrushStroke.raw(scribble(5000), size = 0.03f)
-        val recipe = Recipe(masks = listOf(Mask("m", components = listOf(MaskComponent.Brush(strokes = listOf(stroke))))))
+        val recipe =
+            Recipe(masks = listOf(Mask("m", components = listOf(MaskComponent.Brush(strokes = listOf(stroke))))))
         val json = RecipeCodec.Default.encode(recipe)
         val bytes = json.toByteArray().size
         println("STROKE 5000 points raw: ${stroke.points.length} chars, recipe $bytes bytes")

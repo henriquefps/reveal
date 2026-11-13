@@ -15,6 +15,7 @@ import dev.hfps.reveal.pipeline.mask.MaskParams.Companion.G_SHADOWS
 import dev.hfps.reveal.pipeline.mask.MaskParams.Companion.G_SHARPEN
 import dev.hfps.reveal.pipeline.mask.MaskParams.Companion.G_TEXTURE
 import dev.hfps.reveal.pipeline.mask.MaskParams.Companion.G_WHITES
+import dev.hfps.reveal.pipeline.mask.MaskParams.Companion.VECTOR
 import dev.hfps.reveal.pipeline.mask.MaskParams.Companion.V_BLACKS
 import dev.hfps.reveal.pipeline.mask.MaskParams.Companion.V_CLARITY
 import dev.hfps.reveal.pipeline.mask.MaskParams.Companion.V_CONTRAST
@@ -32,7 +33,6 @@ import dev.hfps.reveal.pipeline.mask.MaskParams.Companion.V_TINT
 import dev.hfps.reveal.pipeline.mask.MaskParams.Companion.V_TINT_A
 import dev.hfps.reveal.pipeline.mask.MaskParams.Companion.V_TINT_B
 import dev.hfps.reveal.pipeline.mask.MaskParams.Companion.V_WHITES
-import dev.hfps.reveal.pipeline.mask.MaskParams.Companion.VECTOR
 import dev.hfps.reveal.pipeline.mask.MaskPlan
 import dev.hfps.reveal.pipeline.mask.MaskRaster
 import kotlin.math.floor
@@ -198,8 +198,8 @@ object LocalTotals {
 
 /**
  * Local saturation, hue and colour tint (slot 10, docs/adr/0022): one OkLab step after the colour stage. Saturation is
- * [VibranceSaturationOp.gain] with the local value (vibrance 0), hue a rotation of `(a, b)` by the local angle, the tint
- * colour grading's global wheel `(a, b) += L (tA, tB)`.
+ * [VibranceSaturationOp.gain] with the local value (vibrance 0), hue a rotation of `(a, b)` by the local angle, the
+ * tint colour grading's global wheel `(a, b) += L (tA, tB)`.
  */
 object LocalColourOp {
     private const val MIN_CHROMA = 1e-7f
@@ -277,7 +277,7 @@ object LocalDevelop {
     }
 
     /** Slots 5b-10 on scene-linear [rgb] in place, with the masks of [field]. */
-    @Suppress("LongParameterList", "LongMethod", "CyclomaticComplexMethod", "NestedBlockDepth")
+    @Suppress("LongParameterList", "LongMethod", "CyclomaticComplexMethod", "NestedBlockDepth", "ComplexCondition")
     fun develop(
         rgb: FloatArray,
         width: Int,
@@ -413,7 +413,11 @@ object LocalDevelop {
             out.sharpenGain = LocalTotals.sharpenGain(total, d.sharpenAtt)
             out.soften = LocalTotals.soften(total)
         }
-        if (s[V_TEXTURE] != 0f) out.textureGain = LocalTotals.textureGain(field.global(G_TEXTURE) + s[V_TEXTURE], e.textureAtt)
+        if (s[V_TEXTURE] !=
+            0f
+        ) {
+            out.textureGain = LocalTotals.textureGain(field.global(G_TEXTURE) + s[V_TEXTURE], e.textureAtt)
+        }
         if (s[V_CLARITY] != 0f) out.clarityGain = LocalTotals.clarityGain(field.global(G_CLARITY) + s[V_CLARITY])
         if (s[V_DEHAZE] != 0f) {
             val total = field.global(G_DEHAZE) + s[V_DEHAZE]

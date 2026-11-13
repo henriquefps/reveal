@@ -150,6 +150,7 @@ class TiledRenderer private constructor(requestedTile: Int, private val share: E
      *
      * @param high true writes unquantised encoded floats to [TileSink.acceptHigh] (10/16-bit encoders) instead of
      *   dithered 8-bit.
+     * @param masks the AI masks' source and photo key (docs/adr/0022); the render waits for masks not ready yet.
      */
     @Suppress("LongParameterList")
     fun render(
@@ -159,9 +160,9 @@ class TiledRenderer private constructor(requestedTile: Int, private val share: E
         output: OutputSettings,
         sink: TileSink,
         high: Boolean = false,
+        masks: MaskContext = MaskContext.NONE,
         cancel: () -> Boolean = { false },
         progress: (Float) -> Unit = {},
-        masks: MaskContext = MaskContext.NONE,
     ): TiledRenderStats = onGl {
         require(plan.maxTile <= tileSize) { "plan tiles ${plan.maxTile} exceed the allocated $tileSize" }
         require(plan.imageWidth == source.width && plan.imageHeight == source.height) { "plan is for another image" }
@@ -389,7 +390,8 @@ class TiledRenderer private constructor(requestedTile: Int, private val share: E
 
     /**
      * The coverage of [region] (after its scene pass): the pre-local develop into the work texture when a range mask
-     * reads it, then the brush layers and the coverage of the region; binds the masks for the develop and Detail passes.
+     * reads it, then the brush layers and the coverage of the region; binds the masks for the develop and Detail
+     * passes.
      */
     private fun maskRegion(region: PixelBox, params: DevelopParams) {
         val plan = maskPlan

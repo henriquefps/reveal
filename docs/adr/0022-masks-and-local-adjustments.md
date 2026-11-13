@@ -130,8 +130,10 @@ layer at a 2048 export tile.
 
 **AI masks** (`mask/AiMaskSource.kt`): the engine never runs a model. It asks `AiMaskSource.mask(request, onReady)`
 with the photo key, the `Ai` component and the size of the image being rendered; the source returns an `AiMask`
-(`width x height` floats in 0..1 covering the whole upright image, any resolution) or null (not ready: the component
-contributes 0, i.e. `invert` makes it 1) and calls `onReady` when it has it, and the renderer then renders again. The
+(`width x height` floats in 0..1 covering the whole upright image, any resolution) or null (not ready: the component is
+**skipped**, so an inverted AI component never turns the whole frame on while its model runs) and calls `onReady` when
+it has it; the renderer then renders again (the zoom tiles develop again). The renderer asks every frame, so `mask` must
+be a cheap cache lookup and must tolerate repeated calls while a mask is pending. The
 source owns model inference, its cache (ADR 0021) and the edge refinement (`refine` travels with the component); the
 engine samples what it gets. M4/C implements it in `:core:ml`, M4/B wires it into the renderers
 (`GpuDevelopRenderer.setMaskSource`, `TiledRenderer.render(…, masks)`); the edited thumbnails and preset thumbnails
@@ -208,6 +210,12 @@ the pre-local pixel flips a few pixels' coverage, so their recipe takes the Deta
 exports a masked recipe in tiles like the preview (no seams), `ZoomTilesTest` develops masked tiles like the CPU, and
 `PipelineBenchmark#maskSliderDragAndBrushAppend` measures a five-mask recipe (one of each type, a 2,000-dab brush): a
 local slider drag's frame time and the time to append dabs to a stroke in progress.
+
+**Measured so far** (M4/A, emulator x86_64 SwiftShader, 320 x 214 synthetic scene): a stroke in progress re-rasterises
+1-5 of its 64 px bins per update (1-4 ms for brush + coverage, against 106 ms for the first full raster) and ends
+bit-identical to a fresh render of the whole stroke. The emulator's GL stack then wedged (system_server died; after a
+clean restart every GPU test, including unchanged ones, blocked in `eglCreateContext`), so the parity, tiled, zoom and
+benchmark numbers are still to be measured on the phone; this section is updated with them.
 
 ## Consequences
 

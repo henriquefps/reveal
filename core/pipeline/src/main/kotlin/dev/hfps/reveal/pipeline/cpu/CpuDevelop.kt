@@ -62,7 +62,13 @@ object CpuDevelop {
      * when given, else built here), the profile, contrast/whites/blacks, the tone curve and the colour stage. Also the
      * masks' pre-local image (docs/adr/0022).
      */
-    fun developGlobal(rgb: FloatArray, params: DevelopParams, grid: LowResGrid, moments: FloatArray?, coef: FloatArray?) {
+    fun developGlobal(
+        rgb: FloatArray,
+        params: DevelopParams,
+        grid: LowResGrid,
+        moments: FloatArray?,
+        coef: FloatArray?,
+    ) {
         if (params.tone.localActive) {
             val m = moments ?: LocalToneOp.moments(rgb, grid)
             LocalToneOp.apply(rgb, grid, m, coef ?: LocalToneOp.guide(m, grid), params.tone)

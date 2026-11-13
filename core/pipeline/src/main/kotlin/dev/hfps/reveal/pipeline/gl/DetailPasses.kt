@@ -167,7 +167,16 @@ internal class DetailPasses {
         // thresholds when a mask changes the luminance noise reduction.
         val localNoise = masks != null && p.localNoise
         // 1. Luminance levels: the preview keeps the smoothing chain and shrinks it in one pass; tiles run them fused.
-        val lumParams = if (p.lumActive) listOf(p.lumStep, p.lumTau, p.lumEdge, if (localNoise) masks else null) else null
+        val lumParams = if (p.lumActive) {
+            listOf(
+                p.lumStep,
+                p.lumTau,
+                p.lumEdge,
+                if (localNoise) masks else null,
+            )
+        } else {
+            null
+        }
         if (lumParams != lumKey) {
             lumResult = when {
                 lumParams == null -> null
@@ -312,7 +321,10 @@ internal class DetailPasses {
         GLES30.glUniform1i(uniform(shrinkProgram, "uLevels"), levels.size)
         val taus = FloatArray(DetailParams.LEVELS) { k -> levels.getOrNull(k)?.let { p.lumTau[it] } ?: 1f }
         GLES30.glUniform1fv(uniform(shrinkProgram, "uTau"), taus.size, taus, 0)
-        val units = FloatArray(DetailParams.LEVELS) { k -> levels.getOrNull(k)?.let { p.lumUnit.getOrElse(it) { 0f } } ?: 0f }
+        val units = FloatArray(DetailParams.LEVELS) { k ->
+            levels.getOrNull(k)?.let { p.lumUnit.getOrElse(it) { 0f } }
+                ?: 0f
+        }
         GLES30.glUniform1fv(uniform(shrinkProgram, "uTauUnit"), units.size, units, 0)
         GLES30.glUniform1i(uniform(shrinkProgram, "uLocal"), if (localNoise) 1 else 0)
         bindUnit(1, chain(0).texture)

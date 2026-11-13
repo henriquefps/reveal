@@ -7,11 +7,19 @@ All notable changes to Reveal are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- Masks in the develop pipeline (no editor UI yet): linear and radial gradients, brush strokes, colour and luminance
+  ranges and AI masks, combined with add / subtract / intersect and invert, each with the local adjustments
+  (temperature, tint, exposure, contrast, highlights, shadows, whites, blacks, texture, clarity, dehaze, hue,
+  saturation, sharpness, noise and a colour tint). The same in the preview, at 100 %, in exports and in thumbnails;
+  docs/adr/0022.
 - Debug builds only: a "Mask lab" in the editor's More ⋯ menu runs the candidate on-device mask models (people and
   their parts, sky, subject by tap or automatically) on the open photo and tints the mask, with edge refinement and
   timings, to judge them before M4's masks. Release builds are unchanged (no models, no ML runtime).
 - `:core:ml`: on-device mask models through LiteRT, pinned model files fetched at build time, guided-filter edge
   refinement (CPU reference and GPU pass); the choice of models is in docs/adr/0021.
+
+### Changed
+- Pasting edits and "Previous" leave masks out unless you choose them (a mask's shape belongs to its photo, like a crop).
 
 ## [0.5.5] - 2026-11-12
 

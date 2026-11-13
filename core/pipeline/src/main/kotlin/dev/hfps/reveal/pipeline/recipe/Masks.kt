@@ -1,3 +1,5 @@
+@file:Suppress("MagicNumber")
+
 package dev.hfps.reveal.pipeline.recipe
 
 import dev.hfps.reveal.pipeline.mask.StrokeCodec
@@ -221,11 +223,7 @@ sealed class MaskComponent {
 
 /** An OkLab colour (L in 0..1). */
 @Serializable
-data class LabColour(
-    @SerialName("l") val l: Float,
-    @SerialName("a") val a: Float,
-    @SerialName("b") val b: Float,
-) {
+data class LabColour(@SerialName("l") val l: Float, @SerialName("a") val a: Float, @SerialName("b") val b: Float) {
     init {
         require(l.isFinite() && a.isFinite() && b.isFinite()) { "colour must be finite" }
     }
@@ -272,8 +270,8 @@ data class BrushStroke(
         private const val FULL = 100f
 
         /**
-         * A finished stroke from raw [points]: simplified ([StrokeCodec.simplify], tolerance relative to the dab radius)
-         * and encoded. While a stroke is being drawn use [raw] instead, so the dabs only grow.
+         * A finished stroke from raw [points]: simplified ([StrokeCodec.simplify], tolerance relative to the dab
+         * radius) and encoded. While a stroke is being drawn use [raw] instead, so the dabs only grow.
          */
         fun of(
             points: List<StrokePoint>,
@@ -342,6 +340,7 @@ data class LocalAdjustments(
     }
 
     /** The value of [adjustment]. */
+    @Suppress("CyclomaticComplexMethod")
     operator fun get(adjustment: LocalAdjustment): Float = when (adjustment) {
         LocalAdjustment.TEMPERATURE -> temperature
         LocalAdjustment.TINT -> tint
@@ -363,6 +362,7 @@ data class LocalAdjustments(
     }
 
     /** A copy with [adjustment] set to [value] (not clamped: the operators clamp). */
+    @Suppress("CyclomaticComplexMethod")
     fun with(adjustment: LocalAdjustment, value: Float): LocalAdjustments = when (adjustment) {
         LocalAdjustment.TEMPERATURE -> copy(temperature = value)
         LocalAdjustment.TINT -> copy(tint = value)

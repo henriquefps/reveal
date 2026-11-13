@@ -55,7 +55,9 @@ vec4 effectsCoef(ivec2 ip, float l) {
 float clarityWith(float l, float b, float gain) {
     float w = min(max(4.0 * b * (1.0 - b), 0.0), 1.0);
     float d = l - b;
-    return l + gain * w * d * (${glslFloat(EffectsParams.CLARITY_EDGE2)} / (${glslFloat(EffectsParams.CLARITY_EDGE2)} + d * d));
+    return l + gain * w * d * (${glslFloat(
+        EffectsParams.CLARITY_EDGE2,
+    )} / (${glslFloat(EffectsParams.CLARITY_EDGE2)} + d * d));
 }
 
 float clarity(float l, float b) {

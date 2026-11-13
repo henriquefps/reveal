@@ -1,3 +1,5 @@
+@file:Suppress("MagicNumber")
+
 package dev.hfps.reveal.pipeline.gl
 
 import dev.hfps.reveal.pipeline.cpu.DetailParams
@@ -43,7 +45,6 @@ internal object MaskShaders {
     /** Most components one coverage draw evaluates (four masks). */
     const val MAX_SHAPE_COMPONENTS: Int = MaskPlan.SLOTS * MaskPlan.MAX_COMPONENTS
 
-
     /** Shared helpers: `MaskMath.sstep` and the stored coverage. */
     val COMMON: String = """
 float maskStep(float e0, float e1, float x) {
@@ -61,11 +62,11 @@ float storeCoverage(float v) {
 """
 
     /**
-     * The `Masks` block (small: never a big array in a uniform block, SwiftShader counts them against the default-uniform
-     * limit), the adjustment table on [ADJUST_UNIT] (RGBA32F, texel (k, m) = vec4 `k` of mask `m`'s vector), the
-     * coverage array and `localSum`.
+     * The `Masks` block (small: never a big array in a uniform block, SwiftShader counts them against the
+     * default-uniform limit), the adjustment table on [ADJUST_UNIT] (RGBA32F, texel (k, m) = vec4 `k` of mask `m`'s
+     * vector), the coverage array and `localSum`.
      */
-    val MASKS: String = """
+    const val MASKS: String = """
 layout(std140) uniform Masks {
     ivec4 maskInfo;                   // x = rendered masks, y = MaskParams.needs
     vec4 maskGlobal[3];               // MaskParams.global (G_ order); [2].zw = sharpening, texture attenuation
@@ -118,7 +119,9 @@ float totalNoiseScale(float t) {
 }
 """
 
-    /** Local white balance and the local colour step (the develop pass; needs `toOkLab`, `fromOkLab`, VS_ constants). */
+    /**
+     * Local white balance and the local colour step (the develop pass; needs `toOkLab`, `fromOkLab`, VS_ constants).
+     */
     val DEVELOP: String = TOTALS + """
 uniform highp sampler2D uLocalWb;   // LocalWhiteBalance.table: (temperature node, tint node) -> rgb cone gains
 
@@ -332,9 +335,9 @@ void main() {
 """
 
     /**
-     * A brush layer (`MaskRaster.brush`): per pixel the dabs of its bin in order, painting `cov += (1 - cov) a`, erasing
-     * `cov *= 1 - a`; stored as float16. Dab `k` is texels `2k`, `2k + 1` of [uDabs] (centre x, y, radius, inner; flow,
-     * erase), bins hold (offset, count) into [uIndex].
+     * A brush layer (`MaskRaster.brush`): per pixel the dabs of its bin in order, painting `cov += (1 - cov) a`,
+     * erasing `cov *= 1 - a`; stored as float16. Dab `k` is texels `2k`, `2k + 1` of [uDabs] (centre x, y, radius,
+     * inner; flow, erase), bins hold (offset, count) into [uIndex].
      */
     val BRUSH_FRAG: String = """#version 300 es
 precision highp float;

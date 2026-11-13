@@ -6,13 +6,9 @@ import androidx.test.platform.app.InstrumentationRegistry
 import dev.hfps.reveal.pipeline.gl.GpuDevelopRenderer
 import dev.hfps.reveal.pipeline.mask.Dabs
 import dev.hfps.reveal.pipeline.mask.MaskContext
-import dev.hfps.reveal.pipeline.recipe.BrushStroke
-import dev.hfps.reveal.pipeline.recipe.LocalAdjustments
-import dev.hfps.reveal.pipeline.recipe.Mask
-import dev.hfps.reveal.pipeline.recipe.MaskComponent
-import dev.hfps.reveal.pipeline.recipe.StrokePoint
 import dev.hfps.reveal.pipeline.recipe.BandValues
 import dev.hfps.reveal.pipeline.recipe.BaseLook
+import dev.hfps.reveal.pipeline.recipe.BrushStroke
 import dev.hfps.reveal.pipeline.recipe.Colour
 import dev.hfps.reveal.pipeline.recipe.ColourGrading
 import dev.hfps.reveal.pipeline.recipe.ColourMixer
@@ -23,10 +19,14 @@ import dev.hfps.reveal.pipeline.recipe.Effects
 import dev.hfps.reveal.pipeline.recipe.Geometry
 import dev.hfps.reveal.pipeline.recipe.GradeWheel
 import dev.hfps.reveal.pipeline.recipe.Light
+import dev.hfps.reveal.pipeline.recipe.LocalAdjustments
+import dev.hfps.reveal.pipeline.recipe.Mask
+import dev.hfps.reveal.pipeline.recipe.MaskComponent
 import dev.hfps.reveal.pipeline.recipe.Optics
 import dev.hfps.reveal.pipeline.recipe.ParametricCurve
 import dev.hfps.reveal.pipeline.recipe.Profile
 import dev.hfps.reveal.pipeline.recipe.Recipe
+import dev.hfps.reveal.pipeline.recipe.StrokePoint
 import dev.hfps.reveal.pipeline.recipe.Transform
 import dev.hfps.reveal.pipeline.recipe.WhiteBalance
 import dev.hfps.reveal.pipeline.synthetic.SyntheticImages
@@ -284,13 +284,23 @@ class PipelineBenchmark {
         val dabs = Dabs.of(brush.strokes, WIDTH, HEIGHT).size
         Log.i(TAG, "masks: brush of ${stroke.size} points, $dabs dabs at ${WIDTH}x$HEIGHT")
         val frame = frameArgument()
-        fun local(t: Float, change: (LocalAdjustments) -> LocalAdjustments) =
-            base.copy(masks = base.masks.mapIndexed { i, m -> if (i == 0) m.copy(adjustments = change(m.adjustments)) else m })
+        fun local(change: (LocalAdjustments) -> LocalAdjustments) = base.copy(
+            masks = base.masks.mapIndexed { i, m ->
+                if (i ==
+                    0
+                ) {
+                    m.copy(adjustments = change(m.adjustments))
+                } else {
+                    m
+                }
+            },
+        )
         val drags: List<Pair<String, (Float) -> Recipe>> = listOf(
-            "masks: global exposure (five masks on)" to { t -> base.copy(light = base.light.copy(exposureEv = -1f + 2f * t)) },
-            "masks: drag a mask's exposure" to { t -> local(t) { it.copy(exposure = -2f + 4f * t) } },
-            "masks: drag a mask's clarity" to { t -> local(t) { it.copy(clarity = -100f + 200f * t) } },
-            "masks: drag a mask's noise" to { t -> local(t) { it.copy(noise = 100f * t) } },
+            "masks: global exposure (five masks on)" to
+                { t -> base.copy(light = base.light.copy(exposureEv = -1f + 2f * t)) },
+            "masks: drag a mask's exposure" to { t -> local { it.copy(exposure = -2f + 4f * t) } },
+            "masks: drag a mask's clarity" to { t -> local { it.copy(clarity = -100f + 200f * t) } },
+            "masks: drag a mask's noise" to { t -> local { it.copy(noise = 100f * t) } },
             "masks: off (same global recipe)" to { t ->
                 base.copy(masks = emptyList(), light = base.light.copy(exposureEv = -1f + 2f * t))
             },
@@ -331,7 +341,10 @@ class PipelineBenchmark {
             Log.i(
                 TAG,
                 "masks: stroke append ($APPEND_POINTS points a frame, ${frames.size} frames, six masks): frame " +
-                    "p50 ${p(f, 50)}, p95 ${p(f, 95)} ms; brush + coverage update p50 ${p(c, 50)}, p95 ${p(c, 95)} ms; " +
+                    "p50 ${p(
+                        f,
+                        50,
+                    )}, p95 ${p(f, 95)} ms; brush + coverage update p50 ${p(c, 50)}, p95 ${p(c, 95)} ms; " +
                     "bins per frame mean ${"%.1f".format(bins.average())}",
             )
         } finally {

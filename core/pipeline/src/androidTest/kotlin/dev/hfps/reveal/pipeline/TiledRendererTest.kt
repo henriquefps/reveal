@@ -354,7 +354,12 @@ class TiledRendererTest {
         fun renderMasked(plan: ExportPlan, with: Recipe = edit): ByteArray {
             val sink = ArraySink(plan.output.width, plan.output.height)
             tiled.render(
-                PipelineInputTileSource(image), with, plan, OutputSettings(), sink, masks = MaskFixtures.context,
+                PipelineInputTileSource(image),
+                with,
+                plan,
+                OutputSettings(),
+                sink,
+                masks = MaskFixtures.context,
             )
             return sink.pixels
         }

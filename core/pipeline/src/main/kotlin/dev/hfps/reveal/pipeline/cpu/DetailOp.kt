@@ -346,7 +346,7 @@ object DetailOp {
         return lab
     }
 
-    @Suppress("LongParameterList", "LongMethod", "CyclomaticComplexMethod", "NestedBlockDepth")
+    @Suppress("LongParameterList", "LongMethod", "CyclomaticComplexMethod", "NestedBlockDepth", "ComplexCondition")
     private fun render(
         rgb: FloatArray,
         width: Int,

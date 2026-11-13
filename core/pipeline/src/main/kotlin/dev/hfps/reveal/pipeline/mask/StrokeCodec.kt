@@ -1,3 +1,5 @@
+@file:Suppress("MagicNumber")
+
 package dev.hfps.reveal.pipeline.mask
 
 import dev.hfps.reveal.pipeline.recipe.StrokePoint
@@ -62,6 +64,7 @@ object StrokeCodec {
     }
 
     /** The points of [text]; an empty or malformed text gives the points read before the problem. */
+    @Suppress("ReturnCount", "NestedBlockDepth")
     fun decode(text: String): List<StrokePoint> {
         if (text.isEmpty()) return emptyList()
         val bytes = runCatching { decoder.decode(text) }.getOrNull() ?: return emptyList()

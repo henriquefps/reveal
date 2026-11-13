@@ -117,6 +117,7 @@ class MaskRasterTest {
         }
     }
 
+    @Suppress("NestedBlockDepth")
     @Test
     fun `binned evaluation (the GPU's) equals the dab-by-dab raster`() {
         val random = kotlin.random.Random(3)
@@ -164,7 +165,13 @@ class MaskRasterTest {
             }
         }
         val colour = coverage(
-            mask(MaskComponent.ColourRange(samples = listOf(LabColour(0.2f, -0.03f, -0.15f)), range = 50f, smoothness = 0f)),
+            mask(
+                MaskComponent.ColourRange(
+                    samples = listOf(LabColour(0.2f, -0.03f, -0.15f)),
+                    range = 50f,
+                    smoothness = 0f,
+                ),
+            ),
             pre,
         )
         assertThat(at(colour, 7, 7)).isEqualTo(1f)
@@ -195,7 +202,11 @@ class MaskRasterTest {
         assertThat(at(c, 20, 15).toDouble()).isWithin(1e-3).of((top + (bottom - top) * v).toDouble())
         // Not ready: the component is skipped (an inverted one too: never a full mask while loading).
         assertThat(coverage(mask(ai.copy(invert = true)), ai = listOf(null)).max()).isEqualTo(0f)
-        val withLinear = mask(MaskComponent.Linear(x0 = 0f, y0 = 0.5f, x1 = 1f, y1 = 0.5f, feather = 0f), ai.copy(op = MaskOp.INTERSECT))
+        val withLinear =
+            mask(
+                MaskComponent.Linear(x0 = 0f, y0 = 0.5f, x1 = 1f, y1 = 0.5f, feather = 0f),
+                ai.copy(op = MaskOp.INTERSECT),
+            )
         assertThat(at(coverage(withLinear, ai = listOf(null)), 3, 3)).isEqualTo(1f)
     }
 

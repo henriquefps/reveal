@@ -49,6 +49,7 @@ class DevelopParams(
     val masks: MaskParams = MaskParams.NONE,
 ) {
 
+    @Suppress("CyclomaticComplexMethod")
     override fun equals(other: Any?): Boolean = other is DevelopParams &&
         wbMultipliers.contentEquals(other.wbMultipliers) &&
         cameraToWorking.contentEquals(other.cameraToWorking) &&

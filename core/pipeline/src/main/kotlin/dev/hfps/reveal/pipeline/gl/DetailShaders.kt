@@ -78,14 +78,17 @@ float smoothV(ivec2 p) {
 """
 
     /**
-     * The shrinkage of one level's detail, accumulated (`DetailOp.lumLevel`, the end of the second loop), and the masks'
-     * per-pixel thresholds (docs/adr/0022): `noiseScale` gives the pixel's `(N/100)^1.5` when a mask sets its total
-     * luminance amount (-1 = the global thresholds) and whether that total is 0 (the pixel keeps its input lightness).
+     * The shrinkage of one level's detail, accumulated (`DetailOp.lumLevel`, the end of the second loop), and the
+     * masks' per-pixel thresholds (docs/adr/0022): `noiseScale` gives the pixel's `(N/100)^1.5` when a mask sets its
+     * total luminance amount (-1 = the global thresholds) and whether that total is 0 (the pixel keeps its input
+     * lightness).
      */
     private val SHRINK = MaskShaders.MASKS + MaskShaders.TOTALS + """
 uniform int uLocal;        // 1 = masks change the luminance noise reduction somewhere
 float shrinkAdd(float acc, float d, float tau) {
-    float keep = d * d / max(d * d + tau * tau, ${ColourShaders.glslFloat(dev.hfps.reveal.pipeline.cpu.DetailOp.KEEP_FLOOR)});
+    float keep = d * d / max(d * d + tau * tau, ${ColourShaders.glslFloat(
+        dev.hfps.reveal.pipeline.cpu.DetailOp.KEEP_FLOOR,
+    )});
     return q16(acc + d * keep * keep);
 }
 
@@ -108,8 +111,8 @@ float noiseScale(ivec2 p, out bool none) {
     /**
      * The vertical axis of a luminance level and its shrinkage (`DetailOp.lumLevel`, second loop): reads the
      * horizontal result ([uSrc]) and the level's input `(L_i, acc)` ([uPrev]; the OkLab input on the first level, whose
-     * accumulator is 0), writes `(L_i+1, acc)` (RG16F). Tiles and exports; the preview splits it into [LUM_V_CHAIN_FRAG]
-     * and [SHRINK_FRAG].
+     * accumulator is 0), writes `(L_i+1, acc)` (RG16F). Tiles and exports; the preview splits it into
+     * [LUM_V_CHAIN_FRAG] and [SHRINK_FRAG].
      */
     val LUM_V_FRAG: String = HEADER + LUM_V_SMOOTH + SHRINK + """
 uniform sampler2D uPrev;
@@ -398,12 +401,18 @@ vec3 finalAt(ivec2 p, vec2 sUp, vec2 dUp) {
                 textureGain = totalTextureGain(maskGlobal[1].y + s[2].x, maskGlobal[2].w);
             }
             if (s[2].y != 0.0) {
-                clarityGain = totalUnit(maskGlobal[1].z + s[2].y) * ${ColourShaders.glslFloat(dev.hfps.reveal.pipeline.cpu.EffectsParams.CLARITY_GAIN)};
+                clarityGain = totalUnit(maskGlobal[1].z + s[2].y) * ${ColourShaders.glslFloat(
+            dev.hfps.reveal.pipeline.cpu.EffectsParams.CLARITY_GAIN,
+        )};
             }
             if (s[2].z != 0.0) {
                 float u = totalUnit(maskGlobal[1].w + s[2].z);
-                omega = u > 0.0 ? u * ${ColourShaders.glslFloat(dev.hfps.reveal.pipeline.cpu.EffectsParams.DEHAZE_OMEGA)} : 0.0;
-                beta = u < 0.0 ? -u * ${ColourShaders.glslFloat(dev.hfps.reveal.pipeline.cpu.EffectsParams.DEHAZE_ADD)} : 0.0;
+                omega = u > 0.0 ? u * ${ColourShaders.glslFloat(
+            dev.hfps.reveal.pipeline.cpu.EffectsParams.DEHAZE_OMEGA,
+        )} : 0.0;
+                beta = u < 0.0 ? -u * ${ColourShaders.glslFloat(
+            dev.hfps.reveal.pipeline.cpu.EffectsParams.DEHAZE_ADD,
+        )} : 0.0;
             }
         }
     }

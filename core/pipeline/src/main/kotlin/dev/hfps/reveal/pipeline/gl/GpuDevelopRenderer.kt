@@ -27,8 +27,8 @@ import dev.hfps.reveal.pipeline.mask.AiMaskSource
 import dev.hfps.reveal.pipeline.mask.MaskContext
 import dev.hfps.reveal.pipeline.mask.MaskParams
 import dev.hfps.reveal.pipeline.mask.MaskPlan
-import dev.hfps.reveal.pipeline.recipe.Mask
 import dev.hfps.reveal.pipeline.recipe.Geometry
+import dev.hfps.reveal.pipeline.recipe.Mask
 import dev.hfps.reveal.pipeline.recipe.Recipe
 import dev.hfps.reveal.pipeline.zoom.PixelAlignment
 import dev.hfps.reveal.pipeline.zoom.ZoomGrid
@@ -400,9 +400,9 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
 
     /**
      * Shows one mask's coverage over the photo (docs/adr/0022, "Overlay"): [MaskOverlay.Mode.COLOUR] blends its colour
-     * at its opacity times the coverage, [MaskOverlay.Mode.GREYSCALE] shows the coverage alone as grey. The mask is found
-     * by id in the recipe; its coverage is computed even when it adjusts nothing or is hidden. `null` hides it. On-screen
-     * only. Coalesced.
+     * at its opacity times the coverage, [MaskOverlay.Mode.GREYSCALE] shows the coverage alone as grey. The mask is
+     * found by id in the recipe; its coverage is computed even when it adjusts nothing or is hidden. `null` hides it.
+     * On-screen only. Coalesced.
      */
     fun setMaskOverlay(overlay: MaskOverlay?) {
         update { it.copy(maskOverlay = overlay) }
@@ -425,7 +425,9 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
 
     /** What the last coverage update did (brush bins, layers, time); for the benchmark. */
     val maskStats: MaskStats
-        get() = masks.lastStats.let { MaskStats(it.brushBins, it.brushFull, it.coverageLayers, it.nanos / NANOS_PER_MS) }
+        get() = masks.lastStats.let {
+            MaskStats(it.brushBins, it.brushFull, it.coverageLayers, it.nanos / NANOS_PER_MS)
+        }
 
     /**
      * The coverage of the mask [maskId] of [recipe] at the proxy's size (row-major, top row first), as the develop pass
@@ -735,6 +737,7 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
      * The post-crop vignette and grain of what the window shows: none for the original, the crop mode's plane (the
      * frame is being edited) or the sharpening mask.
      */
+    @Suppress("ComplexCondition")
     private fun shownPost(req: Request): PostParams = if (req.showOriginal || req.geometryEditing ||
         req.detailMask || req.maskOverlay?.mode == MaskOverlay.Mode.GREYSCALE
     ) {
@@ -744,6 +747,7 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
     }
 
     /** The overlay of [req] when its mask has a coverage slot now (docs/adr/0022, "Overlay"). */
+    @Suppress("ReturnCount")
     private fun overlayUniforms(req: Request): OverlayUniforms? {
         val overlay = req.maskOverlay ?: return null
         if (overlayId(req) == null || masks.coverageTexture == 0) return null
@@ -967,15 +971,17 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         GlSupport.checkError("develop stage")
     }
 
-    /** The overlay mask's id when the window shows one (not for the original, the crop plane or the sharpening mask). */
+    /**
+     * The overlay mask's id when the window shows one (not for the original, the crop plane or the sharpening mask).
+     */
     private fun overlayId(req: Request): String? =
         req.maskOverlay?.maskId?.takeIf { !req.showOriginal && !req.geometryEditing && !req.detailMask }
 
     /**
      * The coverage of [params]' rendered masks, plus the overlay's mask ([overlayExtra]) when it is not one of them
      * (docs/adr/0022): the brush layers, the AI masks from the source, the pre-local image when a range mask reads it
-     * (a develop pass without masks into its own OkLab texture, kept while the global parameters are), then the coverage
-     * passes ([MaskPasses] keeps what did not change). Bumps [masksVersion] when the coverage changed.
+     * (a develop pass without masks into its own OkLab texture, kept while the global parameters are), then the
+     * coverage passes ([MaskPasses] keeps what did not change). Bumps [masksVersion] when the coverage changed.
      */
     private fun prepareMasks(params: DevelopParams) {
         val image = checkNotNull(input) { "no input" }
@@ -1089,7 +1095,7 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, unit0)
     }
 
-    @Suppress("LongParameterList")
+    @Suppress("LongParameterList", "CyclomaticComplexMethod")
     private fun drawOutput(
         image: UploadedImage,
         paneView: ViewTransform,
@@ -1765,7 +1771,9 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
             return b
         }
 
-        /** The mask overlay (docs/adr/0022): colour (linear working space, opacity), info (on, layer, channel, mode). */
+        /**
+         * The mask overlay (docs/adr/0022): colour (linear working space, opacity), info (on, layer, channel, mode).
+         */
         private fun putOverlay(b: ByteBuffer, o: OverlayUniforms?) {
             if (o == null) {
                 repeat(OVERLAY_BLOCK_FLOATS) { b.putInt(0) }
@@ -1976,12 +1984,7 @@ data class MaskOverlay(
 }
 
 /** What the output pass needs of a [MaskOverlay]: the coverage slot, mode, linear colour and opacity. */
-internal class OverlayUniforms(
-    val slot: Int,
-    val mode: MaskOverlay.Mode,
-    val colour: FloatArray,
-    val opacity: Float,
-)
+internal class OverlayUniforms(val slot: Int, val mode: MaskOverlay.Mode, val colour: FloatArray, val opacity: Float)
 
 /** What the last mask coverage update did (`GpuDevelopRenderer.maskStats`). */
 data class MaskStats(val brushBins: Int, val brushFull: Int, val coverageLayers: Int, val ms: Float)

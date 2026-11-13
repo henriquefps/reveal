@@ -68,13 +68,7 @@ data class EffectsParams(
     }
 
     /** Dehaze of the linear [rgb] in place with the haze share [hRaw] and the atmospheric light [air] (GLSL). */
-    fun dehaze(
-        rgb: FloatArray,
-        hRaw: Float,
-        air: FloatArray,
-        omega: Float = dehazeOmega,
-        beta: Float = dehazeBeta,
-    ) {
+    fun dehaze(rgb: FloatArray, hRaw: Float, air: FloatArray, omega: Float = dehazeOmega, beta: Float = dehazeBeta) {
         val h = min(max(hRaw, 0f), 1f)
         if (omega > 0f) {
             val t = max(1f - omega * h, DEHAZE_T0)

@@ -20,8 +20,8 @@ import kotlin.math.sqrt
  * - **brush**: the stroke raster ([brush]);
  * - **colour range**: on the pre-local OkLab pixel, `dist = min_s sqrt(0.25 dL^2 + da^2 + db^2)`,
  *   `v = 1 - sstep(r0, r1, dist)` (samples in d3..d17, count d0, `r0, r1 = d1,d2`);
- * - **luminance range**: `x = clamp(L, 0, 1)`, `v = sstep(d0, d1, x) (1 - sstep(d2, d3, x))`, a cut skipped when d4 / d5
- *   is 0;
+ * - **luminance range**: `x = clamp(L, 0, 1)`, `v = sstep(d0, d1, x) (1 - sstep(d2, d3, x))`, a cut skipped when d4 /
+ * d5   is 0;
  * - **AI**: the source's mask, bilinear with explicit weights; skipped while not ready.
  *
  * Then `v` is clamped to 0..1, inverted when asked, and combined from `cov = 0`: add `max(cov, v)`, subtract
@@ -35,6 +35,7 @@ object MaskRaster {
      * The brush raster of [dabs] over [region] (float16 as stored): per pixel, in dab order, painting
      * `cov += (1 - cov) a`, erasing `cov *= 1 - a`, `a = flow (1 - sstep(inner, 1, d / r))`.
      */
+    @Suppress("NestedBlockDepth")
     fun brush(dabs: Dabs, region: Region): FloatArray {
         val w = region.width
         val out = FloatArray(w * region.height)

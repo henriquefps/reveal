@@ -164,10 +164,6 @@ float contrastCurve(float p, float g) {
     return hermite((p - p0) / (1.0 - p0), p0, 1.0, g * (1.0 - p0), e * (1.0 - p0));
 }
 
-vec3 globalTone(vec3 c) {
-    return globalToneWith(c, tone2.x, tone2.y, tone2.z);
-}
-
 // GlobalToneOp.pixel with the constants g (contrast gamma), wh (whites shift), bl (blacks shift): masks pass their
 // per-pixel totals (docs/adr/0022).
 vec3 globalToneWith(vec3 c, float g, float wh, float bl) {
@@ -180,6 +176,10 @@ vec3 globalToneWith(vec3 c, float g, float wh, float bl) {
     float gain = min(y2 / max(yc, ${f(GlobalToneOp.YMIN)}), ${f(GlobalToneOp.GMAX)});
     float add = max(y2 - yc * gain, 0.0);
     return c * gain + add;
+}
+
+vec3 globalTone(vec3 c) {
+    return globalToneWith(c, tone2.x, tone2.y, tone2.z);
 }
 """
 

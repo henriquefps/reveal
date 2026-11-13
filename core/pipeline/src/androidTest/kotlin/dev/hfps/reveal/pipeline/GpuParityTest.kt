@@ -252,6 +252,7 @@ class GpuParityTest {
      * stage within ADR 0002's tolerances (Detail's where a mask reaches slots 11-12, the colour tolerance where it
      * changes colour), and the 8-bit output within the Detail limits.
      */
+    @Suppress("CyclomaticComplexMethod")
     @Test
     fun masksMatchCpuReference() = runBlocking {
         renderer.setMaskSource(MaskFixtures.source, "fixture")
@@ -289,7 +290,11 @@ class GpuParityTest {
                 Log.i(TAG, "masks $name / $label: worst error / tolerance $worst at $where")
                 worstRatio = maxOf(worstRatio, worst)
                 if (worst > 1f) failures += "$name / $label"
-                val out = maxDiff8(CpuDevelop.render(image, recipe, masks = MaskFixtures.context), renderer.renderOutput(recipe))
+                val out =
+                    maxDiff8(
+                        CpuDevelop.render(image, recipe, masks = MaskFixtures.context),
+                        renderer.renderOutput(recipe),
+                    )
                 Log.i(TAG, "masks $name / $label: 8-bit max diff $out")
                 val limit = if (name == "hueSweep") OUTPUT_MAX_LEVELS_NOISE_TONE else OUTPUT_MAX_LEVELS_DETAIL
                 if (out > kotlin.math.ceil(limit * dehaze)) failures += "$name / $label (8-bit $out)"
@@ -301,7 +306,13 @@ class GpuParityTest {
 
     private fun maxDiff8(a: ByteArray, b: ByteArray): Int {
         var worst = 0
-        for (i in a.indices) if (i % 4 != 3) worst = maxOf(worst, abs((a[i].toInt() and 0xff) - (b[i].toInt() and 0xff)))
+        for (i in a.indices) {
+            if (i % 4 !=
+                3
+            ) {
+                worst = maxOf(worst, abs((a[i].toInt() and 0xff) - (b[i].toInt() and 0xff)))
+            }
+        }
         return worst
     }
 

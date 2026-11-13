@@ -205,7 +205,9 @@ class RecipeDiffTest {
             .containsExactly(HistoryStep(HistoryField.MASK_ADJUST, "Sky"))
         assertThat(steps(one.copy(masks = listOf(sky.copy(amount = 50f), face))))
             .containsExactly(HistoryStep(HistoryField.MASK_ADJUST, "Sky"))
-        assertThat(steps(one.copy(masks = listOf(face, sky)))).containsExactly(HistoryStep(HistoryField.MASK_ORDER, null))
+        assertThat(
+            steps(one.copy(masks = listOf(face, sky))),
+        ).containsExactly(HistoryStep(HistoryField.MASK_ORDER, null))
         val hidden = one.copy(masks = listOf(sky.copy(enabled = false), face))
         assertThat(RecipeDiff.between(hidden, one)).containsExactly(HistoryStep(HistoryField.MASK_SHOW, "Sky"))
     }

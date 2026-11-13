@@ -92,7 +92,8 @@ class MaskRenderTest {
     @Test
     fun aStrokeInProgressUpdatesItsBinsAndEndsLikeAFreshRender() = runBlocking {
         val points = MaskFixtures.scribble(400)
-        fun recipe(n: Int) = recipeOf(MaskComponent.Brush(strokes = listOf(BrushStroke.raw(points.take(n), size = 0.05f))))
+        fun recipe(n: Int) =
+            recipeOf(MaskComponent.Brush(strokes = listOf(BrushStroke.raw(points.take(n), size = 0.05f))))
         var lastBins = 0
         for (n in listOf(20, 60, 61, 120, 250, 400)) {
             renderer.readCoverage(recipe(n), "m")

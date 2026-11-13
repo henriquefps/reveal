@@ -618,6 +618,41 @@ The ADR's COCO numbers and the private review sheets come from host scripts kept
 host, COCO val2017 panoptic subsets); review sheets of the owner's photos go only to the owner's private review
 folder, never to the repo or a PR.
 
+## Masks (`:core:pipeline/mask`, M4/A, ADR 0022)
+
+Recipe (`recipe/Masks.kt`): `Mask` (id, name, `enabled` = the eye, `amount` %, `LocalAdjustments`, `components`
+combined in order with `MaskOp` ADD = max / SUBTRACT / INTERSECT, each with `invert`); `MaskComponent` = `Linear`,
+`Radial`, `Brush` (`BrushStroke`: points in `mask/StrokeCodec`'s base64 varint form; `BrushStroke.raw` while drawing,
+`BrushStroke.of` simplifies when the stroke ends), `ColourRange`, `LuminanceRange`, `Ai` (ADR 0021) and `Unknown` (a newer
+app's type, kept verbatim). Positions are fractions of W/H, lengths of the long edge, image coordinates before crop.
+`LocalAdjustment` enumerates the local sliders with their ranges (`LocalAdjustments[adj]`, `.with(adj, v)`). History:
+`HistoryField.MASK_*` (value = mask name). Masks are excluded from presets and from the default paste groups.
+
+Engine: `MaskParams.from(recipe)` (rendered masks: enabled, amount > 0, an adjustment, a component; at most 32; their
+adjustment vectors `V_*`, the global values `G_*`, `NEED_*` bits) lives in `DevelopParams.masks`; `MaskPlan.of(masks, W,
+H)` packs the shapes for one image size (`PackedComponent`, `Dabs` per brush, AI layers). CPU reference:
+`MaskRaster` (components, combination, brush raster, `MaskMath.store` = float16), `cpu/LocalAdjustOps.kt`
+(`LocalField` sums, `LocalWhiteBalance` table, `LocalTotals`, `LocalColourOp`, `LocalDevelop`), the masked branches of
+`CpuDevelop.renderLinear(…, masks: MaskContext)` and `DetailOp`. GPU: `gl/MaskShaders.kt` (the small `Masks` block +
+adjustment table texture: never big arrays in a uniform block), `gl/MaskPasses.kt` (brush layers re-rasterised per 64 px
+bin, coverage array RGBA16F, 4 masks per layer, cached in the preview), `Shaders.DEVELOP_FRAG` `developMasked`, Detail's
+`FLAG_LOCAL` / per-pixel thresholds. Every program that includes `MaskShaders.MASKS` must call `attachMasks`. A new local
+adjustment = a `LocalAdjustment` + field, a `V_` slot (and `G_` if it adds to a global), the CPU total and operator, the
+GLSL line, a case in `LocalAdjustOpsTest` (full mask = global slider) and in `MaskFixtures`.
+
+AI masks: the engine asks `mask/AiMaskSource` (M4/C implements it in `:core:ml`); `GpuDevelopRenderer.setMaskSource`,
+`TiledRenderer.render(…, masks = MaskContext(source, key))` (an export waits for its masks), the zoom tiles re-develop
+when one arrives. Overlay for M4/B: `GpuDevelopRenderer.setMaskOverlay(MaskOverlay(id, COLOUR | GREYSCALE, colour,
+opacity))`; `readCoverage(recipe, id)` and `maskStats` for tests.
+
+```sh
+./gradlew :core:pipeline:testDebugUnitTest --tests '*mask*' --tests '*LocalAdjustOpsTest*' --tests '*MasksCodecTest*' --tests '*RecipeDiffTest*'
+adb -s <serial> shell am instrument -w -e class dev.hfps.reveal.pipeline.MaskRenderTest,dev.hfps.reveal.pipeline.GpuParityTest#masksMatchCpuReference dev.hfps.reveal.pipeline.test/androidx.test.runner.AndroidJUnitRunner
+adb -s <serial> shell am instrument -w -e class dev.hfps.reveal.pipeline.TiledRendererTest#maskedTilesStitchAndMatchThePreviewAndTheCpu,dev.hfps.reveal.pipeline.ZoomTilesTest#maskedTilesMatchTheCpuAndTheExport dev.hfps.reveal.pipeline.test/androidx.test.runner.AndroidJUnitRunner
+adb -s <serial> shell am instrument -w -e class dev.hfps.reveal.pipeline.PipelineBenchmark#maskSliderDragAndBrushAppend dev.hfps.reveal.pipeline.test/androidx.test.runner.AndroidJUnitRunner
+adb -s <serial> logcat -d -s REVEAL_MASKS REVEAL_PARITY REVEAL_EXPORT REVEAL_ZOOM REVEAL_BENCH
+```
+
 ## `:core:image` harness (ADR 0004)
 
 ```sh

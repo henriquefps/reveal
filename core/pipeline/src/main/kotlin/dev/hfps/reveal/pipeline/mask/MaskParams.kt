@@ -19,12 +19,7 @@ import dev.hfps.reveal.pipeline.recipe.RecipeRanges
  * @property global the global slider values the totals add to (see the `G_` indices), clamped to their ranges.
  * @property needs `NEED_` bits: which operators a mask changes somewhere.
  */
-class MaskParams(
-    val masks: List<Mask>,
-    val adjust: FloatArray,
-    val global: FloatArray,
-    val needs: Int,
-) {
+class MaskParams(val masks: List<Mask>, val adjust: FloatArray, val global: FloatArray, val needs: Int) {
     /** True when any mask renders (the masked paths run). */
     val active: Boolean get() = masks.isNotEmpty()
 

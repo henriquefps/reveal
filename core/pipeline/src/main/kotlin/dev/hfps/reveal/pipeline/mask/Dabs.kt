@@ -1,3 +1,5 @@
+@file:Suppress("MagicNumber")
+
 package dev.hfps.reveal.pipeline.mask
 
 import dev.hfps.reveal.pipeline.recipe.BrushStroke
@@ -21,6 +23,7 @@ class Dabs(val imageWidth: Int, val imageHeight: Int, val data: FloatArray) {
      * Index of the first dab that differs from [other] (both for the same image size), i.e. the length of the common
      * prefix: appending points to the last stroke keeps the earlier dabs.
      */
+    @Suppress("ReturnCount")
     fun commonPrefix(other: Dabs): Int {
         if (other.imageWidth != imageWidth || other.imageHeight != imageHeight) return 0
         val n = min(size, other.size)
@@ -67,6 +70,7 @@ class Dabs(val imageWidth: Int, val imageHeight: Int, val data: FloatArray) {
          * diameter (at least [MIN_SPACING_PX]) of arc length, the pressure interpolated along each segment. Placement
          * only depends on the points before a dab, so appending points only appends dabs.
          */
+        @Suppress("LoopWithTooManyJumpStatements")
         fun of(strokes: List<BrushStroke>, imageWidth: Int, imageHeight: Int): Dabs {
             val out = FloatArrayBuilder()
             val long = max(imageWidth, imageHeight).toFloat()

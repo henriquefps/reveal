@@ -68,12 +68,7 @@ internal class MaskPasses {
         private set
 
     /** Work of one [coverage] call: brush bins re-rasterised, dabs re-uploaded, coverage layers drawn, nanoseconds. */
-    data class Stats(
-        val brushBins: Int = 0,
-        val brushFull: Int = 0,
-        val coverageLayers: Int = 0,
-        val nanos: Long = 0,
-    )
+    data class Stats(val brushBins: Int = 0, val brushFull: Int = 0, val coverageLayers: Int = 0, val nanos: Long = 0)
 
     private fun uniform(program: Int, name: String): Int =
         locations.getOrPut(program) { HashMap() }.getOrPut(name) { GLES30.glGetUniformLocation(program, name) }
@@ -116,8 +111,8 @@ internal class MaskPasses {
 
     /**
      * Uploads the `Masks` block and the adjustment table of [params] (the first [MaskParams.masks] slots of the
-     * coverage) and binds the coverage array (or a stand-in), the table and the white-balance gains on their units. With
-     * [off] the block says no mask renders (the pre-local develop pass).
+     * coverage) and binds the coverage array (or a stand-in), the table and the white-balance gains on their units.
+     * With [off] the block says no mask renders (the pre-local develop pass).
      */
     fun bind(params: DevelopParams, off: Boolean = false) {
         val m = params.masks
@@ -133,7 +128,10 @@ internal class MaskPasses {
 
     private fun bindDevelopUnits(coverage: Int?) {
         GLES30.glActiveTexture(GLES30.GL_TEXTURE0 + MaskShaders.COVERAGE_UNIT)
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D_ARRAY, coverage ?: if (coverageTexture != 0) coverageTexture else dummyArray)
+        GLES30.glBindTexture(
+            GLES30.GL_TEXTURE_2D_ARRAY,
+            coverage ?: if (coverageTexture != 0) coverageTexture else dummyArray,
+        )
         GLES30.glActiveTexture(GLES30.GL_TEXTURE0 + MaskShaders.ADJUST_UNIT)
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, adjustTex)
         GLES30.glActiveTexture(GLES30.GL_TEXTURE0 + MaskShaders.WB_UNIT)
@@ -169,10 +167,10 @@ internal class MaskPasses {
      * The coverage of [plan]'s masks over the region ([x], [y], [width] x [height] pixels of the plan's image) into the
      * coverage array ([coverageTexture]); [pre] is the pre-local OkLab texture of the region (0 when no range mask),
      * [preVersion] changes whenever its content does, [ai] the AI layers' masks. With [cache] (the preview) unchanged
-     * inputs are kept and a changed brush re-rasterises only its bins. Returns true when the coverage changed. Leaves the
-     * framebuffer, viewport and scissor test as it found them only in the sense that the caller binds its own next.
+     * inputs are kept and a changed brush re-rasterises only its bins. Returns true when the coverage changed. Leaves
+     * the framebuffer, viewport and scissor test as it found them only in the sense that the caller binds its own next.
      */
-    @Suppress("LongParameterList", "LongMethod", "CyclomaticComplexMethod")
+    @Suppress("LongParameterList", "LongMethod", "CyclomaticComplexMethod", "ReturnCount")
     fun coverage(
         plan: MaskPlan,
         x: Int,
@@ -243,7 +241,8 @@ internal class MaskPasses {
             aiShown = ai.toList()
         }
         // 3. The coverage, when anything it reads changed.
-        val key = Triple(plan.masks.map { it.components }, preVersion, (x to y) to (plan.imageWidth to plan.imageHeight))
+        val key =
+            Triple(plan.masks.map { it.components }, preVersion, (x to y) to (plan.imageWidth to plan.imageHeight))
         val shapesChanged = key != coverageKey || aiChanged
         if (!shapesChanged && dirty == null) {
             lastStats = Stats(nanos = System.nanoTime() - start)
@@ -258,6 +257,7 @@ internal class MaskPasses {
     }
 
     /** The bins of [binned] that a dab after [prefix] of [dabs] or of [old] reaches, and their pixel bounds. */
+    @Suppress("NestedBlockDepth")
     private fun changedBins(binned: DabBins, dabs: Dabs, old: Dabs, prefix: Int, x: Int, y: Int): ChangedBins {
         val flags = BooleanArray(binned.binsX * binned.binsY)
         val box = IntArray(4)
@@ -302,7 +302,9 @@ internal class MaskPasses {
 
     private class ChangedBins(val flags: BooleanArray, val bounds: IntArray)
 
-    /** Rasterises brush [layer]: every bin, or the runs of [changed] bins per bin row (scissored). Returns bins drawn. */
+    /**
+     * Rasterises brush [layer]: every bin, or the runs of [changed] bins per bin row (scissored). Returns bins drawn.
+     */
     private fun rasterBins(layer: Int, binned: DabBins, changed: ChangedBins?): Int {
         GLES30.glUseProgram(brushProgram)
         GLES30.glUniform2i(uniform(brushProgram, "uOrigin"), binned.x, binned.y)
@@ -364,6 +366,7 @@ internal class MaskPasses {
         upload2d(indexTex, GLES30.GL_R32F, GLES30.GL_RED, w, indexRows, indexData)
     }
 
+    @Suppress("ComplexCondition")
     private fun uploadAi(ai: List<AiMask?>) {
         val ready = ai.filterNotNull()
         val w = max(ready.maxOfOrNull { it.width } ?: 1, 1)
@@ -494,7 +497,11 @@ internal class MaskPasses {
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, id[0])
         GLES30.glFramebufferTextureLayer(GLES30.GL_FRAMEBUFFER, GLES30.GL_COLOR_ATTACHMENT0, texture, 0, layer)
         val status = GLES30.glCheckFramebufferStatus(GLES30.GL_FRAMEBUFFER)
-        if (status != GLES30.GL_FRAMEBUFFER_COMPLETE) throw GlException("mask layer incomplete: 0x${status.toString(16)}")
+        if (status !=
+            GLES30.GL_FRAMEBUFFER_COMPLETE
+        ) {
+            throw GlException("mask layer incomplete: 0x${status.toString(16)}")
+        }
         return id[0]
     }
 

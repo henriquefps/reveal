@@ -9,9 +9,9 @@ import android.util.Log
 import dev.hfps.reveal.pipeline.cpu.DevelopParams
 import dev.hfps.reveal.pipeline.geometry.GeometryMapping
 import dev.hfps.reveal.pipeline.input.TileSource
+import dev.hfps.reveal.pipeline.mask.MaskContext
 import dev.hfps.reveal.pipeline.recipe.Geometry
 import dev.hfps.reveal.pipeline.recipe.Optics
-import dev.hfps.reveal.pipeline.mask.MaskContext
 import dev.hfps.reveal.pipeline.recipe.Recipe
 import dev.hfps.reveal.pipeline.zoom.ZoomGrid
 import dev.hfps.reveal.pipeline.zoom.ZoomView

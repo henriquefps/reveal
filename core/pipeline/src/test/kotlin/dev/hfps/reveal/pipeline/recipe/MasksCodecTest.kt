@@ -105,4 +105,25 @@ class MasksCodecTest {
         assertThat(LocalAdjustment.EXPOSURE.clamp(9f)).isEqualTo(4f)
         assertThat(LocalAdjustment.HUE.clamp(-400f)).isEqualTo(-180f)
     }
+
+    @Test
+    fun `brush density and auto-mask round-trip and default for older strokes`() {
+        val stroke = BrushStroke.raw(listOf(StrokePoint(0.1f, 0.2f)), density = 40f, autoMask = true)
+        val recipe = Recipe(masks = listOf(Mask("m", components = listOf(MaskComponent.Brush(strokes = listOf(stroke))))))
+        val json = Json.parseToJsonElement(codec.encode(recipe)).jsonObject
+        val written = json["masks"]!!.jsonArray[0].jsonObject["components"]!!.jsonArray[0].jsonObject["strokes"]!!
+            .jsonArray[0].jsonObject
+        assertThat(written["autoMask"]!!.jsonPrimitive.content).isEqualTo("true")
+        assertThat(written["density"]!!.jsonPrimitive.content).isEqualTo("40.0")
+        assertThat(codec.decode(codec.encode(recipe))).isEqualTo(recipe)
+        // An M4/A stroke (no density, no autoMask) reads as full density without auto-mask.
+        val old = codec.encode(recipe).replace(""","density":40.0""", "").replace(""","autoMask":true""", "")
+        val decoded = (codec.decode(old).masks.single().components.single() as MaskComponent.Brush).strokes.single()
+        assertThat(decoded.density).isEqualTo(100f)
+        assertThat(decoded.autoMask).isFalse()
+        // The finished stroke keeps both.
+        val finished = BrushStroke.of(listOf(StrokePoint(0.1f, 0.2f), StrokePoint(0.3f, 0.2f)), density = 40f, autoMask = true)
+        assertThat(finished.density).isEqualTo(40f)
+        assertThat(finished.autoMask).isTrue()
+    }
 }

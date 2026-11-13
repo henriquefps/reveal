@@ -245,6 +245,11 @@ data class AiRefine(@SerialName("radius") val radius: Float = 8f, @SerialName("e
  * One brush stroke: [points] in the compact encoding of [StrokeCodec] (decode with [decoded]), [size] the dab diameter
  * as a fraction of the image's long edge, [feather] 0..100 the soft part of a dab's radius, [flow] 0..100 how much one
  * dab adds, [erase] removes coverage instead (docs/adr/0022, "Brush raster").
+ *
+ * M4/B (docs/adr/0022 "M4/B (editor)") added [density] (0..100, the most coverage the stroke paints towards: a painting
+ * dab moves the coverage towards `density / 100` instead of 1, an erasing dab removes at most that share; 100 = the
+ * M4/A behaviour) and [autoMask] (the brush's auto-mask: each dab is weighted by the colour similarity to the dab's
+ * centre on the pre-local image, like the range masks). Both are additive: older strokes read 100 and false.
  */
 @Serializable
 data class BrushStroke(
@@ -253,9 +258,13 @@ data class BrushStroke(
     @SerialName("feather") val feather: Float = DEFAULT_FEATHER,
     @SerialName("flow") val flow: Float = FULL,
     @SerialName("erase") val erase: Boolean = false,
+    @SerialName("density") val density: Float = FULL,
+    @SerialName("autoMask") val autoMask: Boolean = false,
 ) {
     init {
-        require(size.isFinite() && feather.isFinite() && flow.isFinite()) { "stroke values must be finite" }
+        require(size.isFinite() && feather.isFinite() && flow.isFinite() && density.isFinite()) {
+            "stroke values must be finite"
+        }
     }
 
     @Transient
@@ -273,6 +282,7 @@ data class BrushStroke(
          * A finished stroke from raw [points]: simplified ([StrokeCodec.simplify], tolerance relative to the dab
          * radius) and encoded. While a stroke is being drawn use [raw] instead, so the dabs only grow.
          */
+        @Suppress("LongParameterList")
         fun of(
             points: List<StrokePoint>,
             size: Float = DEFAULT_SIZE,
@@ -280,22 +290,29 @@ data class BrushStroke(
             flow: Float = FULL,
             erase: Boolean = false,
             aspect: Float = 1f,
+            density: Float = FULL,
+            autoMask: Boolean = false,
         ): BrushStroke = BrushStroke(
             StrokeCodec.encode(StrokeCodec.simplify(points, size * 0.5f, aspect)),
             size,
             feather,
             flow,
             erase,
+            density,
+            autoMask,
         )
 
         /** A stroke from [points] as they are (quantised, not simplified): the stroke in progress. */
+        @Suppress("LongParameterList")
         fun raw(
             points: List<StrokePoint>,
             size: Float = DEFAULT_SIZE,
             feather: Float = DEFAULT_FEATHER,
             flow: Float = FULL,
             erase: Boolean = false,
-        ): BrushStroke = BrushStroke(StrokeCodec.encode(points), size, feather, flow, erase)
+            density: Float = FULL,
+            autoMask: Boolean = false,
+        ): BrushStroke = BrushStroke(StrokeCodec.encode(points), size, feather, flow, erase, density, autoMask)
     }
 }
 

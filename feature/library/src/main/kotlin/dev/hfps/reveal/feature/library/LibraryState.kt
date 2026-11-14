@@ -241,7 +241,6 @@ data class LibraryActions(
     val onDeleteFromServerConfirm: () -> Unit = {},
     val onDeleteFromServerDismiss: () -> Unit = {},
     val onSettings: () -> Unit = {},
-    val onGallery: () -> Unit = {},
     val onAbout: () -> Unit = {},
 )
 

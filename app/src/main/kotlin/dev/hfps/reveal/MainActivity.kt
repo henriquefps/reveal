@@ -100,8 +100,6 @@ class MainActivity : ComponentActivity() {
             RevealTheme(darkTheme = dark) {
                 RevealNavHost(
                     navController = navController,
-                    themeMode = mode,
-                    onThemeModeChange = themeModeStore::set,
                     onEditorBack = {
                         if (openedFromIntent) {
                             finish()

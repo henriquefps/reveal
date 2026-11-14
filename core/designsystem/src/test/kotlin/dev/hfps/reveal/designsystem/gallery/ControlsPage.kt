@@ -1,4 +1,4 @@
-package dev.hfps.reveal.ui.gallery
+package dev.hfps.reveal.designsystem.gallery
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -18,9 +18,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
-import dev.hfps.reveal.R
 import dev.hfps.reveal.designsystem.components.GhostButton
 import dev.hfps.reveal.designsystem.components.PrimaryButton
 import dev.hfps.reveal.designsystem.components.RevealBottomSheet
@@ -39,69 +37,69 @@ import dev.hfps.reveal.designsystem.theme.RevealTheme
 internal fun ControlsPage() {
     var chip by remember { mutableIntStateOf(0) }
     var sheetOpen by rememberSaveable { mutableStateOf(false) }
-    Section(R.string.gallery_section_buttons) {
+    Section("Buttons") {
         FlowRow(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            PrimaryButton(stringResource(R.string.button_primary), onClick = {}, icon = PhosphorRegular.Export)
-            SecondaryButton(stringResource(R.string.button_secondary), onClick = {})
-            GhostButton(stringResource(R.string.button_ghost), onClick = {})
-            PrimaryButton(stringResource(R.string.button_disabled), onClick = {}, enabled = false)
+            PrimaryButton("Export", onClick = {}, icon = PhosphorRegular.Export)
+            SecondaryButton("Save preset", onClick = {})
+            GhostButton("Cancel", onClick = {})
+            PrimaryButton("Disabled", onClick = {}, enabled = false)
         }
     }
-    Section(R.string.gallery_section_icon_buttons) {
+    Section("Icon buttons") {
         FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-            RevealIconButton(PhosphorRegular.ArrowUUpLeft, stringResource(R.string.action_undo), onClick = {})
-            RevealIconButton(PhosphorRegular.ArrowUUpRight, stringResource(R.string.action_redo), onClick = {})
-            RevealIconButton(PhosphorRegular.CircleHalf, stringResource(R.string.action_before_after), onClick = {})
+            RevealIconButton(PhosphorRegular.ArrowUUpLeft, "Undo", onClick = {})
+            RevealIconButton(PhosphorRegular.ArrowUUpRight, "Redo", onClick = {})
+            RevealIconButton(PhosphorRegular.CircleHalf, "Before and after", onClick = {})
             RevealIconButton(
                 icon = PhosphorFill.SlidersHorizontal,
-                contentDescription = stringResource(R.string.action_adjustments),
+                contentDescription = "Adjustments",
                 onClick = {},
                 active = true,
             )
         }
     }
-    Section(R.string.gallery_section_chips) {
+    Section("Chips") {
         val labels =
-            listOf(R.string.chip_original, R.string.chip_square, R.string.chip_portrait, R.string.chip_landscape)
+            listOf("Original", "1:1", "4:5", "16:9")
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             labels.forEachIndexed { index, label ->
-                RevealChip(stringResource(label), selected = index == chip, onClick = { chip = index })
+                RevealChip(label, selected = index == chip, onClick = { chip = index })
             }
         }
     }
-    Section(R.string.gallery_section_sheet) {
-        SecondaryButton(stringResource(R.string.sheet_open), onClick = { sheetOpen = true })
+    Section("Bottom sheet") {
+        SecondaryButton("Open the sheet", onClick = { sheetOpen = true })
     }
     Column {
-        Section(R.string.gallery_section_list) {}
+        Section("List") {}
         RevealListRow(
-            title = stringResource(R.string.row_library),
-            subtitle = stringResource(R.string.row_library_summary),
+            title = "Library",
+            subtitle = "3 folders · 1,284 photos",
             icon = PhosphorRegular.Images,
             onClick = {},
             trailing = { CaretRight() },
         )
         RevealRowDivider()
         RevealListRow(
-            title = stringResource(R.string.row_theme),
+            title = "Theme",
             icon = PhosphorRegular.Sun,
             onClick = {},
-            trailing = { Value(stringResource(R.string.theme_system)) },
+            trailing = { Value("System") },
         )
         RevealRowDivider()
         RevealListRow(
-            title = stringResource(R.string.row_export),
-            subtitle = stringResource(R.string.row_export_summary),
+            title = "Export defaults",
+            subtitle = "JPEG · 92 % · long edge 4096 px",
             icon = PhosphorRegular.Export,
             onClick = {},
             trailing = { CaretRight() },
         )
         RevealRowDivider()
         RevealListRow(
-            title = stringResource(R.string.row_about),
+            title = "About",
             icon = PhosphorRegular.Info,
             onClick = {},
             trailing = { CaretRight() },
@@ -116,9 +114,9 @@ internal fun ControlsPage() {
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp),
             ) {
-                Text(stringResource(R.string.sheet_body), style = RevealTheme.typography.body)
+                Text("A form or chooser: drag handle, 16 dp radius, the card surface.", style = RevealTheme.typography.body)
                 PrimaryButton(
-                    text = stringResource(R.string.sheet_close),
+                    text = "Done",
                     onClick = { sheetOpen = false },
                     modifier = Modifier.fillMaxWidth(),
                 )

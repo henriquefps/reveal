@@ -75,7 +75,6 @@ fun NavGraphBuilder.libraryScreens(
     navController: NavController,
     onEdit: (versionId: Long, strip: String?) -> Unit,
     onOpenFile: (Uri) -> Unit,
-    onGallery: () -> Unit,
     onAbout: () -> Unit,
     onSettings: () -> Unit = {},
     onSync: () -> Unit = {},
@@ -92,7 +91,6 @@ fun NavGraphBuilder.libraryScreens(
                 )
             },
             onOpenFile = onOpenFile,
-            onGallery = onGallery,
             onAbout = onAbout,
             onSettings = onSettings,
             onSync = onSync,
@@ -109,7 +107,6 @@ fun NavGraphBuilder.libraryScreens(
 fun LibraryScreen(
     onOpen: (PhotoRow, LibraryUiState) -> Unit,
     onOpenFile: (Uri) -> Unit,
-    onGallery: () -> Unit,
     onAbout: () -> Unit,
     modifier: Modifier = Modifier,
     onSettings: () -> Unit = {},
@@ -187,7 +184,6 @@ fun LibraryScreen(
             onDeleteFromServerConfirm = viewModel::confirmDeleteFromServer,
             onDeleteFromServerDismiss = viewModel::dismissDeleteFromServer,
             onSettings = onSettings,
-            onGallery = onGallery,
             onAbout = onAbout,
         )
     }

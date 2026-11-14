@@ -302,4 +302,39 @@
     <string name="library_filter_not_synced">Não sincronizadas</string>
     <string name="library_filter_with_count">%1$s · %2$s</string>
     <string name="library_cloud_uploading">Aguardando envio ao servidor</string>
+    <!-- Cópias virtuais (docs/adr/0025). -->
+    <string name="library_copy_name">Cópia %1$d</string>
+    <string name="library_action_create_copy">Criar cópia virtual</string>
+    <plurals name="library_action_delete_copies">
+        <item quantity="one">Excluir %1$d cópia</item>
+        <item quantity="many">Excluir %1$d cópias</item>
+        <item quantity="other">Excluir %1$d cópias</item>
+    </plurals>
+    <plurals name="library_copies_created">
+        <item quantity="one">%1$d cópia virtual criada</item>
+        <item quantity="many">%1$d cópias virtuais criadas</item>
+        <item quantity="other">%1$d cópias virtuais criadas</item>
+    </plurals>
+    <plurals name="library_copies_deleted">
+        <item quantity="one">%1$d cópia excluída</item>
+        <item quantity="many">%1$d cópias excluídas</item>
+        <item quantity="other">%1$d cópias excluídas</item>
+    </plurals>
+    <string name="versions_title">Versões</string>
+    <string name="versions_hint">Cada cópia virtual tem a própria edição, histórico e exportações. Estrelas e marcações são da foto.</string>
+    <string name="versions_main">Versão principal</string>
+    <string name="versions_on_screen">Na tela</string>
+    <string name="versions_copy_current">Copiar esta edição</string>
+    <string name="versions_copy_original">Cópia do original</string>
+    <string name="versions_rename">Renomear</string>
+    <string name="versions_rename_title">Renomear cópia</string>
+    <string name="versions_name">Nome</string>
+    <string name="versions_delete">Excluir cópia</string>
+    <string name="versions_delete_question_named">Excluir “%1$s”?</string>
+    <plurals name="versions_delete_question">
+        <item quantity="one">Excluir %1$d cópia virtual?</item>
+        <item quantity="many">Excluir %1$d cópias virtuais?</item>
+        <item quantity="other">Excluir %1$d cópias virtuais?</item>
+    </plurals>
+    <string name="versions_delete_body">A edição, o histórico e os instantâneos também são excluídos, em todos os aparelhos sincronizados. A foto e as outras versões continuam.</string>
 </resources>

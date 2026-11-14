@@ -24,6 +24,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import dev.hfps.reveal.designsystem.components.Eyebrow
 import dev.hfps.reveal.designsystem.icons.PhosphorFill
 import dev.hfps.reveal.designsystem.icons.PhosphorRegular
 import dev.hfps.reveal.designsystem.theme.RevealTheme
@@ -57,6 +58,14 @@ fun HistoryPanel(host: PanelHost, modifier: Modifier = Modifier) {
     }
     val enabled = host.state.ready
     Column(modifier.testTag(EditorTags.HISTORY_LIST)) {
+        // Snapshots of a library version (docs/adr/0025), then the steps.
+        if (host.state.versions.library) {
+            SnapshotsSection(host)
+            Eyebrow(
+                stringResource(R.string.editor_history_steps),
+                Modifier.padding(start = 16.dp, top = 12.dp, bottom = 4.dp),
+            )
+        }
         if (history.entries.isEmpty()) {
             Text(
                 text = stringResource(R.string.editor_history_empty),

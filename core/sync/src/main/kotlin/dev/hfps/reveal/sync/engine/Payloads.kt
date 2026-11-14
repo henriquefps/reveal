@@ -57,9 +57,14 @@ data class PhotoData(
 @Serializable
 data class StepData(val recipe: JsonElement, val label: JsonElement)
 
+/** One snapshot of `version.data.snapshots` (docs/adr/0025): its stable id, name, recipe (ADR 0003 JSON) and time. */
+@Serializable
+data class SnapshotData(val id: String, val name: String, val recipe: JsonElement, val createdAt: Long = 0)
+
 /**
  * `version.data` (ADR 0017): the photo it belongs to, its place among the photo's versions, the committed recipe, the
- * history steps and the undo cursor (-1 = before the first step).
+ * history steps and the undo cursor (-1 = before the first step). [name] is a virtual copy's name and [snapshots] the
+ * version's snapshots (docs/adr/0025; absent from records of 0.6.x, which apply as "no snapshots").
  */
 @Serializable
 data class VersionData(
@@ -69,7 +74,15 @@ data class VersionData(
     val recipe: JsonElement,
     val history: List<StepData> = emptyList(),
     val cursor: Int = -1,
+    val snapshots: List<SnapshotData>? = null,
 )
+
+/**
+ * `setting.data` of `export-preset.<uuid>` (docs/adr/0025 "Sync"): one user export preset. [options] is the export
+ * sheet's options JSON as the sheet wrote it (a device-local folder destination falls back to the gallery elsewhere).
+ */
+@Serializable
+data class ExportPresetData(val name: String, val options: JsonElement, val position: Int = 0)
 
 /** `setting.data` of `export.authorship`: the author and copyright exports write (ADR 0009). */
 @Serializable

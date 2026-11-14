@@ -13,8 +13,10 @@ import dev.hfps.reveal.data.db.MetaDao
 import dev.hfps.reveal.data.db.RevealDatabase
 import dev.hfps.reveal.data.edit.EditRepository
 import dev.hfps.reveal.data.edit.HistoryWriter
+import dev.hfps.reveal.data.edit.VersionRepository
 import dev.hfps.reveal.data.editor.EditorLayoutPreferences
 import dev.hfps.reveal.data.export.ExportPreferences
+import dev.hfps.reveal.data.export.ExportPresetRepository
 import dev.hfps.reveal.data.handoff.GalleryAccess
 import dev.hfps.reveal.data.handoff.HandoffPreviewer
 import dev.hfps.reveal.data.handoff.HandoffRepository
@@ -194,6 +196,17 @@ object DataModule {
     @Provides
     @Singleton
     fun provideEdits(database: RevealDatabase): EditRepository = EditRepository(database)
+
+    /** Virtual copies and snapshots (docs/adr/0025). */
+    @Provides
+    @Singleton
+    fun provideVersions(database: RevealDatabase, edits: EditRepository): VersionRepository =
+        VersionRepository(database, edits)
+
+    /** The user's export presets (docs/adr/0025). */
+    @Provides
+    @Singleton
+    fun provideExportPresets(database: RevealDatabase): ExportPresetRepository = ExportPresetRepository(database)
 
     /**
      * The fallback smart correction where no photo is known (docs/adr/0020): the editor and the batch make a

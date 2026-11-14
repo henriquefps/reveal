@@ -101,4 +101,19 @@
         <item quantity="many">%d fotos serão exportadas no tamanho da prévia (2560 px): o Reveal não consegue mais ler os originais. Compartilhe-as com o Reveal de novo para exportar no tamanho completo.</item>
         <item quantity="other">%d fotos serão exportadas no tamanho da prévia (2560 px): o Reveal não consegue mais ler os originais. Compartilhe-as com o Reveal de novo para exportar no tamanho completo.</item>
     </plurals>
+    <!-- Export presets (docs/adr/0025). -->
+    <string name="export_presets">Predefinições</string>
+    <string name="export_preset_instagram">Instagram 4:5</string>
+    <string name="export_preset_web">Web 2048</string>
+    <string name="export_preset_full">Qualidade máxima</string>
+    <string name="export_preset_save">Salvar como predefinição</string>
+    <string name="export_preset_save_title">Salvar predefinição de exportação</string>
+    <string name="export_preset_save_confirm">Salvar</string>
+    <string name="export_preset_name">Nome</string>
+    <string name="export_preset_rename">Renomear</string>
+    <string name="export_preset_rename_title">Renomear predefinição</string>
+    <string name="export_preset_rename_confirm">Renomear</string>
+    <string name="export_preset_update">Atualizar predefinição</string>
+    <string name="export_preset_delete">Excluir</string>
+    <string name="export_preset_modified">Alterada desde que você escolheu “%1$s”.</string>
 </resources>

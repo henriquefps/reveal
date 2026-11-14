@@ -13,6 +13,7 @@ import dev.hfps.reveal.data.db.PhotoEntity
 import dev.hfps.reveal.data.db.PhotoFileEntity
 import dev.hfps.reveal.data.db.RecipeEntity
 import dev.hfps.reveal.data.db.RevealDatabase
+import dev.hfps.reveal.data.db.SnapshotEntity
 import dev.hfps.reveal.data.db.SourceEntity
 import dev.hfps.reveal.data.db.SyncAliasEntity
 import dev.hfps.reveal.data.db.SyncInboxEntity
@@ -84,6 +85,7 @@ class SyncStore(
     private val meta = db.metaDao()
     private val json = SyncApi.json
     private val presetSync = PresetSync(db, clock)
+    private val exportPresetSync = ExportPresetSync(db, clock)
 
     // ------------------------------------------------------------------ pairing
 
@@ -93,6 +95,7 @@ class SyncStore(
         sync.markAllPhotos(now)
         sync.markAllVersions(now)
         sync.markAllPresets(now)
+        sync.markAllExportPresets(now)
         for (setting in settings) meta.delete(settingKey(setting.key))
     }
 
@@ -128,6 +131,7 @@ class SyncStore(
                 Kinds.PHOTO -> photoChange(record)
                 Kinds.VERSION -> versionChange(record, maxData)
                 Kinds.PRESET -> presetSync.change(record)
+                Kinds.SETTING -> exportPresetSync.change(record)
                 else -> null
             }
             if (change == null) {
@@ -191,10 +195,14 @@ class SyncStore(
         val photo = photos.get(version.photoId) ?: return null
         val recipe = edits.recipe(version.id)
         val steps = edits.history(version.id)
+        val snapshots = db.versionDao().snapshots(version.id)
         // A version the user never edited needs nothing on the server: unedited, or only the lens profile default the
         // editor adds when it opens a new photo (ADR 0015 "New photos"). The other devices make their own; pushing it
-        // made a second version or a conflict copy next to another device's real edit (FIX/W).
-        if (version.copyOf == null && isAutomatic(recipe, steps)) return null
+        // made a second version or a conflict copy next to another device's real edit (FIX/W). A virtual copy goes
+        // even unedited (docs/adr/0025): the user made it, the other devices show it.
+        if (version.copyOf == null && version.position == 0 && snapshots.isEmpty() && isAutomatic(recipe, steps)) {
+            return null
+        }
         val cursor = edits.cursor(version.id) ?: (steps.size - 1)
         var history = steps.map { StepData(parse(it.recipeJson), parse(it.labelsJson)) }
         var offset = 0
@@ -209,6 +217,7 @@ class SyncStore(
                     recipe = recipe?.let { parse(it.json) } ?: parse(RecipeCodec.Default.encode(DEFAULT_RECIPE)),
                     history = history,
                     cursor = (cursor - offset).coerceAtLeast(-1),
+                    snapshots = snapshots.map { SnapshotData(it.uuid, it.name, parse(it.recipeJson), it.createdAt) },
                 ),
             )
             // A record is at most 2 MiB (ADR 0017): the oldest steps go first; undo then stops at the oldest kept one.
@@ -234,7 +243,7 @@ class SyncStore(
     /** Records the server's answer to one pushed change. */
     suspend fun pushed(outgoing: Outgoing, result: PushResult) = db.withTransaction {
         val change = outgoing.change
-        if (change.kind == Kinds.SETTING) {
+        if (change.kind == Kinds.SETTING && !ExportPresetSync.owns(change.id)) {
             sync.putRecord(
                 SyncRecordEntity(Kinds.SETTING, change.id, result.rev, dirty = false, modifiedAt = change.modifiedAt),
             )
@@ -326,6 +335,8 @@ class SyncStore(
             record.kind == Kinds.PHOTO -> applyPhoto(record)
 
             record.kind == Kinds.VERSION -> applyVersion(record, deviceName, stats)
+
+            record.kind == Kinds.SETTING && ExportPresetSync.owns(record.id) -> exportPresetSync.apply(record)
 
             record.kind == Kinds.SETTING -> applySetting(record)
 
@@ -593,7 +604,9 @@ class SyncStore(
      * the editor adds on opening a photo is not an edit (FIX/W): such a version adopts another device's edit too.
      */
     private suspend fun isUntouched(version: VersionEntity): Boolean {
-        if (version.copyOf != null) return false
+        // Only a photo's first version is made automatically; a virtual copy is the user's (docs/adr/0025).
+        if (version.copyOf != null || version.position != 0) return false
+        if (db.versionDao().snapshots(version.id).isNotEmpty()) return false
         val record = sync.record(Kinds.VERSION, version.uuid)
         if (record != null && record.rev > 0) return false
         return isAutomatic(edits.recipe(version.id), edits.history(version.id))
@@ -632,8 +645,36 @@ class SyncStore(
         if (current == null || current.json != recipeJson) {
             edits.putRecipe(RecipeEntity(versionId, recipeJson, isDefault = isDefault, updatedAt = now))
         }
+        data.snapshots?.let { writeSnapshots(versionId, it) }
         val photoId = photos.photoIdOfVersion(versionId) ?: return
         photos.setHasEdit(photoId, edits.photoHasEdit(photoId))
+    }
+
+    /**
+     * The version's snapshots become [snapshots] (docs/adr/0025): the record carries them all. A snapshot id another
+     * version of this device already holds (a conflict copy of the same version) gets a new local uuid.
+     */
+    private suspend fun writeSnapshots(versionId: Long, snapshots: List<SnapshotData>) {
+        val dao = db.versionDao()
+        val current = dao.snapshots(versionId)
+        val wanted = snapshots.map { Triple(it.id, it.name, it.recipe.toString()) }
+        if (current.map { Triple(it.uuid, it.name, it.recipeJson) }.sortedBy { it.first } ==
+            wanted.sortedBy { it.first }
+        ) {
+            return
+        }
+        dao.clearSnapshots(versionId)
+        val rows = snapshots.map { snapshot ->
+            val taken = dao.snapshotByUuid(snapshot.id) != null
+            SnapshotEntity(
+                uuid = if (taken) newUuid() else snapshot.id,
+                versionId = versionId,
+                name = snapshot.name,
+                recipeJson = snapshot.recipe.toString(),
+                createdAt = snapshot.createdAt.takeIf { it > 0 } ?: clock(),
+            )
+        }
+        if (rows.isNotEmpty()) dao.insertSnapshots(rows)
     }
 
     /** A version deleted on another device; the last version of a photo is reset instead (a photo needs one). */
@@ -730,6 +771,9 @@ class SyncStore(
                         ),
                     )
                 }
+                // The kept side's snapshots come along (docs/adr/0025).
+                db.versionDao().clearSnapshots(into)
+                db.versionDao().moveSnapshots(from, into)
                 edits.markEdited(into, EditRepository.THIS_DEVICE, now)
                 photos.setHasEdit(pair.photoId, edits.photoHasEdit(pair.photoId))
             }

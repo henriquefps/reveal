@@ -14,7 +14,7 @@ below) and ADR 0023 (healing: the Remove tool, its patch fill and the contract a
 | Conversion | `scripts/ml/convert_big_lama.py` (host, PyTorch + litert-torch): the Fourier units as DFT matrix products, every op on LiteRT's GPU, checked against the original; the float32 file is this repository's release asset `ml-big-lama-fp32-1`, pinned in `models.json` (`big-lama-fp32@1`) |
 | Shipped file | `big-lama@1` = the float32 file with int8 convolution weights (per output channel; the first convolution over rgb + mask stays float32), derived at build time by `scripts/ml/convert_int8_weights.py` (standard library): **53.6 MB** |
 | Speed (S24 Ultra GPU) | **272 ms** a fill (warm), 293 ms the first run, 3.8 s to compile (the GPU program cache shortens later loads), +616 MB PSS while loaded; CPU fallback 7.1 s |
-| Runtime | `:core:ml` `inpaint/`: `InpaintLayout` (crop ↔ the 512 x 512 input), `InpaintService` (one model, released after 60 s idle), `FillDiskCache` (`cache/inpaint`, budgeted with the AI masks); Hilt in `:core:data` |
+| Runtime | `:core:ml` `inpaint/`: `InpaintLayout` (crop ↔ the 512 x 512 input), `InpaintService` (loaded for a fill and released right after it; a free-memory check before loading; a failure falls back to Patch), `FillDiskCache` (`cache/inpaint`, budgeted with the AI masks); Hilt in `:core:data` |
 | Recipe | Remove's `method = "model:big-lama@1"` (ADR 0023); the patch fill stays the fallback for an unknown method |
 | APK budget | ADR 0021's ≈ 34 MB for ML becomes ≈ 85 MB (owner): models 73.2 MB + LiteRT 9.4 MB per arm64 install |
 
@@ -137,8 +137,13 @@ fill 174 ms. The GPU program cache's effect on a cold load and the hole's GPU/CP
   pixels marked known), and grows the hole by the resampling (never shrinks it). Back: the model's content area is
   resampled to the crop, the hole's pixels taken, every other pixel the input's own.
 - **`InpaintService`**: blocking and serial (ADR 0023's `RemoveFills` calls methods from one worker); one model loaded
-  at a time (GPU, else CPU; the GPU's compiled programs kept in the code cache, `LiteRtEngine.GpuCache`), released
-  after 60 s without a fill or by `release()`.
+  at a time (GPU, else CPU; the GPU's compiled programs kept in the code cache, `LiteRtEngine.GpuCache`).
+- **Memory** (the model holds +616 MB on the S24's GPU, +982 MB on its CPU): loaded for a fill and **released right
+  after it** (`idleMs` = 0; a later fill reloads, from the GPU program cache), and loaded only when the system reports
+  free memory above 20 x the model file (`MEMORY_PER_FILE_BYTE`, ≈ 1.07 GB for big-LaMa) and not `lowMemory`. A
+  refusal, an `OutOfMemoryError` or a failed load or run frees what was loaded and throws
+  `InpaintUnavailableException` (`lowMemory` says which): Remove then falls back to the patch fill with a message.
+  PSS before / held / after release: `InpaintDeviceTest#memoryIsReturnedAfterRelease` on the phone.
 - **Cache** (`FillDiskCache`, `cache/inpaint`): key = model `<id>@<version>` + the crop's size and exact content
   (SHA-256 of every rgb and hole value); since ADR 0023's crop is defined on the original (the same for preview, zoom
   and export) the key is the same everywhere. The hole's pixels only, float16-rounded, deflated, files named by the

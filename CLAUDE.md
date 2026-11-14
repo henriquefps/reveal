@@ -698,7 +698,7 @@ products, or LiteRT's GPU refuses it / litert-torch miscompiles it) by `scripts/
 weights per output channel; the first convolution over rgb + mask stays float32). A new model version = rerun the
 host script, publish a new release asset, pin it as a new version. Runtime: `InpaintModels` (spec, `method` =
 `model:<id>@<version>`), `InpaintLayout` (crop ↔ the 512 x 512 input; pure, JVM-tested), `InpaintService` (blocking,
-one model, released after 60 s idle; GPU programs cached via `LiteRtEngine.GpuCache` in the code cache),
+one model, released after each fill, free-memory check, `InpaintUnavailableException` = fall back to Patch; GPU programs cached via `LiteRtEngine.GpuCache` in the code cache),
 `FillDiskCache` (`cache/inpaint`, `:core:data` `storage/FillCacheArea`, budgeted with the masks). Hilt:
 `DataModule.provideInpaintService`. Remove plugs it into ADR 0023's `RemoveFills` by method name.
 

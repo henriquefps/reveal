@@ -132,7 +132,9 @@ class SnapshotsFlowTest {
 
     private fun snapshots(versionId: Long) = runBlocking { access.versions().snapshots(versionId) }
 
+    /** Opens Light unless its panel is showing (tapping the open tool closes its panel). */
     private fun showLight() {
+        if (compose.onAllNodes(hasTestTag(EditorTags.EXPOSURE)).fetchSemanticsNodes().isNotEmpty()) return
         click(EditorTags.tool(ToolId.LIGHT))
         compose.waitUntilAtLeastOneExists(hasTestTag(EditorTags.EXPOSURE), TIMEOUT_MS)
     }

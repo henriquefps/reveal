@@ -157,11 +157,28 @@ fill 174 ms. The GPU program cache's effect on a cold load and the hole's GPU/CP
   key's hash; a fresh fill is rounded the same way (hit = miss, bit for bit). A `CacheArea` of kind `MASKS` (Settings
   → Storage "AI masks and fills"), trimmed by the budget, emptied by "Clear cache".
 
-## Integration with Remove (ADR 0023; lands with M5/H's merge)
+## Integration with Remove (ADR 0023)
 
-`RemoveFills` maps `model:big-lama@1` to a `RemoveMethod` over `InpaintService` (no offsets: the engine upsamples the
-crop's fill), so preview, zoom tiles and exports share one fill per key and an export waits for it like for the
-patch fill. The model fills at most at the crop's resolution (≤ 512 px from ADR 0023): a large object in a 24 MP photo
-is upsampled several times in the hole, so the engine adds grain matched to the surrounding pixels' fine detail at the
-render's own resolution (deterministic by position). Remove's mode offers "AI" (default when the model loads on the
-GPU) and "Patch".
+- **Registration** (`heal/Remove.kt`): `RemoveFills.register(name, method)` over a concurrent map seeded with the patch
+  fill; the app registers every bundled model in `RevealApplication.onCreate` (`InpaintRemoveMethod.registerAll`),
+  before anything renders. A fill computed earlier under the patch method because the model was not yet known is
+  dropped by the registration, so the next request runs the model (`RemoveModelsTest`). `models()` lists the
+  registered model methods for the editor.
+- **Fallback**: `InpaintRemoveMethod` turns `InpaintUnavailableException` into `RemoveUnavailableException`
+  (`low-memory` / `model-failed`); `RemoveFills` then fills that spot with the patch method and stores the fill with
+  `fellBack`, which the engine reports per spot (`HealEngine.fellBack` → `HealStatus.fellBack`); the Heal controls
+  say "Not enough memory for AI: removed with Patch". The patch path and its goldens are unchanged.
+- **Grain** (`heal/Grain.kt`, `HealEngine.propose`): a model's fill has no offsets, so the engine upsamples it from the
+  crop (≤ 512 px). Where the render is finer than the crop (scale s = crop pixels per render pixel < 1), noise is
+  added: σ per channel from the ring of 12 px around the spot (median absolute deviation of each pixel against the
+  mean of its 4 neighbours, ÷ √1.25, in the engine's pixel space), times √(1 − s²) (what the box downscale averaged
+  away), from a hash of the absolute pixel, the channel and the spot's key. So the preview at 100 %, the zoom tiles and
+  an export at the original's size show the same grain, and a proxy-sized view (s ≥ 1) none.
+- **Editor**: Remove offers "AI" and "Patch" (`HealSettings.removeMethod`; null = AI when the app has a model);
+  new spots store the chosen method, a selected Remove spot switches in one history step; the choice hides when no
+  model is registered. Golden `phone_heal_remove_ai`.
+- **Measured on the S24 Ultra**: `HealFlowTest#aiRemoveFillsAnObject` (the object gone, method `model:big-lama@1`,
+  no fallback, the switch to Patch one step) — the first AI spot of a session 4.6 s (the model compiled, then cached
+  as GPU programs; later loads ≈ 1 s), and `InpaintRemoveRenderTest` (1600 x 1200, crop factor 2, grain on): tiled
+  export 256 vs 1024 px tiles identical, export vs preview max 1 level, object red 0.85 → −0.03. The patch tests of
+  `HealFlowTest` pass unchanged (5/5).

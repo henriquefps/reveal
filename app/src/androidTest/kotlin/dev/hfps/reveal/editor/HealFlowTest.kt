@@ -5,6 +5,7 @@ import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Paint
 import android.net.Uri
+import android.os.SystemClock
 import android.util.Log
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.test.ExperimentalTestApi
@@ -141,6 +142,10 @@ class HealFlowTest {
             open(uri) {
                 enterHeal()
                 click(HealTags.kind(HealKind.REMOVE))
+                // The patch fill (new Remove spots use the AI model when the app has one: aiRemoveFillsAnObject).
+                if (compose.onAllNodesWithTag(HealTags.REMOVE_PATCH).fetchSemanticsNodes().isNotEmpty()) {
+                    click(HealTags.REMOVE_PATCH)
+                }
                 val (w, h) = proxySize()
                 val red = redness(readHealed(w, h, OBJECT_X, OBJECT_Y))
                 swipeOnImage(Offset(OBJECT_X - 0.04f, OBJECT_Y), Offset(OBJECT_X + 0.04f, OBJECT_Y))
@@ -153,6 +158,55 @@ class HealFlowTest {
                     compose.onAllNodesWithTag(HealTags.PROGRESS).fetchSemanticsNodes().isEmpty()
                 }
                 Log.i(TAG, "remove: redness $red -> ${redness(readHealed(w, h, OBJECT_X, OBJECT_Y))}")
+            }
+        } finally {
+            TestPhotos.delete(uri)
+        }
+    }
+
+    /**
+     * AI Remove (docs/adr/0024): a new Remove spot uses the bundled model, the object goes, no fallback to Patch is
+     * reported; switching the selected spot to Patch is one step and renders again.
+     */
+    @Test
+    fun aiRemoveFillsAnObject() {
+        val uri = photo("reveal-heal-ai-remove.jpg", dustyJpeg())
+        try {
+            open(uri) {
+                enterHeal()
+                click(HealTags.kind(HealKind.REMOVE))
+                compose.waitUntilAtLeastOneExists(hasTestTag(HealTags.REMOVE_AI), TIMEOUT_MS)
+                val (w, h) = proxySize()
+                val red = redness(readHealed(w, h, OBJECT_X, OBJECT_Y))
+                val t0 = SystemClock.elapsedRealtime()
+                swipeOnImage(Offset(OBJECT_X - 0.04f, OBJECT_Y), Offset(OBJECT_X + 0.04f, OBJECT_Y))
+                compose.waitUntil(TIMEOUT_MS) { committed.heals.any { it.type == HealKind.REMOVE } }
+                val spot = committed.heals.single { it.type == HealKind.REMOVE }
+                assertThat(spot.method).startsWith(Heal.METHOD_MODEL_PREFIX)
+                compose.waitUntil(REMOVE_TIMEOUT_MS) {
+                    redness(readHealed(w, h, OBJECT_X, OBJECT_Y)) < red * 0.3f
+                }
+                val ms = SystemClock.elapsedRealtime() - t0
+                compose.waitUntil(TIMEOUT_MS) {
+                    compose.onAllNodesWithTag(HealTags.PROGRESS).fetchSemanticsNodes().isEmpty()
+                }
+                assertThat(compose.onAllNodesWithTag(HealTags.FELL_BACK).fetchSemanticsNodes()).isEmpty()
+                Log.i(
+                    TAG,
+                    "ai remove: ${spot.method} redness $red -> ${redness(
+                        readHealed(w, h, OBJECT_X, OBJECT_Y),
+                    )} in $ms ms",
+                )
+                // The selected spot switched to Patch: one step, filled again.
+                val steps = history.entries.size
+                click(HealTags.REMOVE_PATCH)
+                compose.waitUntil(TIMEOUT_MS) {
+                    committed.heals.single { it.id == spot.id }.method == Heal.METHOD_PATCH
+                }
+                assertThat(history.entries.size).isEqualTo(steps + 1)
+                compose.waitUntil(REMOVE_TIMEOUT_MS) {
+                    redness(readHealed(w, h, OBJECT_X, OBJECT_Y)) < red * 0.3f
+                }
             }
         } finally {
             TestPhotos.delete(uri)

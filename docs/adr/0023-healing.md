@@ -193,3 +193,11 @@ drag the source, switch kind, delete and undo, reopen; Cancel; Remove an object;
   reads the original too).
 - Open: Remove's model (M5/R) plugs into `RemoveFills` by method name; a disk cache for fills (a fill is recomputed
   after the process ends, or on another device from the same original); pet eyes (green/yellow shine) for red eye.
+
+## Amendment M5/R: model methods (ADR 0024)
+
+Date: 2026-11-14. `RemoveFills` gains `register(name, method)` (the app registers `model:big-lama@1` at start, before
+any render; a registration drops fills an earlier render made under the patch method for that name) and `models()`;
+a method may throw `RemoveUnavailableException` (an inpainting model without enough memory), and the spot is then
+filled by the patch method with `RemoveFill.fellBack` set, reported as `HealStatus.fellBack`. A fill without offsets
+gets grain where the render is finer than the crop (`heal/Grain.kt`). The patch method and its results are unchanged.

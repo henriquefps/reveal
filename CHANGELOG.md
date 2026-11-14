@@ -36,6 +36,10 @@ All notable changes to Reveal are documented here. The format follows
   to find sensor dust. Every spot is one history step; Cancel returns to the spots the mode started with; the
   Healing group pastes spots (not in the default paste choice). Repairs happen on the original pixels before every
   other adjustment, the same in the preview, at 100 % and in exports. Keyboard: `H`, `[`, `]`, `V`.
+- AI Remove (M5/R, ADR 0024): the Heal mode's Remove offers "AI" (new spots use it) and "Patch". AI fills the
+  object with an on-device inpainting model, the same in the preview, at 100 % (with grain matched to the photo where
+  the fill is enlarged) and in exports; when the phone is short of memory the spot is removed with Patch and the
+  controls say so.
 - AI Remove's model (M5/R, ADR 0024): big-LaMa, an on-device inpainting network (Apache-2.0), bundled with int8
   weights (53.6 MB) and run entirely on the GPU by LiteRT: 272 ms a fill on the Galaxy S24 Ultra (3.8 s to compile
   the first time; the compiled programs are kept, so later sessions start faster), 7 s on a CPU. `:core:ml`

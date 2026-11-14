@@ -700,13 +700,20 @@ host script, publish a new release asset, pin it as a new version. Runtime: `Inp
 `model:<id>@<version>`), `InpaintLayout` (crop ↔ the 512 x 512 input; pure, JVM-tested), `InpaintService` (blocking,
 one model, released after each fill, free-memory check, `InpaintUnavailableException` = fall back to Patch; GPU programs cached via `LiteRtEngine.GpuCache` in the code cache),
 `FillDiskCache` (`cache/inpaint`, `:core:data` `storage/FillCacheArea`, budgeted with the masks). Hilt:
-`DataModule.provideInpaintService`. Remove plugs it into ADR 0023's `RemoveFills` by method name.
+`DataModule.provideInpaintService`. Remove: `InpaintRemoveMethod.registerAll(RemoveFills.shared, …)` in
+`RevealApplication.onCreate` (before any render; `RemoveFills.register` drops fills an early render made under the
+patch method), `RemoveUnavailableException` → the patch fill with `RemoveFill.fellBack` (`HealStatus.fellBack`, the
+controls' message), `heal/Grain.kt` for upsampled model fills, `HealSettings.removeMethod` + the AI / Patch chips
+(`HealTags.REMOVE_AI/REMOVE_PATCH/FELL_BACK`). Tests: `RemoveModelsTest` (JVM), `InpaintRemoveRenderTest`
+(`:core:ml`, export = preview), `HealFlowTest#aiRemoveFillsAnObject` (editor, phone).
 
 ```sh
 ./gradlew :core:ml:testDebugUnitTest --tests '*InpaintTest*' --tests '*MaskModelsTest*'
 adb -s <serial> shell am instrument -w -e class dev.hfps.reveal.ml.InpaintDeviceTest dev.hfps.reveal.ml.test/androidx.test.runner.AndroidJUnitRunner   # emulators: -e backend cpu
 adb -s <serial> shell am instrument -w -e class dev.hfps.reveal.ml.InpaintBenchmark dev.hfps.reveal.ml.test/androidx.test.runner.AndroidJUnitRunner   # files/models/*.tflite (big-lama*, migan*, lama*)
 adb -s <serial> logcat -d -s REVEAL_ML | grep inpaint
+adb -s <serial> shell am instrument -w -e class dev.hfps.reveal.ml.InpaintRemoveRenderTest dev.hfps.reveal.ml.test/androidx.test.runner.AndroidJUnitRunner
+adb -s <serial> shell am instrument -w -e class dev.hfps.reveal.editor.HealFlowTest dev.hfps.reveal.debug.test/androidx.test.runner.AndroidJUnitRunner   # Patch and AI Remove
 # host: reconvert (uv, PyTorch + litert-torch; checks the result against the original), then the int8 derivation
 uv run scripts/ml/convert_big_lama.py <work dir> <out>/big-lama-fp32.tflite
 python3 scripts/ml/convert_int8_weights.py <out>/big-lama-fp32.tflite <out>/big-lama.tflite --report

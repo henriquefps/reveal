@@ -79,7 +79,8 @@ class HeifContainerTest {
             assertThat(top.map { it.first }).containsExactly("ftyp", "meta", "mdat").inOrder()
             assertThat(String(bytes, 8, 4)).isEqualTo(codec.brand)
             val text = String(bytes, Charsets.ISO_8859_1)
-            for (type in listOf("hdlr", "pitm", "iinf", "iref", "dimg", "cdsc", "iprp", "ipco", "ipma", "iloc", "pixi")) {
+            val boxes = listOf("hdlr", "pitm", "iinf", "iref", "dimg", "cdsc", "iprp", "ipco", "ipma", "iloc", "pixi")
+            for (type in boxes) {
                 assertThat(text).contains(type)
             }
             assertThat(text).contains("nclx")

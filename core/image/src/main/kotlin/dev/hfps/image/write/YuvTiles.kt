@@ -1,3 +1,6 @@
+// H.273 full-range Y'CbCr: chroma means of 2 x 2 pixels and the BT.709 coefficients.
+@file:Suppress("MagicNumber")
+
 package dev.hfps.image.write
 
 import kotlin.math.roundToInt

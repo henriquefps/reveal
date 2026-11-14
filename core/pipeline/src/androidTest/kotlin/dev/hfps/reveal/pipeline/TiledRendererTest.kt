@@ -197,7 +197,14 @@ class TiledRendererTest {
                 )
                 fun sharp(plan: ExportPlan): ByteArray {
                     val sink = ArraySink(plan.output.width, plan.output.height)
-                    tiled.render(PipelineInputTileSource(image), recipe.copy(geometry = crop), plan, OutputSettings(), sink, sharpen = setting)
+                    tiled.render(
+                        PipelineInputTileSource(image),
+                        recipe.copy(geometry = crop),
+                        plan,
+                        OutputSettings(),
+                        sink,
+                        sharpen = setting,
+                    )
                     return sink.pixels
                 }
                 val small = sharpPlan(256)
@@ -210,7 +217,8 @@ class TiledRendererTest {
                 val out = small.output
                 val cropped = CpuDevelop.renderGeometry(image, Recipe(light = recipe.light, geometry = crop))
                 val resized = if (small.resamples) {
-                    LanczosResampleOp.resample(cropped, g.width, g.height, 0, 0, g.width, g.height, out.width, out.height)
+                    val (w, h) = g.width to g.height
+                    LanczosResampleOp.resample(cropped, w, h, 0, 0, w, h, out.width, out.height)
                 } else {
                     cropped
                 }

@@ -777,12 +777,12 @@ class LibraryRepository(
         return ServerTree.smartUri(authority, fingerprint, main.name)
     }
 
-    /** What an export of [versionId] reads (no side effect, unlike [editTarget]); null when the version is gone. */
-    @Suppress("CyclomaticComplexMethod") // one branch per place an original can be read from (ADR 0011, 0018)
     /** The XMP sidecar for an original-file export of [versionId] (docs/adr/0009 "Original copy"). */
     suspend fun exportSidecar(versionId: Long, recipe: Recipe? = null): ByteArray? =
         withContext(Dispatchers.IO) { sidecars.exportSidecar(versionId, recipe) }
 
+    /** What an export of [versionId] reads (no side effect, unlike [editTarget]); null when the version is gone. */
+    @Suppress("CyclomaticComplexMethod") // one branch per place an original can be read from (ADR 0011, 0018)
     suspend fun exportTarget(versionId: Long): ExportTarget? = withContext(Dispatchers.IO) {
         val photoId = photoDao.photoIdOfVersion(versionId) ?: return@withContext null
         val detail = detail(photoId) ?: return@withContext null

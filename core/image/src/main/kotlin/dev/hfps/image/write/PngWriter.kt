@@ -131,7 +131,13 @@ object PngWriter {
         val pa = abs(p - a)
         val pb = abs(p - b)
         val pc = abs(p - c)
-        return if (pa <= pb && pa <= pc) a else if (pb <= pc) b else c
+        return if (pa <= pb && pa <= pc) {
+            a
+        } else if (pb <= pc) {
+            b
+        } else {
+            c
+        }
     }
 
     private fun deflate(data: ByteArray): ByteArray {

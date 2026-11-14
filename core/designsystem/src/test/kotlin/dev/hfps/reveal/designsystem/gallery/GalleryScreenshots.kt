@@ -19,7 +19,8 @@ import org.robolectric.annotation.GraphicsMode
 /**
  * Design-system component goldens under `core/designsystem/src/test/screenshots/gallery/` (the former in-app
  * "Design system" page, now test-only: tokens, type, icons, controls and the editor surface).
- * Record with `./gradlew :core:designsystem:recordRoborazziDebug`; `./gradlew qa` / `verifyRoborazziDebug` compare against them.
+ * Record with `./gradlew :core:designsystem:recordRoborazziDebug`; `./gradlew qa` / `verifyRoborazziDebug` compare
+ * against them.
  */
 @RunWith(AndroidJUnit4::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)

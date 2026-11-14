@@ -15,6 +15,15 @@ import dev.hfps.image.source.BlockCachedSource
 import dev.hfps.image.source.SourceInputStream
 import dev.hfps.image.source.readRange
 import dev.hfps.image.standard.StandardDecoder
+import dev.hfps.image.write.ColourInfo
+import dev.hfps.image.write.HeifContainer
+import dev.hfps.image.write.IccProfiles
+import dev.hfps.image.write.ImageCodec
+import dev.hfps.image.write.ImageMetadata
+import dev.hfps.image.write.OutputProfile
+import dev.hfps.image.write.PngWriter
+import dev.hfps.image.write.TiffFields
+import dev.hfps.image.write.TiffWriter
 import dev.hfps.reveal.data.export.Authorship
 import dev.hfps.reveal.data.mask.AiMasks
 import dev.hfps.reveal.data.mask.MaskInputs
@@ -23,6 +32,7 @@ import dev.hfps.reveal.feature.export.destination.DestinationUnavailableExceptio
 import dev.hfps.reveal.feature.export.destination.Destinations
 import dev.hfps.reveal.feature.export.encode.EmbeddedMetadata
 import dev.hfps.reveal.feature.export.encode.ImageEncoders
+import dev.hfps.reveal.feature.export.encode.TileCodecEncoder
 import dev.hfps.reveal.feature.export.metadata.ExifWriter
 import dev.hfps.reveal.feature.export.metadata.OutputFacts
 import dev.hfps.reveal.feature.export.metadata.SourceMetadata
@@ -35,6 +45,7 @@ import dev.hfps.reveal.feature.export.model.ExportOptions
 import dev.hfps.reveal.feature.export.model.OriginalCopy
 import dev.hfps.reveal.pipeline.cpu.DevelopParams
 import dev.hfps.reveal.pipeline.cpu.OutputSettings
+import dev.hfps.reveal.pipeline.cpu.OutputSharpenOp
 import dev.hfps.reveal.pipeline.cpu.OutputSpace
 import dev.hfps.reveal.pipeline.export.ExportPlan
 import dev.hfps.reveal.pipeline.gl.GlesRequirementException
@@ -53,17 +64,6 @@ import dev.hfps.reveal.pipeline.mask.MaskContext
 import dev.hfps.reveal.pipeline.preview.SmartPreviewCodec
 import dev.hfps.reveal.pipeline.recipe.MaskComponent
 import dev.hfps.reveal.pipeline.recipe.Recipe
-import dev.hfps.image.write.ColourInfo
-import dev.hfps.image.write.HeifContainer
-import dev.hfps.image.write.IccProfiles
-import dev.hfps.image.write.ImageCodec
-import dev.hfps.image.write.ImageMetadata
-import dev.hfps.image.write.OutputProfile
-import dev.hfps.image.write.PngWriter
-import dev.hfps.image.write.TiffFields
-import dev.hfps.image.write.TiffWriter
-import dev.hfps.reveal.feature.export.encode.TileCodecEncoder
-import dev.hfps.reveal.pipeline.cpu.OutputSharpenOp
 import java.io.File
 import java.io.IOException
 import java.io.InputStream
@@ -302,19 +302,32 @@ class ExportEngine(
             Route.BITMAP_JPEG, Route.BITMAP_HEIF -> {
                 val exif = ExifWriter.build(fields.source, fields.facts, level, fields.authorship)
                 val bitmap = checkNotNull(output.bitmap)
-                ImageEncoders.of(options.format).encode(bitmap, options.quality, EmbeddedMetadata(exif, fields.xmp), target)
+                ImageEncoders.of(
+                    options.format,
+                ).encode(bitmap, options.quality, EmbeddedMetadata(exif, fields.xmp), target)
             }
 
             Route.PNG_8, Route.PNG_16 -> {
                 val exif = ExifWriter.build(fields.source, fields.facts, level, fields.authorship)
                 target.outputStream().buffered(BUFFER).use { out ->
-                    PngWriter.write(checkNotNull(output.raster), ImageMetadata(icc, exif, fields.xmp), out, cancel = cancel)
+                    PngWriter.write(
+                        checkNotNull(output.raster),
+                        ImageMetadata(icc, exif, fields.xmp),
+                        out,
+                        cancel = cancel,
+                    )
                 }
             }
 
             Route.TIFF_16 -> {
                 val tiff = ExifWriter.fields(fields.source, fields.facts, level, fields.authorship) ?: TiffFields()
-                TiffWriter.write(checkNotNull(output.raster), tiff, ImageMetadata(icc, null, fields.xmp), target, cancel = cancel)
+                TiffWriter.write(
+                    checkNotNull(output.raster),
+                    tiff,
+                    ImageMetadata(icc, null, fields.xmp),
+                    target,
+                    cancel = cancel,
+                )
             }
 
             Route.HEIF_TILES, Route.AVIF_TILES -> {
@@ -334,7 +347,7 @@ class ExportEngine(
      * with [ExportItem.sidecar] next to it as `<stem>.xmp` when asked and the destination can hold one (a folder or the
      * share sheet; the gallery takes images only).
      */
-    @Suppress("ThrowsCount")
+    @Suppress("ThrowsCount", "NestedBlockDepth", "CyclomaticComplexMethod", "TooGenericExceptionCaught")
     private fun copyOriginal(
         item: ExportItem,
         options: ExportOptions,

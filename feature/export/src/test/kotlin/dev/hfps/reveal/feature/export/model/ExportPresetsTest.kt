@@ -2,8 +2,8 @@ package dev.hfps.reveal.feature.export.model
 
 import com.google.common.truth.Truth.assertThat
 import dev.hfps.reveal.data.export.StoredExportPreset
-import dev.hfps.reveal.pipeline.export.ExportSize
 import dev.hfps.reveal.feature.export.encode.EncoderSupport
+import dev.hfps.reveal.pipeline.export.ExportSize
 import org.junit.Test
 
 /** Export presets (docs/adr/0025): the built-ins, matching the sheet's options, and use on another device. */

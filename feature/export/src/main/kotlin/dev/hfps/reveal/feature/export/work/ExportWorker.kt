@@ -137,8 +137,17 @@ class ExportWorker(context: Context, params: WorkerParameters) : CoroutineWorker
             // An original copy is the original or nothing: never its smart preview.
             val original = !run.job.options.format.rendered
             val readable = if (original) resolved else previewIfUnreadable(run, index, resolved, target)
-            val item = readyItem(run, index, readable, target.takeUnless { original && it?.reach == OriginalReach.PREVIEW }, state)
-                ?: return !isStopped
+            val item =
+                readyItem(
+                    run,
+                    index,
+                    readable,
+                    target.takeUnless {
+                        original && it?.reach == OriginalReach.PREVIEW
+                    },
+                    state,
+                )
+                    ?: return !isStopped
             val result = runInterruptible(Dispatchers.IO) {
                 run.engine.export(
                     item,

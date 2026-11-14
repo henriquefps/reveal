@@ -15,8 +15,8 @@ import dev.hfps.reveal.data.model.PickFlag
 import dev.hfps.reveal.data.model.SourceState
 import dev.hfps.reveal.data.synthetic.SyntheticExif
 import dev.hfps.reveal.data.synthetic.SyntheticShoot
-import dev.hfps.reveal.data.xmp.XmpFields
 import dev.hfps.reveal.data.xmp.XmpDevelop
+import dev.hfps.reveal.data.xmp.XmpFields
 import dev.hfps.reveal.data.xmp.XmpReader
 import dev.hfps.reveal.pipeline.recipe.Light
 import dev.hfps.reveal.pipeline.recipe.Recipe
@@ -161,6 +161,8 @@ class SidecarSyncTest {
             assertThat(own.readText()).isEqualTo(before)
             // A malformed sidecar is not merged: the export gets a fresh one.
             own.writeText("<x:xmpmeta broken")
-            assertThat(XmpDevelop.read(checkNotNull(sync().exportSidecar(versionId, edit))).reveal?.recipe).isEqualTo(edit)
+            assertThat(
+                XmpDevelop.read(checkNotNull(sync().exportSidecar(versionId, edit))).reveal?.recipe,
+            ).isEqualTo(edit)
         }
 }

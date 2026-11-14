@@ -1,3 +1,6 @@
+// Bit depths (8, 10, 16) are the formats' own.
+@file:Suppress("MagicNumber")
+
 package dev.hfps.reveal.feature.export.model
 
 import dev.hfps.reveal.pipeline.cpu.OutputSpace

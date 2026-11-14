@@ -20,13 +20,7 @@ enum class ImageCodec(val itemType: String, val brand: String, val configBox: St
  * profile of the RGB space. Exports use [primaries] 1 (sRGB/BT.709) or 12 (Display P3, SMPTE EG 432-1), [transfer]
  * 13 (sRGB), [matrix] 1 (BT.709 Y'CbCr), full range.
  */
-class ColourInfo(
-    val primaries: Int,
-    val transfer: Int,
-    val matrix: Int,
-    val fullRange: Boolean,
-    val icc: ByteArray?,
-) {
+class ColourInfo(val primaries: Int, val transfer: Int, val matrix: Int, val fullRange: Boolean, val icc: ByteArray?) {
     companion object {
         const val PRIMARIES_BT709 = 1
         const val PRIMARIES_P3_D65 = 12
@@ -45,6 +39,7 @@ class ColourInfo(
 }
 
 /** A coded picture in a grid of equal tiles (row-major [tiles] samples), as an encoder produced it. */
+@Suppress("LongParameterList")
 class CodedImage(
     val codec: ImageCodec,
     /** The `hvcC` / `av1C` payload shared by every tile. */
@@ -79,6 +74,7 @@ object HeifContainer {
     private const val FIRST_TILE_ID = 2
 
     /** Writes [image] with [colour], EXIF ([exifTiff], the TIFF stream) and [xmp] to [out] (not closed). */
+    @Suppress("CyclomaticComplexMethod")
     fun write(image: CodedImage, colour: ColourInfo, exifTiff: ByteArray?, xmp: String?, out: OutputStream) {
         val tileIds = image.tiles.indices.map { FIRST_TILE_ID + it }
         val exifId = if (exifTiff != null) FIRST_TILE_ID + image.tiles.size else null
@@ -117,6 +113,7 @@ object HeifContainer {
             writeInt(0)
             for (brand in listOf("mif1", image.codec.brand, "miaf")) write(brand.toByteArray())
         }
+
         // The meta box's size does not depend on the offsets (fixed-size fields): build it once to measure.
         fun meta(dataStart: Long): ByteArray {
             val offsets = HashMap<Int, Long>()
@@ -126,28 +123,32 @@ object HeifContainer {
                 at += data.size
             }
             return fullBox("meta", 0, 0) {
-                write(fullBox("hdlr", 0, 0) {
-                    writeInt(0)
-                    write("pict".toByteArray())
-                    repeat(3) { writeInt(0) }
-                    write(0)
-                })
+                write(
+                    fullBox("hdlr", 0, 0) {
+                        writeInt(0)
+                        write("pict".toByteArray())
+                        repeat(3) { writeInt(0) }
+                        write(0)
+                    },
+                )
                 write(fullBox("pitm", 0, 0) { writeShort(GRID_ID) })
                 write(iinf(image, tileIds, exifId, xmpId))
                 write(iref(tileIds, exifId, xmpId))
                 write(iprp(image, colour, tileIds))
-                write(fullBox("iloc", 0, 0) {
-                    write(0x44) // offset_size 4, length_size 4
-                    write(0x00) // base_offset_size 0, reserved
-                    writeShort(items.size)
-                    for ((id, data) in items) {
-                        writeShort(id)
-                        writeShort(0) // data_reference_index: this file
-                        writeShort(1) // extent_count
-                        writeInt(offsets.getValue(id).toInt())
-                        writeInt(data.size)
-                    }
-                })
+                write(
+                    fullBox("iloc", 0, 0) {
+                        write(0x44) // offset_size 4, length_size 4
+                        write(0x00) // base_offset_size 0, reserved
+                        writeShort(items.size)
+                        for ((id, data) in items) {
+                            writeShort(id)
+                            writeShort(0) // data_reference_index: this file
+                            writeShort(1) // extent_count
+                            writeInt(offsets.getValue(id).toInt())
+                            writeInt(data.size)
+                        }
+                    },
+                )
             }
         }
         val metaSize = meta(0).size
@@ -188,17 +189,21 @@ object HeifContainer {
         }
 
     private fun iref(tileIds: List<Int>, exifId: Int?, xmpId: Int?): ByteArray = fullBox("iref", 0, 0) {
-        write(box("dimg") {
-            writeShort(GRID_ID)
-            writeShort(tileIds.size)
-            tileIds.forEach { writeShort(it) }
-        })
-        for (from in listOfNotNull(exifId, xmpId)) {
-            write(box("cdsc") {
-                writeShort(from)
-                writeShort(1)
+        write(
+            box("dimg") {
                 writeShort(GRID_ID)
-            })
+                writeShort(tileIds.size)
+                tileIds.forEach { writeShort(it) }
+            },
+        )
+        for (from in listOfNotNull(exifId, xmpId)) {
+            write(
+                box("cdsc") {
+                    writeShort(from)
+                    writeShort(1)
+                    writeShort(GRID_ID)
+                },
+            )
         }
     }
 
@@ -212,22 +217,28 @@ object HeifContainer {
         val config = add(box(image.codec.configBox) { write(image.config) })
         val tileSize = add(ispe(image.tileWidth, image.tileHeight))
         val fullSize = add(ispe(image.width, image.height))
-        val pixi = add(fullBox("pixi", 0, 0) {
-            write(3)
-            repeat(3) { write(image.bitDepth) }
-        })
-        val nclx = add(box("colr") {
-            write("nclx".toByteArray())
-            writeShort(colour.primaries)
-            writeShort(colour.transfer)
-            writeShort(colour.matrix)
-            write(if (colour.fullRange) 0x80 else 0)
-        })
+        val pixi = add(
+            fullBox("pixi", 0, 0) {
+                write(3)
+                repeat(3) { write(image.bitDepth) }
+            },
+        )
+        val nclx = add(
+            box("colr") {
+                write("nclx".toByteArray())
+                writeShort(colour.primaries)
+                writeShort(colour.transfer)
+                writeShort(colour.matrix)
+                write(if (colour.fullRange) 0x80 else 0)
+            },
+        )
         val prof = colour.icc?.let { icc ->
-            add(box("colr") {
-                write("prof".toByteArray())
-                write(icc)
-            })
+            add(
+                box("colr") {
+                    write("prof".toByteArray())
+                    write(icc)
+                },
+            )
         }
         val colours = listOfNotNull(nclx, prof)
         val associations = ArrayList<Pair<Int, List<Pair<Int, Boolean>>>>()
@@ -239,14 +250,16 @@ object HeifContainer {
         }
         return box("iprp") {
             write(box("ipco") { properties.forEach { write(it) } })
-            write(fullBox("ipma", 0, 0) {
-                writeInt(associations.size)
-                for ((id, props) in associations) {
-                    writeShort(id)
-                    write(props.size)
-                    props.forEach { (index, essential) -> write((if (essential) 0x80 else 0) or index) }
-                }
-            })
+            write(
+                fullBox("ipma", 0, 0) {
+                    writeInt(associations.size)
+                    for ((id, props) in associations) {
+                        writeShort(id)
+                        write(props.size)
+                        props.forEach { (index, essential) -> write((if (essential) 0x80 else 0) or index) }
+                    }
+                },
+            )
         }
     }
 
@@ -270,5 +283,6 @@ object HeifContainer {
             body()
         }
 
-    private val EXIF_HEADER = byteArrayOf('E'.code.toByte(), 'x'.code.toByte(), 'i'.code.toByte(), 'f'.code.toByte(), 0, 0)
+    private val EXIF_HEADER =
+        byteArrayOf('E'.code.toByte(), 'x'.code.toByte(), 'i'.code.toByte(), 'f'.code.toByte(), 0, 0)
 }

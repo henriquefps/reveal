@@ -1,3 +1,6 @@
+// Bit depths (8, 10) are the formats' own.
+@file:Suppress("MagicNumber")
+
 package dev.hfps.reveal.feature.export.encode
 
 import android.graphics.Bitmap
@@ -5,9 +8,9 @@ import android.media.MediaCodecInfo
 import android.media.MediaCodecList
 import android.media.MediaFormat
 import androidx.heifwriter.HeifWriter
+import dev.hfps.image.write.ImageCodec
 import dev.hfps.reveal.feature.export.metadata.ExifWriter
 import dev.hfps.reveal.feature.export.metadata.JpegSegments
-import dev.hfps.image.write.ImageCodec
 import dev.hfps.reveal.feature.export.model.ExportColour
 import dev.hfps.reveal.feature.export.model.ExportFormat
 import java.io.File
@@ -108,6 +111,7 @@ data class EncoderSupport(
         }
 
         ExportFormat.AVIF -> if (depth == 10) avif10 else avif8
+
         else -> true
     }
 

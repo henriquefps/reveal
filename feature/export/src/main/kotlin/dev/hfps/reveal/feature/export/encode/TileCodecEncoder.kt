@@ -1,5 +1,9 @@
+// Bit depths (8, 10) and P010 layout are the formats' own.
+@file:Suppress("MagicNumber")
+
 package dev.hfps.reveal.feature.export.encode
 
+import android.annotation.SuppressLint
 import android.media.Image
 import android.media.MediaCodec
 import android.media.MediaCodecInfo
@@ -29,6 +33,8 @@ import kotlin.math.roundToInt
  * or 10 bits, P010 for 10), so the container's `colr` describes the samples exactly. Quality is the encoder's
  * constant-quality mode when it has one, else a variable bitrate per tile from the quality. Blocking.
  */
+// COLOR_FormatYUVP010 is a constant (inlined): find() only picks encoders that list it.
+@SuppressLint("InlinedApi")
 class TileCodecEncoder(private val codec: ImageCodec, private val depth: Int) {
     /** Encodes [rows] at [quality] (1..100); [cancel] is polled between tiles. */
     @Suppress("LongMethod", "CyclomaticComplexMethod", "NestedBlockDepth")
@@ -60,7 +66,8 @@ class TileCodecEncoder(private val codec: ImageCodec, private val depth: Int) {
                             encoder.queueInputBuffer(index, 0, size, queued * FRAME_US, 0)
                             queued++
                         } else {
-                            encoder.queueInputBuffer(index, 0, 0, queued * FRAME_US, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+                            val eos = MediaCodec.BUFFER_FLAG_END_OF_STREAM
+                            encoder.queueInputBuffer(index, 0, 0, queued * FRAME_US, eos)
                             eosQueued = true
                         }
                     }
@@ -89,7 +96,8 @@ class TileCodecEncoder(private val codec: ImageCodec, private val depth: Int) {
             check(samples.size == count) { "encoder returned ${samples.size} samples for $count tiles" }
             val (record, tiles) = container(config, samples)
             val ms = (System.nanoTime() - started) / NANOS_PER_MS
-            Log.i(TAG, "${info.name}: $count tiles of $TILE at $depth bits, quality $quality, ${tiles.sumOf { it.size }} bytes in $ms ms")
+            val bytes = tiles.sumOf { it.size }
+            Log.i(TAG, "${info.name}: $count tiles of $TILE at $depth bits, quality $quality, $bytes bytes in $ms ms")
             return CodedImage(codec, record, rows.width, rows.height, TILE, TILE, columns, gridRows, depth, tiles)
         } finally {
             runCatching { encoder.stop() }
@@ -150,7 +158,8 @@ class TileCodecEncoder(private val codec: ImageCodec, private val depth: Int) {
             val bpp = MIN_BPP + (MAX_BPP - MIN_BPP) * (quality / MAX_QUALITY.toDouble()).pow(BPP_CURVE)
             val bitrate = (bpp * TILE * TILE).roundToInt()
             format.setInteger(MediaFormat.KEY_BITRATE_MODE, MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_VBR)
-            format.setInteger(MediaFormat.KEY_BIT_RATE, checkNotNull(caps.videoCapabilities).bitrateRange.clamp(bitrate))
+            val range = checkNotNull(caps.videoCapabilities).bitrateRange
+            format.setInteger(MediaFormat.KEY_BIT_RATE, range.clamp(bitrate))
         }
         return format
     }
@@ -221,7 +230,9 @@ class TileCodecEncoder(private val codec: ImageCodec, private val depth: Int) {
             }
 
         private fun profile(codec: ImageCodec, depth: Int): Int = when (codec) {
-            ImageCodec.HEVC -> if (depth == 10) CodecProfileLevel.HEVCProfileMain10 else CodecProfileLevel.HEVCProfileMain
+            ImageCodec.HEVC ->
+                if (depth == 10) CodecProfileLevel.HEVCProfileMain10 else CodecProfileLevel.HEVCProfileMain
+
             ImageCodec.AV1 -> if (depth == 10) CodecProfileLevel.AV1ProfileMain10 else CodecProfileLevel.AV1ProfileMain8
         }
 
@@ -230,7 +241,8 @@ class TileCodecEncoder(private val codec: ImageCodec, private val depth: Int) {
          * the input format (P010 for 10 bits, YUV420Flexible for 8); hardware first. Null when the device has none.
          */
         fun find(codec: ImageCodec, depth: Int): MediaCodecInfo? {
-            val wanted = if (depth == 10) CodecCapabilities.COLOR_FormatYUVP010 else CodecCapabilities.COLOR_FormatYUV420Flexible
+            val wanted =
+                if (depth == 10) CodecCapabilities.COLOR_FormatYUVP010 else CodecCapabilities.COLOR_FormatYUV420Flexible
             val candidates = MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos.filter { info ->
                 info.isEncoder && info.supportedTypes.any { it.equals(codec.mime, ignoreCase = true) } &&
                     runCatching {
@@ -240,6 +252,7 @@ class TileCodecEncoder(private val codec: ImageCodec, private val depth: Int) {
                             caps.profileLevels.any { it.profile == profile(codec, depth) }
                     }.getOrDefault(false)
             }
+
             // Constant quality first (the quality slider means what it says), then hardware.
             fun cq(info: MediaCodecInfo) = info.getCapabilitiesForType(codec.mime).encoderCapabilities
                 ?.isBitrateModeSupported(MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CQ) == true

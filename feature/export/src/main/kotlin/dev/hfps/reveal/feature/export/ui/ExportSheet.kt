@@ -1,11 +1,5 @@
 package dev.hfps.reveal.feature.export.ui
 
-import dev.hfps.reveal.feature.export.model.ExportPresets
-import dev.hfps.reveal.feature.export.model.OriginalCopy
-import dev.hfps.reveal.pipeline.export.OutputSharpening
-import dev.hfps.reveal.pipeline.export.SharpenAmount
-import dev.hfps.reveal.pipeline.export.SharpenMedium
-import androidx.compose.foundation.layout.Box
 import android.Manifest
 import android.content.ClipData
 import android.content.Intent
@@ -17,6 +11,7 @@ import android.text.format.Formatter
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
@@ -68,6 +63,7 @@ import dev.hfps.reveal.designsystem.icons.PhosphorRegular
 import dev.hfps.reveal.designsystem.theme.RevealTheme
 import dev.hfps.reveal.feature.export.R
 import dev.hfps.reveal.feature.export.destination.ShareCache
+import dev.hfps.reveal.feature.export.encode.EncoderSupport
 import dev.hfps.reveal.feature.export.engine.ExportFailure
 import dev.hfps.reveal.feature.export.model.BuiltInExportPreset
 import dev.hfps.reveal.feature.export.model.ExportColour
@@ -76,9 +72,14 @@ import dev.hfps.reveal.feature.export.model.ExportFormat
 import dev.hfps.reveal.feature.export.model.ExportNaming
 import dev.hfps.reveal.feature.export.model.ExportOptions
 import dev.hfps.reveal.feature.export.model.ExportPreset
+import dev.hfps.reveal.feature.export.model.ExportPresets
 import dev.hfps.reveal.feature.export.model.MetadataLevel
 import dev.hfps.reveal.feature.export.model.NameTemplate
+import dev.hfps.reveal.feature.export.model.OriginalCopy
 import dev.hfps.reveal.pipeline.export.ExportSize
+import dev.hfps.reveal.pipeline.export.OutputSharpening
+import dev.hfps.reveal.pipeline.export.SharpenAmount
+import dev.hfps.reveal.pipeline.export.SharpenMedium
 import kotlin.math.roundToInt
 
 /** Test tags of the export sheet (instrumented tests are locale-independent). */
@@ -407,9 +408,7 @@ private fun FormatSection(state: ExportUiState, set: (ExportOptions) -> Unit) {
         fun pick(format: ExportFormat) = set(ExportPresets.usable(options.copy(format = format), support))
         Eyebrow(stringResource(R.string.export_format))
         ChipRow {
-            for ((format, tag) in FORMAT_CHIPS) {
-                if (support != null && !support.offers(format)) continue
-                if (support == null && (format == ExportFormat.HEIF || format == ExportFormat.AVIF)) continue
+            for ((format, tag) in offeredFormats(support)) {
                 val label = if (format == ExportFormat.ORIGINAL) {
                     stringResource(R.string.export_format_original)
                 } else {
@@ -418,14 +417,23 @@ private fun FormatSection(state: ExportUiState, set: (ExportOptions) -> Unit) {
                 RevealChip(label, options.format == format, { pick(format) }, Modifier.testTag(tag))
             }
         }
-        when {
-            support != null && !support.heif -> Note(stringResource(R.string.export_heif_unsupported))
-            options.format == ExportFormat.AVIF -> Note(stringResource(R.string.export_avif_note))
-            options.format == ExportFormat.PNG || options.format == ExportFormat.TIFF ->
-                Note(stringResource(R.string.export_lossless_note))
-        }
+        formatNote(options.format, support)?.let { Note(stringResource(it)) }
         if (options.format.rendered) ColourAndDepth(state, set)
     }
+}
+
+/** The format chips: HEIF and AVIF only once the encoders are known to exist. */
+private fun offeredFormats(support: EncoderSupport?): List<Pair<ExportFormat, String>> =
+    FORMAT_CHIPS.filter { (format, _) ->
+        if (support == null) format != ExportFormat.HEIF && format != ExportFormat.AVIF else support.offers(format)
+    }
+
+/** The note under the format chips, if any. */
+private fun formatNote(format: ExportFormat, support: EncoderSupport?): Int? = when {
+    support != null && !support.heif -> R.string.export_heif_unsupported
+    format == ExportFormat.AVIF -> R.string.export_avif_note
+    format == ExportFormat.PNG || format == ExportFormat.TIFF -> R.string.export_lossless_note
+    else -> null
 }
 
 /** Colour space (every rendered format embeds its profile) and bit depth (the depths this device can write). */

@@ -1,3 +1,6 @@
+// The sharpening table (sigma and amounts per medium and level) is the operator's definition (ADR 0009).
+@file:Suppress("MagicNumber")
+
 package dev.hfps.reveal.pipeline.cpu
 
 import dev.hfps.reveal.pipeline.PipelineInput
@@ -82,6 +85,7 @@ object OutputSharpenOp {
     }
 
     /** Sharpens the interleaved RGB image [rgb] ([width] x [height]); returns a new array. */
+    @Suppress("NestedBlockDepth")
     fun apply(rgb: FloatArray, width: Int, height: Int, params: Params): FloatArray {
         val c = PipelineInput.CHANNELS
         val light = FloatArray(width * height) { i -> lightness(rgb[i * c], rgb[i * c + 1], rgb[i * c + 2]) }

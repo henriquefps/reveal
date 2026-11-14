@@ -1,3 +1,6 @@
+// Sample sizes (bytes per sample, bits) are the formats' constants.
+@file:Suppress("MagicNumber")
+
 package dev.hfps.image.write
 
 import java.io.Closeable
@@ -34,12 +37,9 @@ interface RgbRows {
  * the Java heap (a 24 MP export is 144 MB at 16 bits, a 61 MP one 366 MB). [close] deletes the file; the mapping is
  * released with the buffer (the platform has no explicit unmap).
  */
-class RgbRaster(
-    override val width: Int,
-    override val height: Int,
-    override val bits: Int,
-    private val file: File,
-) : RgbRows, Closeable {
+class RgbRaster(override val width: Int, override val height: Int, override val bits: Int, private val file: File) :
+    RgbRows,
+    Closeable {
     private val sampleBytes = bits / 8
     private val pixelBytes = sampleBytes * 3
     private val channel: FileChannel

@@ -1,3 +1,6 @@
+// Sample layouts (RGB, RGBA, 8/16 bits) are the formats' own.
+@file:Suppress("MagicNumber")
+
 package dev.hfps.reveal.feature.export.engine
 
 import android.content.Context
@@ -6,15 +9,15 @@ import android.net.Uri
 import androidx.core.graphics.createBitmap
 import dev.hfps.image.ImageInput
 import dev.hfps.image.proxy.ProxyBuilder
-import dev.hfps.reveal.feature.export.encode.EmbeddedMetadata
-import dev.hfps.reveal.feature.export.encode.HeifEncoder
-import dev.hfps.reveal.feature.export.encode.JpegEncoder
 import dev.hfps.image.write.ImageCodec
 import dev.hfps.image.write.ImageMetadata
 import dev.hfps.image.write.PngWriter
 import dev.hfps.image.write.RgbRows
 import dev.hfps.image.write.TiffFields
 import dev.hfps.image.write.TiffWriter
+import dev.hfps.reveal.feature.export.encode.EmbeddedMetadata
+import dev.hfps.reveal.feature.export.encode.HeifEncoder
+import dev.hfps.reveal.feature.export.encode.JpegEncoder
 import dev.hfps.reveal.feature.export.encode.TileCodecEncoder
 import dev.hfps.reveal.feature.export.model.ExportOptions
 import dev.hfps.reveal.pipeline.PipelineInput
@@ -70,6 +73,7 @@ class SizeEstimator private constructor(
     ).output
 
     /** Estimated bytes of the exported file. */
+    @Suppress("ReturnCount")
     fun estimate(context: Context, options: ExportOptions): Long {
         if (!options.format.rendered) return originalBytes
         val route = Route.of(options)
@@ -148,7 +152,10 @@ class SizeEstimator private constructor(
             val m = OutputTransformOp.workingToOutput(space).toFloatArray()
             for (i in 0 until width * height) {
                 for (c in 0 until 3) {
-                    val lin = (m[c * 3] * linear[i * 3] + m[c * 3 + 1] * linear[i * 3 + 1] + m[c * 3 + 2] * linear[i * 3 + 2])
+                    val lin = (
+                        m[c * 3] * linear[i * 3] + m[c * 3 + 1] * linear[i * 3 + 1] +
+                            m[c * 3 + 2] * linear[i * 3 + 2]
+                        )
                         .coerceIn(0f, 1f)
                     samples[i * 3 + c] = (OutputTransformOp.oetf(lin) * MAX16 + 0.5f).toInt()
                 }

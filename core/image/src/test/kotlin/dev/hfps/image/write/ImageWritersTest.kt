@@ -111,12 +111,17 @@ class ImageWritersTest {
         val artist = ascii(0x013B, "A. Photographer")
         val make = ascii(0x010F, "Sony")
         val positioning = ExifField(0x0213, TiffWriter.TYPE_SHORT, 1, byteArrayOf(0, 1))
-        val exposure = ExifField(0x829A, TiffWriter.TYPE_RATIONAL, 1, ByteBuffer.allocate(8).putInt(1).putInt(250).array())
+        val exposure =
+            ExifField(0x829A, TiffWriter.TYPE_RATIONAL, 1, ByteBuffer.allocate(8).putInt(1).putInt(250).array())
         val components = ExifField(0x9101, TiffWriter.TYPE_UNDEFINED, 4, byteArrayOf(1, 2, 3, 0))
         val gps = ExifField(0x0001, TiffWriter.TYPE_ASCII, 2, byteArrayOf('N'.code.toByte(), 0))
         TiffWriter.write(
             rows,
-            TiffFields(ifd0 = listOf(make, artist, positioning), exif = listOf(exposure, components), gps = listOf(gps)),
+            TiffFields(
+                ifd0 = listOf(make, artist, positioning),
+                exif = listOf(exposure, components),
+                gps = listOf(gps),
+            ),
             ImageMetadata(icc = icc, xmp = "<x:xmpmeta/>"),
             target,
         )
@@ -194,6 +199,7 @@ class ImageWritersTest {
     }
 
     /** A minimal reader of what the writer makes: deflated strips, horizontal predictor, 16-bit big-endian RGB. */
+    @Suppress("NestedBlockDepth")
     private fun decode16(file: File, width: Int, height: Int): IntArray {
         val b = ByteBuffer.wrap(file.readBytes())
         val ifd = b.getInt(4)

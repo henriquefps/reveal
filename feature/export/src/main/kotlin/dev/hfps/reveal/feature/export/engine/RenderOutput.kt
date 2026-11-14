@@ -1,3 +1,6 @@
+// Bytes per pixel and bit depths are the formats' own.
+@file:Suppress("MagicNumber")
+
 package dev.hfps.reveal.feature.export.engine
 
 import android.graphics.Bitmap
@@ -36,11 +39,22 @@ internal enum class Route(val high: Boolean, val xmp: Boolean, val encodedBound:
     companion object {
         fun of(options: ExportOptions): Route = when (options.format) {
             ExportFormat.JPEG -> BITMAP_JPEG
+
             ExportFormat.HEIF ->
-                if (options.effectiveDepth == 8 && options.effectiveColour == ExportColour.SRGB) BITMAP_HEIF else HEIF_TILES
+                if (options.effectiveDepth == 8 &&
+                    options.effectiveColour == ExportColour.SRGB
+                ) {
+                    BITMAP_HEIF
+                } else {
+                    HEIF_TILES
+                }
+
             ExportFormat.AVIF -> AVIF_TILES
+
             ExportFormat.PNG -> if (options.effectiveDepth == 16) PNG_16 else PNG_8
+
             ExportFormat.TIFF -> TIFF_16
+
             ExportFormat.ORIGINAL -> error("the original copy is not rendered")
         }
     }
@@ -54,11 +68,8 @@ internal class RasterSink(val raster: RgbRaster) : TileSink {
 }
 
 /** Where a render goes for its [Route]: an output bitmap or a raster; [close] frees either. */
-internal class RenderOutput private constructor(
-    val sink: TileSink,
-    val bitmap: Bitmap?,
-    val raster: RgbRaster?,
-) : Closeable {
+internal class RenderOutput private constructor(val sink: TileSink, val bitmap: Bitmap?, val raster: RgbRaster?) :
+    Closeable {
     /** Frees what only the render needed (the bitmap sink's band bitmaps). */
     fun releaseBands() {
         (sink as? BitmapSink)?.releaseBands()
@@ -77,7 +88,8 @@ internal class RenderOutput private constructor(
             }
 
             else -> {
-                val raster = RgbRaster(width, height, if (route.high) 16 else 8, File(dir, "${UUID.randomUUID()}.raster"))
+                val raster =
+                    RgbRaster(width, height, if (route.high) 16 else 8, File(dir, "${UUID.randomUUID()}.raster"))
                 RenderOutput(RasterSink(raster), null, raster)
             }
         }

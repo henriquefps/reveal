@@ -73,6 +73,7 @@ object TiffWriter {
     private val JPEG_ONLY_EXIF = setOf(0x9101)
 
     /** Writes [rows] with [fields] and [metadata] (ICC, XMP; its EXIF stream is ignored here) to [target]. */
+    @Suppress("NestedBlockDepth")
     fun write(
         rows: RgbRows,
         fields: TiffFields,

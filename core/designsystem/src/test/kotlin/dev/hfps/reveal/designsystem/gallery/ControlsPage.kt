@@ -114,7 +114,10 @@ internal fun ControlsPage() {
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp),
             ) {
-                Text("A form or chooser: drag handle, 16 dp radius, the card surface.", style = RevealTheme.typography.body)
+                Text(
+                    "A form or chooser: drag handle, 16 dp radius, the card surface.",
+                    style = RevealTheme.typography.body,
+                )
                 PrimaryButton(
                     text = "Done",
                     onClick = { sheetOpen = false },

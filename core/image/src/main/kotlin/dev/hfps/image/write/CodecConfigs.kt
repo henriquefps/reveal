@@ -40,6 +40,7 @@ object HevcConfig {
     const val NAL_PPS = 34
 
     /** The NAL units (without start codes) of an Annex B byte stream. */
+    @Suppress("LoopWithTooManyJumpStatements")
     fun nalUnits(annexB: ByteArray): List<ByteArray> {
         val starts = ArrayList<Pair<Int, Int>>() // (start code position, payload start)
         var i = 0
@@ -231,10 +232,16 @@ object Av1Config {
         val subsamplingY: Int,
         val chromaSamplePosition: Int,
     ) {
-        val bitDepth: Int get() = if (highBitDepth == 0) 8 else if (twelveBit == 1) 12 else 10
+        val bitDepth: Int get() = if (highBitDepth == 0) {
+            8
+        } else if (twelveBit == 1) {
+            12
+        } else {
+            10
+        }
     }
 
-    @Suppress("CyclomaticComplexMethod", "LongMethod")
+    @Suppress("CyclomaticComplexMethod", "LongMethod", "NestedBlockDepth")
     fun parseSequenceHeader(obu: Obu): SequenceInfo {
         val r = BitReader(obu.bytes, obu.payloadStart * 8)
         val profile = r.int(3)
@@ -314,10 +321,12 @@ object Av1Config {
                     ssx = 1
                     ssy = 1
                 }
+
                 1 -> {
                     ssx = 0
                     ssy = 0
                 }
+
                 else -> if (twelve == 1) {
                     ssx = r.int(1)
                     ssy = if (ssx == 1) r.int(1) else 0

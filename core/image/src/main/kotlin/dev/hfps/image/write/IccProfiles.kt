@@ -45,6 +45,7 @@ object IccProfiles {
 
     private fun chad() = ColorMath.adaptation(ColorMath.xyz(ColorMath.D65), PCS_WHITE)
 
+    @Suppress("LongMethod")
     private fun build(profile: OutputProfile): ByteArray {
         val m = colorants(profile)
         val chad = chad()

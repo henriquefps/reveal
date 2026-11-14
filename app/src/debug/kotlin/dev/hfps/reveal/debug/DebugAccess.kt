@@ -9,6 +9,7 @@ import dev.hfps.reveal.data.editor.EditorLayoutPreferences
 import dev.hfps.reveal.data.handoff.HandoffPreviewer
 import dev.hfps.reveal.data.handoff.HandoffRepository
 import dev.hfps.reveal.data.library.LibraryRepository
+import dev.hfps.reveal.data.mask.AiMasks
 import dev.hfps.reveal.data.preset.PresetRepository
 import dev.hfps.reveal.data.thumb.PhotoImages
 import dev.hfps.reveal.data.thumb.ThumbnailRepository
@@ -40,4 +41,6 @@ interface DebugAccess {
     fun photoImages(): PhotoImages
 
     fun handoffPreviewer(): HandoffPreviewer
+
+    fun aiMasks(): AiMasks
 }

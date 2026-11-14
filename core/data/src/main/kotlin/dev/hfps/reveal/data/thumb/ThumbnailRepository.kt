@@ -24,6 +24,8 @@ import dev.hfps.reveal.data.edit.EditRepository
 import dev.hfps.reveal.data.handoff.HandoffFallbacks
 import dev.hfps.reveal.data.handoff.LocalPreviews
 import dev.hfps.reveal.data.library.DocumentTreeFactory
+import dev.hfps.reveal.data.mask.AiMasks
+import dev.hfps.reveal.data.mask.MaskInputs
 import dev.hfps.reveal.data.model.FileRole
 import dev.hfps.reveal.data.model.SourceKind
 import dev.hfps.reveal.data.model.SourceState
@@ -38,8 +40,10 @@ import dev.hfps.reveal.pipeline.PipelineInput
 import dev.hfps.reveal.pipeline.input.PipelineInputMapper
 import dev.hfps.reveal.pipeline.preset.ApplyContext
 import dev.hfps.reveal.pipeline.preview.SmartPreviewCodec
+import dev.hfps.reveal.pipeline.recipe.MaskComponent
 import java.io.File
 import java.io.IOException
+import java.util.Collections
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CancellationException
@@ -73,6 +77,8 @@ class ThumbnailRepository(
     private val serverAuthority: String? = null,
     /** After a trim: the app's [CacheBudget] trims all caches together. */
     private val onTrimmed: () -> Unit = {},
+    /** The AI masks of edited thumbnails (docs/adr/0022 "M4/F"); null = AI mask parts are left out, as before. */
+    private val aiMasks: AiMasks? = null,
 ) : CacheArea {
     private val fallbacks = HandoffFallbacks(db, previews, serverAuthority)
     private val cache = db.cacheDao()
@@ -146,9 +152,121 @@ class ThumbnailRepository(
 
     private suspend fun loadEdited(target: Target, versionId: Long, editTime: Long): Bitmap? {
         if (edited == null) return null
-        val key = CacheKeys.key(target.identity, Variant.THUMB, "edit:$versionId:$editTime:$PIPELINE_VERSION:$EDGE")
-        return fromDisk(key)
+        // An edit with AI masks has two thumbnails: the one made when its masks were ready (its own key: it is made
+        // once, never rendered twice) and, until then, this one without the AI parts ([withAiMasks] replaces it).
+        val withMasks = if (aiMasks != null && aiComponents(versionId, editTime).isNotEmpty()) {
+            fromDisk(editedKey(target, versionId, editTime, ai = true))
+        } else {
+            null
+        }
+        val key = editedKey(target, versionId, editTime, ai = false)
+        return withMasks ?: fromDisk(key)
             ?: renderEdited(target, versionId, editTime)?.also { save(key, target.photoId, KIND_EDITED, it) }
+    }
+
+    private fun editedKey(target: Target, versionId: Long, editTime: Long, ai: Boolean) = CacheKeys.key(
+        target.identity,
+        Variant.THUMB,
+        "edit:$versionId:$editTime:$PIPELINE_VERSION:$EDGE" + if (ai) ":ai" else "",
+    )
+
+    /** The AI components of [versionId]'s enabled masks. */
+    private suspend fun aiComponents(versionId: Long, editTime: Long): List<MaskComponent.Ai> {
+        val memo = "$versionId:$editTime"
+        aiParts[memo]?.let { return it }
+        val parts = edits.recipe(versionId).masks.filter { it.enabled }
+            .flatMap { it.components.filterIsInstance<MaskComponent.Ai>() }
+        aiParts[memo] = parts
+        return parts
+    }
+
+    /** [aiComponents] per version and edit time: the grid asks once per cell. */
+    private val aiParts = Collections.synchronizedMap(
+        object : LinkedHashMap<String, List<MaskComponent.Ai>>(AI_MEMO, 0.75f, true) {
+            override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, List<MaskComponent.Ai>>?) =
+                size > AI_MEMO
+        },
+    )
+
+    /** Memory keys whose bitmap already has its AI masks. */
+    private val aiDone = ConcurrentHashMap.newKeySet<String>()
+
+    /** Thumbnail keys whose AI masks this process could not make (a failed model): not tried again until restart. */
+    private val aiFailed = ConcurrentHashMap.newKeySet<String>()
+
+    /** One photo's masks at a time: each holds its model input (about 8 MB) while the service works. */
+    private val aiLock = Mutex()
+
+    /**
+     * The edited thumbnail of [photoId] with its AI masks, after [thumbnail] showed it without them (docs/adr/0022
+     * "M4/F"): the masks come from the disk cache (what the editor, an export or an earlier run made) or are computed
+     * here, one photo at a time, off the grid's thread; the thumbnail is then rendered once, kept under its own key
+     * and put where [inMemory] finds it. Suspends until then; null when the edit has no AI mask, the source is not
+     * readable or a mask could not be made (the thumbnail without it stays). Cancelling it (the cell left the screen)
+     * stops the work; what is cached stays.
+     */
+    @Suppress("ReturnCount")
+    suspend fun withAiMasks(photoId: Long, versionId: Long, editTime: Long?): Bitmap? {
+        val renderer = edited
+        val masks = aiMasks
+        if (renderer == null || masks == null || editTime == null) return null
+        val memoryKey = memoryKey(photoId, editTime)
+        if (memoryKey in aiDone && memory.get(memoryKey) != null) return null
+        return withContext(io) {
+            val target = target(photoId) ?: return@withContext null
+            val components = aiComponents(versionId, editTime)
+            if (components.isEmpty()) return@withContext null
+            val key = editedKey(target, versionId, editTime, ai = true)
+            fromDisk(key)?.let {
+                memory.put(memoryKey, it)
+                aiDone += memoryKey
+                return@withContext it
+            }
+            if (key in aiFailed) return@withContext null
+            val tree = availableTree(target.sourceId) ?: return@withContext null
+            aiLock.withLock {
+                try {
+                    tree.openInput(target.main.documentId, target.main.name).use { image ->
+                        renderWithAiMasks(image, target, renderer, masks, components, versionId, key, editTime)
+                    }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (@Suppress("TooGenericExceptionCaught") e: Throwable) {
+                    Log.w(TAG, "AI masks of the thumbnail of version $versionId failed", e)
+                    aiFailed += key
+                    null
+                }
+            }
+        }
+    }
+
+    @Suppress("LongParameterList", "ReturnCount")
+    private suspend fun renderWithAiMasks(
+        image: ImageInput,
+        target: Target,
+        renderer: EditedThumbnails,
+        masks: AiMasks,
+        components: List<MaskComponent.Ai>,
+        versionId: Long,
+        key: String,
+        editTime: Long,
+    ): Bitmap? {
+        val photoKey = MaskInputs.photoKey(image) ?: return null
+        val small = MaskInputs.smallInput(image, MaskInputs.THUMBNAIL_PROXY_EDGE) ?: return null
+        val session = masks.session(photoKey, small.width to small.height) { MaskInputs.render(small) }
+        try {
+            if (!session.ready(components)) {
+                aiFailed += key
+                return null
+            }
+            val bitmap = renderer.renderWithMasks(image, edits.recipe(versionId), EDGE, session, photoKey)
+            save(key, target.photoId, KIND_EDITED, bitmap)
+            memory.put(memoryKey(target.photoId, editTime), bitmap)
+            aiDone += memoryKey(target.photoId, editTime)
+            return bitmap
+        } finally {
+            session.close()
+        }
     }
 
     private suspend fun loadPreview(target: Target): Bitmap? {
@@ -438,6 +556,7 @@ class ThumbnailRepository(
 
     companion object {
         private const val TAG = "RevealThumbs"
+        private const val AI_MEMO = 4096
 
         /** Long edge of a thumbnail: a 3-column cell on a 1440 px wide phone is 480 px. */
         const val EDGE = 512

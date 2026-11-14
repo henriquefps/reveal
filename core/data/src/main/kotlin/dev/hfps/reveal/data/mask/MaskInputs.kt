@@ -4,6 +4,7 @@ package dev.hfps.reveal.data.mask
 
 import dev.hfps.image.ImageInput
 import dev.hfps.image.proxy.ProxyBuilder
+import dev.hfps.image.source.FileFingerprint
 import dev.hfps.reveal.ml.MlImage
 import dev.hfps.reveal.ml.service.MaskService
 import dev.hfps.reveal.pipeline.PipelineInput
@@ -71,7 +72,14 @@ object MaskInputs {
      * The model input of the photo in [image] (an export's, which has no proxy at hand): a [PROXY_EDGE] px proxy
      * decoded like the editor's, then [render]. `null` when it cannot be decoded.
      */
-    fun fromImage(image: ImageInput): MlImage? = runCatching {
+    fun fromImage(image: ImageInput): MlImage? = smallInput(image)?.let(::render)
+
+    /**
+     * [image]'s proxy of about [edge] px (decoded like the editor's) area-averaged to the model input's size and still
+     * linear: about 8 MB, [render] makes the model input from it when a mask is missing. `null` when it cannot be
+     * decoded.
+     */
+    fun smallInput(image: ImageInput, edge: Int = PROXY_EDGE): PipelineInput? = runCatching {
         val orientation = if (image.type.isRaw) {
             null
         } else {
@@ -79,13 +87,23 @@ object MaskInputs {
                 image.inspection.metadata.orientation
             }.getOrNull()
         }
-        val proxy = ProxyBuilder.decodeProxy(image, PROXY_EDGE)
+        val proxy = ProxyBuilder.decodeProxy(image, edge)
         val metadata = runCatching { image.inspection.metadata }.getOrNull()
-        render(PipelineInputMapper.map(proxy.image, proxy.info, orientation ?: proxy.info.orientation, metadata))
+        downscale(PipelineInputMapper.map(proxy.image, proxy.info, orientation ?: proxy.info.orientation, metadata))
     }.getOrNull()
+
+    /**
+     * The photo's key for the masks cache: the file's content fingerprint (`FileFingerprint`, reads at most 2 MiB), the
+     * same whichever proxy the model input was made from, so what the editor computes the export and the thumbnails
+     * find in the cache (docs/adr/0021 "Cache"). `null` when the file cannot be read.
+     */
+    fun photoKey(image: ImageInput): String? = runCatching { image.withSource(FileFingerprint::of) }.getOrNull()
 
     /** The proxy an export decodes for the model input (the editor's is 2400-3000 px). */
     const val PROXY_EDGE: Int = 2400
+
+    /** The proxy a thumbnail decodes for a mask it has to make: the model input's size, nothing more. */
+    const val THUMBNAIL_PROXY_EDGE: Int = MaskService.MAX_INPUT
 
     /**
      * The photo's key for the masks cache when it has no file fingerprint: `img:` and the first 16 bytes of the

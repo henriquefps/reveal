@@ -62,6 +62,7 @@ import androidx.compose.ui.semantics.testTag
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import dev.hfps.reveal.data.mask.AiMaskState
 import dev.hfps.reveal.data.preset.GroupKind
 import dev.hfps.reveal.data.preset.LibraryGroup
 import dev.hfps.reveal.data.preset.LibraryPreset
@@ -125,6 +126,8 @@ fun PresetsPanel(host: PanelHost, modifier: Modifier = Modifier) {
     }
     val base = remember(session, state.edit.committed) { session?.before ?: state.edit.committed }
     val baseHash = remember(base) { base.hashCode() }
+    // Which AI masks are ready: the cell's thumbnail is rendered again when one arrives (docs/adr/0022 "M4/F").
+    val aiReady = state.masks.ai.filterValues { it == AiMaskState.READY }.keys.hashCode()
 
     Column(modifier.fillMaxSize()) {
         AnimatedVisibility(
@@ -196,11 +199,18 @@ fun PresetsPanel(host: PanelHost, modifier: Modifier = Modifier) {
         val items = library.presetsOf(shown)
         val selectedId = session?.preset?.id
         // Cell models made once per list (identity-stable): scrolling composes cells without comparing presets.
-        val cells = remember(items, baseHash, selectedId) {
+        val cells = remember(items, baseHash, selectedId, aiReady) {
             items.map { p ->
                 PresetCellModel(
                     preset = p,
-                    key = PresetThumbnails.key("", baseHash, p.uuid, p.preset.version, p.preset.patch.hashCode()),
+                    key = PresetThumbnails.key(
+                        "",
+                        baseHash,
+                        p.uuid,
+                        p.preset.version,
+                        p.preset.patch.hashCode(),
+                        aiReady = aiReady,
+                    ),
                     selected = p.uuid == selectedId,
                 )
             }

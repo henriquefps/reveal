@@ -274,16 +274,19 @@ class ExportEngine(
 
     /**
      * The AI masks of [recipe]'s rendered masks (docs/adr/0022): a session on the photo's model input, or `null`
-     * when there are none (no decode then). The masks come from the cache when the editor made them for the same
-     * input, else they are computed here.
+     * when there are none (no decode then). The masks come from the cache when the editor (or a thumbnail) made them
+     * for the same photo and input size, else only the missing ones are computed here.
      */
     @Suppress("ReturnCount")
     private fun maskSession(image: ImageInput, recipe: Recipe): AiMasks.Session? {
         val ai = aiMasks ?: return null
         val any = recipe.masks.any { m -> m.enabled && m.components.any { it is MaskComponent.Ai } }
         if (!any) return null
-        val model = MaskInputs.fromImage(image) ?: return null
-        return ai.session { model }
+        val small = MaskInputs.smallInput(image) ?: return null
+        // Keyed by the file's fingerprint and the model input's size: the editor's masks are found in the cache
+        // without rendering anything (docs/adr/0022 "M4/F"); only a missing one renders the input and runs a model.
+        val key = MaskInputs.photoKey(image) ?: return ai.session { MaskInputs.render(small) }
+        return ai.session(key, small.width to small.height) { MaskInputs.render(small) }
     }
 
     /** EXIF of the file (and of its pair's JPEG for gaps) and the photo's rating. */

@@ -10,6 +10,7 @@ import androidx.core.graphics.createBitmap
 import dev.hfps.reveal.pipeline.PipelineInput
 import dev.hfps.reveal.pipeline.cpu.CpuDevelop
 import dev.hfps.reveal.pipeline.gl.GpuDevelopRenderer
+import dev.hfps.reveal.pipeline.mask.AiMaskSource
 import dev.hfps.reveal.pipeline.recipe.Recipe
 import java.nio.ByteBuffer
 import kotlinx.coroutines.CancellationException
@@ -57,6 +58,19 @@ class PresetThumbnails(private val input: PipelineInput, private val pixelScale:
     @Volatile
     private var closed = false
 
+    @Volatile
+    private var masks: AiMaskSource = AiMaskSource.NONE
+
+    /**
+     * The open photo's AI masks (docs/adr/0022 "M4/F"): a base recipe with an AI mask part renders it like the editor
+     * does, once the mask is ready. Until then the part is skipped; the panel's cache key says which are ready
+     * ([key] `aiReady`), so a thumbnail is rendered again when one arrives.
+     */
+    fun useMasks(source: AiMaskSource) {
+        masks = source
+        renderer?.setMaskSource(source, MASK_PHOTO_KEY)
+    }
+
     /** Milliseconds of the last renders (newest last), for the panel measurement. */
     val renderTimes: MutableList<Long> = java.util.Collections.synchronizedList(ArrayList())
 
@@ -99,6 +113,7 @@ class PresetThumbnails(private val input: PipelineInput, private val pixelScale:
         val start = SystemClock.elapsedRealtime()
         val gpu = renderer ?: GpuDevelopRenderer.create().also {
             it.upload(input, pixelScale)
+            if (masks !== AiMaskSource.NONE) it.setMaskSource(masks, MASK_PHOTO_KEY)
             renderer = it
         }
         val rgba = gpu.renderOutput(recipe)
@@ -145,6 +160,10 @@ class PresetThumbnails(private val input: PipelineInput, private val pixelScale:
             presetVersion: Int,
             patchHash: Int,
             strength: Float = 1f,
-        ): String = "$photoKey|$baseHash|$presetId|$presetVersion|$patchHash|$strength"
+            aiReady: Int = 0,
+        ): String = "$photoKey|$baseHash|$presetId|$presetVersion|$patchHash|$strength" +
+            if (aiReady != 0) "|ai$aiReady" else ""
+
+        private const val MASK_PHOTO_KEY = "presets"
     }
 }

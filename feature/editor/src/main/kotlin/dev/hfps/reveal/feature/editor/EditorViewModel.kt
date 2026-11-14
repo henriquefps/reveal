@@ -16,6 +16,7 @@ import androidx.lifecycle.viewModelScope
 import androidx.navigation.toRoute
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
+import dev.hfps.image.ImageInput
 import dev.hfps.image.proxy.ProxySource
 import dev.hfps.image.proxy.ProxyStep
 import dev.hfps.image.source.CancelToken
@@ -56,6 +57,7 @@ import dev.hfps.reveal.feature.editor.presets.PreviewInput
 import dev.hfps.reveal.feature.editor.tools.ToolId
 import dev.hfps.reveal.feature.export.ui.ExportRequest
 import dev.hfps.reveal.ml.MaskKind
+import dev.hfps.reveal.ml.MlImage
 import dev.hfps.reveal.pipeline.PipelineInput
 import dev.hfps.reveal.pipeline.auto.AutoAnalyser
 import dev.hfps.reveal.pipeline.auto.AutoBlackWhite
@@ -217,10 +219,22 @@ class EditorViewModel @Inject constructor(
      * Keeps the proxy area-averaged to the model input's size (about 8 MB, linear; the proxy itself is dropped after
      * the upload) and opens the photo's AI mask session, whose states the panel shows.
      */
-    private suspend fun prepareMasks(input: PipelineInput) {
+    private suspend fun prepareMasks(input: PipelineInput, source: Uri, name: String) {
         val small = withContext(Dispatchers.Default) { MaskInputs.downscale(input) }
-        val session = aiMasks.session { withContext(Dispatchers.Default) { MaskInputs.render(small) } }
+        // The file's fingerprint keys the masks, so the export and the thumbnails reuse them (docs/adr/0022 "M4/F").
+        val key = withContext(Dispatchers.IO) {
+            runCatching {
+                ImageInput.fromUri(context.contentResolver, source, name).use(MaskInputs::photoKey)
+            }.getOrNull()
+        }
+        val render: suspend () -> MlImage? = { withContext(Dispatchers.Default) { MaskInputs.render(small) } }
+        val session = if (key != null) {
+            aiMasks.session(key, small.width to small.height, render)
+        } else {
+            aiMasks.session(null, render)
+        }
         maskSession = session
+        thumbnails?.useMasks(session)
         viewModelScope.launch {
             session.states.collect { states ->
                 _state.update { it.copy(masks = it.masks.copy(ai = states)) }
@@ -326,7 +340,7 @@ class EditorViewModel @Inject constructor(
                     PresetThumbnails(small, full.coerceAtLeast(1f))
                 }
                 prepareOptics(input)
-                prepareMasks(input)
+                prepareMasks(input, uri, photo.name)
                 val ready = gpu.await()
                 // The renderer starts on the stored recipe (attach() pushes it).
                 storedHistory.await()

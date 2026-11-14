@@ -43,6 +43,7 @@ import dev.hfps.reveal.feature.export.work.ExportJobStore
 import dev.hfps.reveal.feature.export.work.ExportWorker
 import dev.hfps.reveal.feature.export.work.ItemStatus
 import dev.hfps.reveal.feature.library.LibraryTags
+import dev.hfps.reveal.feature.library.UnavailableTags
 import dev.hfps.reveal.feature.library.viewer.ViewerTags
 import dev.hfps.reveal.library.SyntheticFolder
 import dev.hfps.reveal.pipeline.gl.TiledRenderer
@@ -61,9 +62,10 @@ import org.junit.runner.RunWith
  * Opening hand-offs whose grant is gone (ADR 0011 "Fallbacks"), on a device: a document of the debug provider is shared
  * to Reveal, then the provider refuses it (`SecurityException`), forgets it (`IllegalArgumentException`, rethrown
  * across Binder) or lets it be read once only. A photo with a preview opens it in the editor with the "preview only"
- * note; one with nothing in its place shows the "share it again" error; a backed-up one (`-e syncLink`, a local
- * `reveal-sync` with backup storage, `scripts/sync/local-server.sh`) opens, shows and exports the server's original at
- * full size with no local preview at all. Locale-independent (test tags, resources and data only).
+ * note; one with nothing in its place is "unavailable" (its cell explains and offers to share it again); a backed-up
+ * one (`-e syncLink`, a local `reveal-sync` with backup storage, `scripts/sync/local-server.sh`) opens, shows and
+ * exports the server's original at full size with no local preview at all. Locale-independent (test tags, resources
+ * and data only).
  */
 @OptIn(ExperimentalTestApi::class)
 @RunWith(AndroidJUnit4::class)
@@ -159,7 +161,7 @@ class HandoffFallbackTest {
     }
 
     @Test
-    fun aHandOffReadOnlyOnceShowsTheShareAgainError() {
+    fun aHandOffReadOnlyOnceIsUnavailableAndTheGridExplainsItInsteadOfOpeningTheEditor() {
         val (id, uri) = shared("${stem}_2.jpg", jpeg(2))
         // The grant lasts for one read: the hand-off's fingerprint. No preview can be made after it.
         SyntheticDocumentsProvider.refuseAfterOpen(context.filesDir, id)
@@ -171,15 +173,27 @@ class HandoffFallbackTest {
         val photo = row()
         assertThat(runBlocking { access.library().originalPlace(photo.id) })
             .isEqualTo(OriginalPlace.HANDOFF_UNREADABLE)
+        // The data layer still says "nothing to read it from" (the editor's error, goldens `phone_error_handoff*`)...
         val target = runBlocking { access.library().editTarget(photo.versionId) }!!
         assertThat(target.unreadable).isEqualTo(uri)
 
-        openFromLibrary(photo, "LOCAL_PREVIEW") {
-            compose.onNodeWithTag(EditorTags.ERROR).assertExists()
-            compose.onNodeWithTag(EditorTags.ERROR_BODY).assertExists()
+        // ...but since 0.5.2 (ADR 0011 "Unavailable photos") such a photo is "unavailable": its cell is the
+        // placeholder and a tap opens the sheet that says why and how to share it again, never the viewer or editor.
+        runBlocking { access.library().setLastFilters(PhotoFilters.FROM_APPS) }
+        assertThat(row().unavailable).isTrue()
+        ActivityScenario.launch(MainActivity::class.java).use {
+            compose.waitUntilAtLeastOneExists(hasTestTag(LibraryTags.GRID), TIMEOUT_MS)
+            compose.onNodeWithTag(LibraryTags.GRID).performScrollToKey(photo.id)
+            compose.waitUntilAtLeastOneExists(hasTestTag(LibraryTags.cell(photo.id)), TIMEOUT_MS)
+            compose.onNodeWithTag(UnavailableTags.cell(photo.id), useUnmergedTree = true).assertExists()
+            compose.onNodeWithTag(LibraryTags.cell(photo.id)).performClick()
+            compose.waitUntilAtLeastOneExists(hasTestTag(UnavailableTags.SHEET), TIMEOUT_MS)
             // The debug provider is Reveal's own: no app to name, not a MediaStore URI.
-            assertThat(compose.onAllNodes(hasTestTag(EditorTags.ERROR_OPEN_APP)).fetchSemanticsNodes()).isEmpty()
-            assertThat(compose.onAllNodes(hasTestTag(EditorTags.ERROR_GALLERY)).fetchSemanticsNodes()).isEmpty()
+            assertThat(compose.onAllNodes(hasTestTag(UnavailableTags.OPEN_APP)).fetchSemanticsNodes()).isEmpty()
+            assertThat(compose.onAllNodes(hasTestTag(UnavailableTags.GALLERY)).fetchSemanticsNodes()).isEmpty()
+            compose.onNodeWithTag(UnavailableTags.TRY_AGAIN).assertExists()
+            assertThat(compose.onAllNodes(hasTestTag(ViewerTags.EDIT)).fetchSemanticsNodes()).isEmpty()
+            assertThat(compose.onAllNodes(hasTestTag(EditorTags.ERROR)).fetchSemanticsNodes()).isEmpty()
         }
     }
 

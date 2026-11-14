@@ -6,6 +6,19 @@ All notable changes to Reveal are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+- AI masks are made once per photo and shared (M4/F): the editor, an export and the library's thumbnails find each
+  other's masks in the masks cache, keyed by the file's fingerprint and the model input's size (the editor used a
+  hash of its own proxy, which an export never reproduced). An export with sky and subject masks of a 24 MP RAW
+  takes about 1.8 s less when the masks exist (4.6 s instead of 6.4 s on the S24 Ultra, models freed).
+- Edited thumbnails with AI masks (library grid, filmstrip) and the presets' live previews now show the AI parts: the
+  grid draws the thumbnail without them at once and replaces it when the masks are ready (computed one photo at a
+  time in the background, or read from the cache); the presets' previews render again when a mask arrives.
+
+### Fixed
+- `HandoffFallbackTest` expected the editor's "share it again" error from the grid for a hand-off with no grant and no
+  preview; since 0.5.2 such a photo is unavailable and its cell opens the explanation sheet. The test now checks that.
+
 ## [0.6.0] - 2026-11-13
 
 ### Added

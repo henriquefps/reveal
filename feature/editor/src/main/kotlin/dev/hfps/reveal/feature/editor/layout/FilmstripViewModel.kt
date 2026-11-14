@@ -49,6 +49,9 @@ class FilmstripViewModel @Inject constructor(
 
         override suspend fun load(row: PhotoRow): ImageBitmap? =
             thumbnails.thumbnail(row.id, row.versionId, row.editTime)?.asImageBitmap()
+
+        override suspend fun upgrade(row: PhotoRow): ImageBitmap? =
+            thumbnails.withAiMasks(row.id, row.versionId, row.editTime)?.asImageBitmap()
     }
 
     fun setFilmstripVisible(visible: Boolean) = preferences.setFilmstripVisible(visible)

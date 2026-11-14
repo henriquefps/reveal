@@ -23,6 +23,7 @@ import dev.hfps.reveal.data.index.LibraryIndexer
 import dev.hfps.reveal.data.library.DocumentTreeFactory
 import dev.hfps.reveal.data.library.LibraryRepository
 import dev.hfps.reveal.data.library.SidecarSync
+import dev.hfps.reveal.data.mask.AiMasks
 import dev.hfps.reveal.data.model.SourceKind
 import dev.hfps.reveal.data.preset.AppBuiltInPresets
 import dev.hfps.reveal.data.preset.BuiltInPresetSource
@@ -203,6 +204,7 @@ object DataModule {
 
     @Provides
     @Singleton
+    @Suppress("LongParameterList")
     fun provideThumbnails(
         @ApplicationContext context: Context,
         database: RevealDatabase,
@@ -211,6 +213,7 @@ object DataModule {
         edited: EditedThumbnails,
         previews: LocalPreviews,
         budget: CacheBudget,
+        aiMasks: AiMasks,
     ): ThumbnailRepository = ThumbnailRepository(
         db = database,
         trees = trees,
@@ -222,6 +225,7 @@ object DataModule {
         resolver = context.contentResolver,
         serverAuthority = ServerTree.authority(context.packageName),
         onTrimmed = budget::requestTrim,
+        aiMasks = aiMasks,
     ).also(budget::register)
 
     /** Settings -> Storage's maximum cache size and the LRU across caches (ADR 0018 FIX/W). */

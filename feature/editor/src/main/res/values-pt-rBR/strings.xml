@@ -534,6 +534,8 @@
     <string name="heal_visualise_strength">Contraste da visualização</string>
     <string name="heal_delete">Excluir ponto</string>
     <string name="heal_new_source">Nova origem</string>
+    <string name="heal_hide_spots">Ocultar pontos</string>
+    <string name="heal_show_spots">Mostrar pontos</string>
     <string name="heal_removing">Removendo…</string>
     <string name="heal_remove_failed">Não foi possível calcular esta remoção</string>
     <string name="heal_remove_ai">IA</string>

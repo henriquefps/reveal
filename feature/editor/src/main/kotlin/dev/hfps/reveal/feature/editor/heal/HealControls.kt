@@ -85,6 +85,15 @@ fun HealControls(host: ModeHost, modifier: Modifier = Modifier) {
                 icon = PhosphorRegular.MagnifyingGlass,
                 modifier = Modifier.testTag(HealTags.VISUALISE),
             )
+            // The spots' outlines off, to judge the healed photo (docs/adr/0023 "FIX/H").
+            RevealIconButton(
+                icon = if (state.overlayHidden) PhosphorRegular.EyeSlash else PhosphorRegular.Eye,
+                contentDescription = stringResource(
+                    if (state.overlayHidden) R.string.heal_show_spots else R.string.heal_hide_spots,
+                ),
+                onClick = { actions.setOverlayHidden(!state.overlayHidden) },
+                modifier = Modifier.testTag(HealTags.OVERLAY_TOGGLE),
+            )
             Spacer(Modifier.weight(1f))
             val count = host.state.edit.recipe.heals.size
             Text(
@@ -352,6 +361,7 @@ object HealTags {
     const val DARKEN = "heal_darken"
     const val PHOTO_LAYER = "heal_photo_layer"
     const val OVERLAY = "heal_overlay"
+    const val OVERLAY_TOGGLE = "heal_overlay_toggle"
 
     fun kind(kind: HealKind): String = "heal_kind_${kind.key}"
 

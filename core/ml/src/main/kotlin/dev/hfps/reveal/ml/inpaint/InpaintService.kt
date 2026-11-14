@@ -10,6 +10,7 @@ import dev.hfps.reveal.ml.runtime.LiteRtEngine
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.security.MessageDigest
+import java.util.concurrent.CancellationException
 import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.TimeUnit
@@ -63,8 +64,20 @@ class InpaintService(
         Thread(r, "reveal-inpaint-release").apply { isDaemon = true }
     }
 
-    /** [model]'s fill of the [width] x [height] crop [rgb] (interleaved, display encoding) where [hole] > 0. */
-    fun fill(model: InpaintModelSpec, width: Int, height: Int, rgb: FloatArray, hole: FloatArray): InpaintResult {
+    /**
+     * [model]'s fill of the [width] x [height] crop [rgb] (interleaved, display encoding) where [hole] > 0. Throws
+     * [CancellationException] once [cancelled] is true, checked before the model loads, before it runs and after
+     * (docs/adr/0023 "FIX/H"; a run itself cannot be interrupted); the model is released either way.
+     */
+    @Suppress("LongParameterList", "ThrowsCount")
+    fun fill(
+        model: InpaintModelSpec,
+        width: Int,
+        height: Int,
+        rgb: FloatArray,
+        hole: FloatArray,
+        cancelled: () -> Boolean = { false },
+    ): InpaintResult {
         val t0 = System.nanoTime()
         require(rgb.size == width * height * 3 && hole.size == width * height) { "crop size mismatch" }
         val holeIndex = hole.indices.filter { hole[it] > 0f }
@@ -72,11 +85,17 @@ class InpaintService(
         cache?.get(key, holeIndex.size)?.let { values ->
             return InpaintResult(merge(rgb, holeIndex, values), true, null, 0.0, ms(t0))
         }
+        if (cancelled()) throw CancellationException("inpaint fill cancelled")
         synchronized(lock) {
             pendingRelease?.cancel(false)
             val (layout, input) = InpaintLayout.prepare(width, height, rgb, hole, model.side)
             val t1 = System.nanoTime()
-            val (engine, output) = run(model, input)
+            val (engine, output) = try {
+                run(model, input, cancelled)
+            } catch (e: CancellationException) {
+                if (idleMs <= 0) release()
+                throw e
+            }
             val modelMs = ms(t1)
             val restored = layout.restore(output, rgb, hole)
             val values = FloatArray(holeIndex.size * 3)
@@ -91,6 +110,8 @@ class InpaintService(
             } else {
                 pendingRelease = releaser.schedule({ release() }, idleMs, TimeUnit.MILLISECONDS)
             }
+            // A run that finished after its fill was cancelled is cached (the same crop may ask again), not used.
+            if (cancelled()) throw CancellationException("inpaint fill cancelled")
             return InpaintResult(merge(rgb, holeIndex, stored), false, backend, modelMs, ms(t0))
         }
     }
@@ -112,7 +133,11 @@ class InpaintService(
     /** Loads [model] if needed and runs it; any failure frees the model and becomes [InpaintUnavailableException]. */
     // a driver or the runtime may fail in any way: Remove falls back to Patch; each failure is told apart
     @Suppress("TooGenericExceptionCaught", "ThrowsCount")
-    private fun run(model: InpaintModelSpec, input: FloatArray): Pair<InferenceEngine, FloatArray> {
+    private fun run(
+        model: InpaintModelSpec,
+        input: FloatArray,
+        cancelled: () -> Boolean,
+    ): Pair<InferenceEngine, FloatArray> {
         val current = loaded?.takeIf { it.first == model }?.second
         val engine = current ?: run {
             release()
@@ -127,6 +152,7 @@ class InpaintService(
                 throw InpaintUnavailableException("${model.key} could not be loaded", lowMemory = false, cause = e)
             }
         }
+        if (cancelled()) throw CancellationException("inpaint fill cancelled")
         return try {
             engine to engine.run(input)
         } catch (e: OutOfMemoryError) {

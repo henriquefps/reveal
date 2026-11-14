@@ -68,6 +68,14 @@ class HealedTileSource(
         engine.overlay(x, y, w, h, out, RGBA)
     }
 
+    /**
+     * Stops waiting for the Remove fills still missing (they are cancelled when no one else wants them; docs/adr/0023
+     * "FIX/H"). Never closes [base], which the caller owns.
+     */
+    override fun close() {
+        engine.close()
+    }
+
     private companion object {
         const val RGBA = 4
         const val WAIT_S = 120L

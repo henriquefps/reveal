@@ -37,6 +37,7 @@ import dev.hfps.reveal.data.preset.PresetRepository
 import dev.hfps.reveal.data.storage.AppStorage
 import dev.hfps.reveal.data.storage.CacheBudget
 import dev.hfps.reveal.data.storage.FillCacheArea
+import dev.hfps.reveal.data.storage.HealFillCacheArea
 import dev.hfps.reveal.data.storage.MaskCacheArea
 import dev.hfps.reveal.data.storage.SafDocumentTree
 import dev.hfps.reveal.data.storage.StorageVolumes
@@ -246,7 +247,8 @@ object DataModule {
 
     @Provides
     @Singleton
-    fun provideEditedThumbnails(@DataScope scope: CoroutineScope): EditedThumbnails = GpuEditedThumbnails(scope)
+    fun provideEditedThumbnails(@DataScope scope: CoroutineScope, healFills: HealFillCacheArea): EditedThumbnails =
+        GpuEditedThumbnails(scope, healFills)
 
     @Provides
     @Singleton
@@ -302,6 +304,20 @@ object DataModule {
     ).also(budget::register)
 
     /**
+     * Remove's fills on disk (docs/adr/0023 "FIX/H"): written by the process's fills ([RemoveFills.shared], set by the
+     * app at start), read by the thumbnails; counted with the AI masks by the budget.
+     */
+    @Provides
+    @Singleton
+    fun provideHealFillCacheArea(@ApplicationContext context: Context, budget: CacheBudget): HealFillCacheArea =
+        HealFillCacheArea(
+            File(context.cacheDir, HealFillCacheArea.DIR),
+            cap = budget::cap,
+            onWrite = budget::requestTrim,
+        )
+            .also(budget::register)
+
+    /**
      * AI Remove's inpainting (docs/adr/0024): the bundled model from the APK's assets (GPU, its compiled programs kept
      * in the code cache; else the CPU), released after each fill, loaded only when the system reports enough free
      * memory (else Remove falls back to the patch fill), fills cached on disk.
@@ -330,6 +346,7 @@ object DataModule {
 
     @Provides
     @Singleton
+    @Suppress("LongParameterList")
     fun provideAppStorage(
         @ApplicationContext context: Context,
         database: RevealDatabase,
@@ -339,6 +356,7 @@ object DataModule {
         @Suppress("UNUSED_PARAMETER") thumbnails: ThumbnailRepository,
         @Suppress("UNUSED_PARAMETER") masks: MaskCacheArea,
         @Suppress("UNUSED_PARAMETER") fills: FillCacheArea,
+        @Suppress("UNUSED_PARAMETER") healFills: HealFillCacheArea,
     ): AppStorage = AppStorage(
         db = database,
         budget = budget,

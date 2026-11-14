@@ -297,6 +297,10 @@ class EditorViewModel @Inject constructor(
         maskEditor.panelOpen = open
     }
 
+    /** The file's fingerprint, once known: Remove's fills are stored by it (docs/adr/0023 "FIX/H"). */
+    @Volatile
+    private var healPhotoKey: String? = null
+
     /** This photo's AI masks (docs/adr/0021): the model input is rendered from [maskInput] when first needed. */
     @Volatile
     private var maskSession: AiMasks.Session? = null
@@ -312,6 +316,11 @@ class EditorViewModel @Inject constructor(
             runCatching {
                 ImageInput.fromUri(context.contentResolver, source, name).use(MaskInputs::photoKey)
             }.getOrNull()
+        }
+        // The same key finds Remove's fills in their store (docs/adr/0023 "FIX/H": the thumbnails show them).
+        if (key != null) {
+            healPhotoKey = key
+            renderer()?.setHealSource(RemoveFills.shared, key)
         }
         val render: suspend () -> MlImage? = { withContext(Dispatchers.Default) { MaskInputs.render(small) } }
         val session = if (key != null) {
@@ -1175,7 +1184,7 @@ class EditorViewModel @Inject constructor(
         renderer.histogramEnabled = current.view.histogram
         maskSession?.let { renderer.setMaskSource(it, MASK_PHOTO_KEY) }
         // Remove's fills (docs/adr/0023): shared with the zoom and with the exports of this process.
-        renderer.setHealSource(RemoveFills.shared)
+        renderer.setHealSource(RemoveFills.shared, healPhotoKey)
         renderer.onHeals = { status -> healEditor.onStatus(status) }
         healEditor.pushView()
         maskEditor.pushOverlay()

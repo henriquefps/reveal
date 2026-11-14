@@ -30,7 +30,7 @@ import kotlin.math.min
  * 4. The field is upsampled to the next level (`2 q + (p - 2 parent)`), and so is the voted hole.
  *
  * Returns the finest voted crop and, per hole pixel, the offset to the centre of its own patch's source: the engine
- * copies the photo's pixels through it at any resolution.
+ * copies the photo's pixels through it at any resolution. Polls [RemoveInput.checkCancelled] every few rows.
  */
 object PatchFill : RemoveMethod {
     /** Patch side (odd). */
@@ -40,7 +40,12 @@ object PatchFill : RemoveMethod {
     private const val MAX_LEVELS = 8
     private const val PM_ROUNDS = 2
 
+    /** Rows between cancellation checks, minus one (a power of two minus one: `y and CHECK_ROWS == 0`). */
+    private const val CHECK_ROWS = 7
+
     override fun fill(input: RemoveInput): RemoveOutput {
+        val check = input::checkCancelled
+        check()
         val levels = pyramid(input)
         val rng = XorShift(input.seed)
         var nnf: Nnf? = null
@@ -66,7 +71,8 @@ object PatchFill : RemoveMethod {
                 4
             }
             repeat(rounds) { round ->
-                repeat(PM_ROUNDS) { field.iterate(rng, (round + it) % 2 == 1) }
+                repeat(PM_ROUNDS) { field.iterate(rng, (round + it) % 2 == 1, check) }
+                check()
                 field.vote()
             }
         }
@@ -290,10 +296,12 @@ object PatchFill : RemoveMethod {
         }
 
         /** One PatchMatch pass: propagation in scan order ([reverse]: from the bottom right), then random search. */
-        fun iterate(rng: XorShift, reverse: Boolean) {
+        fun iterate(rng: XorShift, reverse: Boolean, check: () -> Unit = {}) {
             val step = if (reverse) -1 else 1
             val ys = if (reverse) (h - 1 downTo 0) else (0 until h)
             for (y in ys) {
+                // Cancellation (docs/adr/0023 "FIX/H"): a row costs well under a millisecond.
+                if (y and CHECK_ROWS == 0) check()
                 val xs = if (reverse) (w - 1 downTo 0) else (0 until w)
                 for (x in xs) {
                     val i = y * w + x

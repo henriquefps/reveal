@@ -52,6 +52,7 @@ internal class HealEditor(private val scope: CoroutineScope, private val host: H
             it.copy(
                 open = open,
                 painting = null,
+                dragging = null,
                 selected = if (open) it.selected else null,
                 aiRemove = if (open) RemoveFills.shared.models().firstOrNull() else it.aiRemove,
             )
@@ -70,7 +71,7 @@ internal class HealEditor(private val scope: CoroutineScope, private val host: H
             host.edit { it.copy(heals = before) }
             host.commit()
         }
-        host.updateHeal { it.copy(selected = null) }
+        host.updateHeal { it.copy(selected = null, dragging = null) }
     }
 
     @Suppress("ReturnCount")
@@ -100,12 +101,35 @@ internal class HealEditor(private val scope: CoroutineScope, private val host: H
     }
 
     override fun setSettings(settings: HealSettings) {
+        val sizeChanged = settings.size != heal.settings.size
         host.updateHeal { it.copy(settings = settings) }
         val selected = HealEdits.find(recipe, heal.selected) ?: return
+        if (sizeChanged || heal.dragging?.id == selected.id) {
+            // The size changes the spot's shape (and a Remove spot's fill): its outline follows the slider, the
+            // healing runs once on release (docs/adr/0023 "FIX/H"). Feather, opacity and darken stay live.
+            val base = heal.dragging?.takeIf { it.id == selected.id } ?: selected
+            host.updateHeal { it.copy(dragging = HealEdits.applySettings(base, settings)) }
+            return
+        }
         host.edit { HealEdits.update(it, selected.id) { h -> HealEdits.applySettings(h, settings) } }
     }
 
-    override fun commit() = host.commit()
+    override fun commit() {
+        val drag = heal.dragging
+        if (drag != null) {
+            host.updateHeal { it.copy(dragging = null) }
+            if (HealEdits.find(recipe, drag.id) != null) host.edit { HealEdits.update(it, drag.id) { drag } }
+        }
+        host.commit()
+    }
+
+    override fun dragCancel() {
+        host.updateHeal { it.copy(dragging = null) }
+    }
+
+    override fun setOverlayHidden(hidden: Boolean) {
+        host.updateHeal { it.copy(overlayHidden = hidden) }
+    }
 
     override fun tap(x: Float, y: Float) {
         if (x !in 0f..1f || y !in 0f..1f) return
@@ -147,11 +171,17 @@ internal class HealEditor(private val scope: CoroutineScope, private val host: H
     }
 
     override fun moveSource(id: String, dx: Float, dy: Float) {
-        host.edit { HealEdits.update(it, id) { h -> h.copy(dx = dx, dy = dy, autoSource = false) } }
+        drag(id) { h -> h.copy(dx = dx, dy = dy, autoSource = false) }
     }
 
     override fun moveTarget(id: String, x: Float, y: Float) {
-        host.edit { HealEdits.update(it, id) { h -> HealEdits.moved(h, x, y) } }
+        drag(id) { h -> HealEdits.moved(h, x, y) }
+    }
+
+    /** The dragged spot [id] (from the recipe) changed by [change]: the overlay only, until [commit]. */
+    private fun drag(id: String, change: (Heal) -> Heal) {
+        val spot = HealEdits.find(recipe, id) ?: return
+        host.updateHeal { it.copy(dragging = change(spot)) }
     }
 
     override fun newSource(id: String) {

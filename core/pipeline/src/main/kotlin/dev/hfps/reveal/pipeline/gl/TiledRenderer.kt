@@ -158,6 +158,9 @@ class TiledRenderer private constructor(requestedTile: Int, private val share: E
     /** The zoom's source with its healing (kept while the base source is). */
     private var zoomHealed: HealedTileSource? = null
 
+    /** One callback for the zoom's Remove fills, so a released spot's interest is dropped (docs/adr/0023 "FIX/H"). */
+    private val zoomReady: () -> Unit = { onHealReady?.invoke() }
+
     /**
      * Develops [source] with [recipe] as [plan] says and streams the output to [sink]. Blocking (runs on the renderer's
      * GL thread); [cancel] is polled between tiles ([RenderCancelledException]); [progress] gets 0..1.
@@ -191,7 +194,12 @@ class TiledRenderer private constructor(requestedTile: Int, private val share: E
         } else {
             source
         }
-        renderOnGl(healed, recipe, plan, output, sink, high, cancel, progress, masks)
+        try {
+            renderOnGl(healed, recipe, plan, output, sink, high, cancel, progress, masks)
+        } finally {
+            // Fills still missing after the wait are not wanted any more (docs/adr/0023 "FIX/H").
+            (healed as? HealedTileSource)?.close()
+        }
     }
 
     @Suppress("LongParameterList", "LongMethod")
@@ -623,11 +631,11 @@ class TiledRenderer private constructor(requestedTile: Int, private val share: E
     private fun zoomSource(base: TileSource, recipe: Recipe): TileSource {
         if (!HealOp.active(recipe.heals)) return base
         val kept = zoomHealed?.takeIf { it.base === base }
-        val ready = { onHealReady?.invoke() ?: Unit }
         if (kept == null) {
-            return HealedTileSource(base, recipe.heals, healSource, onReady = ready).also { zoomHealed = it }
+            zoomHealed?.close()
+            return HealedTileSource(base, recipe.heals, healSource, onReady = zoomReady).also { zoomHealed = it }
         }
-        kept.update(recipe.heals, ready)
+        kept.update(recipe.heals, zoomReady)
         return kept
     }
 
@@ -1027,6 +1035,8 @@ class TiledRenderer private constructor(requestedTile: Int, private val share: E
     override fun close() {
         runCatching {
             onGl {
+                zoomHealed?.close()
+                zoomHealed = null
                 if (::info.isInitialized) {
                     deleteTiles()
                     maskPasses.release()

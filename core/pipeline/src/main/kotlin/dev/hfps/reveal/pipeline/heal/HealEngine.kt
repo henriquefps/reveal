@@ -29,8 +29,20 @@ class HealPatch(val x0: Int, val y0: Int, val width: Int, val height: Int, val r
  * Where Remove spots get their fills (docs/adr/0023): the [source] (cache and worker) and the [original] photo the
  * crops are read from (the full-resolution image when there is one, so the editor and an export ask for the same
  * fill), with its [colour] matrices. [NONE]: Remove spots render nothing.
+ *
+ * docs/adr/0023 "FIX/H": [photoKey] (the file's fingerprint) gives each request a store key, so a fill outlives the
+ * process and reaches the thumbnails. [originalWidth] x [originalHeight] is the original's size when [original] is a
+ * smaller image of it (a thumbnail): the crops are then defined on the original (the editor's keys), and a fill the
+ * store does not have is made on [original]'s own grid.
  */
-class RemoveContext(val source: RemoveSource, val original: PixelReader?, val colour: PipelineInput?) {
+class RemoveContext(
+    val source: RemoveSource,
+    val original: PixelReader?,
+    val colour: PipelineInput?,
+    val photoKey: String? = null,
+    val originalWidth: Int = original?.width ?: 0,
+    val originalHeight: Int = original?.height ?: 0,
+) {
     @Volatile
     private var identity: String? = null
 
@@ -70,6 +82,10 @@ class HealEngine(
     private var reads: List<IntArray?> = emptyList()
     private var waiting: List<Boolean> = emptyList()
 
+    /** The Remove keys this engine waits for, with the callback each was asked with (to [release] them). */
+    private var asked: Map<String, () -> Unit> = emptyMap()
+    private var asking: MutableMap<String, () -> Unit>? = null
+
     /** Ids of the Remove spots whose fill is still being computed. */
     var pending: Set<String> = emptySet()
         private set
@@ -106,6 +122,8 @@ class HealEngine(
         val pend = HashSet<String>()
         val fail = HashSet<String>()
         val back = HashSet<String>()
+        val nowAsked = HashMap<String, () -> Unit>()
+        asking = nowAsked
         fun compute(h: Heal) {
             val res = patch(h, newPatches, onReady)
             newPatches += res.patch
@@ -156,6 +174,11 @@ class HealEngine(
             b++
         }
         for (i in a until spots.size) patches[i]?.let { changed += intArrayOf(it.x0, it.y0, it.x1, it.y1) }
+        asking = null
+        // Fills this engine no longer waits for (a spot moved, changed or was deleted) are released: cancelled when
+        // no one else waits for them (docs/adr/0023 "FIX/H").
+        releaseAsked(asked.filter { (key, callback) -> nowAsked[key] !== callback })
+        asked = nowAsked
         spots = list
         patches = newPatches
         reads = newReads
@@ -172,6 +195,22 @@ class HealEngine(
             out[3] = max(out[3], r[3])
         }
         return out
+    }
+
+    /**
+     * Stops waiting for every Remove fill this engine asked for (the editor, its zoom or an export is done with it):
+     * fills no one else waits for are cancelled (docs/adr/0023 "FIX/H"). The engine renders on if updated again.
+     */
+    fun close() {
+        releaseAsked(asked)
+        asked = emptyMap()
+    }
+
+    private fun releaseAsked(keys: Map<String, () -> Unit>) {
+        if (keys.isEmpty()) return
+        keys.entries.groupBy({
+            it.value
+        }, { it.key }).forEach { (callback, list) -> remove.source.release(callback, list) }
     }
 
     /**
@@ -356,12 +395,22 @@ class HealEngine(
         val fp = Footprint.of(h, width, height) ?: return Result(null, null, waiting = false, failed = false)
         val original = remove.original ?: return Result(null, fp.rect, waiting = false, failed = true)
         val colour = remove.colour ?: colourInfo
-        val spec = RemoveSpec.of(h, original.width, original.height)
+        val full = remove.originalWidth == original.width && remove.originalHeight == original.height
+        val spec = RemoveSpec.of(h, remove.originalWidth, remove.originalHeight)
             ?: return Result(null, fp.rect, waiting = false, failed = false)
-        val identity = remove.identity() ?: return Result(null, fp.rect, waiting = false, failed = true)
+        val identity = remove.photoKey.takeIf { !full } ?: remove.identity()
+            ?: return Result(null, fp.rect, waiting = false, failed = true)
         val key = RemoveSpec.key(identity, spec, h, h.method)
-        val request = RemoveRequest(key, h.method, spec, original.threadSafe) {
-            spec.read(h, original, colour, RemoveSpec.seed(key))
+        val storeKey = remove.photoKey?.let { RemoveSpec.key("file:$it", spec, h, h.method) }
+        val request = RemoveRequest(key, h.method, spec, original.threadSafe, storeKey) {
+            if (full) {
+                spec.read(h, original, colour, RemoveSpec.seed(key))
+            } else {
+                // A smaller image of the original (a thumbnail): its own crop, carried by the fill.
+                val own = checkNotNull(RemoveSpec.of(h, original.width, original.height)) { "empty crop" }
+                val crop = own.read(h, original, colour, RemoveSpec.seed(key))
+                RemoveCrop(crop.input, crop.colour, own)
+            }
         }
         val ctx = spec.rectIn(width, height)
         val gx0 = fp.x0 - 1
@@ -370,7 +419,11 @@ class HealEngine(
         val gh = fp.height + 2
         val reads = union(ctx, intArrayOf(gx0 - 1, gy0 - 1, gx0 + gw + 1, gy0 + gh + 1))
         val fill = remove.source.fill(request, onReady)
-            ?: return Result(null, reads, waiting = !remove.source.failed(key), failed = remove.source.failed(key))
+        if (fill == null) {
+            val failed = remove.source.failed(key)
+            if (!failed) asking?.put(key, onReady)
+            return Result(null, reads, waiting = !failed, failed = failed)
+        }
         // The proposed pixels over the grid grown by one (the ring's 3 x 3 means).
         val px0 = gx0 - 1
         val py0 = gy0 - 1

@@ -14,7 +14,7 @@ import dev.hfps.reveal.pipeline.heal.RemoveUnavailableException
  */
 class InpaintRemoveMethod(private val service: InpaintService, private val model: InpaintModelSpec) : RemoveMethod {
     override fun fill(input: RemoveInput): RemoveOutput = try {
-        RemoveOutput(service.fill(model, input.width, input.height, input.rgb, input.hole).rgb)
+        RemoveOutput(service.fill(model, input.width, input.height, input.rgb, input.hole, input.cancelled).rgb)
     } catch (e: InpaintUnavailableException) {
         throw RemoveUnavailableException(if (e.lowMemory) LOW_MEMORY else FAILED, e)
     }

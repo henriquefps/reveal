@@ -23,7 +23,9 @@ import kotlin.math.min
  * original is box-downscaled by the integer [factor] (a "virtual" image of [virtualWidth] x [virtualHeight]) and the
  * crop is the virtual pixels ([x0], [y0]) .. ([x1], [y1]), exclusive. The crop is the region's box grown by
  * [CONTEXT] times its larger side on every side, clipped to the image; [factor] keeps its longer side at most
- * [MAX_SIDE].
+ * [MAX_SIDE], and for the patch method (docs/adr/0023 "FIX/H") the region's larger side at most [PATCH_REGION]: the
+ * patch search runs at a resolution matched to the hole (its offsets copy the photo's own pixels at any resolution,
+ * so a coarser search stays sharp), full resolution only for small spots.
  */
 data class RemoveSpec(
     val originalWidth: Int,
@@ -109,6 +111,12 @@ data class RemoveSpec(
         /** Longest side of a crop in pixels. */
         const val MAX_SIDE: Int = 512
 
+        /**
+         * Longest side of the region (the spot's box) in a patch method's crop, pixels: bigger regions are searched on
+         * a downscaled crop (docs/adr/0023 "FIX/H": a 300 px stroke on a 24 MP photo well under a second).
+         */
+        const val PATCH_REGION: Float = 96f
+
         /** Context around the region, as a multiple of its larger side, on each side. */
         const val CONTEXT: Float = 1f
 
@@ -150,7 +158,12 @@ data class RemoveSpec(
             val cy1 = min(by1 + margin, height.toFloat())
             if (cx1 <= cx0 || cy1 <= cy0) return null
             val side = max(cx1 - cx0, cy1 - cy0)
-            val factor = max(1, ceil(side / MAX_SIDE).toInt())
+            val region = max(bx1 - bx0, by1 - by0)
+            val patch = !heal.method.startsWith(Heal.METHOD_MODEL_PREFIX)
+            val factor = max(
+                max(1, ceil(side / MAX_SIDE).toInt()),
+                if (patch) ceil(region / PATCH_REGION).toInt() else 1,
+            )
             val vw = width / factor
             val vh = height / factor
             val x0 = floor(cx0 / factor).toInt().coerceIn(0, vw - 1)
@@ -203,7 +216,7 @@ data class RemoveSpec(
         }
 
         /** Bump when the crop, the encoding or the patch method change their output. */
-        const val VERSION: Int = 1
+        const val VERSION: Int = 2
         private const val SAMPLES = 16
         private const val HALF = 0.5
         private const val SEED_HEX = 15

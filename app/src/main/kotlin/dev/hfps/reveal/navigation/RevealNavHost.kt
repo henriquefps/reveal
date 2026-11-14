@@ -17,11 +17,7 @@ import dev.hfps.reveal.ui.about.AboutScreen
 
 /** The app's navigation: the library is the start (M1); the editor, Settings and About hang off it. */
 @Composable
-fun RevealNavHost(
-    navController: NavHostController,
-    onEditorBack: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
+fun RevealNavHost(navController: NavHostController, onEditorBack: () -> Unit, modifier: Modifier = Modifier) {
     NavHost(navController = navController, startDestination = LibraryRoute(), modifier = modifier) {
         libraryScreens(
             navController = navController,

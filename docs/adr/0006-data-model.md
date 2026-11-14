@@ -172,8 +172,9 @@ accepts new documents); otherwise, or if the provider refuses, the change is kep
 "Saved in Reveal only". After writing, the sidecar's new mtime is stored, so the next walk does not read Reveal's own
 write back as a change. A sidecar changed by another app (newer mtime) wins over the database on the next index.
 
-**Seam for M5:** `XmpNs.REVEAL` (`https://reveal.hfps.dev/ns/1.0/`) is reserved for the recipe; the writer leaves
-`reveal:` properties untouched and `XmpWriter.update(..., extensions)` takes `XmpExtension`s that will write them.
+**M5 (ADR 0026):** `XmpNs.REVEAL` (`https://reveal.hfps.dev/ns/1.0/`) now carries the master version's recipe, and
+the Camera Raw overlap (`crs:`, `tiff:Orientation`) is written next to the culling fields through the
+`XmpWriter.update(..., extensions)` seam; sidecars with edits are read back (ADR 0026 "Reading").
 
 ## Thumbnails (`ThumbnailRepository`)
 

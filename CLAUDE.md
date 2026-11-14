@@ -160,8 +160,8 @@ REVEAL_COLOUR_SHEET_DIR=$PWD/build/calibration REVEAL_RENDER_OUT=$PWD/docs/scree
 Room `RevealDatabase` v11 (sources, photos, photo_files, versions, recipes, history, history_cursor, cache_entries; sync tables v6; preset tables v7, ADR 0019; `photo_files.unreadable_at` v8, ADR 0011; `photo_cloud.preview_format` v9; `photo_files.on_server` + `sync_deletes` v10, ADR 0018 FIX/V; `versions.edit_device/edited_at` + data fixes v11, FIX/W);
 schema change = new version + migration (or `AutoMigration`) + exported `core/data/schemas/*.json`, tested by
 `RevealDatabaseMigrationTest`. `LibraryRepository` (sources, SAF grants, volumes, indexing, ratings/flags with XMP
-write-back), `LibraryIndexer` (walk → diff → sidecars → headers), `XmpReader`/`XmpWriter` (merge, never overwrite a
-malformed sidecar; `reveal:` namespace reserved for M5), `ThumbnailRepository` (embedded preview / JPEG, edited thumb
+write-back), `LibraryIndexer` (walk → diff → sidecars → headers → sidecar edits), `XmpReader`/`XmpWriter` (merge, never
+overwrite a malformed sidecar; `reveal:` = the edit, see "XMP sidecars"), `ThumbnailRepository` (embedded preview / JPEG, edited thumb
 via `GpuEditedThumbnails`), `PhotoImages` (viewer display + region decoder), `EditRepository` (recipes, undo/redo
 history for the editor). The editor route is `EditorRoute(versionId = …)` from the library or `EditorRoute(uri = …)`
 from other apps.
@@ -191,9 +191,31 @@ adb -s emulator-<port> logcat -d -s REVEAL_LIBRARY RevealLibrary
 ```
 
 The full suite excludes the measurement classes:
-`-e notClass dev.hfps.reveal.editor.EditorMeasurementsTest,dev.hfps.reveal.library.LibraryMeasurementsTest,dev.hfps.reveal.editor.FilmstripMeasurementsTest,dev.hfps.reveal.sync.SyncPullMeasurementsTest,dev.hfps.reveal.editor.PresetsMeasurementsTest`.
+`-e notClass dev.hfps.reveal.editor.EditorMeasurementsTest,dev.hfps.reveal.library.LibraryMeasurementsTest,dev.hfps.reveal.editor.FilmstripMeasurementsTest,dev.hfps.reveal.sync.SyncPullMeasurementsTest,dev.hfps.reveal.editor.PresetsMeasurementsTest,dev.hfps.reveal.library.XmpMeasurementsTest`.
 Frame measurements must not use a Compose test rule (it holds frames while it synchronizes): launch with
 `ActivityScenario` and inject touches with `input swipe`.
+
+## XMP sidecars (`:core:data/xmp`, `library/`, M5/X, ADR 0026)
+
+The sidecar carries the master version's edit next to the culling fields (ADR 0006): `XmpDevelop` (the `reveal:`
+block: `Schema`, `RecipeVersion`, `Edited`, `Device`, `Ancestors` (digests), `Recipe` = compact ADR 0003 JSON or
+`RecipeDeflate`; `SidecarRecipe.encode/digest`), `CameraRaw` (the `crs:` table: one `Field` per Camera Raw property,
+group, Lightroom default, get/set; a new mappable recipe field = one entry there + a case in `CameraRawTest`),
+`CameraRawGeometry` (crop corners in the stored image, `CropAngle`, `tiff:Orientation`). Writing: `SidecarSync.write`
+(culling always; the edit while `XmpPreferences.writeEdits`), triggered for edits by `EditSidecars` (observes
+`MAX(recipes.updated_at)`, 2 s debounce, `meta` `xmp.editsWritten`; started by `RevealApplication`). Reading:
+`LibraryIndexer` parses each changed sidecar once, then after the headers `SidecarEdits.reconcile` (import step
+`HistoryAction.XMP_IMPORT`, sidecar behind -> `IndexReport.sidecarsBehind` rewritten by `LibraryRepository`, diverged ->
+conflict copy; Lightroom's defaults never imported; `XmpPreferences.readEdits`). Never write darktable history, never
+create a sidecar for an unedited photo, never overwrite a newer app's `reveal:` block or a malformed sidecar.
+Fixtures: `core/data/src/test/resources/xmp/` (hand-written Lightroom Classic/mobile, darktable, Hoard).
+
+```sh
+./gradlew :core:data:testDebugUnitTest --tests '*CameraRawTest*' --tests '*XmpDevelopTest*' --tests '*SidecarEditsTest*' --tests '*XmpTest*' --tests '*SidecarSyncTest*'
+adb -s emulator-<port> shell am instrument -w -e class dev.hfps.reveal.library.XmpSidecarFlowTest dev.hfps.reveal.debug.test/androidx.test.runner.AndroidJUnitRunner
+adb -s emulator-<port> shell am instrument -w -e class dev.hfps.reveal.library.XmpMeasurementsTest dev.hfps.reveal.debug.test/androidx.test.runner.AndroidJUnitRunner   # 1,000 photos
+adb -s emulator-<port> logcat -d -s REVEAL_XMP RevealSidecars
+```
 
 ## Hand-off from other apps (`:core:data/handoff`, ADR 0011)
 

@@ -137,6 +137,7 @@
     <string name="history_action_auto_mix">Mistura P&amp;B automática</string>
     <string name="history_action_curve_preset">Predefinição de curva</string>
     <string name="history_action_lens_profile">Perfil da lente aplicado</string>
+    <string name="history_action_xmp_import">Importado do XMP</string>
     <string name="history_lens_corrections">Correções da lente %1$s</string>
     <string name="history_remove_ca">Remover aberração cromática %1$s</string>
     <string name="history_value_toggle_on">ligado</string>

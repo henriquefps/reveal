@@ -6,6 +6,17 @@ All notable changes to Reveal are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- XMP portability (M5/X, docs/adr/0026): each edited photo's sidecar carries its edit, in Reveal's own `reveal:`
+  block (the full recipe, compact, with its ancestry) and as the Camera Raw values other apps read (exposure, the
+  tone sliders, white balance, presence, sharpening and noise reduction, vignette, grain, lens switches, defringe,
+  transform, curves, HSL, black & white, colour grading, crop and straighten, orientation; approximate by nature).
+  Written 2 s after the last change, off the main thread, merged into the existing sidecar (other apps' fields kept).
+- Edits read back from sidecars: another device's Reveal edit (no sync needed) or Lightroom's basic edit comes in as
+  one "Imported from XMP" step you can undo; a sidecar older than the photo's edit is rewritten; edits changed on
+  both sides become a conflict copy, chosen like a sync conflict. Lightroom's own defaults are never imported.
+- Settings → XMP sidecars: "Write edits to XMP sidecars" and "Apply edits from XMP sidecars" (both on).
+
 ### Changed
 - AI masks are made once per photo and shared (M4/F): the editor, an export and the library's thumbnails find each
   other's masks in the masks cache, keyed by the file's fingerprint and the model input's size (the editor used a

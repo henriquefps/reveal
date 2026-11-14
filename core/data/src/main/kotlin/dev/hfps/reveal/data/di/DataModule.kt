@@ -1,6 +1,7 @@
 package dev.hfps.reveal.data.di
 
 import android.content.Context
+import android.os.Build
 import androidx.core.net.toUri
 import androidx.room.Room
 import dagger.Module
@@ -21,6 +22,7 @@ import dev.hfps.reveal.data.handoff.HandoffTree
 import dev.hfps.reveal.data.handoff.LocalPreviews
 import dev.hfps.reveal.data.index.LibraryIndexer
 import dev.hfps.reveal.data.library.DocumentTreeFactory
+import dev.hfps.reveal.data.library.EditSidecars
 import dev.hfps.reveal.data.library.LibraryRepository
 import dev.hfps.reveal.data.library.SidecarSync
 import dev.hfps.reveal.data.mask.AiMasks
@@ -39,6 +41,7 @@ import dev.hfps.reveal.data.thumb.EditedThumbnails
 import dev.hfps.reveal.data.thumb.GpuEditedThumbnails
 import dev.hfps.reveal.data.thumb.PhotoImages
 import dev.hfps.reveal.data.thumb.ThumbnailRepository
+import dev.hfps.reveal.data.xmp.XmpPreferences
 import dev.hfps.reveal.ml.service.EngineLoader
 import dev.hfps.reveal.ml.service.MaskDiskCache
 import dev.hfps.reveal.ml.service.MaskService
@@ -126,15 +129,38 @@ object DataModule {
         @ApplicationContext context: Context,
         database: RevealDatabase,
         trees: DocumentTreeFactory,
+        xmp: XmpPreferences,
     ): SidecarSync {
         val version = runCatching {
             context.packageManager.getPackageInfo(context.packageName, 0).versionName
         }.getOrNull().orEmpty().substringBefore('-')
-        return SidecarSync(database, trees, "Reveal $version".trim())
+        return SidecarSync(
+            database,
+            trees,
+            "Reveal $version".trim(),
+            writeEdits = { xmp.writeEdits.value },
+            device = Build.MODEL.orEmpty(),
+        )
     }
+
+    /** The XMP switches of Settings (ADR 0026). */
+    @Provides
+    @Singleton
+    fun provideXmpPreferences(@ApplicationContext context: Context): XmpPreferences = XmpPreferences(context)
+
+    /** Writes edited photos' sidecars after their recipe changes (ADR 0026); started by the application. */
+    @Provides
+    @Singleton
+    fun provideEditSidecars(
+        database: RevealDatabase,
+        sidecars: SidecarSync,
+        xmp: XmpPreferences,
+        @DataScope scope: CoroutineScope,
+    ): EditSidecars = EditSidecars(database, sidecars, xmp.writeEdits, isEnabled = { xmp.writeEdits.value }, scope)
 
     @Provides
     @Singleton
+    @Suppress("LongParameterList")
     fun provideLibrary(
         @ApplicationContext context: Context,
         database: RevealDatabase,
@@ -143,6 +169,7 @@ object DataModule {
         sidecars: SidecarSync,
         @DataScope scope: CoroutineScope,
         previews: LocalPreviews,
+        xmp: XmpPreferences,
     ): LibraryRepository = LibraryRepository(
         context.contentResolver,
         database,
@@ -152,6 +179,7 @@ object DataModule {
         scope,
         serverAuthority = ServerTree.authority(context.packageName),
         previews = previews,
+        readEdits = { xmp.readEdits.value },
     )
 
     @Provides

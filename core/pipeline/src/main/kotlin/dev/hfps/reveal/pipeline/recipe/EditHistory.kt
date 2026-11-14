@@ -34,6 +34,9 @@ enum class HistoryAction {
 
     /** The lens profile's corrections a new photo starts with (docs/adr/0015, "Defaults"). */
     LENS_PROFILE,
+
+    /** Edits read from the photo's XMP sidecar: another device's or app's recipe, or Camera Raw values (ADR 0026). */
+    XMP_IMPORT,
 }
 
 /**

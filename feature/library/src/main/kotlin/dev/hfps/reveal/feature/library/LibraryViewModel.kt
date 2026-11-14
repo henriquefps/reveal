@@ -9,9 +9,11 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dev.hfps.reveal.data.db.PhotoRow
+import dev.hfps.reveal.data.edit.CopySource
 import dev.hfps.reveal.data.edit.EditClipboard
 import dev.hfps.reveal.data.edit.EditRepository
 import dev.hfps.reveal.data.edit.HistoryWriter
+import dev.hfps.reveal.data.edit.VersionRepository
 import dev.hfps.reveal.data.handoff.GalleryAccess
 import dev.hfps.reveal.data.library.AddSourceResult
 import dev.hfps.reveal.data.library.LibraryRepository
@@ -83,6 +85,12 @@ sealed interface LibraryMessage {
 
     /** [count] photos deleted from the sync server ("Delete from server"). */
     data class DeletedFromServer(val count: Int) : LibraryMessage
+
+    /** [count] virtual copies made (docs/adr/0025). */
+    data class CopiesCreated(val count: Int) : LibraryMessage
+
+    /** [count] virtual copies deleted. */
+    data class CopiesDeleted(val count: Int) : LibraryMessage
 }
 
 /**
@@ -104,6 +112,7 @@ class LibraryViewModel @Inject constructor(
     private val presets: PresetRepository,
     private val gallery: GalleryAccess,
     private val unavailable: UnavailableHelper,
+    private val versions: VersionRepository,
 ) : ViewModel() {
     /**
      * Offer the "Photos and videos" permission now (ADR 0011 "Gallery access"): a photo the gallery shared can no
@@ -212,7 +221,7 @@ class LibraryViewModel @Inject constructor(
                     .collect { (rows, entries) ->
                         LibraryMetrics.firstRows(SystemClock.elapsedRealtime(), rows.size)
                         _state.update { s ->
-                            val visible = rows.mapTo(HashSet(rows.size)) { it.id }
+                            val visible = rows.mapTo(HashSet(rows.size)) { it.versionId }
                             s.copy(
                                 entries = entries,
                                 photoCount = rows.size,
@@ -240,19 +249,14 @@ class LibraryViewModel @Inject constructor(
 
     // ------------------------------------------------------------------ copy / paste edits
 
-    /** Versions of the selected photos, in grid order, for the export sheet. */
-    suspend fun selectedVersions(): List<Long> {
-        val selected = _state.value.selected
-        val ordered = _state.value.photoIds.filter { it in selected }
-        return edits.versionsOf(ordered)
-    }
+    /** The selected versions (virtual copies are cells of their own), in grid order, for the export sheet. */
+    suspend fun selectedVersions(): List<Long> = _state.value.selectedVersions
 
-    /** Copies the whole edit of the one selected photo (the paste chooser picks the groups). */
+    /** Copies the whole edit of the one selected cell (the paste chooser picks the groups). */
     fun copyEdits() {
-        val photoId = _state.value.selected.singleOrNull() ?: return
+        val versionId = _state.value.selected.singleOrNull() ?: return
         viewModelScope.launch {
             writer.flush()
-            val versionId = edits.versionsOf(listOf(photoId)).firstOrNull() ?: return@launch
             edits.copy(edits.recipe(versionId))
             messages.send(LibraryMessage.Copied)
         }
@@ -268,15 +272,52 @@ class LibraryViewModel @Inject constructor(
         }
     }
 
+    // ------------------------------------------------------------------ virtual copies (docs/adr/0025)
+
+    /**
+     * A virtual copy of every selected cell's current edit, named by [nameFor] ("Copy 1"); the copies appear next to
+     * their photo in the grid. Clears the selection.
+     */
+    fun createCopies(nameFor: (Int) -> String) {
+        val selected = _state.value.selectedVersions
+        if (selected.isEmpty()) return
+        viewModelScope.launch {
+            writer.flush()
+            val made = versions.createCopies(selected, CopySource.CURRENT, nameFor)
+            setSelected(emptySet())
+            messages.send(LibraryMessage.CopiesCreated(made.size))
+        }
+    }
+
+    /** "Delete copy" on the selection: asks first (a copy's edit, history and snapshots go with it). */
+    fun deleteCopies() {
+        val copies = _state.value.selectedCopies
+        if (copies.isNotEmpty()) _state.update { it.copy(deleteCopiesPrompt = copies) }
+    }
+
+    fun dismissDeleteCopies() = _state.update { it.copy(deleteCopiesPrompt = null) }
+
+    /** Deletes the asked-about virtual copies (never a photo's last version), here and through sync everywhere. */
+    fun confirmDeleteCopies() {
+        val copies = _state.value.deleteCopiesPrompt ?: return
+        _state.update { it.copy(deleteCopiesPrompt = null) }
+        viewModelScope.launch {
+            writer.flush()
+            val deleted = copies.count { versions.delete(it) }
+            _state.update { s -> s.copy(selected = s.selected - copies.toSet()) }
+            messages.send(LibraryMessage.CopiesDeleted(deleted))
+        }
+    }
+
     /** Resets every selected photo to the original: one "Reset all" history step per edited photo (undoable). */
     fun resetEdits() {
-        val ids = _state.value.selected.toList()
+        val ids = _state.value.selectedVersions
         if (ids.isEmpty()) return
         viewModelScope.launch {
             writer.flush()
             val all = RecipeGroup.entries.toSet()
             val changed = edits.paste(
-                edits.versionsOf(ids),
+                ids,
                 EditClipboard(Recipe.DEFAULT),
                 all,
                 HistoryAction.RESET_ALL,
@@ -302,14 +343,14 @@ class LibraryViewModel @Inject constructor(
     /** Pastes the chosen groups onto every selected photo: one history step per photo the paste changes. */
     fun confirmPaste() {
         val groups = _state.value.pasteChooser ?: return
-        val ids = _state.value.selected.toList()
+        val ids = _state.value.selectedVersions
         dismissPaste()
         if (groups.isEmpty() || ids.isEmpty()) return
         viewModelScope.launch {
             val clip = edits.currentClipboard() ?: return@launch
             edits.setPasteGroups(groups)
             writer.flush()
-            val changed = edits.paste(edits.versionsOf(ids), clip, groups)
+            val changed = edits.paste(ids, clip, groups)
             messages.send(LibraryMessage.Pasted(changed))
         }
     }
@@ -442,7 +483,7 @@ class LibraryViewModel @Inject constructor(
         viewModelScope.launch {
             writer.flush()
             val count = sync.deleteFromServer(ids)
-            _state.update { s -> s.copy(selected = s.selected - ids.toSet()) }
+            _state.update { s -> s.copy(selected = s.selected - s.versionsOfPhotos(ids)) }
             messages.send(LibraryMessage.DeletedFromServer(count))
         }
     }
@@ -526,12 +567,14 @@ class LibraryViewModel @Inject constructor(
 
     private suspend fun doForget(ids: List<Long>) {
         library.forget(ids)
-        _state.update { s -> s.copy(selected = s.selected - ids.toSet(), unavailableInfo = null, forgetPrompt = null) }
+        _state.update { s ->
+            s.copy(selected = s.selected - s.versionsOfPhotos(ids), unavailableInfo = null, forgetPrompt = null)
+        }
         messages.send(LibraryMessage.Forgotten(ids.size))
     }
 
     fun removeSelected() {
-        val ids = _state.value.selected.toList()
+        val ids = _state.value.selectedPhotoIds
         if (ids.isEmpty()) return
         viewModelScope.launch {
             library.removeFromLibrary(ids)
@@ -540,7 +583,7 @@ class LibraryViewModel @Inject constructor(
         }
     }
 
-    private fun act(ids: List<Long> = _state.value.selected.toList(), block: suspend (List<Long>) -> SidecarOutcome) {
+    private fun act(ids: List<Long> = _state.value.selectedPhotoIds, block: suspend (List<Long>) -> SidecarOutcome) {
         if (ids.isEmpty()) return
         viewModelScope.launch {
             val outcome = block(ids)

@@ -118,7 +118,9 @@ class PhotoQuerySqlTest {
                 hidden = hidden,
             ),
         )
-        dao.insertVersion(VersionEntity(photoId = id, createdAt = 0))
+        val versionId = dao.insertVersion(VersionEntity(photoId = id, createdAt = 0))
+        // "Edited" is per version (docs/adr/0025): a non-default recipe.
+        if (edited) db.editDao().putRecipe(RecipeEntity(versionId, "{}", isDefault = false, updatedAt = 1))
         dao.insertFiles(
             listOf(
                 PhotoFileEntity(

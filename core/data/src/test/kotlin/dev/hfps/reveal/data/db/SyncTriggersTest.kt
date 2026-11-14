@@ -121,4 +121,26 @@ class SyncTriggersTest {
         assertThat(after.rev).isEqualTo(7)
         assertThat(after.dirty).isTrue()
     }
+
+    @Test
+    fun `a snapshot change marks its version, an export preset its setting record`() = runBlocking {
+        cleanAll()
+        val dao = db.versionDao()
+        val id = dao.insertSnapshot(SnapshotEntity(versionId = versionId, name = "A", recipeJson = "{}", createdAt = 0))
+        assertThat(dirty()).containsExactly("version" to versionUuid)
+        cleanAll()
+        dao.renameSnapshot(id, "B")
+        assertThat(dirty()).containsExactly("version" to versionUuid)
+        cleanAll()
+        dao.deleteSnapshot(id)
+        assertThat(dirty()).containsExactly("version" to versionUuid)
+        cleanAll()
+        val preset = ExportPresetEntity(name = "Web", optionsJson = "{}", position = 0, createdAt = 0, updatedAt = 0)
+        dao.insertExportPreset(preset)
+        assertThat(dirty()).containsExactly("setting" to SyncTriggers.EXPORT_PRESET_PREFIX + preset.uuid)
+        cleanAll()
+        dao.deleteExportPreset(dao.exportPresetByUuid(preset.uuid)!!.id)
+        val tombstone = db.syncDao().record("setting", SyncTriggers.EXPORT_PRESET_PREFIX + preset.uuid)!!
+        assertThat(tombstone.deleted).isTrue()
+    }
 }

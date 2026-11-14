@@ -8,7 +8,8 @@ import androidx.sqlite.db.SupportSQLiteDatabase
  * write path (editor, library, XMP sidecars, hand-offs, indexing) can forget to: a photo's metadata or files change ->
  * its `photo` record; a version, its recipe or its history cursor change -> its `version` record; a preset, its
  * group (name, order) or its pack (kept after a trial) change -> its `preset` record, and a deleted preset becomes a
- * tombstone (docs/adr/0019 "Sync"). While the sync
+ * tombstone (docs/adr/0019 "Sync"); a snapshot changes -> its `version` record, an export preset -> its `setting`
+ * record (docs/adr/0025). While the sync
  * engine applies pulled records it sets the `meta` key [APPLYING] in the same transaction, and the triggers stay quiet.
  *
  * Triggers are not part of Room's schema, so they are (re)created on every open ([callback]); the names carry a
@@ -19,7 +20,10 @@ object SyncTriggers {
     /** The `meta` key that silences the triggers while pulled records are applied. */
     const val APPLYING = "sync.applying"
 
-    private const val VERSION = 3
+    /** `setting` record ids of export presets start with this, then the preset's uuid (docs/adr/0025). */
+    const val EXPORT_PRESET_PREFIX = "export-preset."
+
+    private const val VERSION = 4
 
     /** Unix milliseconds in SQL. */
     private const val NOW = "CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)"
@@ -56,6 +60,9 @@ object SyncTriggers {
     private val photoOf = { photoId: String -> "(SELECT uuid FROM photos WHERE id = $photoId)" }
     private val versionOf = { versionId: String -> "(SELECT uuid FROM versions WHERE id = $versionId)" }
 
+    /** The `setting` record id of an export preset (docs/adr/0025): [EXPORT_PRESET_PREFIX] + its uuid. */
+    private val exportPreset = { uuid: String -> "('$EXPORT_PRESET_PREFIX' || $uuid)" }
+
     /** name -> `AFTER ... ON ... ` clause and the record it marks. */
     private val TRIGGERS = listOf(
         Triple("photo_insert", "AFTER INSERT ON photos", mark("photo", "NEW.uuid")),
@@ -73,6 +80,18 @@ object SyncTriggers {
         Triple("recipe_update", "AFTER UPDATE ON recipes", mark("version", versionOf("NEW.version_id"))),
         Triple("cursor_insert", "AFTER INSERT ON history_cursor", mark("version", versionOf("NEW.version_id"))),
         Triple("cursor_update", "AFTER UPDATE ON history_cursor", mark("version", versionOf("NEW.version_id"))),
+        // Snapshots travel inside their version's record (docs/adr/0025). A cascade delete finds no version uuid.
+        Triple("snapshot_insert", "AFTER INSERT ON snapshots", mark("version", versionOf("NEW.version_id"))),
+        Triple("snapshot_update", "AFTER UPDATE ON snapshots", mark("version", versionOf("NEW.version_id"))),
+        Triple("snapshot_delete", "AFTER DELETE ON snapshots", mark("version", versionOf("OLD.version_id"))),
+        // Export presets are `setting` records, one per preset (docs/adr/0025 "Sync").
+        Triple("export_preset_insert", "AFTER INSERT ON export_presets", mark("setting", exportPreset("NEW.uuid"))),
+        Triple("export_preset_update", "AFTER UPDATE ON export_presets", mark("setting", exportPreset("NEW.uuid"))),
+        Triple(
+            "export_preset_delete",
+            "AFTER DELETE ON export_presets",
+            markDeleted("setting", exportPreset("OLD.uuid")),
+        ),
         Triple("preset_insert", "AFTER INSERT ON presets", mark("preset", "NEW.uuid")),
         Triple("preset_update", "AFTER UPDATE ON presets", mark("preset", "NEW.uuid")),
         Triple("preset_delete", "AFTER DELETE ON presets", markDeleted("preset", "OLD.uuid")),

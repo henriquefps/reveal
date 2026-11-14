@@ -10,7 +10,10 @@ import androidx.navigation.toRoute
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dev.hfps.image.format.PhotoMetadata
 import dev.hfps.reveal.data.db.PhotoEntity
+import dev.hfps.reveal.data.edit.CopySource
 import dev.hfps.reveal.data.edit.HistoryWriter
+import dev.hfps.reveal.data.edit.VersionInfo
+import dev.hfps.reveal.data.edit.VersionRepository
 import dev.hfps.reveal.data.library.LibraryRepository
 import dev.hfps.reveal.data.library.OriginalPlace
 import dev.hfps.reveal.data.library.PhotoDetail
@@ -37,9 +40,10 @@ import kotlinx.coroutines.launch
 
 /** What the viewer's pages and info sheet read (the ViewModel, or a fake in tests). */
 interface ViewerPages {
-    suspend fun display(id: Long, longEdge: Int): DisplayImage?
+    /** The screen-size image of photo [id] as version [versionId] shows it (a virtual copy has its own edit). */
+    suspend fun display(id: Long, versionId: Long, longEdge: Int): DisplayImage?
 
-    suspend fun developed(id: Long, longEdge: Int): Bitmap?
+    suspend fun developed(id: Long, versionId: Long, longEdge: Int): Bitmap?
 
     suspend fun region(id: Long): RegionSource?
 
@@ -54,9 +58,12 @@ interface ViewerPages {
     suspend fun isUnavailable(id: Long): Boolean = false
 }
 
-/** The photos the viewer pages through (a snapshot of the grid's list when it opened) and where it starts. */
+/** One viewer page: a photo's version (the photo's first one, or a virtual copy, docs/adr/0025). */
+data class ViewerPage(val photoId: Long, val versionId: Long)
+
+/** The cells the viewer pages through (a snapshot of the grid's list when it opened) and where it starts. */
 data class ViewerUiState(
-    val ids: List<Long> = emptyList(),
+    val pages: List<ViewerPage> = emptyList(),
     val start: Int = 0,
     val loaded: Boolean = false,
     /** The explanation of an unavailable photo (FIX/U); null = closed. */
@@ -69,7 +76,13 @@ data class ViewerUiState(
     val conflict: ConflictChoice? = null,
     /** Bumped when a conflict was resolved, so the page asks again whether it has one. */
     val conflictsResolved: Int = 0,
-)
+    /** The versions sheet of a photo (docs/adr/0025); null = closed. */
+    val versions: VersionsUi? = null,
+    /** A page to move to (a new virtual copy, a version picked in the sheet); consumed by the screen. */
+    val jumpTo: Int? = null,
+) {
+    val ids: List<Long> get() = pages.map { it.photoId }
+}
 
 /**
  * The full-screen viewer: the grid's photo list (same scope, filter, order, search) as a snapshot, so rating a photo
@@ -84,6 +97,7 @@ class ViewerViewModel @Inject constructor(
     private val unavailableHelper: UnavailableHelper,
     private val sync: SyncRepository,
     private val writer: HistoryWriter,
+    private val versions: VersionRepository,
 ) : ViewModel(),
     ViewerPages {
     private val route = savedState.toRoute<ViewerRoute>()
@@ -95,22 +109,96 @@ class ViewerViewModel @Inject constructor(
 
     init {
         viewModelScope.launch {
-            val ids = PhotoListCodec.decode(route.query)?.let { query ->
-                library.photoList(query).map { it.id }.distinct()
-            }.orEmpty().ifEmpty { listOf(route.photoId) }
-            _state.update {
-                it.copy(ids = ids, start = ids.indexOf(route.photoId).coerceAtLeast(0), loaded = true)
+            // One page per grid cell: a virtual copy is a page of its own (docs/adr/0025).
+            val pages = PhotoListCodec.decode(route.query)?.let { query ->
+                library.photoList(query).map { ViewerPage(it.id, it.versionId) }
+            }.orEmpty().ifEmpty {
+                listOfNotNull(versions.versions(route.photoId).firstOrNull()?.let { ViewerPage(route.photoId, it.id) })
             }
+            val start = pages.indexOfFirst { it.versionId == route.versionId }.takeIf { it >= 0 }
+                ?: pages.indexOfFirst { it.photoId == route.photoId }
+            _state.update { it.copy(pages = pages, start = start.coerceAtLeast(0), loaded = true) }
         }
+    }
+
+    // ------------------------------------------------------------------ versions (docs/adr/0025)
+
+    /** Opens the versions sheet of [page]'s photo. */
+    fun openVersions(page: ViewerPage, photoName: String) {
+        viewModelScope.launch {
+            val list = versions.versions(page.photoId)
+            _state.update { it.copy(versions = VersionsUi(photoName, list, page.versionId)) }
+        }
+    }
+
+    fun dismissVersions() = _state.update { it.copy(versions = null) }
+
+    /** Shows [version]: its page when the viewer lists it, else a page added after its photo's last one. */
+    fun showVersion(version: VersionInfo) {
+        _state.update { s -> s.withPage(ViewerPage(version.photoId, version.id)).copy(versions = null) }
+    }
+
+    /** A virtual copy of the version on screen (its edit, or the original), shown at once. */
+    fun createCopy(source: CopySource, nameFor: (Int) -> String) {
+        val sheet = _state.value.versions ?: return
+        viewModelScope.launch {
+            writer.flush()
+            val id = versions.createCopy(sheet.currentVersionId, source, nameFor) ?: return@launch
+            val photoId = versions.version(id)?.photoId ?: return@launch
+            _state.update { s -> s.withPage(ViewerPage(photoId, id)).copy(versions = null) }
+        }
+    }
+
+    fun renameVersion(version: VersionInfo, name: String) {
+        viewModelScope.launch {
+            versions.rename(version.id, name)
+            refreshVersions()
+        }
+    }
+
+    /** Deletes a virtual copy; its page leaves the viewer. */
+    fun deleteVersion(version: VersionInfo) {
+        viewModelScope.launch {
+            writer.flush()
+            if (!versions.delete(version.id)) return@launch
+            _state.update { s ->
+                val pages = s.pages.filter { it.versionId != version.id }
+                s.copy(pages = pages)
+            }
+            refreshVersions()
+        }
+    }
+
+    /** The screen moved to the requested page. */
+    fun jumped() = _state.update { it.copy(jumpTo = null) }
+
+    private suspend fun refreshVersions() {
+        val sheet = _state.value.versions ?: return
+        val photoId = sheet.versions.firstOrNull()?.photoId ?: return
+        val list = versions.versions(photoId)
+        _state.update { s -> s.versions?.let { s.copy(versions = it.copy(versions = list)) } ?: s }
+    }
+
+    /** [page] added after its photo's last page when missing, and asked to be shown. */
+    private fun ViewerUiState.withPage(page: ViewerPage): ViewerUiState {
+        val existing = pages.indexOf(page)
+        if (existing >= 0) return copy(jumpTo = existing)
+        val after = pages.indexOfLast { it.photoId == page.photoId }
+        val at = if (after < 0) pages.size else after + 1
+        return copy(pages = pages.toMutableList().apply { add(at, page) }, jumpTo = at)
     }
 
     fun photo(id: Long): Flow<PhotoEntity?> = library.observePhoto(id)
 
-    override suspend fun display(id: Long, longEdge: Int): DisplayImage? = runCatching {
-        images.display(id, longEdge)
+    override suspend fun display(id: Long, versionId: Long, longEdge: Int): DisplayImage? = runCatching {
+        images.display(id, longEdge, versionId)
     }.getOrNull()
 
-    override suspend fun developed(id: Long, longEdge: Int): Bitmap? = images.developed(id, longEdge)
+    override suspend fun developed(id: Long, versionId: Long, longEdge: Int): Bitmap? =
+        images.developed(id, longEdge, versionId)
+
+    /** The version [versionId] as the top bar names it (null when gone). */
+    suspend fun version(versionId: Long): VersionInfo? = versions.version(versionId)
 
     override suspend fun region(id: Long): RegionSource? = images.region(id)
 
@@ -201,6 +289,6 @@ class ViewerViewModel @Inject constructor(
     suspend fun conflictThumbnail(photoId: Long, side: ConflictSide): ImageBitmap? =
         thumbnails.thumbnail(photoId, side.versionId, side.editTime)?.asImageBitmap()
 
-    /** The version the editor opens for [id] (its first; virtual copies are M5). */
+    /** The version the editor opens for [id] (its first; a page knows its own version). */
     suspend fun versionOf(id: Long): Long? = library.detail(id)?.versionId
 }

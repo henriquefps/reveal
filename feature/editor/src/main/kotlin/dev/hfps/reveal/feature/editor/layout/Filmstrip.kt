@@ -183,7 +183,7 @@ private fun CellBadges(row: PhotoRow) {
             .fillMaxSize()
             .padding(3.dp),
     ) {
-        if (row.hasEdit) {
+        if (row.edited) {
             Box(
                 Modifier
                     .align(Alignment.TopEnd)
@@ -242,7 +242,7 @@ private fun cellDescription(row: PhotoRow): String {
             PickFlag.REJECT -> add(stringResource(R.string.editor_filmstrip_rejected))
             PickFlag.NONE -> Unit
         }
-        if (row.hasEdit) add(stringResource(R.string.editor_filmstrip_edited))
+        if (row.edited) add(stringResource(R.string.editor_filmstrip_edited))
     }
     return parts.joinToString(", ")
 }

@@ -13,6 +13,7 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import dev.hfps.reveal.data.edit.EditRepository
 import dev.hfps.reveal.data.export.Authorship
 import dev.hfps.reveal.data.export.ExportPreferences
+import dev.hfps.reveal.data.export.ExportPresetRepository
 import dev.hfps.reveal.data.library.LibraryRepository
 import dev.hfps.reveal.feature.export.encode.EncoderSupport
 import dev.hfps.reveal.feature.export.engine.ExportFailure
@@ -20,6 +21,8 @@ import dev.hfps.reveal.feature.export.engine.SizeEstimator
 import dev.hfps.reveal.feature.export.model.ExportDestination
 import dev.hfps.reveal.feature.export.model.ExportFormat
 import dev.hfps.reveal.feature.export.model.ExportOptions
+import dev.hfps.reveal.feature.export.model.ExportPreset
+import dev.hfps.reveal.feature.export.model.ExportPresets
 import dev.hfps.reveal.feature.export.work.ExportJobItem
 import dev.hfps.reveal.feature.export.work.ExportJobStore
 import dev.hfps.reveal.feature.export.work.ExportWorker
@@ -88,7 +91,17 @@ data class ExportUiState(
     val share: List<Uri> = emptyList(),
     /** Photos of the request Reveal can no longer read: they export from their preview (ADR 0011). */
     val previewOnly: Int = 0,
-)
+    /** The export presets (docs/adr/0025): built-ins, then the user's. */
+    val presets: List<ExportPreset> = ExportPresets.builtIns,
+    /**
+     * The preset last picked (its [ExportPreset.key]) while the options still come from it, else the preset matching
+     * the options; null = none. [presetModified]: the options changed since it was picked (offers "Update").
+     */
+    val activePreset: String? = null,
+) {
+    val active: ExportPreset? get() = presets.firstOrNull { it.key == activePreset }
+    val presetModified: Boolean get() = active?.let { it.options != options } ?: false
+}
 
 /**
  * The export sheet: options (remembered), the live size estimate, starting the background job and following it.
@@ -100,6 +113,7 @@ class ExportViewModel @Inject constructor(
     private val preferences: ExportPreferences,
     private val library: LibraryRepository,
     private val edits: EditRepository,
+    private val presetStore: ExportPresetRepository,
 ) : ViewModel() {
     private val _state = MutableStateFlow(
         ExportUiState(
@@ -126,6 +140,53 @@ class ExportViewModel @Inject constructor(
             }
         }
         viewModelScope.launch { preferences.authorship.collect { a -> _state.update { it.copy(authorship = a) } } }
+        viewModelScope.launch {
+            presetStore.observe().collect { stored ->
+                _state.update { s ->
+                    val presets = ExportPresets.all(stored)
+                    val active = s.activePreset?.takeIf { key -> presets.any { it.key == key } }
+                        ?: ExportPresets.matching(s.options, presets)?.key
+                    s.copy(presets = presets, activePreset = active)
+                }
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------ export presets (docs/adr/0025)
+
+    /** Applies [preset]'s options in one tap (made usable on this device: folder grant, HEIF support). */
+    fun pickPreset(preset: ExportPreset) {
+        val options = ExportPresets.resolve(preset, _state.value.support?.heif ?: true, ::folderGranted)
+        _state.update { it.copy(activePreset = preset.key) }
+        setOptions(options)
+    }
+
+    /** Saves the sheet's current options as a new preset named [name]; it becomes the active one. */
+    fun savePreset(name: String) {
+        val options = _state.value.options
+        viewModelScope.launch {
+            val uuid = presetStore.create(name, options.encode())
+            _state.update { it.copy(activePreset = uuid) }
+        }
+    }
+
+    fun renamePreset(uuid: String, name: String) {
+        viewModelScope.launch { presetStore.update(uuid, name = name) }
+    }
+
+    /** Stores the sheet's current options in the user preset [uuid]. */
+    fun updatePreset(uuid: String) {
+        val options = _state.value.options
+        viewModelScope.launch { presetStore.update(uuid, optionsJson = options.encode()) }
+    }
+
+    fun deletePreset(uuid: String) {
+        _state.update { if (it.activePreset == uuid) it.copy(activePreset = null) else it }
+        viewModelScope.launch { presetStore.delete(uuid) }
+    }
+
+    private fun folderGranted(treeUri: String): Boolean = context.contentResolver.persistedUriPermissions.any {
+        it.uri.toString() == treeUri && it.isWritePermission
     }
 
     /** Shows the sheet for [request] (a new request resets the estimate; a running job keeps being followed). */
@@ -152,7 +213,12 @@ class ExportViewModel @Inject constructor(
     }
 
     fun setOptions(options: ExportOptions) {
-        _state.update { it.copy(options = options) }
+        _state.update { s ->
+            // The picked preset stays active while it is being adjusted; otherwise a preset the options match is.
+            val keep = s.active?.let { it is ExportPreset.User || it.options == options } == true
+            val active = if (keep) s.activePreset else ExportPresets.matching(options, s.presets)?.key
+            s.copy(options = options, activePreset = active)
+        }
         preferences.lastOptionsJson = options.encode()
         refreshEstimate()
     }

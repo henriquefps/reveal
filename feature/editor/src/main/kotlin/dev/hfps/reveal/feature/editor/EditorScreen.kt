@@ -48,6 +48,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.onPlaced
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.CustomAccessibilityAction
@@ -117,7 +118,9 @@ fun EditorScreen(
     val galleryPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
         viewModel.retryOpen()
     }
-    val actions = remember(viewModel, strip, onBack, onSwitch, context) {
+    val scope = rememberCoroutineScope()
+    val resources = LocalResources.current
+    val actions = remember(viewModel, strip, onBack, onSwitch, context, resources) {
         EditorActions(
             onBack = onBack,
             onOpenSender = viewModel::openSender,
@@ -139,6 +142,20 @@ fun EditorScreen(
             onPickNeutral = viewModel::pickNeutral,
             onUndo = viewModel::undo,
             onRedo = viewModel::redo,
+            onCreateCopy = {
+                scope.launch {
+                    val id = viewModel.createCopy { n -> resources.getString(R.string.editor_copy_name, n) }
+                        ?: return@launch
+                    Toast.makeText(context, R.string.editor_copy_created, Toast.LENGTH_SHORT).show()
+                    onSwitch(viewModel.routeFor(id, viewModel.initialTool))
+                }
+            },
+            onSaveSnapshot = { name ->
+                viewModel.saveSnapshot(name, resources.getString(R.string.editor_snapshot_default_name, 1))
+            },
+            onApplySnapshot = viewModel::applySnapshot,
+            onRenameSnapshot = viewModel::renameSnapshot,
+            onDeleteSnapshot = viewModel::deleteSnapshot,
             onGoTo = viewModel::goTo,
             onCopy = {
                 viewModel.copy()

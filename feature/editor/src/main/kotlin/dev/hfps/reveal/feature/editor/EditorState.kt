@@ -3,6 +3,7 @@ package dev.hfps.reveal.feature.editor
 import androidx.compose.runtime.Immutable
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.ImageBitmap
+import dev.hfps.reveal.data.edit.SnapshotInfo
 import dev.hfps.reveal.feature.editor.edit.AsShot
 import dev.hfps.reveal.feature.editor.masks.MaskActions
 import dev.hfps.reveal.feature.editor.masks.MasksUiState
@@ -175,9 +176,23 @@ data class EditorUiState(
     val previewOnly: PreviewOnly? = null,
     /** The Masks tool (docs/adr/0022 "M4/B (editor)"): selection, brush, overlay, AI states. */
     val masks: MasksUiState = MasksUiState(),
+    /** Virtual copies and snapshots of the version being edited (docs/adr/0025). */
+    val versions: VersionsState = VersionsState(),
 ) {
     val ready: Boolean get() = phase is EditorPhase.Ready
 }
+
+/**
+ * The version being edited (docs/adr/0025): [library] = a library version (copies and snapshots are possible; a photo
+ * opened from another app without a library entry has neither), [copyName] = a virtual copy's name (the top bar shows
+ * it), [snapshots] newest first.
+ */
+@Immutable
+data class VersionsState(
+    val library: Boolean = false,
+    val copyName: String? = null,
+    val snapshots: List<SnapshotInfo> = emptyList(),
+)
 
 /** Everything the editor content can ask for; defaults do nothing (screenshot tests, previews). */
 @Suppress("LongParameterList")
@@ -214,6 +229,14 @@ class EditorActions(
     val onPickNeutral: (imageX: Float, imageY: Float) -> Unit = { _, _ -> },
     val onUndo: () -> Unit = {},
     val onRedo: () -> Unit = {},
+    /** More ⋯ → "Create virtual copy": a copy of the current edit, then the editor moves to it (docs/adr/0025). */
+    val onCreateCopy: () -> Unit = {},
+    /** Saves the committed recipe as a snapshot named [name]. */
+    val onSaveSnapshot: (name: String) -> Unit = {},
+    /** Applies a snapshot as one history step. */
+    val onApplySnapshot: (snapshotId: Long) -> Unit = {},
+    val onRenameSnapshot: (snapshotId: Long, name: String) -> Unit = { _, _ -> },
+    val onDeleteSnapshot: (snapshotId: Long) -> Unit = {},
     /** History list: jump to the step at a position (-1 = the original). */
     val onGoTo: (Int) -> Unit = {},
     /** More ⋯: copy the whole edit; the paste chooser picks the groups. */

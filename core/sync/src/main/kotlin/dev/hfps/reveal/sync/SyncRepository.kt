@@ -19,6 +19,7 @@ import dev.hfps.reveal.sync.api.SyncApi
 import dev.hfps.reveal.sync.api.SyncHttpException
 import dev.hfps.reveal.sync.blobs.BlobUploader
 import dev.hfps.reveal.sync.engine.ConflictPair
+import dev.hfps.reveal.sync.engine.EditPreviews
 import dev.hfps.reveal.sync.engine.ServerChangedException
 import dev.hfps.reveal.sync.engine.ServerLibrary
 import dev.hfps.reveal.sync.engine.SyncEngine
@@ -113,6 +114,8 @@ class SyncRepository(
     private val trees: DocumentTreeFactory? = null,
     private val library: ServerLibrary = ServerLibrary(db, store),
     private val newApi: (url: String, key: String?) -> SyncApi = { url, key -> SyncApi(url, key) },
+    /** Edited previews for the server's gallery (Hoard ADR 0020); null = never (tests, no renderer). */
+    private val editPreviews: EditPreviews? = null,
 ) {
     /**
      * The device's name, platform and app version, sent when pairing, and how it describes itself to a server with
@@ -224,6 +227,7 @@ class SyncRepository(
 
     private suspend fun forgetLocked() {
         store.forget()
+        editPreviews?.forget()
         engine.resetCursors()
         files.clear()
     }
@@ -333,6 +337,7 @@ class SyncRepository(
      * dropping the previews no longer needed and, when [originalsAllowed] (the network suits the Wi-Fi rule), the
      * originals backup. Returns true when more work is left for another run.
      */
+    @Suppress("CyclomaticComplexMethod")
     suspend fun syncBlobs(originalsAllowed: Boolean, unmetered: Boolean = false): Boolean =
         withContext(Dispatchers.IO) {
             val api = api() ?: return@withContext false
@@ -346,6 +351,14 @@ class SyncRepository(
                 }
                 progress += uploader.drops(api)
                 if (options.originals && originalsAllowed) progress += uploader.originals(api, ORIGINALS_PER_RUN)
+                // Edited previews follow the originals' network rule (a few MB each, rendered on this device).
+                val edits = editPreviews
+                if (edits != null && options.editedPreviews && originalsAllowed) {
+                    val report = edits.run(api, EDITS_PER_RUN)
+                    if (report.progress > 0) Log.i(TAG, "edited previews: $report")
+                    progress += report.progress
+                    if (report.uploaded >= EDITS_PER_RUN) return@withContext true
+                }
                 val left = blobWorkLeft(options, originalsAllowed)
                 // A run that moved nothing forward (every item unreadable or failing) does not start the next one at
                 // once: the next metadata sync or the periodic job tries again.
@@ -426,6 +439,9 @@ class SyncRepository(
         /** Previews made again in the current format per blob run (unmetered network only; never re-schedules). */
         const val REFORMATS_PER_RUN = 3
         const val ORIGINALS_PER_RUN = 10
+
+        /** Edited previews rendered per blob run (each a develop render at 2560 px). */
+        const val EDITS_PER_RUN = 5
         const val HEADERS_PER_RUN = 300
         const val HTTP_CONFLICT = 409
         const val HTTP_NOT_FOUND = 404

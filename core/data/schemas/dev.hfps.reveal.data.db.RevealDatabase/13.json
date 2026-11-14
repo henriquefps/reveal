@@ -2,7 +2,7 @@
   "formatVersion": 1,
   "database": {
     "version": 13,
-    "identityHash": "d57454b2e18621ec42e31d607cb0c1ba",
+    "identityHash": "3cc1cf6784d1753770a4f482c208038e",
     "entities": [
       {
         "tableName": "meta",
@@ -1908,11 +1908,80 @@
             ]
           }
         ]
+      },
+      {
+        "tableName": "edit_uploads",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`version_uuid` TEXT NOT NULL, `photo_id` INTEGER NOT NULL, `item_id` TEXT, `digest` TEXT, `label` TEXT NOT NULL, `primary` INTEGER NOT NULL, `virtual_copy` INTEGER NOT NULL, `edited_at` INTEGER NOT NULL, `refused` TEXT, `updated_at` INTEGER NOT NULL, PRIMARY KEY(`version_uuid`))",
+        "fields": [
+          {
+            "fieldPath": "versionUuid",
+            "columnName": "version_uuid",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "photoId",
+            "columnName": "photo_id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "itemId",
+            "columnName": "item_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "digest",
+            "columnName": "digest",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "label",
+            "columnName": "label",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "primary",
+            "columnName": "primary",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "virtualCopy",
+            "columnName": "virtual_copy",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "editedAt",
+            "columnName": "edited_at",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "refused",
+            "columnName": "refused",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "updatedAt",
+            "columnName": "updated_at",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "version_uuid"
+          ]
+        }
       }
     ],
     "setupQueries": [
       "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
-      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, 'd57454b2e18621ec42e31d607cb0c1ba')"
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '3cc1cf6784d1753770a4f482c208038e')"
     ]
   }
 }

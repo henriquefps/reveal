@@ -1,4 +1,4 @@
-# ADR 0027: Culling sync with hoard-server, device identity, XMP culling fixes
+# ADR 0027: Culling sync with hoard-server, device identity, edited previews, XMP culling fixes
 
 Status: accepted (R0.8). Date: 2026-11-14. Implements Hoard ADR 0016 "Client rules" 1–5 and "Wire format" (culling
 records, per-field last writer wins) and Hoard ADR 0017 "Client calls" (one device identity for Hoard and Reveal) on
@@ -6,7 +6,8 @@ Reveal's side. Amends ADR 0018 (culling no longer travels inside `photo` records
 records), ADR 0006 "XMP" and ADR 0026 (which culling properties a sidecar write touches, how a sidecar is imported),
 and ADR 0011 "Culling" (hand-off values are pushed only when they differ from the server's). Database v13. Protocol of
 record: Hoard's `docs/adr/0013-server-protocol.md` ("Culling", "Physical devices"); pinned server
-`hoard-server:0.8.0` (`scripts/sync/local-server.sh`).
+`hoard-server:0.9.0` (`scripts/sync/local-server.sh`). Also implements Hoard ADR 0020 "Client rules (Reveal)"
+(edited previews for the server's gallery, section "Edited previews").
 
 Code: `:core:data` `db/CullingEntities.kt`, `db/CullingDao.kt`, `db/SyncTriggers.kt` (v5), `library/SidecarImport.kt`,
 `library/SidecarSync.kt`, `xmp/Xmp.kt` (`SidecarCulling`, `CullingChanges`, `XmpWriter.update(write = …)`),
@@ -150,6 +151,39 @@ N extra records per decision).
   ms, any `CULLING_VERSION`; Hoard's planned version 2): they date the queued change (blind) instead of the hand-off's
   time.
 
+### Edited previews (Hoard ADR 0020)
+
+With `edits` in `/v1/server` `features` (hoard-server 0.9.0 with previews on), every **edited** version (a non-default
+committed recipe; the main version and virtual copies, never a sync conflict copy) gets its rendered look on the
+server, so the web gallery and Hoard show the photo as finished in Reveal.
+
+- **When.** In the blob job (`SyncRepository.syncBlobs`), under the originals' network rule (unmetered, unless
+  "Originals over Wi-Fi only" is off) and Settings → Sync → "Edited photos for the gallery" (on by default), at most 5
+  renders per run (the job runs again while there is more). A version goes up once its edit **settled**: its recipe
+  unchanged for `EditPreviews.SETTLE_MS` (60 s) and its record pushed; not on every slider step.
+- **Which item.** `POST /v1/items/lookup` with the photos' main fingerprints (batches of ≤ 1000) names each photo's
+  item and the edits it already holds; a photo the server does not index (phone-only, not backed up) is skipped
+  until it is (an edited photo's original is backed up by default, ADR 0018 FIX/P).
+- **Render.** `ThumbnailRepository.renderEdit`: the same develop as the thumbnails and the viewer (GPU, AI masks from
+  the masks' cache or made, Remove fills), proxy at the server's `maxEdge` (2560), the geometry's output (sRGB,
+  upright, a crop is smaller than 2560: never upscaled), JPEG quality 90 (80, 70 only when over `maxBytes`).
+- **Digest.** `r<PIPELINE_VERSION>.<EditPreviews.RENDER_VERSION>:` + SHA-256 of the recipe re-encoded by the codec:
+  equal for the same edit on every device, new when the recipe or Reveal's rendering changes. An edit whose digest
+  the server already holds (uploaded by this or another device) is never rendered again; a change of label (the
+  version's name; `""` for the main version), primary (the main version when edited, else the first edited copy:
+  what Reveal's grid shows) or `editedAt` (the version record's `modifiedAt`) is a header-only PUT.
+- **Deletes.** A version reset to unedited, or deleted here (a tombstone), is deleted on the server
+  (`DELETE /v1/items/{itemId}/edits/{versionId}`); a version gone without a tombstone (its folder removed) only
+  leaves this device's state.
+- **Answers.** `409 older` (another device's later edit), `422 invalid_image` / `too_many_edits` /
+  `not_applicable`: remembered (`edit_uploads.refused` = digest + time) and not tried again until the edit changes;
+  `image_required` on a header-only PUT: sent again with the image; `404`: looked up again next pass; transient
+  errors: the job retries.
+- **State.** `edit_uploads` (v13): per version uuid the item, digest and metadata the server holds. Each pass
+  recomputes the work from it and the database, so nothing is lost when a run is cut short. Unpairing clears it.
+- Known limit: a version whose item later changes id (a lone JPEG whose RAW appeared: the server moves the edit) is
+  deleted on the old id only when it is next reset; the server's move keeps the gallery right meanwhile.
+
 ## Consequences
 
 - Rating, pick and label made at the same time on different devices or apps all survive; Hoard's decisions reach
@@ -178,6 +212,11 @@ N extra records per decision).
   selective write), `SidecarSyncTest` (rating-only and edit-only writes, changed-fields import dated by mtime, cleared
   label, reject keeps stars), `HandoffIntentsTest` / `HandoffRepositoryTest` (sender times, values the server already
   holds), `RevealDatabaseMigrationTest` (12 → 13).
+- Edited previews: `EditPreviewsTest` (fake: upload once, settle, virtual copies, header-only rename, primary,
+  reset and delete, conflict copies excluded, `409 older` not retried, another device's upload not re-rendered,
+  unindexed photo and older server, digest); `RealServerEditsTest` (`REVEAL_EDITS_LINK`: backup -> item, upload, lookup
+  lists it, header-only PUT, `image_required`, reset deletes it); instrumented `EditedPreviewFlowTest` (`-e syncLink`,
+  GPU: a real device): +2 EV in Reveal -> the server's `preview?edit=primary` is the brighter edit.
 - Instrumented: `dev.hfps.reveal.sync.CullingFlowTest` (`-e syncLinks`): pair from the Sync screen after "Hoard",
   answer "Same phone", see Hoard under This device, a rating + pick Hoard sends appear in the grid without a manual
   sync, a reject made in Reveal reaches the server with the stars kept. Goldens `phone_this_device*`,

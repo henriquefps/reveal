@@ -12,6 +12,11 @@ All notable changes to Reveal are documented here. The format follows
   Hoard at the same moment both survive; decisions made offline keep their time; a label longer than the server takes
   stays on this device. Ratings Hoard (or the server's web gallery) sets appear in the library within one foreground
   sync (about 20 s on the emulator), and Reveal's go up within a few seconds. Older servers keep today's behaviour.
+- Edited photos in the server's gallery (Hoard ADR 0020, hoard-server 0.9.0): once an edit settles, Reveal renders
+  it (2560 px, JPEG, every tool including AI masks and Remove) and uploads it to the shot on the server, virtual copies
+  as copies, so the web gallery and Hoard show the photo as finished in Reveal; an unchanged edit is never sent again,
+  a rename sends no image, a reset or deleted version is removed there. Over Wi-Fi like the originals; Settings ->
+  Sync -> "Edited photos for the gallery".
 - Settings -> Sync -> This device (Hoard ADR 0017): how the server knows this phone, Hoard on the same phone, and a
   one-tap "Same phone?" question after pairing when Hoard is paired from a phone of the same model. Reveal reports its
   app id (with the build variant: `reveal`, `reveal-debug`, `reveal-bench`), manufacturer and model.
@@ -23,7 +28,7 @@ All notable changes to Reveal are documented here. The format follows
   rating). Values another app hands over that the server already has are not sent back to it.
 
 ### Changed
-- Database v13 (culling tables). `scripts/sync/local-server.sh` pins `hoard-server:0.8.0`.
+- Database v13 (culling and edited-preview tables). `scripts/sync/local-server.sh` pins `hoard-server:0.9.0`.
 
 ### Changed
 - The sync server moved to Hoard (SRV/M): it is now `hoard-server` (github.com/henriquefps/hoard, `server/`, image

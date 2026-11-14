@@ -948,12 +948,21 @@ any photo record push (`SyncEngine.report`), pairing candidates -> `SyncReposito
 question), `thisDevice()` / `claim()`, Settings -> Sync -> This device (`feature/settings/sync/ThisDeviceScreen.kt`,
 goldens `phone_this_device*`, `phone_same_phone_dark`). Hand-off values equal to the server's cached value are not
 pushed; `EXTRA_CULLING` may carry `ratingModifiedAt`/`flagModifiedAt`/`labelModifiedAt`.
+Edited previews (Hoard ADR 0020, `features` `edits`, hoard-server 0.9.0): `engine/EditPreviews` in the blob job
+(originals' network rule, `SyncOptions.editedPreviews`): settled edited versions (60 s, record pushed; never conflict
+copies) -> `POST /v1/items/lookup` -> `ThumbnailRepository.renderEdit` at `maxEdge` (JPEG q90) ->
+`PUT /v1/items/{itemId}/edits/{versionUuid}` (digest `r<pipeline>.<render>:<sha256>`, header-only when only
+label/primary/time changed), DELETE for reset or tombstoned versions; state in `edit_uploads`. Bump
+`EditPreviews.RENDER_VERSION` when the render of an edit changes.
 
 ```sh
 ./gradlew :core:sync:testDebugUnitTest --tests '*CullingSyncTest*' --tests '*DeviceIdentityTest*'
 # against the real server (loopback, three fresh links):
 REVEAL_SYNC_LINKS=$(for i in 1 2 3; do scripts/sync/local-server.sh pair <work dir>; done | paste -sd,) \
   ./gradlew --no-configuration-cache :core:sync:testDebugUnitTest --tests '*RealServerCullingTest*'
+REVEAL_EDITS_LINK=$(scripts/sync/local-server.sh pair <work dir>) \
+  ./gradlew --no-configuration-cache :core:sync:testDebugUnitTest --tests '*RealServerEditsTest*'
+adb -s <serial> shell am instrument -w -e class dev.hfps.reveal.sync.EditedPreviewFlowTest -e syncLink "'$L1'" dev.hfps.reveal.debug.test/androidx.test.runner.AndroidJUnitRunner   # GPU: a real device
 adb -s <serial> shell am instrument -w -e class dev.hfps.reveal.sync.CullingFlowTest -e syncLinks "'$L1,$L2'" dev.hfps.reveal.debug.test/androidx.test.runner.AndroidJUnitRunner
 adb -s <serial> logcat -d -s REVEAL_CULLING RevealSync
 ```

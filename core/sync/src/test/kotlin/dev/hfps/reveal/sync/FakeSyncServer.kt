@@ -101,10 +101,14 @@ class FakeSyncServer : Dispatcher() {
     /** Culling records, items and device identity (hoard-server 0.7.0). */
     val culling = FakeCulling(serverId) { clock() }
 
-    /** Turns on what hoard-server 0.7.0+ lists. */
-    fun hoard() {
+    /** Edited previews (hoard-server 0.9.0). */
+    val edits = FakeEdits(culling) { clock() }
+
+    /** Turns on what hoard-server 0.7.0+ lists ([edits]: 0.9.0 with previews on). */
+    fun hoard(edits: Boolean = false) {
         features.clear()
         features += listOf("items", "culling", "device-identity")
+        if (edits) features += listOf("previews", "edits")
     }
 
     fun start(): String {
@@ -193,6 +197,24 @@ class FakeSyncServer : Dispatcher() {
             path == "/v1/changes" && method == "POST" -> push(device, request)
 
             path == "/v1/fingerprints/lookup" -> lookup(request)
+
+            path == "/v1/items/lookup" && "items" in features ->
+                ok(edits.lookup(json.parseToJsonElement(request.body!!.utf8()).jsonObject))
+
+            path.matches(Regex("/v1/items/[^/]+/edits/[^/]+")) && "edits" in features -> {
+                val parts = url.pathSegments
+                val answer = if (method == "DELETE") {
+                    edits.delete(parts[2], parts[4])
+                } else {
+                    edits.put(device, parts[2], parts[4], request)
+                }
+                when (answer) {
+                    is FakeEdits.Answer.Ok -> MockResponse.Builder().code(answer.status)
+                        .addHeader("Content-Type", "application/json").body(answer.body.toString()).build()
+
+                    is FakeEdits.Answer.Error -> error(answer.status, answer.code, answer.details)
+                }
+            }
 
             path == "/v1/culling" && method == "POST" && "culling" in features ->
                 ok(culling.push(device, json.parseToJsonElement(request.body!!.utf8()).jsonObject))

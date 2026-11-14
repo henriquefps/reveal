@@ -140,4 +140,6 @@
     <string name="device_same_phone_yes">Same phone</string>
     <string name="device_same_phone_no">Another device</string>
     <string name="device_same_phone_none">None</string>
+    <string name="sync_edited_previews">Edited photos for the gallery</string>
+    <string name="sync_edited_previews_subtitle">Your edits, rendered at 2560 px, so the server\'s web gallery and Hoard show them as you finished them. Sent under the originals\' Wi-Fi rule; only servers that support it.</string>
 </resources>

@@ -27,7 +27,8 @@ import androidx.sqlite.db.SupportSQLiteDatabase
  * | 11 | ADR 0018 FIX/W ([MIGRATION_10_11]): `versions.edit_device` / `edited_at`; Server photos read their header |
  * |    | again, hand-offs back up only edited photos |
  * | 12 | Versions (docs/adr/0025): `snapshots`, `export_presets` |
- * | 13 | Culling sync (ADR 0027): `culling_records`, `culling_files`, `culling_pending`, `sidecar_culling` |
+ * | 13 | Culling sync and edited previews (ADR 0027): `culling_records`, `culling_files`, `culling_pending`, |
+ * |    | `sidecar_culling`, `edit_uploads` |
  * |    | ([Migration12To13] fills `sidecar_culling` from the photos' sidecar values) |
  *
  * Open it with [configure] (migrations and the sync triggers of [SyncTriggers]).
@@ -59,6 +60,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         CullingFileEntity::class,
         CullingPendingEntity::class,
         SidecarCullingEntity::class,
+        EditUploadEntity::class,
     ],
     version = RevealDatabase.VERSION,
     exportSchema = true,
@@ -88,6 +90,8 @@ abstract class RevealDatabase : RoomDatabase() {
     abstract fun versionDao(): VersionDao
 
     abstract fun cullingDao(): CullingDao
+
+    abstract fun editUploadDao(): EditUploadDao
 
     /**
      * 12 -> 13 (ADR 0027): the culling tables are new; `sidecar_culling` starts as what each photo's sidecar held when

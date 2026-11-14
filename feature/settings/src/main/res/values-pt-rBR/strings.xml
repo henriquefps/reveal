@@ -141,4 +141,6 @@
     <string name="device_same_phone_yes">Mesmo celular</string>
     <string name="device_same_phone_no">Outro aparelho</string>
     <string name="device_same_phone_none">Nenhum</string>
+    <string name="sync_edited_previews">Fotos editadas para a galeria</string>
+    <string name="sync_edited_previews_subtitle">Suas edições, renderizadas em 2560 px, para a galeria web do servidor e o Hoard mostrarem como você as finalizou. Enviadas pela regra de Wi-Fi dos originais; só em servidores compatíveis.</string>
 </resources>

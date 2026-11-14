@@ -108,6 +108,72 @@ class SyncApi(baseUrl: String, private val apiKey: String?, private val client: 
         return client.newCall(request.build()).execute().use { response -> parse(response, DeviceView.serializer()) }
     }
 
+    // ------------------------------------------------------------------ edited previews (Hoard ADR 0020)
+
+    /** `POST /v1/items/lookup`: the live items having any of [fingerprints] (≤ 1000) as a member, with their edits. */
+    fun itemsLookup(fingerprints: List<String>): ItemsLookupResponse = post(
+        url("v1/items/lookup"),
+        LookupRequest.serializer(),
+        LookupRequest(fingerprints),
+        ItemsLookupResponse.serializer(),
+    )
+
+    /**
+     * `PUT /v1/items/{itemId}/edits/{versionId}`: [image] (JPEG) with [meta] in headers; null [image] = a
+     * metadata-only change (the server keeps the stored image when the digest is the same).
+     */
+    fun putEdit(itemId: String, versionId: String, meta: EditMeta, image: ByteArray?): EditPutResponse {
+        val body = image?.toRequestBody(JPEG_TYPE) ?: ByteArray(0).toRequestBody(null)
+        val request = authed(Request.Builder().url(editUrl(itemId, versionId)).put(body))
+            .header("Accept", "application/json")
+            .header("X-Hoard-Recipe-Digest", meta.recipeDigest)
+            .header("X-Hoard-Edited-At", meta.editedAt.toString())
+            .header("X-Hoard-Label", java.net.URLEncoder.encode(meta.label, "UTF-8").replace("+", "%20"))
+            .header("X-Hoard-Virtual-Copy", meta.virtualCopy.toString())
+            .header("X-Hoard-Primary", meta.primary.toString())
+        return client.newCall(request.build()).execute().use { response ->
+            parse(response, EditPutResponse.serializer())
+        }
+    }
+
+    /** `DELETE /v1/items/{itemId}/edits/{versionId}`: idempotent; false when the server never had the item (`404`). */
+    fun deleteEdit(itemId: String, versionId: String): Boolean {
+        val request = authed(Request.Builder().url(editUrl(itemId, versionId)).delete())
+        return client.newCall(request.build()).execute().use { response ->
+            if (response.code == HTTP_NOT_FOUND) return false
+            check(response)
+            true
+        }
+    }
+
+    /** `GET` of a stored edit (tests): its bytes, or null (`404`). */
+    fun editImage(itemId: String, versionId: String): ByteArray? {
+        val request = authed(Request.Builder().url(editUrl(itemId, versionId)))
+        return client.newCall(request.build()).execute().use { response ->
+            if (response.code == HTTP_NOT_FOUND) return null
+            check(response)
+            response.body.bytes()
+        }
+    }
+
+    /**
+     * `GET /v1/items/{itemId}/preview?size=screen&format=jpeg&edit=[edit]` (Hoard ADR 0020 "Previews of an edit"):
+     * the bytes, or null while it is not made yet or there is no such edit (`404`). Checks and tests.
+     */
+    fun itemPreview(itemId: String, edit: String = "primary"): ByteArray? {
+        val url = url("v1/items").newBuilder().addPathSegment(itemId).addPathSegment("preview")
+            .addQueryParameter("size", "screen").addQueryParameter("format", "jpeg")
+            .addQueryParameter("edit", edit).build()
+        return client.newCall(authed(Request.Builder().url(url)).build()).execute().use { response ->
+            if (response.code == HTTP_NOT_FOUND || response.code == HTTP_ACCEPTED) return null
+            check(response)
+            response.body.bytes()
+        }
+    }
+
+    private fun editUrl(itemId: String, versionId: String) = url("v1/items").newBuilder().addPathSegment(itemId)
+        .addPathSegment("edits").addPathSegment(versionId).build()
+
     // ------------------------------------------------------------------ culling (Hoard ADR 0016)
 
     /** The culling records changed since [cursor], from the items feed (`include=culling`: no items downloaded). */
@@ -345,6 +411,7 @@ class SyncApi(baseUrl: String, private val apiKey: String?, private val client: 
 
     companion object {
         private const val HTTP_OK = 200
+        private const val HTTP_ACCEPTED = 202
         private const val HTTP_NOT_FOUND = 404
         private const val HTTP_NO_CONTENT = 204
         private const val HTTP_FORBIDDEN = 403
@@ -352,6 +419,7 @@ class SyncApi(baseUrl: String, private val apiKey: String?, private val client: 
         private const val HTTP_METHOD_NOT_ALLOWED = 405
         private val JSON_TYPE = "application/json; charset=utf-8".toMediaType()
         private val OFFSET_OCTETS = "application/offset+octet-stream".toMediaType()
+        private val JPEG_TYPE = "image/jpeg".toMediaType()
         private const val TIMEOUT_S = 30L
 
         val json = Json {
@@ -560,6 +628,8 @@ data class ServerInfo(
     val storageConfigured: Boolean = false,
     /** What the server implements beyond the base protocol (`items`, `previews`, `culling`, `device-identity`). */
     val features: List<String> = emptyList(),
+    /** The edited previews' limits (Hoard ADR 0020), present with the `edits` feature. */
+    val edits: EditLimits? = null,
 ) {
     fun has(feature: String): Boolean = feature in features
 
@@ -655,4 +725,63 @@ data class UploadCreateResponse(
     val offset: Long = 0,
     val chunkSize: Long = 0,
     val expiresAt: Long = 0,
+)
+
+/** 8 MiB: an edited preview's upload limit when the server does not say (Hoard ADR 0020 "Limits"). */
+private const val DEFAULT_EDIT_BYTES = 8L * 1024 * 1024
+
+/** `GET /v1/server` `edits` (Hoard ADR 0020 "Storage and the setup page"). */
+@Serializable
+data class EditLimits(
+    val maxBytes: Long = DEFAULT_EDIT_BYTES,
+    val maxEdge: Int = 2560,
+    val minEdge: Int = 16,
+    val formats: List<String> = listOf("jpeg"),
+    val maxPerItem: Int = 32,
+    val maxLabel: Int = 64,
+    val maxDigest: Int = 128,
+)
+
+/** One edited preview the server holds for an item. */
+@Serializable
+data class ServerEdit(
+    val versionId: String,
+    val label: String = "",
+    val recipeDigest: String = "",
+    val editedAt: Long = 0,
+    val primary: Boolean = false,
+    val isVirtualCopy: Boolean = false,
+    val deviceId: String = "",
+)
+
+/** An item as the lookup answers it: only what the edited previews need. */
+@Serializable
+data class ServerItem(val id: String, val edits: List<ServerEdit> = emptyList())
+
+@Serializable
+data class ItemMatch(val fingerprint: String, val itemId: String, val role: String = "")
+
+@Serializable
+data class ItemsLookupResponse(
+    val items: List<ServerItem> = emptyList(),
+    val matches: List<ItemMatch> = emptyList(),
+    val missing: List<String> = emptyList(),
+)
+
+/** The headers of an edited preview's PUT. */
+data class EditMeta(
+    val recipeDigest: String,
+    val editedAt: Long,
+    val label: String,
+    val virtualCopy: Boolean,
+    val primary: Boolean,
+)
+
+@Serializable
+data class EditPutResponse(
+    /** `created`, `updated`, `replaced` or `unchanged`. */
+    val status: String,
+    val itemId: String,
+    val rev: Long = 0,
+    val edit: ServerEdit? = null,
 )

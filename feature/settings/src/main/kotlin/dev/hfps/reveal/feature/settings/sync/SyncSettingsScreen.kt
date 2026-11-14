@@ -132,6 +132,7 @@ object SyncTags {
     const val STATUS = "sync_status"
     const val PREVIEWS = "sync_previews"
     const val ORIGINALS = "sync_originals"
+    const val EDITED_PREVIEWS = "sync_edited_previews"
     const val WIFI_ONLY = "sync_wifi_only"
     const val SYNC_NOW = "sync_now"
     const val UNPAIR = "sync_unpair"
@@ -462,6 +463,13 @@ private fun Paired(
             checked = options.previews,
             onChange = { actions.onOptions(options.copy(previews = it)) },
             tag = SyncTags.PREVIEWS,
+        )
+        SwitchRow(
+            title = stringResource(R.string.sync_edited_previews),
+            subtitle = stringResource(R.string.sync_edited_previews_subtitle),
+            checked = options.editedPreviews,
+            onChange = { actions.onOptions(options.copy(editedPreviews = it)) },
+            tag = SyncTags.EDITED_PREVIEWS,
         )
         SwitchRow(
             title = stringResource(R.string.sync_originals),

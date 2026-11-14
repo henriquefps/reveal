@@ -689,6 +689,29 @@ The ADR's COCO numbers and the private review sheets come from host scripts kept
 host, COCO val2017 panoptic subsets); review sheets of the owner's photos go only to the owner's private review
 folder, never to the repo or a PR.
 
+## AI Remove (`:core:ml/inpaint`, M5/R, ADR 0024)
+
+Model: `big-lama@1` (big-LaMa, Apache-2.0, Places2), bundled, derived at build time from `big-lama-fp32@1` (this
+repository's release asset `ml-big-lama-fp32-1`, made by `scripts/ml/convert_big_lama.py` on a host with PyTorch:
+the Fourier units as DFT matrix products; keep every product's constant on the right, tensors ≤ 4-D and no sum of two
+products, or LiteRT's GPU refuses it / litert-torch miscompiles it) by `scripts/ml/convert_int8_weights.py` (int8
+weights per output channel; the first convolution over rgb + mask stays float32). A new model version = rerun the
+host script, publish a new release asset, pin it as a new version. Runtime: `InpaintModels` (spec, `method` =
+`model:<id>@<version>`), `InpaintLayout` (crop ↔ the 512 x 512 input; pure, JVM-tested), `InpaintService` (blocking,
+one model, released after 60 s idle; GPU programs cached via `LiteRtEngine.GpuCache` in the code cache),
+`FillDiskCache` (`cache/inpaint`, `:core:data` `storage/FillCacheArea`, budgeted with the masks). Hilt:
+`DataModule.provideInpaintService`. Remove plugs it into ADR 0023's `RemoveFills` by method name.
+
+```sh
+./gradlew :core:ml:testDebugUnitTest --tests '*InpaintTest*' --tests '*MaskModelsTest*'
+adb -s <serial> shell am instrument -w -e class dev.hfps.reveal.ml.InpaintDeviceTest dev.hfps.reveal.ml.test/androidx.test.runner.AndroidJUnitRunner   # emulators: -e backend cpu
+adb -s <serial> shell am instrument -w -e class dev.hfps.reveal.ml.InpaintBenchmark dev.hfps.reveal.ml.test/androidx.test.runner.AndroidJUnitRunner   # files/models/*.tflite (big-lama*, migan*, lama*)
+adb -s <serial> logcat -d -s REVEAL_ML | grep inpaint
+# host: reconvert (uv, PyTorch + litert-torch; checks the result against the original), then the int8 derivation
+uv run scripts/ml/convert_big_lama.py <work dir> <out>/big-lama-fp32.tflite
+python3 scripts/ml/convert_int8_weights.py <out>/big-lama-fp32.tflite <out>/big-lama.tflite --report
+```
+
 ## Masks (`:core:pipeline/mask`, M4/A, ADR 0022)
 
 Recipe (`recipe/Masks.kt`): `Mask` (id, name, `enabled` = the eye, `amount` %, `LocalAdjustments`, `components`

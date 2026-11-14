@@ -23,6 +23,12 @@ jobs:
           distribution: temurin
           java-version: 21
       - uses: gradle/actions/setup-gradle@v4
+      # The pinned models (core/ml/models.json; big-LaMa's source file alone is 205 MB): keyed by the manifest.
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/reveal-ml
+          key: reveal-ml-${{ hashFiles('core/ml/models.json') }}
+          restore-keys: reveal-ml-
       # No secrets here: the release is signed locally with `skv run reveal -- ./gradlew :app:assembleRelease`.
       - name: Quality gates (unit tests, screenshots, lint, ktlint, detekt)
         run: ./gradlew qa

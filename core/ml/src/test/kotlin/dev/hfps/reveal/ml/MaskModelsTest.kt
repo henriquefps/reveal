@@ -1,6 +1,7 @@
 package dev.hfps.reveal.ml
 
 import com.google.common.truth.Truth.assertThat
+import dev.hfps.reveal.ml.inpaint.InpaintModels
 import java.io.File
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.boolean
@@ -36,7 +37,8 @@ class MaskModelsTest {
     fun `the bundled and lab lists are what the manifest carries`() {
         val bundled = manifest.filterValues { flag(it, "bundled") }.keys
         val lab = manifest.filterValues { flag(it, "lab") }.keys
-        val kotlinBundled = MaskModels.bundled.map { it.key } + MaskModels.FACE_LANDMARKER.key
+        val kotlinBundled = MaskModels.bundled.map { it.key } + MaskModels.FACE_LANDMARKER.key +
+            InpaintModels.bundled.map { it.key }
         assertThat(kotlinBundled).containsExactlyElementsIn(bundled)
         assertThat(MaskModels.lab.map { it.key }).containsExactlyElementsIn(lab)
         assertThat(bundled.intersect(lab)).isEmpty()

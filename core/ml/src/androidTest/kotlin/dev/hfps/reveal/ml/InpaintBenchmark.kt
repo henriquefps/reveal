@@ -25,7 +25,8 @@ import org.junit.runner.RunWith
  *   adb shell am instrument -w -e class dev.hfps.reveal.ml.InpaintBenchmark \
  *     dev.hfps.reveal.ml.test/androidx.test.runner.AndroidJUnitRunner
  *
- * Layouts: `migan*` = one NCHW input concat(keep - 0.5, rgb x keep) in -1..1, output NCHW -1..1; `lama*` = NHWC image
+ * Layouts: `big-lama*` = one NHWC input (rgb x (1 - mask), mask) in 0..1, output NHWC 0..1; `migan*` = one NCHW
+ * input concat(keep - 0.5, rgb x keep) in -1..1, output NCHW -1..1; `lama*` = NHWC image
  * 0..1 + NHWC mask (1 = fill), output NHWC 0..1. "crop1024" adds what a 1024 px crop costs around the model: an area
  * downscale to 512, the model, a bilinear upscale back and the feathered blend, on the CPU in Kotlin.
  */
@@ -57,7 +58,8 @@ class InpaintBenchmark {
         Log.i(TAG, "inpaint parity $name meanAbs=${f4(sum / gpu.size)} maxAbs=${f4(max.toDouble())}")
     }
 
-    @Suppress("ExplicitGarbageCollectionCall", "LongMethod") // the memory delta of one model needs a settled heap
+    // the memory delta of one model needs a settled heap
+    @Suppress("ExplicitGarbageCollectionCall", "LongMethod", "CyclomaticComplexMethod")
     private fun measure(file: File, backend: String, photo: MlImage): FloatArray? {
         Runtime.getRuntime().gc()
         val pss0 = Debug.getPss()
@@ -74,8 +76,13 @@ class InpaintBenchmark {
         val inputs = model.createInputBuffers()
         val outputs = model.createOutputBuffers()
         val lama = file.name.startsWith("lama")
+        val big = file.name.startsWith("big-lama")
         val (rgb, hole) = sample(photo)
-        val feed = if (lama) listOf(rgb, hole) else listOf(miganInput(rgb, hole))
+        val feed = when {
+            big -> listOf(bigLamaInput(rgb, hole))
+            lama -> listOf(rgb, hole)
+            else -> listOf(miganInput(rgb, hole))
+        }
         fun run(): FloatArray {
             feed.forEachIndexed { i, a -> inputs[i].writeFloat(a) }
             model.run(inputs, outputs)
@@ -92,15 +99,16 @@ class InpaintBenchmark {
             }.sorted()
             val pss = Debug.getPss() - pss0
             // a 1024 px crop around a hole: downscale, run, upscale, blend
-            val big = upscale2(rgb)
+            val large = upscale2(rgb)
             val bigHole = upscale2(hole, 1)
             val crop = (0 until 5).map {
                 val a = SystemClock.elapsedRealtimeNanos()
-                val small = downscale2(big)
+                val small = downscale2(large)
                 val smallHole = downscale2(bigHole, 1)
                 feed.forEachIndexed { i, _ ->
                     inputs[i].writeFloat(
                         when {
+                            big -> bigLamaInput(small, smallHole)
                             lama && i == 0 -> small
                             lama -> smallHole
                             else -> miganInput(small, smallHole)
@@ -109,7 +117,7 @@ class InpaintBenchmark {
                 }
                 model.run(inputs, outputs)
                 val out = outputs[0].readFloat()
-                blend(big, upscale2(if (lama) out else nhwc(out)), bigHole)
+                blend(large, upscale2(if (lama || big) out else nhwc(out)), bigHole)
                 SystemClock.elapsedRealtimeNanos() - a
             }.sorted()
             Log.i(
@@ -118,7 +126,7 @@ class InpaintBenchmark {
                     "warm=${ms(warm[RUNS / 2])} warmMin=${ms(warm[0])} crop1024=${ms(crop[2])} " +
                     "pssDeltaMiB=${pss / 1024} sizeMiB=${file.length() / (1024 * 1024)}",
             )
-            return if (lama) first else nhwc(first)
+            return if (lama || big) first else nhwc(first)
         } finally {
             inputs.forEach { it.close() }
             outputs.forEach { it.close() }
@@ -144,6 +152,17 @@ class InpaintBenchmark {
             }
         }
         return rgb to hole
+    }
+
+    /** big-LaMa (docs/adr/0024): NHWC (rgb x (1 - mask), mask) in 0..1. */
+    private fun bigLamaInput(rgb: FloatArray, hole: FloatArray): FloatArray {
+        val out = FloatArray(4 * S * S)
+        for (i in 0 until S * S) {
+            val keep = 1f - hole[i]
+            for (c in 0 until 3) out[i * 4 + c] = rgb[i * 3 + c] * keep
+            out[i * 4 + 3] = hole[i]
+        }
+        return out
     }
 
     private fun miganInput(rgb: FloatArray, hole: FloatArray): FloatArray {

@@ -100,6 +100,10 @@
         <item>Phosphor Icons 2.1.1|MIT</item>
         <item>lensfun lens database (converted, commit 52cf1a7)|CC BY-SA 3.0</item>
         <item>MediaPipe BlazeFace face detection model|Apache-2.0</item>
+        <item>LiteRT (on-device ML runtime)|Apache-2.0</item>
+        <item>MediaPipe Selfie Multiclass, MagicTouch and Face Landmarker models|Apache-2.0</item>
+        <item>DeepLab-v3 MobileNetV2 ADE20K (sky model, converted)|Apache-2.0</item>
+        <item>big-LaMa inpainting model, Samsung Research (converted)|Apache-2.0</item>
         <item>Kotlin standard library|Apache-2.0</item>
         <item>kotlinx.coroutines|Apache-2.0</item>
         <item>kotlinx.serialization|Apache-2.0</item>

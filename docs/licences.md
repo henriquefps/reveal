@@ -32,10 +32,10 @@ with its licence; add a row in the same change that adds the dependency, and mir
 The shipped list was checked against `./gradlew :app:dependencies --configuration releaseRuntimeClasspath` for 0.1.0
 (every group on that classpath is covered by a row above).
 
-## Shipped in debug builds only (the mask lab, docs/adr/0021)
+## On-device ML (`:core:ml`, docs/adr/0021, 0024)
 
-Until M4 ships masks, `:core:ml` is a debug-only dependency: release builds contain none of these. When M4 moves them
-into release, move the rows above (and into `R.array.about_licences`).
+Every build since 0.6.0 carries LiteRT and the bundled models (`R.array.about_licences` lists them); the rows marked
+"debug builds only" are the mask lab's comparisons.
 
 | Component | Version source | Licence |
 | --- | --- | --- |
@@ -43,6 +43,7 @@ into release, move the rows above (and into `R.array.about_licences`).
 | MediaPipe Selfie Multiclass 256, MagicTouch interactive segmenter (model files, fetched at build time; every build) | URL + SHA-256 in `core/ml/models.json` | Apache-2.0 (Google LLC, the MediaPipe authors) |
 | MediaPipe Face Landmarker: its landmark model `face_landmarks_detector.tflite` (478-point face mesh with irises), extracted at build time from the pinned `face_landmarker.task` bundle (`face-landmarker` in `core/ml/models.json`; every build) | URL + SHA-256 of the bundle and of the extracted file in `core/ml/models.json` | Apache-2.0 (Google LLC, the MediaPipe authors; model card "MediaPipe Face Mesh V2") |
 | DeepLab-v3 MobileNetV2 ADE20K, converted for the GPU by `scripts/ml/convert_deeplab_sky.py` at build time (`deeplab-v3-ade20k-sky`; every build): a derived work of the TensorFlow model zoo's TFLite export, same licence | `core/ml/models.json` (input and output SHA-256) | Apache-2.0 (weights; trained on ADE20K, whose terms the owner accepted: docs/adr/0021 "Training-data terms") |
+| big-LaMa inpainting model (Suvorov et al. 2022, `advimman/lama`, Samsung Research): the authors' checkpoint converted to LiteRT by `scripts/ml/convert_big_lama.py` (published as this repository's release asset `ml-big-lama-fp32-1`), int8 weights derived at build time by `scripts/ml/convert_int8_weights.py` (`big-lama`; every build): a derived work, same licence | `core/ml/models.json` (URL + SHA-256 of the float32 file and of the derived file) | Apache-2.0 (weights; trained on Places2, whose terms the owner accepted: docs/adr/0024 "Training data") |
 | MediaPipe Selfie Segmenter, Hair Segmenter; the published DeepLab-v3 MobileNetV2 ADE20K (debug builds only: the mask lab's comparisons) | `core/ml/models.json` (`lab: true`) | Apache-2.0 |
 | LR-ASPP MobileNetV3-Large (torchvision weights, LiteRT export by litert-community; debug builds only) | `core/ml/models.json` | BSD-3-Clause |
 | MODNet (ZHKKKe/MODNet weights, LiteRT export by litert-community; debug builds only) | `core/ml/models.json` | Apache-2.0 |

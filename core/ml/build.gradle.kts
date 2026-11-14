@@ -41,7 +41,13 @@ abstract class FetchMlModels : Exec() {
     }
 }
 
-val mlScripts = listOf("fetch_models.py", "convert_deeplab_sky.py", "convert_fp16_weights.py", "tflite_flatbuffer.py")
+val mlScripts = listOf(
+    "fetch_models.py",
+    "convert_deeplab_sky.py",
+    "convert_fp16_weights.py",
+    "convert_int8_weights.py",
+    "tflite_flatbuffer.py",
+)
     .map { rootProject.file("scripts/ml/$it") }
 
 val fetchModels = listOf("release", "debug").associateWith { set ->

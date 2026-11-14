@@ -24,6 +24,7 @@ object HealEdits {
         feather = settings.feather,
         opacity = settings.opacity,
         darken = settings.darken,
+        method = methodOf(settings),
     )
 
     /**
@@ -38,6 +39,7 @@ object HealEdits {
         feather = settings.feather,
         opacity = settings.opacity,
         darken = settings.darken,
+        method = methodOf(settings),
         x = points.first().x,
         y = points.first().y,
     )
@@ -68,7 +70,12 @@ object HealEdits {
         feather = heal.feather,
         opacity = heal.opacity,
         darken = heal.darken,
+        removeMethod = if (heal.type == HealKind.REMOVE) heal.method else base.removeMethod,
     )
+
+    /** The method a new spot of [settings] stores: Remove's chosen one; the patch fill for the other kinds. */
+    private fun methodOf(settings: HealSettings): String =
+        if (settings.kind == HealKind.REMOVE) settings.removeMethod ?: Heal.METHOD_PATCH else Heal.METHOD_PATCH
 
     /**
      * A spot moved so that its centre is at ([x], [y]): a circle's centre, a stroke's points translated. The source

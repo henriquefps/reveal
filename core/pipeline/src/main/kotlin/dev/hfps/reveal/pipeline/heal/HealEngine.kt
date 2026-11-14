@@ -78,6 +78,10 @@ class HealEngine(
     var failed: Set<String> = emptySet()
         private set
 
+    /** Ids of the Remove spots filled by the patch method because theirs could not run (docs/adr/0024). */
+    var fellBack: Set<String> = emptySet()
+        private set
+
     /** The patches of the spots that render, in order (null: a Remove spot without its fill yet). */
     val current: List<HealPatch?> get() = patches
 
@@ -101,6 +105,7 @@ class HealEngine(
         val changed = ArrayList<IntArray>()
         val pend = HashSet<String>()
         val fail = HashSet<String>()
+        val back = HashSet<String>()
         fun compute(h: Heal) {
             val res = patch(h, newPatches, onReady)
             newPatches += res.patch
@@ -108,6 +113,7 @@ class HealEngine(
             newWaiting += res.waiting
             if (res.waiting) pend += h.id
             if (res.failed) fail += h.id
+            if (res.fellBack) back += h.id
             res.patch?.let { changed += intArrayOf(it.x0, it.y0, it.x1, it.y1) }
         }
         var a = 0
@@ -126,6 +132,7 @@ class HealEngine(
                     newReads += read
                     newWaiting += false
                     if (h.id in failed) fail += h.id
+                    if (h.id in fellBack) back += h.id
                 }
                 a++
                 b++
@@ -155,6 +162,7 @@ class HealEngine(
         waiting = newWaiting
         pending = pend
         failed = fail
+        fellBack = back
         if (changed.isEmpty()) return null
         val out = intArrayOf(Int.MAX_VALUE, Int.MAX_VALUE, Int.MIN_VALUE, Int.MIN_VALUE)
         for (r in changed) {
@@ -194,7 +202,13 @@ class HealEngine(
 
     // ------------------------------------------------------------------ per spot
 
-    private class Result(val patch: HealPatch?, val reads: IntArray?, val waiting: Boolean, val failed: Boolean)
+    private class Result(
+        val patch: HealPatch?,
+        val reads: IntArray?,
+        val waiting: Boolean,
+        val failed: Boolean,
+        val fellBack: Boolean = false,
+    )
 
     private fun patch(h: Heal, before: List<HealPatch?>, onReady: () -> Unit): Result = when (h.type) {
         HealKind.HEAL -> heal(h, before, seamless = true)
@@ -362,7 +376,7 @@ class HealEngine(
         val py0 = gy0 - 1
         val pw = gw + 2
         val ph = gh + 2
-        val proposed = propose(fill, px0, py0, pw, ph, before)
+        val proposed = propose(fill, px0, py0, pw, ph, before, grainOf(fill, fp, before, key))
         val t = readLayer(before, before.size, px0, py0, px0 + pw, py0 + ph)
         val prop = Region.of(px0, py0, pw, ph, proposed)
         val m = membrane(fp, gx0, gy0, gw, gh, t) { x, y, c -> mean3(prop, x, y, c) }
@@ -383,7 +397,13 @@ class HealEngine(
                 }
             }
         }
-        return Result(HealPatch(fp.x0, fp.y0, fp.width, fp.height, out), reads, waiting = false, failed = false)
+        return Result(
+            HealPatch(fp.x0, fp.y0, fp.width, fp.height, out),
+            reads,
+            waiting = false,
+            failed = false,
+            fellBack = fill.fellBack != null,
+        )
     }
 
     /**
@@ -392,7 +412,39 @@ class HealEngine(
      * fill's colours (bilinear, decoded), else the image itself.
      */
     @Suppress("LongMethod", "CyclomaticComplexMethod", "NestedBlockDepth")
-    private fun propose(fill: RemoveFill, x0: Int, y0: Int, w: Int, h: Int, before: List<HealPatch?>): FloatArray {
+    /**
+     * A model's fill (no offsets) is upsampled where this render is finer than the crop: grain matched to the ring of
+     * pixels around the spot ([Grain], docs/adr/0024). The patch method copies the photo's own pixels: none.
+     */
+    private fun grainOf(fill: RemoveFill, fp: Footprint, before: List<HealPatch?>, key: String): Grain? {
+        if (fill.output.offsets != null) return null
+        val scale = max(fill.spec.virtualWidth.toFloat() / width, fill.spec.virtualHeight.toFloat() / height)
+        if (scale >= 1f) return null
+        val x0 = max(0, fp.x0 - Grain.RING)
+        val y0 = max(0, fp.y0 - Grain.RING)
+        val x1 = min(width, fp.x0 + fp.width + Grain.RING)
+        val y1 = min(height, fp.y0 + fp.height + Grain.RING)
+        val ring = readLayer(before, before.size, x0, y0, x1, y1)
+        return Grain.of(
+            ring.rgb,
+            ring.width,
+            ring.height,
+            { x, y -> fp.at(ring.x0 + x, ring.y0 + y) == 0f },
+            scale,
+            RemoveSpec.seed(key),
+        )
+    }
+
+    @Suppress("LongParameterList")
+    private fun propose(
+        fill: RemoveFill,
+        x0: Int,
+        y0: Int,
+        w: Int,
+        h: Int,
+        before: List<HealPatch?>,
+        grain: Grain? = null,
+    ): FloatArray {
         val spec = fill.spec
         val cw = spec.width
         val ch = spec.height
@@ -468,6 +520,7 @@ class HealEngine(
             if (inside && offsets == null) {
                 bilinear(disp, cw, ch, u, v, tmp)
                 fill.colour.fromDisplay(tmp, 0, out, k * 3)
+                grain?.add(x, y, out, k * 3)
             } else {
                 val ti = t.index(x, y)
                 for (c in 0..2) out[k * 3 + c] = t.rgb[ti + c]

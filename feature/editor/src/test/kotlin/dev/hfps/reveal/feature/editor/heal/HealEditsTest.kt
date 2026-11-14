@@ -78,4 +78,21 @@ class HealEditsTest {
         assertThat(HealEdits.length(points, aspect = 2f / 3f)).isWithin(1e-5f).of(0.5f)
         assertThat(HealEdits.length(points, aspect = 1.5f)).isWithin(1e-5f).of(0.5f / 1.5f)
     }
+
+    @Test
+    fun `remove spots store the chosen method, other kinds the patch fill`() {
+        val ai = "model:big-lama@1"
+        val remove = HealSettings(kind = HealKind.REMOVE)
+        // default: the app's model when it has one, else Patch
+        assertThat(remove.method(ai)).isEqualTo(ai)
+        assertThat(remove.method(null)).isEqualTo(Heal.METHOD_PATCH)
+        assertThat(remove.copy(removeMethod = Heal.METHOD_PATCH).method(ai)).isEqualTo(Heal.METHOD_PATCH)
+        val spot = HealEdits.circle(0.5f, 0.5f, remove.copy(removeMethod = remove.method(ai)))
+        assertThat(spot.method).isEqualTo(ai)
+        val heal = HealEdits.circle(0.5f, 0.5f, HealSettings(kind = HealKind.HEAL, removeMethod = ai))
+        assertThat(heal.method).isEqualTo(Heal.METHOD_PATCH)
+        // selecting a Remove spot shows its method; another kind keeps the current choice
+        assertThat(HealEdits.settingsOf(spot, HealSettings()).removeMethod).isEqualTo(ai)
+        assertThat(HealEdits.settingsOf(heal, remove.copy(removeMethod = ai)).removeMethod).isEqualTo(ai)
+    }
 }

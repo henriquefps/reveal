@@ -1396,7 +1396,7 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
 
     private fun publishHealStatus() {
         val engine = healEngine
-        val status = HealStatus(engine?.pending.orEmpty(), engine?.failed.orEmpty())
+        val status = HealStatus(engine?.pending.orEmpty(), engine?.failed.orEmpty(), engine?.fellBack.orEmpty())
         if (status != healStatus) {
             healStatus = status
             onHeals?.invoke(status)
@@ -2581,8 +2581,15 @@ data class MaskStats(val brushBins: Int, val brushFull: Int, val coverageLayers:
 /** What stage 1's develop output depends on, besides Detail and Effects (see `runStage1`). */
 private data class DevelopKey(val params: DevelopParams, val local: Boolean, val masks: Int, val heals: Int)
 
-/** The Remove spots of the shown recipe whose fill is still being computed ([pending]) or failed ([failed]), by id. */
-data class HealStatus(val pending: Set<String> = emptySet(), val failed: Set<String> = emptySet())
+/**
+ * The Remove spots of the shown recipe whose fill is still being computed ([pending]), failed ([failed]), or was made
+ * by the patch method because the spot's model could not run ([fellBack], docs/adr/0024), by id.
+ */
+data class HealStatus(
+    val pending: Set<String> = emptySet(),
+    val failed: Set<String> = emptySet(),
+    val fellBack: Set<String> = emptySet(),
+)
 
 /** The "Visualise spots" view (docs/adr/0023): high-pass [strength] 0..100. */
 data class SpotsView(val strength: Float) {

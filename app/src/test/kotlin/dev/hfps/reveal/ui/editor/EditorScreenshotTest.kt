@@ -233,6 +233,18 @@ class EditorPhoneScreenshotTest : EditorScreenshotBase("phone") {
         )
     }
 
+    /** Remove with the AI model available (docs/adr/0024): new spots use AI; one spot fell back to Patch. */
+    @Test fun healRemoveAi() = shoot("heal_remove_ai") {
+        HealEditor(
+            selected = null,
+            heal = HealUiState(
+                settings = HealSettings(kind = HealKind.REMOVE, removeMethod = "model:big-lama@1"),
+                aiRemove = "model:big-lama@1",
+                fellBack = setOf("remove"),
+            ),
+        )
+    }
+
     /** Red eye selected, its Darken slider shown. */
     @Test fun healRedEye() = shoot("heal_red_eye") {
         HealEditor(

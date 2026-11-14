@@ -538,6 +538,9 @@
     <string name="heal_new_source">New source</string>
     <string name="heal_removing">Removing…</string>
     <string name="heal_remove_failed">This removal could not be computed</string>
+    <string name="heal_remove_ai">AI</string>
+    <string name="heal_remove_patch">Patch</string>
+    <string name="heal_remove_fell_back">Not enough memory for AI: removed with Patch</string>
     <string name="heal_hint">Tap a spot or paint over it. Drag a spot\'s source to choose where it copies from.</string>
     <string name="heal_full">This photo has the most spots it can hold</string>
     <string name="heal_source">Source of the spot</string>

@@ -29,6 +29,7 @@ import dev.hfps.reveal.designsystem.icons.PhosphorRegular
 import dev.hfps.reveal.designsystem.theme.RevealTheme
 import dev.hfps.reveal.feature.editor.R
 import dev.hfps.reveal.feature.editor.tools.ModeHost
+import dev.hfps.reveal.pipeline.recipe.Heal
 import dev.hfps.reveal.pipeline.recipe.HealKind
 import dev.hfps.reveal.pipeline.recipe.ValueFormat
 import dev.hfps.reveal.pipeline.recipe.ValueKind
@@ -52,6 +53,8 @@ fun HealControls(host: ModeHost, modifier: Modifier = Modifier) {
         } else {
             ChipRow { for (kind in KINDS) KindChip(kind, settings.kind, actions) }
         }
+        val ai = state.aiRemove
+        if (settings.kind == HealKind.REMOVE && ai != null) RemoveMethodChips(settings.method(ai), ai, actions)
         val shown = if (host.vertical) {
             HealSetting.entries.filter { it != HealSetting.DARKEN || settings.kind == HealKind.RED_EYE }
         } else {
@@ -122,6 +125,26 @@ fun HealControls(host: ModeHost, modifier: Modifier = Modifier) {
     }
 }
 
+/** Remove's AI model or the patch fill (docs/adr/0024), for new spots and the selected one. */
+@Composable
+private fun RemoveMethodChips(method: String, ai: String, actions: HealActions) {
+    ChipRow {
+        RevealChip(
+            label = stringResource(R.string.heal_remove_ai),
+            selected = method == ai,
+            onClick = { actions.setRemoveMethod(ai) },
+            icon = PhosphorRegular.Sparkle,
+            modifier = Modifier.testTag(HealTags.REMOVE_AI),
+        )
+        RevealChip(
+            label = stringResource(R.string.heal_remove_patch),
+            selected = method != ai,
+            onClick = { actions.setRemoveMethod(Heal.METHOD_PATCH) },
+            modifier = Modifier.testTag(HealTags.REMOVE_PATCH),
+        )
+    }
+}
+
 /** Remove's progress and failures, the limit, or the hint. */
 @Composable
 private fun Status(state: HealUiState) {
@@ -147,6 +170,13 @@ private fun Status(state: HealUiState) {
             style = RevealTheme.typography.body,
             color = colors.destructive,
             modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp).testTag(HealTags.FAILED),
+        )
+
+        state.fellBack.isNotEmpty() -> Text(
+            stringResource(R.string.heal_remove_fell_back),
+            style = RevealTheme.typography.body,
+            color = colors.mutedForeground,
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp).testTag(HealTags.FELL_BACK),
         )
 
         state.full -> Text(
@@ -313,6 +343,9 @@ object HealTags {
     const val DELETE = "heal_delete"
     const val PROGRESS = "heal_progress"
     const val FAILED = "heal_failed"
+    const val FELL_BACK = "heal_fell_back"
+    const val REMOVE_AI = "heal_remove_ai"
+    const val REMOVE_PATCH = "heal_remove_patch"
     const val SIZE = "heal_size"
     const val FEATHER = "heal_feather"
     const val OPACITY = "heal_opacity"

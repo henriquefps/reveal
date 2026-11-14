@@ -530,8 +530,9 @@ private fun StorageLine(text: String) {
     Text(text, style = RevealTheme.typography.body, color = RevealTheme.colors.foreground)
 }
 
+/** A titled switch row (Sync, Settings' XMP section). */
 @Composable
-private fun SwitchRow(
+internal fun SwitchRow(
     title: String,
     subtitle: String?,
     checked: Boolean,

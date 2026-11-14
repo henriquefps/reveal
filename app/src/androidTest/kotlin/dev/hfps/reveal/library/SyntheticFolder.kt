@@ -33,6 +33,8 @@ class SyntheticFolder(val name: String) {
     private val access = EntryPointAccessors.fromApplication(context, DebugAccess::class.java)
     val library get() = access.library()
     val edits get() = access.edits()
+    val editSidecars get() = access.editSidecars()
+    val xmp get() = access.xmpPreferences()
 
     init {
         dir.deleteRecursively()

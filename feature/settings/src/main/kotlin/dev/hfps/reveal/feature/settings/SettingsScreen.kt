@@ -42,6 +42,7 @@ import dev.hfps.reveal.data.export.ExportPreferences
 import dev.hfps.reveal.data.handoff.GalleryAccess
 import dev.hfps.reveal.data.handoff.GalleryAccessState
 import dev.hfps.reveal.data.library.LibraryRepository
+import dev.hfps.reveal.data.xmp.XmpPreferences
 import dev.hfps.reveal.designsystem.components.Eyebrow
 import dev.hfps.reveal.designsystem.components.RevealListRow
 import dev.hfps.reveal.designsystem.components.RevealScaffold
@@ -49,6 +50,7 @@ import dev.hfps.reveal.designsystem.components.RevealTopBar
 import dev.hfps.reveal.designsystem.icons.PhosphorRegular
 import dev.hfps.reveal.designsystem.theme.RevealTheme
 import dev.hfps.reveal.feature.settings.storage.StorageScreen
+import dev.hfps.reveal.feature.settings.sync.SwitchRow
 import dev.hfps.reveal.feature.settings.sync.SyncSettingsScreen
 import dev.hfps.reveal.sync.SyncRepository
 import javax.inject.Inject
@@ -58,14 +60,26 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
-/** Settings: sync (ADR 0018) and the author and copyright that exports write (docs/adr/0009, "Metadata"). */
+/**
+ * Settings: sync (ADR 0018), the XMP sidecar switches (ADR 0026) and the author and copyright that exports write
+ * (docs/adr/0009, "Metadata").
+ */
 @HiltViewModel
 class SettingsViewModel @Inject constructor(
     private val preferences: ExportPreferences,
     sync: SyncRepository,
     private val gallery: GalleryAccess,
     private val library: LibraryRepository,
+    private val xmp: XmpPreferences,
 ) : ViewModel() {
+    /** Settings → XMP sidecars (ADR 0026). */
+    val writeEdits: StateFlow<Boolean> = xmp.writeEdits
+    val readEdits: StateFlow<Boolean> = xmp.readEdits
+
+    fun setWriteEdits(on: Boolean) = xmp.setWriteEdits(on)
+
+    fun setReadEdits(on: Boolean) = xmp.setReadEdits(on)
+
     val authorship: Authorship get() = preferences.authorship.value
 
     /** The optional gallery permission (ADR 0011 "Gallery access"). */
@@ -105,6 +119,8 @@ object SettingsTags {
     const val SYNC = "settings_sync"
     const val GALLERY = "settings_gallery"
     const val STORAGE = "settings_storage"
+    const val XMP_WRITE = "settings_xmp_write"
+    const val XMP_READ = "settings_xmp_read"
 }
 
 @Composable
@@ -117,6 +133,8 @@ fun SettingsScreen(
 ) {
     val server by viewModel.server.collectAsStateWithLifecycle()
     val gallery by viewModel.galleryAccess.collectAsStateWithLifecycle()
+    val writeEdits by viewModel.writeEdits.collectAsStateWithLifecycle()
+    val readEdits by viewModel.readEdits.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
         viewModel.onGalleryResult()
@@ -155,8 +173,17 @@ fun SettingsScreen(
                 permission.launch(GalleryAccess.permissions())
             }
         },
+        xmp = XmpSettings(writeEdits, readEdits, viewModel::setWriteEdits, viewModel::setReadEdits),
     )
 }
+
+/** The XMP switches as the content shows them (ADR 0026). */
+data class XmpSettings(
+    val writeEdits: Boolean = true,
+    val readEdits: Boolean = true,
+    val onWriteEdits: (Boolean) -> Unit = {},
+    val onReadEdits: (Boolean) -> Unit = {},
+)
 
 private fun appSettings(context: Context) = Intent(
     Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
@@ -177,6 +204,7 @@ fun SettingsContent(
     gallery: GalleryAccessState = GalleryAccessState.NONE,
     onGallery: () -> Unit = {},
     onStorage: () -> Unit = {},
+    xmp: XmpSettings = XmpSettings(),
 ) {
     RevealScaffold(
         modifier = modifier,
@@ -231,9 +259,30 @@ fun SettingsContent(
                     Icon(PhosphorRegular.CaretRight, null, tint = RevealTheme.colors.mutedForeground)
                 },
             )
+            XmpSection(xmp)
             ExportSection(author, copyright, onAuthor, onCopyright)
         }
     }
+}
+
+/** The XMP sidecar switches (ADR 0026). */
+@Composable
+private fun XmpSection(xmp: XmpSettings) {
+    Eyebrow(stringResource(R.string.settings_section_xmp), Modifier.padding(horizontal = 16.dp))
+    SwitchRow(
+        title = stringResource(R.string.settings_xmp_write),
+        subtitle = stringResource(R.string.settings_xmp_write_note),
+        checked = xmp.writeEdits,
+        onChange = xmp.onWriteEdits,
+        tag = SettingsTags.XMP_WRITE,
+    )
+    SwitchRow(
+        title = stringResource(R.string.settings_xmp_read),
+        subtitle = stringResource(R.string.settings_xmp_read_note),
+        checked = xmp.readEdits,
+        onChange = xmp.onReadEdits,
+        tag = SettingsTags.XMP_READ,
+    )
 }
 
 @Composable

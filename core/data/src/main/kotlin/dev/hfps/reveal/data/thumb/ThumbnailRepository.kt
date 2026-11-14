@@ -274,6 +274,40 @@ class ThumbnailRepository(
         }
     }
 
+    /**
+     * [versionId]'s edit of [photoId] rendered whole at [longEdge] (the long edge the develop works at; the output
+     * is the geometry's: a crop is smaller): the same develop as the thumbnails and the viewer, with its AI masks
+     * (from the masks' cache, else made here) and Remove fills. Not cached. Null when the photo cannot be read, there
+     * is no GPU path, or a mask could not be made. For the server's edited previews (docs/adr/0027).
+     */
+    @Suppress("ReturnCount")
+    suspend fun renderEdit(photoId: Long, versionId: Long, longEdge: Int): Bitmap? {
+        val renderer = edited ?: return null
+        return withContext(io) {
+            val target = target(photoId) ?: return@withContext null
+            val tree = availableTree(target.sourceId) ?: return@withContext null
+            val recipe = edits.recipe(versionId)
+            val components = recipe.masks.filter {
+                it.enabled
+            }.flatMap { it.components.filterIsInstance<MaskComponent.Ai>() }
+            aiLock.withLock {
+                tree.openInput(target.main.documentId, target.main.name).use { image ->
+                    val masks = aiMasks
+                    if (masks == null || components.isEmpty()) return@use renderer.render(image, recipe, longEdge)
+                    val photoKey = MaskInputs.photoKey(image) ?: return@use null
+                    val small = MaskInputs.smallInput(image, MaskInputs.THUMBNAIL_PROXY_EDGE) ?: return@use null
+                    val session = masks.session(photoKey, small.width to small.height) { MaskInputs.render(small) }
+                    try {
+                        if (!session.ready(components)) return@use null
+                        renderer.renderWithMasks(image, recipe, longEdge, session, photoKey)
+                    } finally {
+                        session.close()
+                    }
+                }
+            }
+        }
+    }
+
     @Suppress("LongParameterList", "ReturnCount")
     private suspend fun renderWithAiMasks(
         image: ImageInput,

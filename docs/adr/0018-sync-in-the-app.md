@@ -404,3 +404,9 @@ filtered grid. The library's top bar carries a compact sync status (`SyncBadge.o
 synced, syncing, uploading N, N waiting, offline, problem) that opens the Sync screen; "Manage folders" sets a
 folder's backup mode (FIX/V's choice) and removes it with FIX/V's delete-from-server question.
 
+
+## Amendment R0.8: culling through the server's culling records
+
+With a server that lists `culling` (hoard-server 0.7.0+), rating, flag and label no longer travel inside `photo`
+records for this device: they sync per field through the culling records, and pulled records' culling fields are
+ignored (they are still written into this device's records for older Reveals). See docs/adr/0027.

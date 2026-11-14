@@ -16,13 +16,16 @@ import dev.hfps.reveal.data.db.RevealDatabase
 import dev.hfps.reveal.data.db.SourceEntity
 import dev.hfps.reveal.data.db.VersionEntity
 import dev.hfps.reveal.data.index.LibraryIndexer
+import dev.hfps.reveal.data.library.SidecarImport
 import dev.hfps.reveal.data.library.SidecarSync
+import dev.hfps.reveal.data.model.CullingField
 import dev.hfps.reveal.data.model.FileRole
 import dev.hfps.reveal.data.model.SourceKind
 import dev.hfps.reveal.data.model.SourceState
 import dev.hfps.reveal.data.storage.DocumentEntry
 import dev.hfps.reveal.data.storage.DocumentTree
 import dev.hfps.reveal.data.storage.fingerprint
+import dev.hfps.reveal.data.xmp.SidecarCulling
 import dev.hfps.reveal.data.xmp.SidecarNames
 import dev.hfps.reveal.data.xmp.XmpFields
 import dev.hfps.reveal.data.xmp.XmpReader
@@ -365,65 +368,101 @@ class HandoffRepository(
 
     /**
      * Sets each shot's rating, flag and label (ADR 0011 "Culling"). Without culling values from the sender, the
-     * sidecar's apply, as the folder indexer does. With values, they win unless the shot's sidecar was modified after
-     * the photo's previous hand-off (someone rated it since the sender last said what it holds): then the sidecar
-     * wins. Fields the sender left out keep the sidecar's (or the photo's) value. Nothing is written back: the values
-     * live in Reveal's database, and the sender's files stay as they are.
+     * sidecar's apply, as the folder indexer does (only the fields it changed since it was last read, ADR 0027). With
+     * values, they win unless the shot's sidecar was modified after the photo's previous hand-off (someone rated it
+     * since the sender last said what it holds): then the sidecar wins. Fields the sender left out keep the sidecar's
+     * (or the photo's) value. Nothing is written back: the values live in Reveal's database, and the sender's files
+     * stay as they are. A sender's value that the sync server already holds for the shot is not pushed back to it
+     * (Hoard sends its cached server values, ADR 0027 "Hand-offs").
      */
     private suspend fun applyRatings(stored: List<Pair<Shot, StoredShot>>, culling: Map<Uri, HandoffCulling>) {
-        val folderChanged = ArrayList<Long>()
+        val folderChanged = HashMap<Long, Set<CullingField>>()
+        val valued = ArrayList<Long>()
         for ((shot, ids) in stored) {
             val values = cullingFor(shot, culling)
+            if (values != null) valued += ids.photoId
             if (!ids.foreign) {
                 applyRatings(shot, ids, values)
-            } else if (values != null && applyFolderCulling(ids, values)) {
-                folderChanged += ids.photoId
+            } else if (values != null) {
+                val changed = applyFolderCulling(ids, values)
+                if (changed.isNotEmpty()) folderChanged[ids.photoId] = changed
             }
+            if (values != null) dateValues(ids.photoId, values)
         }
-        // A folder photo's culling lives in its folder's sidecar: written like any rating change made in Reveal.
-        if (folderChanged.isNotEmpty()) sidecars?.write(folderChanged)
+        settle(valued)
+        // A folder photo's culling lives in its folder's sidecar: written like any rating change made in Reveal, only
+        // the fields that changed.
+        for ((fields, ids) in folderChanged.entries.groupBy({
+            it.value
+        }, { it.key })) {
+            sidecars?.write(ids, fields = fields)
+        }
+    }
+
+    /** The sender's decision times (when it sent them) date the queued changes instead of now. */
+    private suspend fun dateValues(photoId: Long, values: HandoffCulling) {
+        val dao = db.cullingDao()
+        values.ratingAt?.let { dao.date(photoId, listOf(CullingField.RATING.key), it) }
+        values.flagAt?.let { dao.date(photoId, listOf(CullingField.FLAG.key), it) }
+        values.labelAt?.let { dao.date(photoId, listOf(CullingField.LABEL.key), it) }
+    }
+
+    /** Queued changes equal to the server's cached value are dropped: nothing to tell the server (ADR 0027). */
+    private suspend fun settle(photoIds: List<Long>) {
+        val dao = db.cullingDao()
+        for (chunk in photoIds.chunked(SQL_ARGS)) {
+            dao.settleRatings(chunk)
+            dao.settleFlags(chunk)
+            dao.settleLabels(chunk)
+        }
     }
 
     /**
      * The sender's culling [values] on a photo of an added folder (ADR 0011 "One photo across sources"): they win,
      * field by field, unless the folder's sidecar was written after the photo's previous hand-off (someone rated it
-     * there since the sender last said what it holds). True when the photo changed.
+     * there since the sender last said what it holds). Returns the fields that changed.
      */
     @Suppress("ReturnCount")
-    private suspend fun applyFolderCulling(ids: StoredShot, values: HandoffCulling): Boolean {
-        val photo = photos.get(ids.photoId) ?: return false
+    private suspend fun applyFolderCulling(ids: StoredShot, values: HandoffCulling): Set<CullingField> {
+        val photo = photos.get(ids.photoId) ?: return emptySet()
         val current = XmpFields(photo.rating.coerceIn(0, XmpFields.MAX_RATING), photo.label, photo.flag)
         val previous = ids.previousHandoff
         val sidecarTime = photo.xmpModified.takeIf { photo.xmpDocumentId != null }
-        if (previous != null && sidecarTime != null && sidecarTime > previous) return false
+        if (previous != null && sidecarTime != null && sidecarTime > previous) return emptySet()
         val result = merge(values, current)
-        if (result == current) return false
+        if (result == current) return emptySet()
         photos.setCulling(photo.id, result.rating, result.label, result.flag)
-        return true
+        return buildSet {
+            if (result.rating != current.rating) add(CullingField.RATING)
+            if (result.flag != current.flag) add(CullingField.FLAG)
+            if (result.label != current.label) add(CullingField.LABEL)
+        }
     }
 
     private suspend fun applyRatings(shot: Shot, ids: StoredShot, values: HandoffCulling?) {
         val sidecar = shot.sidecar
         if (sidecar == null && values == null) return
-        val fields = sidecar?.let(::readSidecar)
+        val read = sidecar?.let(::readSidecar)
         val sidecarId = sidecar?.uri?.toString()
         val sidecarTime = sidecar?.entry?.modified
         val previous = ids.previousHandoff
-        val sidecarNewer = fields != null && previous != null && sidecarTime != null && sidecarTime > previous
-        val result = when {
-            values != null && !sidecarNewer -> merge(values, fields ?: storedFields(ids.photoId))
-            else -> fields
+        val sidecarNewer = read != null && previous != null && sidecarTime != null && sidecarTime > previous
+        when {
+            // The sidecar first (what changed in it), then the sender's values over it unless the sidecar is newer.
+            read != null -> SidecarImport.apply(db, ids.photoId, read, sidecarId, sidecarTime)
+
+            // Unreadable sidecar: remember it so it is not read again until it changes.
+            sidecar != null -> photos.setSidecar(ids.photoId, sidecarId, sidecarTime)
         }
-        if (result == null) {
-            // Unreadable sidecar, no values: remember it so it is not read again until it changes.
-            photos.setSidecar(ids.photoId, sidecarId, sidecarTime)
-        } else {
-            photos.applyXmp(ids.photoId, result.rating, result.label, result.flag, sidecarId, sidecarTime)
+        if (values != null && !sidecarNewer) {
+            val base = storedFields(ids.photoId)
+            val result = merge(values, base)
+            if (result != base) photos.setCulling(ids.photoId, result.rating, result.label, result.flag)
         }
     }
 
-    private fun readSidecar(item: Item): XmpFields? = runCatching {
-        XmpReader.read(tree.readBytes(item.uri.toString(), LibraryIndexer.MAX_SIDECAR_BYTES))
+    private fun readSidecar(item: Item): SidecarCulling? = runCatching {
+        XmpReader.readCulling(tree.readBytes(item.uri.toString(), LibraryIndexer.MAX_SIDECAR_BYTES))
     }.getOrNull()
 
     private suspend fun storedFields(photoId: Long): XmpFields = photos.get(photoId)?.let {
@@ -436,10 +475,16 @@ class HandoffRepository(
         return if (all.isEmpty()) {
             null
         } else {
+            val rating = all.firstOrNull { it.rating != null }
+            val flag = all.firstOrNull { it.flag != null }
+            val label = all.firstOrNull { it.label != null }
             HandoffCulling(
-                rating = all.firstNotNullOfOrNull { it.rating },
-                flag = all.firstNotNullOfOrNull { it.flag },
-                label = all.firstNotNullOfOrNull { it.label },
+                rating = rating?.rating,
+                flag = flag?.flag,
+                label = label?.label,
+                ratingAt = rating?.ratingAt,
+                flagAt = flag?.flagAt,
+                labelAt = label?.labelAt,
             )
         }
     }

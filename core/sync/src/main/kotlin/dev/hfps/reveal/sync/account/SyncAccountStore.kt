@@ -32,6 +32,8 @@ data class SyncOptions(
     val originals: Boolean = true,
     /** Originals only over an unmetered network (Wi-Fi). */
     val originalsWifiOnly: Boolean = true,
+    /** Rendered edits for the server's gallery (Hoard ADR 0020), uploaded under the originals' network rule. */
+    val editedPreviews: Boolean = true,
 )
 
 /** Where the device key is kept: the Android Keystore in the app, memory in tests. */
@@ -156,6 +158,7 @@ class SyncAccountStore(context: Context, val secrets: SecretStore) {
             putBoolean(KEY_PREVIEWS, options.previews)
             putBoolean(KEY_ORIGINALS, options.originals)
             putBoolean(KEY_WIFI_ONLY, options.originalsWifiOnly)
+            putBoolean(KEY_EDITED_PREVIEWS, options.editedPreviews)
         }
         _options.value = options
     }
@@ -175,6 +178,7 @@ class SyncAccountStore(context: Context, val secrets: SecretStore) {
         previews = prefs.getBoolean(KEY_PREVIEWS, true),
         originals = prefs.getBoolean(KEY_ORIGINALS, true),
         originalsWifiOnly = prefs.getBoolean(KEY_WIFI_ONLY, true),
+        editedPreviews = prefs.getBoolean(KEY_EDITED_PREVIEWS, true),
     )
 
     private companion object {
@@ -187,5 +191,6 @@ class SyncAccountStore(context: Context, val secrets: SecretStore) {
         const val KEY_PREVIEWS = "previews"
         const val KEY_ORIGINALS = "originals"
         const val KEY_WIFI_ONLY = "originalsWifiOnly"
+        const val KEY_EDITED_PREVIEWS = "editedPreviews"
     }
 }

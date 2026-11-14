@@ -7,7 +7,9 @@ import kotlinx.serialization.KSerializer
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -80,6 +82,126 @@ class SyncApi(baseUrl: String, private val apiKey: String?, private val client: 
     fun server(): ServerInfo = get(url("v1/server"), ServerInfo.serializer())
 
     fun devices(): DevicesResponse = get(url("v1/devices"), DevicesResponse.serializer())
+
+    // ------------------------------------------------------------------ this device (Hoard ADR 0017)
+
+    /** `GET /v1/device`: this device, its physical device and the candidates to join. */
+    fun device(): DeviceView = get(url("v1/device"), DeviceView.serializer())
+
+    /** `PATCH /v1/device`: reports the app id, model and capabilities (`features` are only ever added). */
+    fun reportDevice(report: DeviceReport): DeviceView {
+        val text = json.encodeToString(DeviceReport.serializer(), report)
+        val request = authed(Request.Builder().url(url("v1/device")).patch(text.toRequestBody(JSON_TYPE)))
+            .header("Accept", "application/json")
+        return client.newCall(request.build()).execute().use { response -> parse(response, DeviceView.serializer()) }
+    }
+
+    /**
+     * `POST /v1/device/claim`: moves this device into physical device [physicalDeviceId], or out to one of its own
+     * when null. `409 conflict` (`same_app`) when that phone already has a live device of this app id.
+     */
+    fun claim(physicalDeviceId: String?): DeviceView {
+        val body = JsonObject(mapOf("physicalDeviceId" to (physicalDeviceId?.let(::JsonPrimitive) ?: JsonNull)))
+        val request = authed(
+            Request.Builder().url(url("v1/device/claim")).post(body.toString().toRequestBody(JSON_TYPE)),
+        ).header("Accept", "application/json")
+        return client.newCall(request.build()).execute().use { response -> parse(response, DeviceView.serializer()) }
+    }
+
+    // ------------------------------------------------------------------ edited previews (Hoard ADR 0020)
+
+    /** `POST /v1/items/lookup`: the live items having any of [fingerprints] (≤ 1000) as a member, with their edits. */
+    fun itemsLookup(fingerprints: List<String>): ItemsLookupResponse = post(
+        url("v1/items/lookup"),
+        LookupRequest.serializer(),
+        LookupRequest(fingerprints),
+        ItemsLookupResponse.serializer(),
+    )
+
+    /**
+     * `PUT /v1/items/{itemId}/edits/{versionId}`: [image] (JPEG) with [meta] in headers; null [image] = a
+     * metadata-only change (the server keeps the stored image when the digest is the same).
+     */
+    fun putEdit(itemId: String, versionId: String, meta: EditMeta, image: ByteArray?): EditPutResponse {
+        val body = image?.toRequestBody(JPEG_TYPE) ?: ByteArray(0).toRequestBody(null)
+        val request = authed(Request.Builder().url(editUrl(itemId, versionId)).put(body))
+            .header("Accept", "application/json")
+            .header("X-Hoard-Recipe-Digest", meta.recipeDigest)
+            .header("X-Hoard-Edited-At", meta.editedAt.toString())
+            .header("X-Hoard-Label", java.net.URLEncoder.encode(meta.label, "UTF-8").replace("+", "%20"))
+            .header("X-Hoard-Virtual-Copy", meta.virtualCopy.toString())
+            .header("X-Hoard-Primary", meta.primary.toString())
+        return client.newCall(request.build()).execute().use { response ->
+            parse(response, EditPutResponse.serializer())
+        }
+    }
+
+    /** `DELETE /v1/items/{itemId}/edits/{versionId}`: idempotent; false when the server never had the item (`404`). */
+    fun deleteEdit(itemId: String, versionId: String): Boolean {
+        val request = authed(Request.Builder().url(editUrl(itemId, versionId)).delete())
+        return client.newCall(request.build()).execute().use { response ->
+            if (response.code == HTTP_NOT_FOUND) return false
+            check(response)
+            true
+        }
+    }
+
+    /** `GET` of a stored edit (tests): its bytes, or null (`404`). */
+    fun editImage(itemId: String, versionId: String): ByteArray? {
+        val request = authed(Request.Builder().url(editUrl(itemId, versionId)))
+        return client.newCall(request.build()).execute().use { response ->
+            if (response.code == HTTP_NOT_FOUND) return null
+            check(response)
+            response.body.bytes()
+        }
+    }
+
+    /**
+     * `GET /v1/items/{itemId}/preview?size=screen&format=jpeg&edit=[edit]` (Hoard ADR 0020 "Previews of an edit"):
+     * the bytes, or null while it is not made yet or there is no such edit (`404`). Checks and tests.
+     */
+    fun itemPreview(itemId: String, edit: String = "primary"): ByteArray? {
+        val url = url("v1/items").newBuilder().addPathSegment(itemId).addPathSegment("preview")
+            .addQueryParameter("size", "screen").addQueryParameter("format", "jpeg")
+            .addQueryParameter("edit", edit).build()
+        return client.newCall(authed(Request.Builder().url(url)).build()).execute().use { response ->
+            if (response.code == HTTP_NOT_FOUND || response.code == HTTP_ACCEPTED) return null
+            check(response)
+            response.body.bytes()
+        }
+    }
+
+    private fun editUrl(itemId: String, versionId: String) = url("v1/items").newBuilder().addPathSegment(itemId)
+        .addPathSegment("edits").addPathSegment(versionId).build()
+
+    // ------------------------------------------------------------------ culling (Hoard ADR 0016)
+
+    /** The culling records changed since [cursor], from the items feed (`include=culling`: no items downloaded). */
+    fun cullingChanges(cursor: String, limit: Int): CullingPage = get(
+        url("v1/items/changes").newBuilder().addQueryParameter("cursor", cursor)
+            .addQueryParameter("limit", limit.toString()).addQueryParameter("include", "culling").build(),
+        CullingPage.serializer(),
+    )
+
+    /** `POST /v1/culling`: up to 500 per-field changes; one result per change, in order (invalid ones included). */
+    fun pushCulling(changes: List<CullingChange>): CullingPushResponse = post(
+        url("v1/culling"),
+        CullingPushRequest.serializer(),
+        CullingPushRequest(changes),
+        CullingPushResponse.serializer(),
+    )
+
+    /** `GET /v1/culling/{itemId}`, or null when no field of it was ever written (tests, checks). */
+    fun cullingRecord(itemId: String): CullingRecord? {
+        val request = authed(
+            Request.Builder().url(url("v1/culling").newBuilder().addPathSegment(itemId).build())
+                .header("Accept", "application/json"),
+        )
+        return client.newCall(request.build()).execute().use { response ->
+            if (response.code == HTTP_NOT_FOUND) return null
+            parse(response, CullingRecord.serializer())
+        }
+    }
 
     fun pull(cursor: String, limit: Int): PullResponse = get(
         url("v1/changes").newBuilder().addQueryParameter("cursor", cursor)
@@ -289,6 +411,7 @@ class SyncApi(baseUrl: String, private val apiKey: String?, private val client: 
 
     companion object {
         private const val HTTP_OK = 200
+        private const val HTTP_ACCEPTED = 202
         private const val HTTP_NOT_FOUND = 404
         private const val HTTP_NO_CONTENT = 204
         private const val HTTP_FORBIDDEN = 403
@@ -296,6 +419,7 @@ class SyncApi(baseUrl: String, private val apiKey: String?, private val client: 
         private const val HTTP_METHOD_NOT_ALLOWED = 405
         private val JSON_TYPE = "application/json; charset=utf-8".toMediaType()
         private val OFFSET_OCTETS = "application/offset+octet-stream".toMediaType()
+        private val JPEG_TYPE = "image/jpeg".toMediaType()
         private const val TIMEOUT_S = 30L
 
         val json = Json {
@@ -361,11 +485,137 @@ data class ChunkResult(val offset: Long, val complete: Boolean)
 @Serializable
 data class HealthResponse(val status: String, val version: String? = null, val api: Int = 0)
 
+/** `POST /v1/pair`; [app], [manufacturer] and [model] are Hoard ADR 0017's (older servers ignore them). */
 @Serializable
-data class PairRequest(val token: String, val deviceName: String, val platform: String, val appVersion: String)
+data class PairRequest(
+    val token: String,
+    val deviceName: String,
+    val platform: String,
+    val appVersion: String,
+    val app: String? = null,
+    val manufacturer: String? = null,
+    val model: String? = null,
+)
 
 @Serializable
-data class PairResponse(val deviceId: String, val apiKey: String, val serverId: String, val serverName: String = "")
+data class PairResponse(
+    val deviceId: String,
+    val apiKey: String,
+    val serverId: String,
+    val serverName: String = "",
+    /** hoard-server 0.7.0+: the physical device this pairing started (its id = [deviceId]). */
+    val physicalDeviceId: String? = null,
+    /** hoard-server 0.7.0+: phones this one may be (another app paired there), model matches first. */
+    val candidates: List<DeviceCandidate> = emptyList(),
+)
+
+/** One app installation of a physical device (Hoard ADR 0017 "Client calls"). */
+@Serializable
+data class DeviceEntry(
+    val id: String,
+    val name: String = "",
+    val app: String? = null,
+    val platform: String = "",
+    val manufacturer: String? = null,
+    val model: String? = null,
+)
+
+/** A physical device this one may belong to: [match] `model` (same manufacturer and model) or `other`. */
+@Serializable
+data class DeviceCandidate(
+    val physicalDeviceId: String,
+    val name: String = "",
+    val match: String = "other",
+    val devices: List<DeviceEntry> = emptyList(),
+) {
+    val modelMatch: Boolean get() = match == "model"
+}
+
+@Serializable
+data class PhysicalDevice(val id: String, val name: String = "", val devices: List<DeviceEntry> = emptyList())
+
+/** `GET /v1/device` (and the answer of `PATCH` / `claim`). */
+@Serializable
+data class DeviceView(
+    val deviceId: String,
+    val name: String = "",
+    val platform: String = "",
+    val app: String? = null,
+    val manufacturer: String? = null,
+    val model: String? = null,
+    val features: List<String> = emptyList(),
+    val physicalDevice: PhysicalDevice? = null,
+    val candidates: List<DeviceCandidate> = emptyList(),
+)
+
+/** `PATCH /v1/device`: null fields are left out (unchanged on the server). */
+@Serializable
+data class DeviceReport(
+    val app: String? = null,
+    val manufacturer: String? = null,
+    val model: String? = null,
+    val features: List<String>? = null,
+)
+
+/** One field of a culling record: its value (`4`, `"pick"`, `"Red"`), revision, time and writer. */
+@Serializable
+data class CullingFieldState(
+    val value: JsonElement,
+    val rev: Long = 0,
+    val modifiedAt: Long = 0,
+    val deviceId: String = "",
+)
+
+/** A culling record of the items feed (Hoard ADR 0016 "Wire format"). */
+@Serializable
+data class CullingRecord(
+    val itemId: String,
+    val rev: Long = 0,
+    val fingerprints: List<String> = emptyList(),
+    val replacedBy: String? = null,
+    val rating: CullingFieldState? = null,
+    val flag: CullingFieldState? = null,
+    val label: CullingFieldState? = null,
+)
+
+@Serializable
+data class CullingPage(
+    val culling: List<CullingRecord> = emptyList(),
+    val cursor: String,
+    val hasMore: Boolean = false,
+)
+
+/** One per-field change; the shot is named by [fingerprint] (Reveal always pushes by its main file). */
+@Serializable
+data class CullingChange(
+    val fingerprint: String? = null,
+    val itemId: String? = null,
+    val field: String,
+    val value: JsonElement,
+    val baseRev: Long,
+    val modifiedAt: Long,
+)
+
+@Serializable
+data class CullingPushRequest(val changes: List<CullingChange>)
+
+@Serializable
+data class CullingResult(
+    val index: Int = -1,
+    val itemId: String? = null,
+    val fingerprint: String? = null,
+    val field: String = "",
+    /** `applied`, `unchanged`, `conflict` (with [winner]) or `invalid` (with [code]). */
+    val status: String,
+    val winner: String? = null,
+    val rev: Long? = null,
+    val clipped: Boolean = false,
+    val code: String? = null,
+    val message: String? = null,
+)
+
+@Serializable
+data class CullingPushResponse(val results: List<CullingResult> = emptyList())
 
 @Serializable
 data class ServerInfo(
@@ -376,14 +626,26 @@ data class ServerInfo(
     val deviceId: String,
     val limits: JsonObject? = null,
     val storageConfigured: Boolean = false,
+    /** What the server implements beyond the base protocol (`items`, `previews`, `culling`, `device-identity`). */
+    val features: List<String> = emptyList(),
+    /** The edited previews' limits (Hoard ADR 0020), present with the `edits` feature. */
+    val edits: EditLimits? = null,
 ) {
+    fun has(feature: String): Boolean = feature in features
+
     fun limit(name: String): Long? = limits?.get(name)?.jsonPrimitive?.longOrNull
 
     fun intLimit(name: String): Int? = limits?.get(name)?.jsonPrimitive?.intOrNull
 }
 
 @Serializable
-data class DeviceSummary(val id: String, val name: String, val platform: String = "")
+data class DeviceSummary(
+    val id: String,
+    val name: String,
+    val platform: String = "",
+    val physicalDeviceId: String? = null,
+    val app: String? = null,
+)
 
 @Serializable
 data class DevicesResponse(val devices: List<DeviceSummary> = emptyList())
@@ -463,4 +725,63 @@ data class UploadCreateResponse(
     val offset: Long = 0,
     val chunkSize: Long = 0,
     val expiresAt: Long = 0,
+)
+
+/** 8 MiB: an edited preview's upload limit when the server does not say (Hoard ADR 0020 "Limits"). */
+private const val DEFAULT_EDIT_BYTES = 8L * 1024 * 1024
+
+/** `GET /v1/server` `edits` (Hoard ADR 0020 "Storage and the setup page"). */
+@Serializable
+data class EditLimits(
+    val maxBytes: Long = DEFAULT_EDIT_BYTES,
+    val maxEdge: Int = 2560,
+    val minEdge: Int = 16,
+    val formats: List<String> = listOf("jpeg"),
+    val maxPerItem: Int = 32,
+    val maxLabel: Int = 64,
+    val maxDigest: Int = 128,
+)
+
+/** One edited preview the server holds for an item. */
+@Serializable
+data class ServerEdit(
+    val versionId: String,
+    val label: String = "",
+    val recipeDigest: String = "",
+    val editedAt: Long = 0,
+    val primary: Boolean = false,
+    val isVirtualCopy: Boolean = false,
+    val deviceId: String = "",
+)
+
+/** An item as the lookup answers it: only what the edited previews need. */
+@Serializable
+data class ServerItem(val id: String, val edits: List<ServerEdit> = emptyList())
+
+@Serializable
+data class ItemMatch(val fingerprint: String, val itemId: String, val role: String = "")
+
+@Serializable
+data class ItemsLookupResponse(
+    val items: List<ServerItem> = emptyList(),
+    val matches: List<ItemMatch> = emptyList(),
+    val missing: List<String> = emptyList(),
+)
+
+/** The headers of an edited preview's PUT. */
+data class EditMeta(
+    val recipeDigest: String,
+    val editedAt: Long,
+    val label: String,
+    val virtualCopy: Boolean,
+    val primary: Boolean,
+)
+
+@Serializable
+data class EditPutResponse(
+    /** `created`, `updated`, `replaced` or `unchanged`. */
+    val status: String,
+    val itemId: String,
+    val rev: Long = 0,
+    val edit: ServerEdit? = null,
 )

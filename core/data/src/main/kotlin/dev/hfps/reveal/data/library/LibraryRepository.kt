@@ -25,6 +25,7 @@ import dev.hfps.reveal.data.handoff.MergeReport
 import dev.hfps.reveal.data.index.IndexProgress
 import dev.hfps.reveal.data.index.IndexReport
 import dev.hfps.reveal.data.index.LibraryIndexer
+import dev.hfps.reveal.data.model.CullingField
 import dev.hfps.reveal.data.model.FileRole
 import dev.hfps.reveal.data.model.PhotoAvailability
 import dev.hfps.reveal.data.model.PhotoFilters
@@ -587,12 +588,12 @@ class LibraryRepository(
 
     suspend fun setRating(photoIds: List<Long>, rating: Int): SidecarOutcome = withContext(Dispatchers.IO) {
         photoIds.chunked(SQL_ARGS).forEach { photoDao.setRating(it, rating.coerceIn(0, MAX_RATING)) }
-        sidecars.write(photoIds)
+        sidecars.write(photoIds, fields = setOf(CullingField.RATING))
     }
 
     suspend fun setFlag(photoIds: List<Long>, flag: PickFlag): SidecarOutcome = withContext(Dispatchers.IO) {
         photoIds.chunked(SQL_ARGS).forEach { photoDao.setFlag(it, flag) }
-        sidecars.write(photoIds)
+        sidecars.write(photoIds, fields = setOf(CullingField.FLAG))
     }
 
     /** The per-folder switch of the originals backup (ADR 0018). */

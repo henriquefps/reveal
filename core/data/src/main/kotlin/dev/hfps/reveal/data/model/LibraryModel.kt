@@ -191,3 +191,20 @@ data class PhotoQuery(
         val SERVER_ONLY = PhotoQuery(filters = PhotoFilters.SERVER_ONLY)
     }
 }
+
+/**
+ * The three culling fields (Hoard ADR 0016, Reveal ADR 0027): each one is synced, written to a sidecar and imported on
+ * its own. [key] is the field's name on the wire and in `culling_pending.field`.
+ */
+enum class CullingField(val key: String) {
+    RATING("rating"),
+    FLAG("flag"),
+    LABEL("label"),
+    ;
+
+    companion object {
+        val ALL: Set<CullingField> = entries.toSet()
+
+        fun of(key: String): CullingField? = entries.firstOrNull { it.key == key }
+    }
+}

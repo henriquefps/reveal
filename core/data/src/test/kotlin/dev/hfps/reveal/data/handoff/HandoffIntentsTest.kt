@@ -153,6 +153,41 @@ class HandoffIntentsTest {
     }
 
     @Test
+    fun `a sender's decision times travel with their fields`() {
+        val intent = Intent(HandoffIntents.ACTION_DEVELOP).apply {
+            clipData = clip(a)
+            putExtra(HandoffIntents.EXTRA_CULLING_VERSION, 2)
+            putExtra(
+                HandoffIntents.EXTRA_CULLING,
+                HandoffIntents.cullingExtra(
+                    mapOf(a to HandoffCulling(rating = 4, flag = PickFlag.PICK, ratingAt = 1_000, flagAt = 2_000)),
+                ),
+            )
+        }
+        assertThat(HandoffIntents.parse(intent)!!.culling.getValue(a))
+            .isEqualTo(HandoffCulling(rating = 4, flag = PickFlag.PICK, ratingAt = 1_000, flagAt = 2_000))
+
+        // A time without its field, or not a positive Long, is ignored.
+        val odd = Intent(HandoffIntents.ACTION_DEVELOP).apply {
+            clipData = clip(a)
+            putExtra(
+                HandoffIntents.EXTRA_CULLING,
+                Bundle().apply {
+                    putBundle(
+                        a.toString(),
+                        Bundle().apply {
+                            putInt(HandoffIntents.KEY_RATING, 2)
+                            putString(HandoffIntents.KEY_RATING_AT, "1000")
+                            putLong(HandoffIntents.KEY_LABEL_AT, 5_000)
+                        },
+                    )
+                },
+            )
+        }
+        assertThat(HandoffIntents.parse(odd)!!.culling.getValue(a)).isEqualTo(HandoffCulling(rating = 2))
+    }
+
+    @Test
     fun `invalid culling values are dropped field by field, unknown uris and keys ignored`() {
         val values = Bundle().apply {
             putBundle(

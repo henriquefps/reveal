@@ -9,8 +9,10 @@ import androidx.sqlite.db.SupportSQLiteDatabase
  * its `photo` record; a version, its recipe or its history cursor change -> its `version` record; a preset, its
  * group (name, order) or its pack (kept after a trial) change -> its `preset` record, and a deleted preset becomes a
  * tombstone (docs/adr/0019 "Sync"); a snapshot changes -> its `version` record, an export preset -> its `setting`
- * record (docs/adr/0025). While the sync
- * engine applies pulled records it sets the `meta` key [APPLYING] in the same transaction, and the triggers stay quiet.
+ * record (docs/adr/0025); a photo's rating, flag or label changes -> a `culling_pending` row for that field (ADR 0027:
+ * the local decision to push per field; [CULLING]). While the sync engine applies pulled records (or culling values)
+ * it sets the `meta` key [APPLYING] in the same transaction, and the triggers stay quiet: a value from the server is
+ * never queued back to it.
  *
  * Triggers are not part of Room's schema, so they are (re)created on every open ([callback]); the names carry a
  * version, and [create] drops the previous version's. SQLite 3.22 (API 29) has no UPSERT, hence a guarded `INSERT` +
@@ -23,7 +25,7 @@ object SyncTriggers {
     /** `setting` record ids of export presets start with this, then the preset's uuid (docs/adr/0025). */
     const val EXPORT_PRESET_PREFIX = "export-preset."
 
-    private const val VERSION = 4
+    private const val VERSION = 5
 
     /** Unix milliseconds in SQL. */
     private const val NOW = "CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)"
@@ -56,6 +58,30 @@ object SyncTriggers {
             "(SELECT record_id FROM sync_records WHERE kind = 'preset'); " +
             "UPDATE sync_records SET dirty = 1, deleted = 0, modified_at = $NOW " +
             "WHERE kind = 'preset' AND record_id IN (SELECT uuid FROM presets WHERE $where);"
+
+    /** Queues a local culling decision on [field] of photo [photoId] (now; an import dates it afterwards). */
+    private fun pend(field: String, photoId: String): String =
+        "INSERT INTO culling_pending (photo_id, field, modified_at, state, invalid_rev, blind) " +
+            "SELECT $photoId, '$field', $NOW, 'pending', 0, 0 WHERE NOT EXISTS " +
+            "(SELECT 1 FROM culling_pending WHERE photo_id = $photoId AND field = '$field'); " +
+            "UPDATE culling_pending SET modified_at = $NOW, state = 'pending', invalid_rev = 0, blind = 0 " +
+            "WHERE photo_id = $photoId AND field = '$field';"
+
+    /**
+     * Culling decisions (ADR 0027): name -> event, extra `WHEN` condition, body. Only a real change queues one; a new
+     * photo queues the fields it starts with that are not the defaults.
+     */
+    private val CULLING = listOf(
+        culling("culling_rating", "AFTER UPDATE OF rating ON photos", "OLD.rating IS NOT NEW.rating", "rating"),
+        culling("culling_flag", "AFTER UPDATE OF flag ON photos", "OLD.flag IS NOT NEW.flag", "flag"),
+        culling("culling_label", "AFTER UPDATE OF label ON photos", "OLD.label IS NOT NEW.label", "label"),
+        culling("culling_insert_rating", "AFTER INSERT ON photos", "NEW.rating <> 0", "rating"),
+        culling("culling_insert_flag", "AFTER INSERT ON photos", "NEW.flag <> 'NONE'", "flag"),
+        culling("culling_insert_label", "AFTER INSERT ON photos", "NEW.label IS NOT NULL", "label"),
+    )
+
+    private fun culling(name: String, event: String, condition: String, field: String) =
+        Triple(name, event to condition, pend(field, "NEW.id"))
 
     private val photoOf = { photoId: String -> "(SELECT uuid FROM photos WHERE id = $photoId)" }
     private val versionOf = { versionId: String -> "(SELECT uuid FROM versions WHERE id = $versionId)" }
@@ -111,13 +137,20 @@ object SyncTriggers {
 
     /** Creates the triggers (idempotent) and drops those of older trigger versions. */
     fun create(db: SupportSQLiteDatabase) {
+        val names = TRIGGERS.map { it.first } + CULLING.map { it.first }
         for (old in 0 until VERSION) {
-            for ((name, _, _) in TRIGGERS) db.execSQL("DROP TRIGGER IF EXISTS sync${old}_$name")
+            for (name in names) db.execSQL("DROP TRIGGER IF EXISTS sync${old}_$name")
         }
         for ((name, event, body) in TRIGGERS) {
             db.execSQL(
                 "CREATE TRIGGER IF NOT EXISTS sync${VERSION}_$name $event FOR EACH ROW WHEN $QUIET " +
                     "BEGIN $body END",
+            )
+        }
+        for ((name, event, body) in CULLING) {
+            db.execSQL(
+                "CREATE TRIGGER IF NOT EXISTS sync${VERSION}_$name ${event.first} FOR EACH ROW " +
+                    "WHEN $QUIET AND ${event.second} BEGIN $body END",
             )
         }
     }

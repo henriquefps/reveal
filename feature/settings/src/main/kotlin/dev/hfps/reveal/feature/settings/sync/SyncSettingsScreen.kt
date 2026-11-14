@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
@@ -51,6 +52,7 @@ import dev.hfps.reveal.designsystem.components.SecondaryButton
 import dev.hfps.reveal.designsystem.icons.PhosphorRegular
 import dev.hfps.reveal.designsystem.theme.RevealTheme
 import dev.hfps.reveal.feature.settings.R
+import dev.hfps.reveal.sync.ClaimException
 import dev.hfps.reveal.sync.PairException
 import dev.hfps.reveal.sync.PairProblem
 import dev.hfps.reveal.sync.SyncProblem
@@ -59,6 +61,7 @@ import dev.hfps.reveal.sync.SyncStatus
 import dev.hfps.reveal.sync.account.PairingLink
 import dev.hfps.reveal.sync.account.SyncAccount
 import dev.hfps.reveal.sync.account.SyncOptions
+import dev.hfps.reveal.sync.api.DeviceCandidate
 import dev.hfps.reveal.sync.work.SyncScheduler
 import java.net.URI
 import javax.inject.Inject
@@ -95,6 +98,8 @@ data class SyncUiState(
     val pairing: PairingState = PairingState.Idle,
     /** "Photos opened from other apps": everything (true) or only edited photos (the default, FIX/W). */
     val handoffBackup: Boolean = false,
+    /** Right after pairing: phones of the same model another app paired from (Hoard ADR 0017's one question). */
+    val samePhone: List<DeviceCandidate> = emptyList(),
 )
 
 /** What the Sync screen can ask for. */
@@ -110,6 +115,9 @@ data class SyncActions(
     val onHandoffBackup: (Boolean) -> Unit = {},
     val onSyncNow: () -> Unit = {},
     val onUnpair: () -> Unit = {},
+    val onThisDevice: () -> Unit = {},
+    val onSamePhone: (String) -> Unit = {},
+    val onNotSamePhone: () -> Unit = {},
 )
 
 /** Test tags of the Sync screen. */
@@ -124,12 +132,17 @@ object SyncTags {
     const val STATUS = "sync_status"
     const val PREVIEWS = "sync_previews"
     const val ORIGINALS = "sync_originals"
+    const val EDITED_PREVIEWS = "sync_edited_previews"
     const val WIFI_ONLY = "sync_wifi_only"
     const val SYNC_NOW = "sync_now"
     const val UNPAIR = "sync_unpair"
     const val UNPAIR_CONFIRM = "sync_unpair_confirm"
 
     const val HANDOFF_BACKUP = "sync_handoff_backup"
+    const val THIS_DEVICE = "sync_this_device"
+    const val SAME_PHONE = "sync_same_phone"
+    const val SAME_PHONE_YES = "sync_same_phone_yes"
+    const val SAME_PHONE_NO = "sync_same_phone_no"
 
     fun folder(id: Long) = "sync_folder_$id"
 }
@@ -148,8 +161,8 @@ class SyncSettingsViewModel @Inject constructor(
         sync.options,
         sync.status,
         combine(library.sources(), library.handoffBackup(), ::Pair),
-        pairing,
-    ) { account, options, status, (sources, handoffBackup), pairingState ->
+        combine(pairing, sync.pairCandidates, ::Pair),
+    ) { account, options, status, (sources, handoffBackup), (pairingState, samePhone) ->
         SyncUiState(
             account = account,
             options = options,
@@ -157,6 +170,7 @@ class SyncSettingsViewModel @Inject constructor(
             folders = sources.map { BackupFolder(it.id, it.name, it.backup) },
             pairing = pairingState,
             handoffBackup = handoffBackup,
+            samePhone = samePhone,
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_MS), SyncUiState())
 
@@ -211,6 +225,19 @@ class SyncSettingsViewModel @Inject constructor(
         viewModelScope.launch { sync.unpair() }
     }
 
+    /** "Same phone": joins the other app's phone (Hoard ADR 0017); a refusal leaves it for the This device screen. */
+    fun samePhone(physicalDeviceId: String) {
+        viewModelScope.launch {
+            try {
+                sync.claim(physicalDeviceId)
+            } catch (@Suppress("SwallowedException") e: ClaimException) {
+                sync.dismissCandidates()
+            }
+        }
+    }
+
+    fun notSamePhone() = sync.dismissCandidates()
+
     private companion object {
         const val STOP_MS = 5_000L
     }
@@ -220,6 +247,7 @@ class SyncSettingsViewModel @Inject constructor(
 fun SyncSettingsScreen(
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
+    onThisDevice: () -> Unit = {},
     viewModel: SyncSettingsViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -236,6 +264,9 @@ fun SyncSettingsScreen(
             onHandoffBackup = viewModel::setHandoffBackup,
             onSyncNow = viewModel::syncNow,
             onUnpair = viewModel::unpair,
+            onThisDevice = onThisDevice,
+            onSamePhone = viewModel::samePhone,
+            onNotSamePhone = viewModel::notSamePhone,
         ),
         modifier = modifier,
     )
@@ -269,6 +300,9 @@ fun SyncSettingsContent(
             } else {
                 Paired(account, state, actions, now)
             }
+        }
+        if (state.account != null) {
+            SamePhoneDialog(state.samePhone, onJoin = actions.onSamePhone, onDismiss = actions.onNotSamePhone)
         }
     }
 }
@@ -383,6 +417,16 @@ private fun Paired(
                 modifier = Modifier.padding(horizontal = 16.dp),
             )
         }
+        RevealListRow(
+            title = stringResource(R.string.device_title),
+            subtitle = stringResource(R.string.device_row_subtitle),
+            icon = PhosphorRegular.DeviceMobile,
+            onClick = actions.onThisDevice,
+            trailing = {
+                Icon(PhosphorRegular.CaretRight, null, tint = RevealTheme.colors.mutedForeground)
+            },
+            modifier = Modifier.testTag(SyncTags.THIS_DEVICE),
+        )
         RevealRowDivider()
         RevealListRow(
             title = statusTitle(status, now),
@@ -419,6 +463,13 @@ private fun Paired(
             checked = options.previews,
             onChange = { actions.onOptions(options.copy(previews = it)) },
             tag = SyncTags.PREVIEWS,
+        )
+        SwitchRow(
+            title = stringResource(R.string.sync_edited_previews),
+            subtitle = stringResource(R.string.sync_edited_previews_subtitle),
+            checked = options.editedPreviews,
+            onChange = { actions.onOptions(options.copy(editedPreviews = it)) },
+            tag = SyncTags.EDITED_PREVIEWS,
         )
         SwitchRow(
             title = stringResource(R.string.sync_originals),

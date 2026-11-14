@@ -170,6 +170,10 @@ interface SyncDao {
     @Query("UPDATE photos SET rating = :rating, flag = :flag, label = :label, hidden = :hidden WHERE id = :id")
     suspend fun applyPhotoMetadata(id: Long, rating: Int, flag: PickFlag, label: String?, hidden: Boolean)
 
+    /** A pulled photo record while culling comes from the server's culling records (ADR 0027): only `hidden`. */
+    @Query("UPDATE photos SET hidden = :hidden WHERE id = :id")
+    suspend fun applyPhotoHidden(id: Long, hidden: Boolean)
+
     /**
      * Every printed file and whether the sync server holds a copy Reveal can read instead (the file itself, or the
      * photo's main file): Settings -> Storage keeps a hand-off's local preview unless this is true (FIX/W).

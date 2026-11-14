@@ -1,8 +1,10 @@
 package dev.hfps.reveal.sync.di
 
 import android.content.Context
+import android.graphics.Bitmap
 import android.os.Build
 import android.provider.Settings
+import androidx.core.graphics.scale
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -15,18 +17,24 @@ import dev.hfps.reveal.data.export.ExportPreferences
 import dev.hfps.reveal.data.handoff.LocalPreviews
 import dev.hfps.reveal.data.library.DocumentTreeFactory
 import dev.hfps.reveal.data.storage.CacheBudget
+import dev.hfps.reveal.data.thumb.ThumbnailRepository
 import dev.hfps.reveal.pipeline.preview.SmartPreviewMaker
 import dev.hfps.reveal.sync.SyncRepository
+import dev.hfps.reveal.sync.account.ClientDevice
 import dev.hfps.reveal.sync.account.KeystoreSecretStore
 import dev.hfps.reveal.sync.account.SyncAccountStore
 import dev.hfps.reveal.sync.api.SyncApi
 import dev.hfps.reveal.sync.blobs.BlobUploader
 import dev.hfps.reveal.sync.engine.AuthorshipData
+import dev.hfps.reveal.sync.engine.EditPreviews
+import dev.hfps.reveal.sync.engine.EditRenderer
+import dev.hfps.reveal.sync.engine.RenderedEdit
 import dev.hfps.reveal.sync.engine.SyncEngine
 import dev.hfps.reveal.sync.engine.SyncStore
 import dev.hfps.reveal.sync.engine.SyncedSetting
 import dev.hfps.reveal.sync.files.ServerFiles
 import dev.hfps.reveal.sync.work.SyncController
+import java.io.ByteArrayOutputStream
 import java.io.File
 import javax.inject.Singleton
 import kotlinx.coroutines.CoroutineScope
@@ -66,7 +74,12 @@ object SyncModule {
 
     @Provides
     @Singleton
-    fun provideEngine(database: RevealDatabase, store: SyncStore): SyncEngine = SyncEngine(database, store)
+    fun provideEngine(@ApplicationContext context: Context, database: RevealDatabase, store: SyncStore): SyncEngine =
+        SyncEngine(database, store, device = clientDevice(context))
+
+    /** This installation as hoard-server's device identity knows it (Hoard ADR 0017): app id with variant, model. */
+    private fun clientDevice(context: Context): ClientDevice =
+        ClientDevice.of(context.packageName, Build.MANUFACTURER, Build.MODEL)
 
     @Provides
     @Singleton
@@ -115,6 +128,7 @@ object SyncModule {
         uploader: BlobUploader,
         files: ServerFiles,
         trees: DocumentTreeFactory,
+        thumbnails: ThumbnailRepository,
     ): SyncRepository {
         val version = runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }
             .getOrNull().orEmpty()
@@ -127,10 +141,46 @@ object SyncModule {
             engine = engine,
             uploader = uploader,
             files = files,
-            clientInfo = SyncRepository.ClientInfo(name.take(MAX_NAME), "android", version.take(MAX_VERSION)),
+            clientInfo = SyncRepository.ClientInfo(
+                name.take(MAX_NAME),
+                "android",
+                version.take(MAX_VERSION),
+                clientDevice(context),
+            ),
             trees = trees,
+            editPreviews = EditPreviews(database, editRenderer(thumbnails)),
         )
     }
+
+    /**
+     * Edited previews (Hoard ADR 0020 rule 4): the version's develop render (AI masks and Remove fills included) at the
+     * server's long edge, sRGB and upright, JPEG quality 90 (lower only when it would exceed the server's limit).
+     */
+    private fun editRenderer(thumbnails: ThumbnailRepository) = EditRenderer { photoId, versionId, maxEdge, maxBytes ->
+        val rendered = thumbnails.renderEdit(photoId, versionId, maxEdge) ?: return@EditRenderer null
+        val long = maxOf(rendered.width, rendered.height)
+        val bitmap = if (long > maxEdge) {
+            val scale = maxEdge.toFloat() / long
+            rendered.scale(
+                (rendered.width * scale).toInt().coerceAtLeast(1),
+                (rendered.height * scale).toInt().coerceAtLeast(1),
+            ).also { if (it !== rendered) rendered.recycle() }
+        } else {
+            rendered
+        }
+        try {
+            for (quality in JPEG_QUALITIES) {
+                val bytes = ByteArrayOutputStream().also { bitmap.compress(Bitmap.CompressFormat.JPEG, quality, it) }
+                    .toByteArray()
+                if (bytes.size <= maxBytes) return@EditRenderer RenderedEdit(bytes, bitmap.width, bitmap.height)
+            }
+            null
+        } finally {
+            bitmap.recycle()
+        }
+    }
+
+    private val JPEG_QUALITIES = listOf(90, 80, 70)
 
     @Provides
     @Singleton

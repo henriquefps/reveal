@@ -92,6 +92,25 @@ class FakeSyncServer : Dispatcher() {
 
     private val server = MockWebServer().also { it.dispatcher = this }
 
+    /** `features` of `/v1/server`: empty = a server before hoard-server 0.7.0 (no culling, no device identity). */
+    val features = ArrayList<String>()
+
+    /** The server's clock (the culling clock guard). */
+    var clock: () -> Long = System::currentTimeMillis
+
+    /** Culling records, items and device identity (hoard-server 0.7.0). */
+    val culling = FakeCulling(serverId) { clock() }
+
+    /** Edited previews (hoard-server 0.9.0). */
+    val edits = FakeEdits(culling) { clock() }
+
+    /** Turns on what hoard-server 0.7.0+ lists ([edits]: 0.9.0 with previews on). */
+    fun hoard(edits: Boolean = false) {
+        features.clear()
+        features += listOf("items", "culling", "device-identity")
+        if (edits) features += listOf("previews", "edits")
+    }
+
     fun start(): String {
         server.start()
         return server.url("/").toString()
@@ -139,6 +158,7 @@ class FakeSyncServer : Dispatcher() {
                     put("api", 1)
                     put("deviceId", device)
                     put("storageConfigured", true)
+                    put("features", buildJsonArray { features.forEach { add(JsonPrimitive(it)) } })
                     put(
                         "limits",
                         buildJsonObject {
@@ -177,6 +197,61 @@ class FakeSyncServer : Dispatcher() {
             path == "/v1/changes" && method == "POST" -> push(device, request)
 
             path == "/v1/fingerprints/lookup" -> lookup(request)
+
+            path == "/v1/items/lookup" && "items" in features ->
+                ok(edits.lookup(json.parseToJsonElement(request.body!!.utf8()).jsonObject))
+
+            path.matches(Regex("/v1/items/[^/]+/edits/[^/]+")) && "edits" in features -> {
+                val parts = url.pathSegments
+                val answer = if (method == "DELETE") {
+                    edits.delete(parts[2], parts[4])
+                } else {
+                    edits.put(device, parts[2], parts[4], request)
+                }
+                when (answer) {
+                    is FakeEdits.Answer.Ok -> MockResponse.Builder().code(answer.status)
+                        .addHeader("Content-Type", "application/json").body(answer.body.toString()).build()
+
+                    is FakeEdits.Answer.Error -> error(answer.status, answer.code, answer.details)
+                }
+            }
+
+            path == "/v1/culling" && method == "POST" && "culling" in features ->
+                ok(culling.push(device, json.parseToJsonElement(request.body!!.utf8()).jsonObject))
+
+            path == "/v1/items/changes" && "items" in features -> {
+                val include = url.queryParameter("include").orEmpty().split(',')
+                if ("culling" !in include || "culling" !in features) {
+                    ok(
+                        buildJsonObject {
+                            put("items", buildJsonArray {})
+                            put("cursor", "")
+                            put("hasMore", false)
+                        },
+                    )
+                } else {
+                    culling.page(url.queryParameter("cursor").orEmpty(), url.queryParameter("limit")?.toInt() ?: 500)
+                        ?.let(::ok) ?: error(400, "invalid_cursor")
+                }
+            }
+
+            path == "/v1/device" && "device-identity" in features && method == "GET" ->
+                ok(culling.view(device, deviceNames))
+
+            path == "/v1/device" && "device-identity" in features && method == "PATCH" -> {
+                culling.patch(device, json.parseToJsonElement(request.body!!.utf8()).jsonObject)
+                ok(culling.view(device, deviceNames))
+            }
+
+            path == "/v1/device/claim" && "device-identity" in features -> {
+                val target = json.parseToJsonElement(request.body!!.utf8()).jsonObject["physicalDeviceId"]
+                    ?.let { (it as? JsonPrimitive)?.takeIf { p -> p.isString }?.content }
+                when (culling.claim(device, target, deviceNames)) {
+                    null -> ok(culling.view(device, deviceNames))
+                    "not_found" -> error(404, "not_found")
+                    else -> error(409, "conflict", buildJsonObject { put("reason", "same_app") })
+                }
+            }
 
             path == "/v1/uploads" && method == "POST" -> createUpload(device, request)
 
@@ -262,12 +337,18 @@ class FakeSyncServer : Dispatcher() {
         val token = body["token"]!!.jsonPrimitive.content
         if (!tokens.remove(token)) return error(401, "invalid_pairing_token")
         val key = addDevice(body["deviceName"]!!.jsonPrimitive.content)
+        val id = devices.getValue(key)
+        culling.paired(id, body)
         return MockResponse.Builder().code(201).body(
             buildJsonObject {
-                put("deviceId", devices[key])
+                put("deviceId", id)
                 put("apiKey", key)
                 put("serverId", serverId)
                 put("serverName", "Test")
+                if ("device-identity" in features) {
+                    put("physicalDeviceId", id)
+                    put("candidates", culling.candidates(id, deviceNames))
+                }
             }.toString(),
         ).build()
     }
@@ -401,6 +482,7 @@ class FakeSyncServer : Dispatcher() {
     ) {
         val before = (current?.data as? JsonObject)?.get("preview")?.let { it as? JsonObject }
             ?.get("sha256")?.jsonPrimitive?.content
+        if (kind == "photo" && !deleted && "culling" in features) culling.bridge(device, current?.data, data, at)
         head++
         if (current == null) {
             records[kind to id] = Record(kind, id, head, deleted, at, device, copyOf, if (deleted) null else data)

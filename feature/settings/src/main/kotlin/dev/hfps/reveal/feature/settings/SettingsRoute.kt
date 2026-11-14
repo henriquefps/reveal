@@ -13,3 +13,7 @@ data object SyncSettingsRoute
 /** The Storage screen inside Settings (ADR 0018 amendment FIX/W). */
 @Serializable
 data object StorageRoute
+
+/** "This device" inside Settings -> Sync (Hoard ADR 0017, Reveal ADR 0027). */
+@Serializable
+data object ThisDeviceRoute

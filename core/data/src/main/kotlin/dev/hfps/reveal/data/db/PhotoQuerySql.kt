@@ -55,22 +55,32 @@ object PhotoQuerySql {
             "AND COALESCE(c.original_on_server, 0) = 0 AND c.preview_sha IS NULL " +
             "AND NOT $SERVER_SOURCE_SQL"
 
+    /** The row's version has an edit (a non-default recipe); `r` is the left-joined non-default recipe. */
+    const val EDITED_SQL = "r.version_id IS NOT NULL"
+
     /**
-     * One row per version: the first version of every photo, then its other versions (sync conflict copies and
-     * versions another device added, ADR 0018) right after it. `remote` = the photo lives only on the sync server.
+     * The FROM clause of one row per version (a grid cell, docs/adr/0025): the counts use it too, so a virtual copy
+     * counts like the cell it is.
+     */
+    const val CELLS_FROM = "FROM photos p JOIN versions v ON v.photo_id = p.id " +
+        "LEFT JOIN recipes r ON r.version_id = v.id AND r.is_default = 0 " +
+        "LEFT JOIN photo_cloud c ON c.photo_id = p.id"
+
+    /**
+     * One row per version: the first version of every photo, then its other versions (virtual copies, docs/adr/0025;
+     * sync conflict copies, ADR 0018) right after it. `remote` = the photo lives only on the sync server.
      */
     private const val SELECT =
         "SELECT p.id, p.source_id, p.name, p.format, p.sort_time, p.capture_time, p.rating, p.label, p.flag, " +
             "p.has_edit, v.id AS version_id, r.updated_at AS edit_time, p.handoff_at, p.handoff_title, " +
             "v.position AS version_position, v.copy_of IS NOT NULL AS conflict, v.copy_device, " +
+            "v.name AS version_name, " +
             "COALESCE(c.original_on_server, 0) AS cloud_original, c.preview_sha IS NOT NULL AS cloud_preview, " +
             "$SERVER_SOURCE_SQL AS remote, ($UPLOADING_SQL) AS uploading, " +
             "EXISTS (SELECT 1 FROM photo_files uf WHERE uf.photo_id = p.id AND uf.unreadable_at IS NOT NULL) " +
             "AS unreadable, ($UNAVAILABLE_SQL) AS unavailable, (SELECT uf.fingerprint FROM photo_files uf WHERE " +
             "uf.photo_id = p.id AND uf.unreadable_at IS NOT NULL LIMIT 1) AS unreadable_fingerprint " +
-            "FROM photos p JOIN versions v ON v.photo_id = p.id " +
-            "LEFT JOIN recipes r ON r.version_id = v.id AND r.is_default = 0 " +
-            "LEFT JOIN photo_cloud c ON c.photo_id = p.id"
+            CELLS_FROM
 
     /** The statement text and its arguments, in order (exposed for tests). */
     fun build(query: PhotoQuery): Pair<String, List<Any>> {
@@ -119,8 +129,10 @@ object PhotoQuerySql {
         group(
             filters.edits.sorted().map {
                 when (it) {
-                    EditFilter.EDITED -> Clause("p.has_edit = 1")
-                    EditFilter.NOT_EDITED -> Clause("p.has_edit = 0")
+                    // Per grid cell (docs/adr/0025): a virtual copy is edited or not on its own.
+                    EditFilter.EDITED -> Clause(EDITED_SQL)
+
+                    EditFilter.NOT_EDITED -> Clause("NOT $EDITED_SQL")
                 }
             },
         ),

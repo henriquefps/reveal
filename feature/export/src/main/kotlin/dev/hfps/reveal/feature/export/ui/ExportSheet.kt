@@ -32,6 +32,9 @@ import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -45,23 +48,28 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import dev.hfps.reveal.data.export.ExportPresetRepository
 import dev.hfps.reveal.designsystem.components.Eyebrow
 import dev.hfps.reveal.designsystem.components.GhostButton
 import dev.hfps.reveal.designsystem.components.PrimaryButton
 import dev.hfps.reveal.designsystem.components.RevealBottomSheet
 import dev.hfps.reveal.designsystem.components.RevealChip
+import dev.hfps.reveal.designsystem.components.RevealTextDialog
 import dev.hfps.reveal.designsystem.components.SecondaryButton
 import dev.hfps.reveal.designsystem.components.slider.RevealSlider
 import dev.hfps.reveal.designsystem.components.slider.SliderSpec
+import dev.hfps.reveal.designsystem.icons.PhosphorRegular
 import dev.hfps.reveal.designsystem.theme.RevealTheme
 import dev.hfps.reveal.feature.export.R
 import dev.hfps.reveal.feature.export.destination.ShareCache
 import dev.hfps.reveal.feature.export.engine.ExportFailure
+import dev.hfps.reveal.feature.export.model.BuiltInExportPreset
 import dev.hfps.reveal.feature.export.model.ExportColour
 import dev.hfps.reveal.feature.export.model.ExportDestination
 import dev.hfps.reveal.feature.export.model.ExportFormat
 import dev.hfps.reveal.feature.export.model.ExportNaming
 import dev.hfps.reveal.feature.export.model.ExportOptions
+import dev.hfps.reveal.feature.export.model.ExportPreset
 import dev.hfps.reveal.feature.export.model.MetadataLevel
 import dev.hfps.reveal.feature.export.model.NameTemplate
 import dev.hfps.reveal.pipeline.export.ExportSize
@@ -81,6 +89,14 @@ object ExportTags {
     const val DEST_PICTURES = "export_dest_pictures"
     const val DEST_FOLDER = "export_dest_folder"
     const val DEST_SHARE = "export_dest_share"
+    const val PRESETS = "export_presets"
+    const val PRESET_SAVE = "export_preset_save"
+    const val PRESET_RENAME = "export_preset_rename"
+    const val PRESET_UPDATE = "export_preset_update"
+    const val PRESET_DELETE = "export_preset_delete"
+
+    /** The chip of the preset [key] (`builtin:instagram`, `builtin:web`, `builtin:full` or a user preset's uuid). */
+    fun preset(key: String) = "export_preset_$key"
 }
 
 /**
@@ -129,6 +145,11 @@ fun ExportSheetHost(
             if (needsPermission) notifications.launch(Manifest.permission.POST_NOTIFICATIONS) else viewModel.start()
         },
         onCancel = viewModel::cancel,
+        onPreset = viewModel::pickPreset,
+        onSavePreset = viewModel::savePreset,
+        onRenamePreset = viewModel::renamePreset,
+        onUpdatePreset = viewModel::updatePreset,
+        onDeletePreset = viewModel::deletePreset,
         onShareResults = { uris ->
             shareResultsLauncher.launch(Intent.createChooser(shareIntent(uris, state.options.format.mimeType), null))
         },
@@ -153,6 +174,12 @@ class ExportSheetActions(
     /** Share the files the finished run saved ([ExportRun.results]) through the system share sheet. */
     val onShareResults: (List<Uri>) -> Unit = {},
     val onDone: () -> Unit = {},
+    /** Export presets (docs/adr/0025): pick one, save the current options as one, rename, update, delete. */
+    val onPreset: (ExportPreset) -> Unit = {},
+    val onSavePreset: (name: String) -> Unit = {},
+    val onRenamePreset: (uuid: String, name: String) -> Unit = { _, _ -> },
+    val onUpdatePreset: (uuid: String) -> Unit = {},
+    val onDeletePreset: (uuid: String) -> Unit = {},
 )
 
 @Composable
@@ -189,6 +216,7 @@ private fun OptionsSection(state: ExportUiState, actions: ExportSheetActions) {
     Column(verticalArrangement = Arrangement.spacedBy(SECTION_GAP)) {
         val options = state.options
         val set = actions.onOptions
+        PresetsSection(state, actions)
         FormatSection(state, set)
         if (options.format.hasQuality) {
             RevealSlider(
@@ -235,6 +263,112 @@ private fun Note(text: String, warning: Boolean = false) {
         style = RevealTheme.typography.ui,
         color = if (warning) RevealTheme.colors.warning else RevealTheme.colors.mutedForeground,
     )
+}
+
+/** What the preset name dialog is for. */
+private sealed interface PresetDialog {
+    data object Save : PresetDialog
+
+    data class Rename(val preset: ExportPreset.User) : PresetDialog
+}
+
+/** The name a preset chip shows: the built-in's localised name, or the user's. */
+@Composable
+fun ExportPreset.label(): String = when (this) {
+    is ExportPreset.User -> name
+
+    is ExportPreset.BuiltIn -> stringResource(
+        when (kind) {
+            BuiltInExportPreset.INSTAGRAM -> R.string.export_preset_instagram
+            BuiltInExportPreset.WEB -> R.string.export_preset_web
+            BuiltInExportPreset.FULL_QUALITY -> R.string.export_preset_full
+        },
+    )
+}
+
+/**
+ * Export presets (docs/adr/0025): one chip per preset (built-ins first) sets every option in one tap; "Save as preset"
+ * keeps the current options under a name. The picked user preset can be renamed, updated with the current options
+ * (when they changed) or deleted.
+ */
+@Suppress("LongMethod")
+@Composable
+private fun PresetsSection(state: ExportUiState, actions: ExportSheetActions) {
+    var dialog by remember { mutableStateOf<PresetDialog?>(null) }
+    Column(verticalArrangement = Arrangement.spacedBy(SECTION_GAP), modifier = Modifier.testTag(ExportTags.PRESETS)) {
+        Eyebrow(stringResource(R.string.export_presets))
+        ChipRow {
+            for (preset in state.presets) {
+                RevealChip(
+                    preset.label(),
+                    preset.key == state.activePreset,
+                    { actions.onPreset(preset) },
+                    Modifier.testTag(ExportTags.preset(preset.key)),
+                )
+            }
+        }
+        val active = state.active
+        if (active is ExportPreset.User) {
+            if (state.presetModified) Note(stringResource(R.string.export_preset_modified, active.name))
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
+                if (state.presetModified) {
+                    GhostButton(
+                        text = stringResource(R.string.export_preset_update),
+                        onClick = { actions.onUpdatePreset(active.uuid) },
+                        modifier = Modifier.testTag(ExportTags.PRESET_UPDATE),
+                    )
+                }
+                GhostButton(
+                    text = stringResource(R.string.export_preset_rename),
+                    onClick = { dialog = PresetDialog.Rename(active) },
+                    modifier = Modifier.testTag(ExportTags.PRESET_RENAME),
+                )
+                GhostButton(
+                    text = stringResource(R.string.export_preset_delete),
+                    onClick = { actions.onDeletePreset(active.uuid) },
+                    modifier = Modifier.testTag(ExportTags.PRESET_DELETE),
+                )
+            }
+        } else if (active == null || state.presetModified) {
+            GhostButton(
+                text = stringResource(R.string.export_preset_save),
+                onClick = { dialog = PresetDialog.Save },
+                icon = PhosphorRegular.Plus,
+                modifier = Modifier.testTag(ExportTags.PRESET_SAVE),
+            )
+        }
+    }
+    when (val d = dialog) {
+        null -> Unit
+
+        PresetDialog.Save -> RevealTextDialog(
+            title = stringResource(R.string.export_preset_save_title),
+            label = stringResource(R.string.export_preset_name),
+            initial = "",
+            confirm = stringResource(R.string.export_preset_save_confirm),
+            cancel = stringResource(R.string.export_cancel),
+            onConfirm = {
+                dialog = null
+                actions.onSavePreset(it)
+            },
+            onDismiss = { dialog = null },
+            maxLength = ExportPresetRepository.MAX_NAME,
+        )
+
+        is PresetDialog.Rename -> RevealTextDialog(
+            title = stringResource(R.string.export_preset_rename_title),
+            label = stringResource(R.string.export_preset_name),
+            initial = d.preset.name,
+            confirm = stringResource(R.string.export_preset_rename_confirm),
+            cancel = stringResource(R.string.export_cancel),
+            onConfirm = {
+                dialog = null
+                actions.onRenamePreset(d.preset.uuid, it)
+            },
+            onDismiss = { dialog = null },
+            maxLength = ExportPresetRepository.MAX_NAME,
+        )
+    }
 }
 
 @Composable

@@ -42,6 +42,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.platform.testTag
@@ -55,6 +56,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.hfps.image.decode.IntRect
 import dev.hfps.image.decode.Sampling
 import dev.hfps.reveal.data.db.PhotoEntity
+import dev.hfps.reveal.data.edit.VersionInfo
 import dev.hfps.reveal.data.handoff.GalleryAccess
 import dev.hfps.reveal.data.model.PickFlag
 import dev.hfps.reveal.data.thumb.RegionSource
@@ -74,6 +76,7 @@ import dev.hfps.reveal.feature.library.R
 import dev.hfps.reveal.feature.library.TwoPaneMinWidth
 import dev.hfps.reveal.feature.library.UnavailableSheet
 import dev.hfps.reveal.feature.library.UnavailableTags
+import dev.hfps.reveal.feature.library.copyNamer
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
@@ -110,18 +113,20 @@ fun ViewerScreen(
             Row(Modifier.fillMaxSize()) {
                 Box(Modifier.weight(1f).fillMaxHeight()) {
                     if (!state.loaded) return@Box
-                    val pager = rememberPagerState(initialPage = state.start) { state.ids.size }
+                    val pager = rememberPagerState(initialPage = state.start) { state.pages.size }
                     var zoomed by remember { mutableStateOf(false) }
                     HorizontalPager(
                         state = pager,
                         userScrollEnabled = !zoomed,
-                        key = { state.ids[it] },
+                        // One page per version: a virtual copy is a page of its own (docs/adr/0025).
+                        key = { state.pages[it].versionId },
                         beyondViewportPageCount = 1,
                         modifier = Modifier.fillMaxSize().testTag(ViewerTags.PAGER),
                     ) { page ->
-                        val id = state.ids[page]
+                        val id = state.pages[page].photoId
                         ViewerPage(
                             id = id,
+                            versionId = state.pages[page].versionId,
                             pages = pages,
                             reloads = state.reloads,
                             onExplain = { viewModel.explain(id) },
@@ -130,15 +135,28 @@ fun ViewerScreen(
                             onZoomChange = { if (pager.currentPage == page) zoomed = it },
                         )
                     }
-                    val currentId = state.ids.getOrNull(pager.currentPage)
+                    val currentPage = state.pages.getOrNull(pager.currentPage)
+                    val currentId = currentPage?.photoId
+                    LaunchedEffect(state.jumpTo) {
+                        val target = state.jumpTo ?: return@LaunchedEffect
+                        pager.scrollToPage(target.coerceIn(0, (state.pages.size - 1).coerceAtLeast(0)))
+                        viewModel.jumped()
+                    }
+                    val version by produceState<VersionInfo?>(null, currentPage, state.versions) {
+                        value = currentPage?.let { viewModel.version(it.versionId) }
+                    }
                     val photo by remember(currentId) { currentId?.let(viewModel::photo) ?: flowOf(null) }
                         .collectAsStateWithLifecycle(null)
+                    val copyName = version?.takeIf { it.position > 0 }?.label()
                     ViewerTopChrome(
                         visible = chrome,
-                        title = photo?.name.orEmpty(),
+                        title = listOfNotNull(photo?.name, copyName).joinToString(" · "),
                         position = pager.currentPage + 1,
-                        total = state.ids.size,
+                        total = state.pages.size,
                         onBack = onBack,
+                        onVersions = {
+                            currentPage?.let { viewModel.openVersions(it, photo?.name.orEmpty()) }
+                        },
                         modifier = Modifier.align(Alignment.TopCenter),
                     )
                     androidx.compose.animation.AnimatedVisibility(
@@ -162,7 +180,12 @@ fun ViewerScreen(
                                     null
                                 },
                                 onEdit = {
-                                    scope.launch { viewModel.versionOf(p.id)?.let { onEdit(it, viewModel.strip) } }
+                                    val versionId = currentPage?.versionId
+                                    if (versionId != null) {
+                                        onEdit(versionId, viewModel.strip)
+                                    } else {
+                                        scope.launch { viewModel.versionOf(p.id)?.let { onEdit(it, viewModel.strip) } }
+                                    }
                                 },
                             )
                         }
@@ -198,6 +221,19 @@ fun ViewerScreen(
                     onDismiss = viewModel::dismissConflict,
                 )
             }
+            state.versions?.let { ui ->
+                val context = LocalContext.current
+                VersionsSheet(
+                    ui = ui,
+                    actions = VersionsActions(
+                        onShow = viewModel::showVersion,
+                        onCreate = { source -> viewModel.createCopy(source, copyNamer(context)) },
+                        onRename = viewModel::renameVersion,
+                        onDelete = viewModel::deleteVersion,
+                        onDismiss = viewModel::dismissVersions,
+                    ),
+                )
+            }
             state.forgetPrompt?.let { prompt ->
                 ForgetDialog(
                     prompt,
@@ -221,6 +257,7 @@ private fun ViewerTopChrome(
     total: Int,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
+    onVersions: () -> Unit = {},
 ) {
     AnimatedVisibility(visible, enter = fadeIn(), exit = fadeOut(), modifier = modifier) {
         Box(
@@ -238,7 +275,13 @@ private fun ViewerTopChrome(
                         stringResource(R.string.viewer_position, position, total),
                         style = RevealTheme.typography.ui,
                         color = RevealTheme.colors.mutedForeground,
-                        modifier = Modifier.padding(horizontal = 12.dp),
+                        modifier = Modifier.padding(horizontal = 4.dp),
+                    )
+                    RevealIconButton(
+                        icon = PhosphorRegular.Stack,
+                        contentDescription = stringResource(R.string.versions_title),
+                        onClick = onVersions,
+                        modifier = Modifier.testTag(ViewerTags.VERSIONS),
                     )
                 },
             )
@@ -328,9 +371,11 @@ private fun ViewerControls(
 }
 
 /** One page: the screen-size image at once, full-resolution detail when zoomed past it. */
+@Suppress("LongParameterList")
 @Composable
 private fun ViewerPage(
     id: Long,
+    versionId: Long,
     pages: ViewerPages,
     reloads: Int,
     onExplain: () -> Unit,
@@ -341,8 +386,8 @@ private fun ViewerPage(
     val currentOnZoomChange by rememberUpdatedState(onZoomChange)
     val window = LocalWindowInfo.current.containerSize
     val longEdge = maxOf(window.width, window.height).coerceAtLeast(MIN_DISPLAY_EDGE)
-    val image by produceState<Loaded?>(null, id, reloads) {
-        val display = pages.display(id, longEdge)
+    val image by produceState<Loaded?>(null, id, versionId, reloads) {
+        val display = pages.display(id, versionId, longEdge)
         value = if (display == null) {
             if (pages.isUnavailable(id)) {
                 Loaded.Unavailable(pages.detail(id)?.photo?.name.orEmpty())
@@ -382,7 +427,7 @@ private fun ViewerPage(
         is Loaded.Unavailable -> UnavailablePage(loaded.name, onExplain)
 
         is Loaded.Image -> {
-            val detail = rememberDetail(id, loaded, zoom, pages, active)
+            val detail = rememberDetail(id, versionId, loaded, zoom, pages, active)
             ZoomableImage(
                 base = loaded.bitmap,
                 fullSize = loaded.fullSize,
@@ -446,6 +491,7 @@ private sealed interface Loaded {
 @Composable
 private fun rememberDetail(
     id: Long,
+    versionId: Long,
     loaded: Loaded.Image,
     zoom: ZoomState,
     pages: ViewerPages,
@@ -471,7 +517,7 @@ private fun rememberDetail(
                 region = pages.region(id)
                 if (region == null) {
                     // A RAW without its JPEG: develop it larger once (half-size decode) and use it as the detail.
-                    val big = pages.developed(id, RAW_DETAIL_EDGE) ?: return@collectLatest
+                    val big = pages.developed(id, versionId, RAW_DETAIL_EDGE) ?: return@collectLatest
                     detail =
                         DetailTile(
                             big.asImageBitmap(),

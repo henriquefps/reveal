@@ -293,4 +293,35 @@
     <string name="library_filter_not_synced">Not synced</string>
     <string name="library_filter_with_count">%1$s · %2$s</string>
     <string name="library_cloud_uploading">Waiting to upload to the server</string>
+    <!-- Virtual copies (docs/adr/0025). -->
+    <string name="library_copy_name">Copy %1$d</string>
+    <string name="library_action_create_copy">Create virtual copy</string>
+    <plurals name="library_action_delete_copies">
+        <item quantity="one">Delete copy</item>
+        <item quantity="other">Delete %1$d copies</item>
+    </plurals>
+    <plurals name="library_copies_created">
+        <item quantity="one">%1$d virtual copy created</item>
+        <item quantity="other">%1$d virtual copies created</item>
+    </plurals>
+    <plurals name="library_copies_deleted">
+        <item quantity="one">%1$d copy deleted</item>
+        <item quantity="other">%1$d copies deleted</item>
+    </plurals>
+    <string name="versions_title">Versions</string>
+    <string name="versions_hint">Each virtual copy has its own edit, history and exports. Ratings and flags belong to the photo.</string>
+    <string name="versions_main">Main version</string>
+    <string name="versions_on_screen">On screen</string>
+    <string name="versions_copy_current">Copy this edit</string>
+    <string name="versions_copy_original">Copy of the original</string>
+    <string name="versions_rename">Rename</string>
+    <string name="versions_rename_title">Rename copy</string>
+    <string name="versions_name">Name</string>
+    <string name="versions_delete">Delete copy</string>
+    <string name="versions_delete_question_named">Delete “%1$s”?</string>
+    <plurals name="versions_delete_question">
+        <item quantity="one">Delete %1$d virtual copy?</item>
+        <item quantity="other">Delete %1$d virtual copies?</item>
+    </plurals>
+    <string name="versions_delete_body">Its edit, history and snapshots are deleted too, on every synced device. The photo and its other versions stay.</string>
 </resources>

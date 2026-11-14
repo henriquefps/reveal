@@ -145,13 +145,23 @@ class PhotoImages(
         )
     }
 
-    /** The screen-size image of [photoId] (long edge about [longEdge]); null when its folder is not available. */
-    suspend fun display(photoId: Long, longEdge: Int): DisplayImage? = withContext(Dispatchers.IO) {
+    /**
+     * The screen-size image of [photoId] (long edge about [longEdge]) as [versionId] shows it (a virtual copy has its
+     * own edit, docs/adr/0025; null = the photo's first version); null when its folder is not available.
+     */
+    suspend fun display(photoId: Long, longEdge: Int, versionId: Long? = null): DisplayImage? = withContext(
+        Dispatchers.IO,
+    ) {
         val photo = photos.get(photoId) ?: return@withContext null
         val opened = open(photoId) ?: return@withContext null
         val (fullWidth, fullHeight) = fullSize(photo.width, photo.height, photo.orientation, opened)
-        if (photo.hasEdit) {
-            developed(photoId, longEdge)?.let {
+        val edited = if (versionId == null) {
+            photo.hasEdit
+        } else {
+            db.editDao().recipe(versionId)?.isDefault == false
+        }
+        if (edited) {
+            developed(photoId, longEdge, versionId)?.let {
                 return@withContext DisplayImage.of(it, fullWidth, fullHeight, developed = true)
             }
         }
@@ -178,12 +188,17 @@ class PhotoImages(
         }
     }
 
-    /** A develop render of the version's recipe (default when unedited) at [longEdge]; null without a GPU path. */
-    suspend fun developed(photoId: Long, longEdge: Int): Bitmap? = withContext(Dispatchers.IO) {
+    /**
+     * A develop render of [versionId]'s recipe (null = the photo's first version; default when unedited) at
+     * [longEdge]; null without a GPU path.
+     */
+    suspend fun developed(photoId: Long, longEdge: Int, versionId: Long? = null): Bitmap? = withContext(
+        Dispatchers.IO,
+    ) {
         val renderer = edited ?: return@withContext null
         val opened = open(photoId) ?: return@withContext null
         val main = opened.raw ?: opened.rendered ?: return@withContext null
-        val version = photos.firstVersion(photoId) ?: return@withContext null
+        val version = versionId ?: photos.firstVersion(photoId) ?: return@withContext null
         val recipe = edits.recipe(version)
         runCatching {
             opened.tree.openInput(main.documentId, main.name).use { renderer.render(it, recipe, longEdge) }

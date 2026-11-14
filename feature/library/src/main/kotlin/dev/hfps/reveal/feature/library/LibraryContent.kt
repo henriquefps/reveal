@@ -445,6 +445,7 @@ private fun SelectionOverflow(state: LibraryUiState, actions: LibraryActions, wi
         RevealIconButton(
             icon = PhosphorRegular.DotsThree,
             contentDescription = stringResource(R.string.library_menu),
+            modifier = Modifier.testTag(LibraryTags.SELECTION_MENU),
             onClick = { open = true },
         )
         DropdownMenu(open, {
@@ -452,7 +453,7 @@ private fun SelectionOverflow(state: LibraryUiState, actions: LibraryActions, wi
         }, containerColor = RevealTheme.colors.card, shape = RevealTheme.shapes.control) {
             MenuItem(PhosphorRegular.SelectionAll, stringResource(R.string.library_selection_all)) {
                 open = false
-                actions.onSelectionChange(state.photoIds.toSet())
+                actions.onSelectionChange(state.versionIds.toSet())
             }
             MenuItem(PhosphorRegular.Minus, stringResource(R.string.library_action_unflag)) {
                 open = false
@@ -488,6 +489,28 @@ private fun SelectionOverflow(state: LibraryUiState, actions: LibraryActions, wi
                 ) {
                     open = false
                     actions.onDeleteFromServer()
+                }
+            }
+            TaggedMenuItem(
+                PhosphorRegular.CopySimple,
+                stringResource(R.string.library_action_create_copy),
+                LibraryTags.CREATE_COPY,
+            ) {
+                open = false
+                actions.onCreateCopies()
+            }
+            if (state.selectedCopies.isNotEmpty()) {
+                TaggedMenuItem(
+                    PhosphorRegular.Trash,
+                    pluralStringResource(
+                        R.plurals.library_action_delete_copies,
+                        state.selectedCopies.size,
+                        state.selectedCopies.size,
+                    ),
+                    LibraryTags.DELETE_COPIES,
+                ) {
+                    open = false
+                    actions.onDeleteCopies()
                 }
             }
             if (state.selectedConflictCopies.isNotEmpty()) {

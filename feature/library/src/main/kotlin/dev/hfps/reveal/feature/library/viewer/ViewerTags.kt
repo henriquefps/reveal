@@ -7,6 +7,7 @@ object ViewerTags {
     const val INFO = "viewer-info"
     const val INFO_SHEET = "viewer-info-sheet"
     const val INFO_ORIGINAL = "viewer-info-original"
+    const val VERSIONS = "viewer-versions"
 
     fun star(n: Int) = "viewer-star-$n"
 }

@@ -38,6 +38,8 @@ data class PhotoRow(
     @ColumnInfo(name = "handoff_title") val handoffTitle: String? = null,
     /** 0 for a photo's first version; a later one is a virtual copy (a sync conflict copy when [conflict]). */
     @ColumnInfo(name = "version_position") val versionPosition: Int = 0,
+    /** A virtual copy's name ("Copy 1", docs/adr/0025); null for the first version and unnamed versions. */
+    @ColumnInfo(name = "version_name") val versionName: String? = null,
     val conflict: Boolean = false,
     /** The device whose losing change a conflict copy keeps (ADR 0017), null otherwise. */
     @ColumnInfo(name = "copy_device") val copyDevice: String? = null,
@@ -62,6 +64,9 @@ data class PhotoRow(
     /** The fingerprint of an unreadable file of the photo (to look for its local preview), null when readable. */
     @ColumnInfo(name = "unreadable_fingerprint") val unreadableFingerprint: String? = null,
 ) {
+    /** This cell's version has an edit (per version: a virtual copy is edited or not on its own, docs/adr/0025). */
+    val edited: Boolean get() = editTime != null
+
     /** The grid's key: the photo for its first version, the version for a copy (two cells of one photo). */
     val gridKey: Any get() = if (versionPosition == 0) id else "v$versionId"
 }
@@ -167,17 +172,20 @@ interface PhotoDao {
     fun observeFromAppsCount(): Flow<Int>
 
     /**
-     * How many photos of the library home each filter choice would show on its own (the filter sheet's counts; the
-     * folders' come with the sources). Not faceted: counted over every photo, whatever the other filters.
+     * How many grid cells of the library home each filter choice would show on its own (the filter sheet's counts; the
+     * folders' come with the sources). Not faceted: counted over every cell, whatever the other filters. A cell is a
+     * version: a virtual copy counts once more (docs/adr/0025).
      */
     @Query(
         "SELECT COALESCE(SUM(p.handoff_at IS NOT NULL AND NOT " + PhotoQuerySql.SERVER_SOURCE_SQL + "), 0) " +
             "AS from_apps, COALESCE(SUM(" + PhotoQuerySql.SERVER_SOURCE_SQL + "), 0) AS server_only, " +
             "COALESCE(SUM(p.flag = 'PICK'), 0) AS picked, COALESCE(SUM(p.rating >= 1), 0) AS starred, " +
-            "COALESCE(SUM(p.flag = 'REJECT'), 0) AS rejected, COALESCE(SUM(p.has_edit = 1), 0) AS edited, " +
-            "COALESCE(SUM(p.has_edit = 0), 0) AS not_edited, COALESCE(SUM(p.has_raw = 1), 0) AS raw, " +
+            "COALESCE(SUM(p.flag = 'REJECT'), 0) AS rejected, " +
+            "COALESCE(SUM(" + PhotoQuerySql.EDITED_SQL + "), 0) AS edited, " +
+            "COALESCE(SUM(NOT " + PhotoQuerySql.EDITED_SQL + "), 0) AS not_edited, " +
+            "COALESCE(SUM(p.has_raw = 1), 0) AS raw, " +
             "COALESCE(SUM(p.has_raw = 0), 0) AS jpeg, COALESCE(SUM(" + PhotoQuerySql.SYNCED_SQL + "), 0) AS synced, " +
-            "COUNT(*) AS total FROM photos p LEFT JOIN photo_cloud c ON c.photo_id = p.id " +
+            "COUNT(*) AS total " + PhotoQuerySql.CELLS_FROM + " " +
             "WHERE p.hidden = 0 AND (NOT " + PhotoQuerySql.SERVER_SOURCE_SQL + " OR " +
             PhotoQuerySql.SERVER_OPENABLE_SQL + ")",
     )

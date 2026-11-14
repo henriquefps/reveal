@@ -93,4 +93,19 @@
         <item quantity="one">%d photo will be exported at preview size (2560 px): Reveal can no longer read its original. Share it to Reveal again to export it at full size.</item>
         <item quantity="other">%d photos will be exported at preview size (2560 px): Reveal can no longer read their originals. Share them to Reveal again to export them at full size.</item>
     </plurals>
+    <!-- Export presets (docs/adr/0025). -->
+    <string name="export_presets">Presets</string>
+    <string name="export_preset_instagram">Instagram 4:5</string>
+    <string name="export_preset_web">Web 2048</string>
+    <string name="export_preset_full">Full quality</string>
+    <string name="export_preset_save">Save as preset</string>
+    <string name="export_preset_save_title">Save export preset</string>
+    <string name="export_preset_save_confirm">Save</string>
+    <string name="export_preset_name">Name</string>
+    <string name="export_preset_rename">Rename</string>
+    <string name="export_preset_rename_title">Rename preset</string>
+    <string name="export_preset_rename_confirm">Rename</string>
+    <string name="export_preset_update">Update preset</string>
+    <string name="export_preset_delete">Delete</string>
+    <string name="export_preset_modified">Changed since you picked “%1$s”.</string>
 </resources>

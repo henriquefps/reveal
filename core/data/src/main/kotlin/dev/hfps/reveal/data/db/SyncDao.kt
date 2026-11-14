@@ -106,6 +106,13 @@ interface SyncDao {
     )
     suspend fun markAllPresets(now: Long)
 
+    /** Every user export preset, as its `setting` record (docs/adr/0025 "Sync"). */
+    @Query(
+        "INSERT OR REPLACE INTO sync_records (kind, record_id, rev, dirty, modified_at, deleted) " +
+            "SELECT 'setting', '" + SyncTriggers.EXPORT_PRESET_PREFIX + "' || uuid, 0, 1, :now, 0 FROM export_presets",
+    )
+    suspend fun markAllExportPresets(now: Long)
+
     @Query("SELECT COUNT(*) FROM sync_records WHERE dirty = 1")
     fun observePending(): Flow<Int>
 

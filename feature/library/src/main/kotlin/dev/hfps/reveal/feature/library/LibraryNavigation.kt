@@ -31,6 +31,7 @@ import dev.hfps.reveal.data.thumb.ThumbnailRepository
 import dev.hfps.reveal.feature.export.ui.ExportRequest
 import dev.hfps.reveal.feature.export.ui.ExportSheetHost
 import dev.hfps.reveal.feature.library.presets.ApplyPresetSheet
+import dev.hfps.reveal.feature.library.viewer.DeleteCopiesDialog
 import dev.hfps.reveal.feature.library.viewer.ViewerScreen
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.launch
@@ -44,11 +45,20 @@ import kotlinx.serialization.Serializable
 data class LibraryRoute(val fromApps: Boolean = false)
 
 /**
- * The full-screen viewer on [photoId], paging through the same photos as the grid it came from: [query] is the grid's
- * (view and filters), encoded by `PhotoListCodec`.
+ * The full-screen viewer on [photoId] ([versionId]: the cell tapped, a virtual copy included), paging through the same
+ * cells as the grid it came from: [query] is the grid's (view and filters), encoded by `PhotoListCodec`.
  */
 @Serializable
-data class ViewerRoute(val photoId: Long, val query: String)
+data class ViewerRoute(val photoId: Long, val query: String, val versionId: Long = NO_VERSION) {
+    companion object {
+        /** No version given: the viewer starts on the photo's first version. */
+        const val NO_VERSION = -1L
+    }
+}
+
+/** "Copy N" in the app's language, for new virtual copies (docs/adr/0025). */
+fun copyNamer(context: android.content.Context): (Int) -> String =
+    { n -> context.getString(R.string.library_copy_name, n) }
 
 /**
  * MIME types of "Open a photo": every image (JPEG, HEIF, PNG, WebP and the `image/x-*` RAW types) plus
@@ -73,7 +83,13 @@ fun NavGraphBuilder.libraryScreens(
     composable<LibraryRoute> {
         LibraryScreen(
             onOpen = { row, state ->
-                navController.navigate(ViewerRoute(photoId = row.id, query = PhotoListCodec.encode(state.gridQuery)))
+                navController.navigate(
+                    ViewerRoute(
+                        photoId = row.id,
+                        query = PhotoListCodec.encode(state.gridQuery),
+                        versionId = row.versionId,
+                    ),
+                )
             },
             onOpenFile = onOpenFile,
             onGallery = onGallery,
@@ -142,6 +158,10 @@ fun LibraryScreen(
             onPasteDismiss = viewModel::dismissPaste,
             onResetEdits = viewModel::resetEdits,
             onDeleteConflictCopies = viewModel::deleteConflictCopies,
+            onCreateCopies = { viewModel.createCopies(copyNamer(context)) },
+            onDeleteCopies = viewModel::deleteCopies,
+            onDeleteCopiesConfirm = viewModel::confirmDeleteCopies,
+            onDeleteCopiesDismiss = viewModel::dismissDeleteCopies,
             onExport = {
                 scope.launch {
                     val versions = viewModel.selectedVersions()
@@ -196,6 +216,14 @@ fun LibraryScreen(
     state.forgetPrompt?.let { prompt ->
         ForgetDialog(prompt, onConfirm = actions.onForgetConfirm, onDismiss = actions.onForgetDismiss)
     }
+    state.deleteCopiesPrompt?.let { copies ->
+        DeleteCopiesDialog(
+            count = copies.size,
+            name = null,
+            onConfirm = actions.onDeleteCopiesConfirm,
+            onDismiss = actions.onDeleteCopiesDismiss,
+        )
+    }
     state.conflictChoice?.let { choice ->
         ConflictSheet(
             choice = choice,
@@ -232,6 +260,7 @@ fun LibraryScreen(
 }
 
 /** Shows the ViewModel's one-off messages in the snackbar. */
+@Suppress("LongMethod")
 @Composable
 private fun LibraryMessages(events: Flow<LibraryMessage>, snackbar: SnackbarHostState) {
     val resources = LocalResources.current
@@ -285,6 +314,18 @@ private fun LibraryMessages(events: Flow<LibraryMessage>, snackbar: SnackbarHost
 
                 is LibraryMessage.Pasted -> resources.getQuantityString(
                     R.plurals.library_edits_pasted,
+                    message.count,
+                    message.count,
+                )
+
+                is LibraryMessage.CopiesCreated -> resources.getQuantityString(
+                    R.plurals.library_copies_created,
+                    message.count,
+                    message.count,
+                )
+
+                is LibraryMessage.CopiesDeleted -> resources.getQuantityString(
+                    R.plurals.library_copies_deleted,
                     message.count,
                     message.count,
                 )

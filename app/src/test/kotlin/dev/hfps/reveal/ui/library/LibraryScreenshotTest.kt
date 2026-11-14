@@ -27,6 +27,7 @@ import com.github.takahirom.roborazzi.captureRoboImage
 import dev.hfps.image.format.ExifTime
 import dev.hfps.reveal.data.db.FilterCounts
 import dev.hfps.reveal.data.db.PhotoRow
+import dev.hfps.reveal.data.edit.VersionInfo
 import dev.hfps.reveal.data.index.IndexPhase
 import dev.hfps.reveal.data.index.IndexProgress
 import dev.hfps.reveal.data.library.SourceItem
@@ -39,6 +40,7 @@ import dev.hfps.reveal.data.model.SourceFilter
 import dev.hfps.reveal.data.model.SourceState
 import dev.hfps.reveal.data.model.SyncFilter
 import dev.hfps.reveal.data.model.TypeFilter
+import dev.hfps.reveal.designsystem.theme.EditorTheme
 import dev.hfps.reveal.designsystem.theme.RevealTheme
 import dev.hfps.reveal.feature.library.AddFolderBackupContent
 import dev.hfps.reveal.feature.library.FilterSheetContent
@@ -54,6 +56,9 @@ import dev.hfps.reveal.feature.library.UnavailableContent
 import dev.hfps.reveal.feature.library.UnavailableInfo
 import dev.hfps.reveal.feature.library.UnavailableReason
 import dev.hfps.reveal.feature.library.buildGridEntries
+import dev.hfps.reveal.feature.library.viewer.VersionsActions
+import dev.hfps.reveal.feature.library.viewer.VersionsContent
+import dev.hfps.reveal.feature.library.viewer.VersionsUi
 import dev.hfps.reveal.pipeline.recipe.Colour
 import dev.hfps.reveal.pipeline.recipe.Geometry
 import dev.hfps.reveal.pipeline.recipe.Light
@@ -179,9 +184,60 @@ internal object LibrarySamples {
             entries = buildGridEntries(shown, query),
             photoCount = shown.size,
             photosLoaded = true,
+            selected = versionsOf(selected),
+        )
+    }
+
+    /** The selection holds version ids (docs/adr/0025); the samples name photos. */
+    private fun versionsOf(photoIds: Set<Long>): Set<Long> =
+        rows.filter { it.id in photoIds }.mapTo(HashSet()) { it.versionId }
+
+    /**
+     * Virtual copies (docs/adr/0025): photo 2 has an edited "Copy 1", photo 5 an unedited "Black and white", photo
+     * 7 a sync conflict copy; [selected] cells by version id.
+     */
+    fun copies(selected: Set<Long> = emptySet()): LibraryUiState {
+        val shown = rows.flatMap { row ->
+            when (row.id) {
+                2L -> listOf(row, row.copy(versionId = 900, versionPosition = 1, versionName = "Copy 1", editTime = 2))
+
+                5L -> listOf(
+                    row,
+                    row.copy(versionId = 901, versionPosition = 1, versionName = "Black and white", editTime = null),
+                )
+
+                7L -> listOf(
+                    row,
+                    row.copy(versionId = 902, versionPosition = 1, conflict = true, copyDevice = "Tablet"),
+                )
+
+                else -> listOf(row)
+            }
+        }
+        val query = PhotoQuery()
+        return LibraryUiState(
+            sources = sources,
+            sourcesLoaded = true,
+            counts = counts,
+            query = query,
+            entries = buildGridEntries(shown, query),
+            photoCount = shown.size,
+            photosLoaded = true,
             selected = selected,
         )
     }
+
+    /** The viewer's Versions sheet of photo 2 (docs/adr/0025): main version on screen, two copies, a conflict copy. */
+    val versions = VersionsUi(
+        photoName = "DSC07699.ARW",
+        versions = listOf(
+            VersionInfo(101, "a", 2, 0, null, conflict = false),
+            VersionInfo(900, "b", 2, 1, "Copy 1", conflict = false),
+            VersionInfo(903, "c", 2, 2, "Black and white, grainy", conflict = false),
+            VersionInfo(904, "d", 2, 3, null, conflict = true),
+        ),
+        currentVersionId = 101,
+    )
 
     val unavailableInfo = UnavailableInfo(
         photoId = 2,
@@ -219,7 +275,7 @@ internal object LibrarySamples {
             entries = buildGridEntries(rows, query),
             photoCount = rows.size,
             photosLoaded = true,
-            selected = selected,
+            selected = versionsOf(selected),
         )
 
     /** Several active filters across groups: chips above the grid. */
@@ -278,6 +334,31 @@ abstract class LibraryScreenshotBase(private val device: String) {
                         ) {
                             Box(Modifier.padding(top = if (wide) 16.dp else 24.dp)) { content() }
                         }
+                    }
+                }
+            }
+        }
+        composeRule.onRoot().captureRoboImage("src/test/screenshots/library/${device}_$name.png")
+    }
+
+    /** The viewer's Versions sheet over the dark viewer: a bottom sheet on phones, a centred dialog when [wide]. */
+    protected fun versionsSheet(name: String, wide: Boolean) {
+        composeRule.setContent {
+            EditorTheme {
+                Box(
+                    Modifier.fillMaxSize().background(RevealTheme.colors.background),
+                    if (wide) Alignment.Center else Alignment.BottomCenter,
+                ) {
+                    Surface(
+                        color = RevealTheme.colors.card,
+                        shape = RevealTheme.shapes.sheet,
+                        modifier = if (wide) Modifier.widthIn(max = 560.dp).padding(24.dp) else Modifier,
+                    ) {
+                        VersionsContent(
+                            LibrarySamples.versions,
+                            VersionsActions(),
+                            Modifier.padding(top = if (wide) 16.dp else 24.dp),
+                        )
                     }
                 }
             }
@@ -474,6 +555,11 @@ class PhoneLibraryScreenshotTest : LibraryScreenshotBase("phone") {
         composeRule.onRoot().captureRoboImage("src/test/screenshots/library/phone_unavailable_sheet_dark.png")
     }
 
+    /** Virtual copies as cells of their own, named; one copy selected (docs/adr/0025). */
+    @Test fun copies() = shoot("home_copies_dark", dark = true, state = LibrarySamples.copies(selected = setOf(900L)))
+
+    @Test fun versionsSheet() = versionsSheet("versions_sheet", wide = false)
+
     @Test fun indexing() = shoot(
         "indexing_light",
         dark = false,
@@ -486,6 +572,10 @@ class PhoneLibraryScreenshotTest : LibraryScreenshotBase("phone") {
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 @Config(sdk = [35], qualifiers = "w1280dp-h800dp-hdpi")
 class TabletLibraryScreenshotTest : LibraryScreenshotBase("tablet") {
+    @Test fun copies() = shoot("home_copies_light", dark = false, state = LibrarySamples.copies())
+
+    @Test fun versionsSheet() = versionsSheet("versions_sheet", wide = true)
+
     @Test fun homeLight() = shoot("home_light", dark = false, state = LibrarySamples.grid())
 
     @Test fun homeDark() = shoot("home_dark", dark = true, state = LibrarySamples.syncing())
@@ -564,4 +654,14 @@ class FoldableLibraryScreenshotTest : LibraryScreenshotBase("foldable") {
         state = LibrarySamples.grid(),
         fontScale = 2f,
     )
+}
+
+/** A landscape phone (docs/adr/0025): the grid with copies and the viewer's Versions sheet. */
+@RunWith(AndroidJUnit4::class)
+@GraphicsMode(GraphicsMode.Mode.NATIVE)
+@Config(sdk = [35], qualifiers = "w844dp-h390dp-xhdpi")
+class LandscapeLibraryScreenshotTest : LibraryScreenshotBase("landscape") {
+    @Test fun copies() = shoot("home_copies_dark", dark = true, state = LibrarySamples.copies())
+
+    @Test fun versionsSheet() = versionsSheet("versions_sheet", wide = false)
 }

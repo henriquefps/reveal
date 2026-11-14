@@ -6,6 +6,21 @@ All notable changes to Reveal are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- Virtual copies (M5/V, docs/adr/0025): several independent edits of one photo, each a cell of its own in the library
+  with its name on the badge ("Copy 1", renamable), its own history, snapshots, thumbnail and exports. Create one from
+  the library's selection menu, the viewer's new Versions sheet (a copy of the edit on screen or of the original) or
+  the editor's More ⋯ (the editor moves to the copy). The viewer pages through copies and the filmstrip steps through
+  them; a copy can be renamed or deleted (never a photo's last version). Ratings and flags stay the photo's (one XMP
+  sidecar per file, shared with Hoard). Copies sync like versions and stay apart from sync conflict copies.
+- Snapshots: named saved states of a version's edit, at the top of the History panel and in More ⋯ ("Save
+  snapshot…"); a tap applies one as a single undoable step ("Snapshot: <name>"), each can be renamed or deleted.
+  Snapshots travel inside their version's sync record.
+- Export presets: a Presets row in the export sheet (single and batch) with "Instagram 4:5", "Web 2048" and "Full
+  quality" built in; save the current options as a preset, pick one in one tap, update it with changed options,
+  rename or delete it. User presets sync (one setting record each); a folder destination another device cannot use
+  falls back to Pictures/Reveal.
+
 ### Changed
 - AI masks are made once per photo and shared (M4/F): the editor, an export and the library's thumbnails find each
   other's masks in the masks cache, keyed by the file's fingerprint and the model input's size (the editor used a
@@ -14,6 +29,8 @@ All notable changes to Reveal are documented here. The format follows
 - Edited thumbnails with AI masks (library grid, filmstrip) and the presets' live previews now show the AI parts: the
   grid draws the thumbnail without them at once and replaces it when the masks are ready (computed one photo at a
   time in the background, or read from the cache); the presets' previews render again when a mask arrives.
+- The library's selection, "Edited" filter, edited badge and filter counts go by grid cell (version), so a virtual
+  copy is selected, exported, pasted onto and counted on its own. Database v12 (`snapshots`, `export_presets`).
 
 ### Fixed
 - `HandoffFallbackTest` expected the editor's "share it again" error from the grid for a hand-off with no grant and no

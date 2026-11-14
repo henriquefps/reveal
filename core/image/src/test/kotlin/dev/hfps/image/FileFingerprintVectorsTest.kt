@@ -6,18 +6,17 @@ import java.io.File
 import org.junit.Test
 
 /**
- * The `v1:` fingerprint vectors shared with the sync server (`sync-server/testdata/fingerprint-vectors.txt`, ADR 0017
- * "Tests"): the app and the server must agree byte for byte, edges included (0 bytes, exactly 2 MiB, 2 MiB + 1).
+ * The `v1:` fingerprint vectors shared with the sync server (ADR 0017 "Tests"): the app and the server must agree
+ * byte for byte, edges included (0 bytes, exactly 2 MiB, 2 MiB + 1). `fingerprint-vectors.txt` in the test resources
+ * is a copy of Hoard's `server/testdata/fingerprint-vectors.txt`; the generator lives in the Hoard server's tests
+ * (`REVEAL_WRITE_VECTORS=1 go test ./internal/fingerprint/` there), so change both copies together.
  */
 class FileFingerprintVectorsTest {
     private fun vectorsFile(): File {
-        var dir: File? = File("").absoluteFile
-        while (dir != null) {
-            val candidate = File(dir, "sync-server/testdata/fingerprint-vectors.txt")
-            if (candidate.isFile) return candidate
-            dir = dir.parentFile
+        val url = checkNotNull(javaClass.classLoader?.getResource("fingerprint-vectors.txt")) {
+            "fingerprint-vectors.txt not found in the test resources"
         }
-        error("sync-server/testdata/fingerprint-vectors.txt not found above ${File("").absolutePath}")
+        return File(url.toURI())
     }
 
     /** Byte i = ((i * 2654435761 + seed * 97) >> 13) & 0xff, the generator the Go test uses. */

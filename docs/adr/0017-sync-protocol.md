@@ -1,6 +1,8 @@
 # ADR 0017: Sync protocol and the `reveal-sync` server
 
-Status: accepted (MS/1 server; MS/2 app side, ADR 0018, added `GET /v1/devices`). Date: 2026-11-11.
+Status: superseded: the protocol of record is Hoard's ADR 0013 (`docs/adr/0013-server-protocol.md` in
+github.com/henriquefps/hoard, server `hoard-server`; ownership and compatibility in Hoard's ADR 0012). This text is the
+history of the protocol as Reveal defined it. Was: accepted (MS/1 server; MS/2 app side, ADR 0018, added `GET /v1/devices`). Date: 2026-11-11.
 
 ## Context
 
@@ -12,7 +14,7 @@ or the app may assume the owner's host, and a third party must be able to write 
 
 This ADR is that document: the HTTP API (`/v1`), authentication and pairing, the data model, the change feed with
 cursors and tombstones, the conflict rule, blob addressing and resumable uploads, NAS indexing, limits and errors.
-The machine-readable form is `sync-server/api/openapi.yaml` (OpenAPI 3.1); where the two differ, this ADR wins and
+The machine-readable form is `api/openapi.yaml` in Hoard's `server/` (OpenAPI 3.1); where the two differ, this ADR wins and
 the YAML is a bug.
 
 ## Decisions in one place
@@ -247,7 +249,7 @@ The server indexes folders the admin picks among the read-only mounts it can see
 starting with `.` and symbolic links, keeps RAW, JPEG and HEIF files by extension (the list of `ImageFormats` in
 `:core:image`), compares size and mtime with the last walk, and computes the `v1:` fingerprint of new or changed files
 (at most 2 MiB read per file, 2 files at a time). The `v1:` rule is defined once (ADR 0006 "Identity"); the Go and
-Kotlin implementations check the same vectors (`sync-server/testdata/fingerprint-vectors.txt`, see "Tests").
+Kotlin implementations check the same vectors (`core/image/src/test/resources/fingerprint-vectors.txt` here, `server/testdata/` in Hoard; see "Tests").
 
 Devices can list the indexed files so a device without the folder still sees the shoots:
 `GET /v1/nas/files?cursor=&limit=` → `{"files": [{"fingerprint" (null when the file could not be read),
@@ -320,7 +322,7 @@ Every error is JSON:
 
 ## Server implementation
 
-Go, `sync-server/`, a static binary (`CGO_ENABLED=0`) and a distroless non-root image:
+Go, `sync-server/` (moved to Hoard's `server/` in SRV/M), a static binary (`CGO_ENABLED=0`) and a distroless non-root image:
 
 - **SQLite** through the pure-Go `modernc.org/sqlite`, WAL, `busy_timeout`, foreign keys, write transactions
   `BEGIN IMMEDIATE`; the schema is versioned by `PRAGMA user_version` with numbered migrations embedded in the binary.

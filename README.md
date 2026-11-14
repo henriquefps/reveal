@@ -34,17 +34,12 @@ and [ADR 0001](docs/adr/0001-stack-and-modules.md).
 
 ## Sync server (self-hosted)
 
-`reveal-sync` ([sync-server/](sync-server/README.md)) keeps edits, ratings and virtual copies in step between your
-devices, backs up photos that live only on a device and serves the photos on your NAS. It runs on your own machine:
-
-```sh
-cd sync-server && mkdir -p data backup && sudo chown 65532:65532 data backup
-NAS_DIR=/path/to/photos docker compose up -d && docker compose logs reveal-sync | grep setupCode
-```
-
-Then open `http://<server>:3071/admin/` from your network, set the admin password, choose the backup folder and NAS
-folders, and pair each device with its QR code. Protocol: [ADR 0017](docs/adr/0017-sync-protocol.md). The app side
-of sync is not built yet.
+Sync runs against your own server, **`hoard-server`** (from the [Hoard repository](https://github.com/henriquefps/hoard),
+`server/`; it was `reveal-sync` and lived here). It keeps edits, ratings and virtual copies in step between your
+devices, backs up photos that live only on a device and serves the photos on your NAS. Self-hosting (Docker image
+`ghcr.io/henriquefps/hoard-server`) is documented in Hoard's
+[server README](https://github.com/henriquefps/hoard/blob/main/server/README.md); then pair each device with its QR code
+in Settings → Sync. Protocol: [ADR 0017](docs/adr/0017-sync-protocol.md) (history) and Hoard's ADR 0013.
 
 ## Licence
 

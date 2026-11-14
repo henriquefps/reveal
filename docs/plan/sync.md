@@ -1,9 +1,10 @@
 # Reveal: sync and cloud library (proposal, not scheduled yet)
 
 Status: **MS (0.4.0), after M2** (owner, 2026-11-11). Built: the content fingerprint and stable ids (see "Prepare
-now") and, in MS/1, the **server** (`sync-server/`, `reveal-sync`): the protocol is
-[ADR 0017](../adr/0017-sync-protocol.md) (HTTP API `/v1`, pairing, change feed, conflicts, chunked uploads, NAS
-indexing; OpenAPI in `sync-server/api/openapi.yaml`), self-hosting in `sync-server/README.md`; in MS/2 the **app
+now") and, in MS/1, the **server** (`reveal-sync`, since SRV/M `hoard-server` in the
+Hoard repository, `server/`): the protocol is [ADR 0017](../adr/0017-sync-protocol.md) (HTTP API `/v1`, pairing, change
+feed, conflicts, chunked uploads, NAS indexing; superseded as the protocol of record by Hoard's ADR 0013, which
+holds the OpenAPI), self-hosting in Hoard's `server/README.md`; in MS/2 the **app
 side** ([ADR 0018](../adr/0018-sync-in-the-app.md): `:core:sync`, Settings → Sync with QR pairing, the sync jobs,
 conflict copies in the library, the Server source with NAS photos read by range, smart previews and the originals
 backup).
@@ -69,7 +70,7 @@ Keystore, server secrets in `skv`. Files at mode 0600; optional encryption at re
 
 ### Server
 
-`reveal-sync` in Go in this repo (`sync-server/`): metadata in SQLite, blobs (previews, originals)
+`reveal-sync` in Go, now `hoard-server` in the Hoard repository (`server/`; it was in this repo as `sync-server/` until SRV/M): metadata in SQLite, blobs (previews, originals)
 in a content-addressed folder, chunked resumable uploads, a list endpoint with changes since a
 cursor, tombstones kept forever, health endpoint with counts only. Docker image + static binaries,
 like the other two servers. Built in MS/1 (ADR 0017). The owner's own deployment (Docker Compose and a

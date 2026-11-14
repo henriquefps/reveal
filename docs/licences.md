@@ -48,17 +48,11 @@ Every build since 0.6.0 carries LiteRT and the bundled models (`R.array.about_li
 | LR-ASPP MobileNetV3-Large (torchvision weights, LiteRT export by litert-community; debug builds only) | `core/ml/models.json` | BSD-3-Clause |
 | MODNet (ZHKKKe/MODNet weights, LiteRT export by litert-community; debug builds only) | `core/ml/models.json` | Apache-2.0 |
 
-## Shipped in the sync server (`sync-server/`, a separate program)
+## The sync server (not part of Reveal)
 
-| Component | Version source | Licence |
-| --- | --- | --- |
-| Go standard library and runtime | `sync-server/go.mod` (`go`) | BSD-3-Clause |
-| modernc.org/sqlite and its modernc.org/libc, mathutil, memory (a C-to-Go translation of SQLite, which is public domain) | `sync-server/go.mod` | BSD-3-Clause (SQLite: public domain) |
-| golang.org/x/crypto (argon2), golang.org/x/sys | `sync-server/go.mod` | BSD-3-Clause |
-| rsc.io/qr (QR codes on the setup page) | `sync-server/go.mod` | BSD-3-Clause |
-| github.com/google/uuid, github.com/dustin/go-humanize, github.com/mattn/go-isatty, github.com/ncruces/go-strftime, github.com/remyoudompheng/bigfft (via modernc.org/sqlite) | `sync-server/go.sum` | BSD-3-Clause / MIT |
-| Phosphor Icons 2.1.1 (path data in `sync-server/internal/server/web/assets/icons.js`) | npm `@phosphor-icons/core` | MIT |
-| Distroless static base image (`gcr.io/distroless/static-debian13`) | `sync-server/Dockerfile` | Apache-2.0 (Debian packages under their own licences) |
+The sync server is `hoard-server`, built and released from the Hoard repository (github.com/henriquefps/hoard,
+`server/`); its dependencies and licences are listed there. Reveal ships no server code, and only runs the pinned
+release image in its local sync tests (`scripts/sync/local-server.sh`).
 
 ## Build, test and analysis tooling (not shipped)
 

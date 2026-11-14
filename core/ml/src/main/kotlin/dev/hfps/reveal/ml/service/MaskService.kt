@@ -56,6 +56,22 @@ class MaskRequest(
 )
 
 /**
+ * What a cache lookup needs of a [MaskRequest] ([MaskService.cached]): everything but the pixels. The key never reads
+ * them, so an export or a thumbnail can ask "did the editor already make this?" before it decodes anything.
+ */
+class MaskLookup(
+    val photoKey: String,
+    val width: Int,
+    val height: Int,
+    val kind: MaskKind,
+    val inputVersion: Int = 1,
+    val model: String? = null,
+    val prompts: List<MaskPrompt> = emptyList(),
+    val autoSeeds: Boolean = true,
+    val refine: RefineDefaults.Setting? = RefineDefaults.of(kind),
+)
+
+/**
  * A mask from [MaskService]: [mask] at the request image's size (refined when asked), [raw] the model's own output
  * before refinement (at the model's resolution, or the image's for face parts) for a renderer that refines on the GPU
  * at its own size ([dev.hfps.reveal.ml.refine.GpuGuidedRefiner]), the [model] key, and where it came from.
@@ -136,9 +152,56 @@ class MaskService(
         }
     }
 
-    @Suppress("ReturnCount")
+    /**
+     * The mask of [lookup] if the disk cache already holds it (the same entries [mask] reads and writes), else null:
+     * no model, no pixels, no waiting behind a running request. Throws [IllegalArgumentException] like [mask].
+     */
+    suspend fun cached(lookup: MaskLookup): MaskOutput? = withContext(dispatcher) {
+        val model = resolve(lookup.model, lookup.kind)
+        val kind = if (lookup.kind == MaskKind.BACKGROUND) MaskKind.SUBJECT else lookup.kind
+        val rawKey = rawKey(
+            lookup.photoKey,
+            lookup.inputVersion,
+            lookup.width,
+            lookup.height,
+            lookup.autoSeeds,
+            lookup.prompts,
+            model,
+            kind,
+        )
+        val refinedKey = lookup.refine?.let { refinedKey(rawKey, it) }
+        val out = cachedOutput(lookup.width, lookup.height, lookup.refine, model, kind, rawKey, refinedKey)
+        if (out != null && lookup.kind == MaskKind.BACKGROUND) {
+            MaskOutput(
+                MaskKind.BACKGROUND, out.model, out.mask.inverted(), out.raw.inverted(), out.refine, true, null, 0.0,
+                0.0,
+            )
+        } else {
+            out
+        }
+    }
+
     private fun cachedOutput(
         request: MaskRequest,
+        model: PinnedModel,
+        kind: MaskKind,
+        rawKey: String,
+        refinedKey: String?,
+    ): MaskOutput? = cachedOutput(
+        request.image.width,
+        request.image.height,
+        request.refine,
+        model,
+        kind,
+        rawKey,
+        refinedKey,
+    )
+
+    @Suppress("ReturnCount", "LongParameterList")
+    private fun cachedOutput(
+        width: Int,
+        height: Int,
+        refine: RefineDefaults.Setting?,
         model: PinnedModel,
         kind: MaskKind,
         rawKey: String,
@@ -146,14 +209,8 @@ class MaskService(
     ): MaskOutput? {
         val c = cache ?: return null
         val raw = c.get(rawKey) ?: return null
-        val refined = if (refinedKey ==
-            null
-        ) {
-            raw.resized(request.image.width, request.image.height)
-        } else {
-            c.get(refinedKey)
-        }
-        return refined?.let { MaskOutput(kind, model.key, it, raw, request.refine, true, null, 0.0, 0.0) }
+        val refined = if (refinedKey == null) raw.resized(width, height) else c.get(refinedKey)
+        return refined?.let { MaskOutput(kind, model.key, it, raw, refine, true, null, 0.0, 0.0) }
     }
 
     private suspend fun compute(
@@ -299,11 +356,14 @@ class MaskService(
         }
 
         /** The model [request] names (or the current one), checked against its kind. */
-        fun resolve(request: MaskRequest): PinnedModel {
-            val model = request.model?.let { key ->
+        fun resolve(request: MaskRequest): PinnedModel = resolve(request.model, request.kind)
+
+        /** The model named [modelKey] (or the current one for [requestKind]), checked against its kind. */
+        fun resolve(modelKey: String?, requestKind: MaskKind): PinnedModel {
+            val model = modelKey?.let { key ->
                 requireNotNull(MaskModels.pinned.find { it.key == key }) { "unknown model $key" }
-            } ?: modelFor(request.kind)
-            val kind = if (request.kind == MaskKind.BACKGROUND) MaskKind.SUBJECT else request.kind
+            } ?: modelFor(requestKind)
+            val kind = if (requestKind == MaskKind.BACKGROUND) MaskKind.SUBJECT else requestKind
             val ok = when (model) {
                 is ModelSpec -> kind in model.kinds
                 is LandmarkModelSpec -> kind.isFacePart
@@ -314,15 +374,36 @@ class MaskService(
         }
 
         /** The unrefined model output's cache key. */
-        fun rawKey(request: MaskRequest, model: PinnedModel, kind: MaskKind): String {
+        fun rawKey(request: MaskRequest, model: PinnedModel, kind: MaskKind): String = rawKey(
+            request.photoKey,
+            request.inputVersion,
+            request.image.width,
+            request.image.height,
+            request.autoSeeds,
+            request.prompts,
+            model,
+            kind,
+        )
+
+        /** The same from the parts of a request that the key reads (never the pixels). */
+        @Suppress("LongParameterList")
+        fun rawKey(
+            photoKey: String,
+            inputVersion: Int,
+            width: Int,
+            height: Int,
+            autoSeeds: Boolean,
+            prompts: List<MaskPrompt>,
+            model: PinnedModel,
+            kind: MaskKind,
+        ): String {
             val seeds = if (model is ModelSpec && model.interactive) {
-                "seeds:${if (request.autoSeeds) "auto" else "none"}" +
-                    request.prompts.joinToString("") { ";%.4f,%.4f".format(Locale.ROOT, it.x, it.y) }
+                "seeds:${if (autoSeeds) "auto" else "none"}" +
+                    prompts.joinToString("") { ";%.4f,%.4f".format(Locale.ROOT, it.x, it.y) }
             } else {
                 "seeds:-"
             }
-            return "mask$KEY_FORMAT|${request.photoKey}|${model.key}|$kind|input${request.inputVersion}|" +
-                "${request.image.width}x${request.image.height}|$seeds"
+            return "mask$KEY_FORMAT|$photoKey|${model.key}|$kind|input$inputVersion|${width}x$height|$seeds"
         }
 
         /** The refined mask's cache key. */

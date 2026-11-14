@@ -8,12 +8,14 @@ import dev.hfps.reveal.ml.PinnedModel
 import dev.hfps.reveal.ml.runtime.Backend
 import dev.hfps.reveal.ml.runtime.InferenceEngine
 import dev.hfps.reveal.ml.service.EngineLoader
+import dev.hfps.reveal.ml.service.MaskDiskCache
 import dev.hfps.reveal.ml.service.MaskService
 import dev.hfps.reveal.pipeline.mask.AiMaskRequest
 import dev.hfps.reveal.pipeline.recipe.AiRefine
 import dev.hfps.reveal.pipeline.recipe.MaskComponent
 import dev.hfps.reveal.pipeline.recipe.MaskPoint
 import dev.hfps.reveal.pipeline.synthetic.SyntheticImages
+import java.nio.file.Files
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.flow.first
@@ -64,6 +66,49 @@ class AiMasksTest {
         assertThat(loader.loads).isEqualTo(1)
         session.close()
     }
+
+    @Test
+    fun `a session with the photo's key and size finds the masks another made, without rendering or a model`() =
+        runBlocking {
+            val dir = Files.createTempDirectory("masks").toFile()
+            try {
+                val cache = MaskDiskCache(dir)
+                val key = "v1:abc"
+                // The editor makes the mask (the model runs once, the input is rendered once).
+                val first = Loader()
+                var renders = 0
+                val editor = AiMasks(MaskService(first, cache)).session(key, 64 to 48) {
+                    renders++
+                    image
+                }
+                assertThat(editor.ready(listOf(sky))).isTrue()
+                assertThat(first.loads).isEqualTo(1)
+                assertThat(renders).isEqualTo(1)
+                editor.close()
+
+                // An export, later, from another proxy of the same photo: same key and size, nothing is made.
+                val second = Loader(fail = true)
+                var exportRenders = 0
+                val export = AiMasks(MaskService(second, cache)).session(key, 64 to 48) {
+                    exportRenders++
+                    image
+                }
+                assertThat(export.ready(listOf(sky))).isTrue()
+                assertThat(second.loads).isEqualTo(0)
+                assertThat(exportRenders).isEqualTo(0)
+                val mask = checkNotNull(export.mask(request(sky)) {})
+                assertThat(mask.values[0]).isGreaterThan(0.9f)
+                assertThat(mask.values.last()).isLessThan(0.1f)
+                export.close()
+
+                // Another photo is a different mask: computed (and here the failing model says so).
+                val other = AiMasks(MaskService(second, cache)).session("v1:other", 64 to 48) { image }
+                assertThat(other.ready(listOf(sky))).isFalse()
+                other.close()
+            } finally {
+                dir.deleteRecursively()
+            }
+        }
 
     @Test
     fun `a kind or model this app does not have is unavailable, never a crash`() = runBlocking {

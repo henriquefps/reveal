@@ -79,6 +79,12 @@ interface ThumbnailSource {
     fun cached(row: PhotoRow): ImageBitmap?
 
     suspend fun load(row: PhotoRow): ImageBitmap?
+
+    /**
+     * The edited thumbnail once its AI masks are ready (docs/adr/0022 "M4/F"), after [load] showed it without them;
+     * suspends while they are made, null when there is nothing to add.
+     */
+    suspend fun upgrade(row: PhotoRow): ImageBitmap? = null
 }
 
 /** Test tags of the library. */
@@ -378,6 +384,7 @@ private fun PhotoCell(
     var image by remember(row.versionId, row.editTime) { mutableStateOf(thumbnails.cached(row)) }
     LaunchedEffect(row.versionId, row.editTime, row.unavailable) {
         if (image == null && !row.unavailable) image = thumbnails.load(row)
+        if (image != null && row.editTime != null) thumbnails.upgrade(row)?.let { image = it }
     }
     val description = cellDescription(row)
     val selectLabel = stringResource(R.string.library_cell_select)

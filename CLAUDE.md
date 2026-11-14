@@ -685,6 +685,20 @@ AI masks: the engine asks `mask/AiMaskSource` (M4/C implements it in `:core:ml`)
 when one arrives. Overlay for M4/B: `GpuDevelopRenderer.setMaskOverlay(MaskOverlay(id, COLOUR | GREYSCALE, colour,
 opacity))`; `readCoverage(recipe, id)` and `maskStats` for tests.
 
+Shared AI masks (M4/F, ADR 0022 "M4/F"): the editor, the export and the thumbnails make an AI mask once and read each
+other's from the masks cache. Key = `MaskInputs.photoKey(image)` (the file's `FileFingerprint`) + the model input's size
+(`MaskInputs.size`): open sessions with `AiMasks.session(photoKey, size) { render }` so the cache is read before the
+input is rendered (`MaskService.cached(MaskLookup)`, no pixels); without a file, `session(null) { render }` keys by
+`MaskInputs.contentKey`. `MaskInputs.smallInput(image, edge)` = proxy area-averaged to the model input size;
+`Session.ready(components)` suspends until the parts are made. Thumbnails: `ThumbnailRepository.thumbnail` is the
+quick one (AI parts absent), `withAiMasks` renders again with them (cells call it through `ThumbnailSource.upgrade` /
+`FilmstripThumbs.upgrade`); the presets' previews get the editor's session by `PresetThumbnails.useMasks`. Test and
+export timings (phone, `files/samples/sony-zv-e10.arw`; logs `REVEAL_MASKS_REUSE`):
+
+```sh
+adb -s <serial> shell am instrument -w -e class dev.hfps.reveal.library.AiMaskReuseTest dev.hfps.reveal.debug.test/androidx.test.runner.AndroidJUnitRunner
+```
+
 ```sh
 ./gradlew :core:pipeline:testDebugUnitTest --tests '*mask*' --tests '*LocalAdjustOpsTest*' --tests '*MasksCodecTest*' --tests '*RecipeDiffTest*'   # + BrushOptionsTest
 adb -s <serial> shell am instrument -w -e class dev.hfps.reveal.pipeline.MaskRenderTest,dev.hfps.reveal.pipeline.GpuParityTest#masksMatchCpuReference dev.hfps.reveal.pipeline.test/androidx.test.runner.AndroidJUnitRunner

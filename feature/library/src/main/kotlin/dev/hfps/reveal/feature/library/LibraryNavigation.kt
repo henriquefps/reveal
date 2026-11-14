@@ -300,4 +300,7 @@ private class RepositoryThumbnails(private val repository: ThumbnailRepository) 
 
     override suspend fun load(row: PhotoRow): ImageBitmap? =
         repository.thumbnail(row.id, row.versionId, row.editTime)?.asImageBitmap()
+
+    override suspend fun upgrade(row: PhotoRow): ImageBitmap? =
+        repository.withAiMasks(row.id, row.versionId, row.editTime)?.asImageBitmap()
 }

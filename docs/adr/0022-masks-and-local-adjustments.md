@@ -456,3 +456,41 @@ mapping; the model input and its key), `MasksCodecTest`. Goldens: `phone_masks*`
 `tablet_portrait_masks`. Instrumented: `MasksFlowTest` (each hand-made type, history, reopen; subject, hair, eyes on a
 public-domain portrait; sky on a public-domain landscape; a newer app's mask), `MaskPenTest` (injected stylus events:
 pressure, eraser end, side button, fingers pan once a pen is seen).
+
+## Amendment: M4/F (shared AI masks)
+
+An AI mask is a function of the photo, the model and the component, never of the recipe's other fields, so it is made
+once and read by every renderer. Three renderers ignored each other's work before M4/F: an export recomputed masks the
+editor had cached, and thumbnails (library grid, filmstrip, presets) rendered AI parts as absent.
+
+- **One key.** The masks cache's photo key is the file's content fingerprint (`MaskInputs.photoKey`, `FileFingerprint`)
+  and the model input's size (`MaskInputs.size` of the upright proxy) goes into the key as before (ADR 0021 "Cache").
+  The editor used `MaskInputs.contentKey` (a hash of the model input's pixels), which differs between proxies of the
+  same file, so an export, whose proxy is 2400 px (the editor's is 2400-3000), never hit. `contentKey` remains for an
+  input without a file (a smart preview the editor opens, a photo whose file cannot be read). A cache entry made under
+  the old key is simply not found once; nothing else changes (`MaskInputs.VERSION` is not bumped: the input rendering is
+  the same).
+- **Look before rendering.** `MaskService.cached(MaskLookup)` reads the disk cache with no pixels (the key never reads
+  them); `AiMasks.session(photoKey, size, input)` asks it first and calls `input` (the CPU render of the model input)
+  only for a mask that is not cached. The export decodes a 2400 px proxy, area-averages it to the model input's size
+  (about 8 MB) and passes that to the session; `AiMasks.Session.ready(components)` suspends until every part is READY,
+  FAILED or UNAVAILABLE. The model input's size can differ by a pixel between two proxies of the same photo only when
+  their own rounding sits on a .5 boundary; the result is a cache miss and a recomputation, never a wrong mask.
+- **Thumbnails** (`ThumbnailRepository`): `thumbnail()` is unchanged and never waits for a model: an edit with AI parts
+  is rendered without them under its usual key. `withAiMasks(photoId, versionId, editTime)` then makes the masks (one
+  photo at a time behind `aiLock`; a 1024 px proxy of the original for the model input, the cache first), renders the
+  thumbnail with them (`EditedThumbnails.renderWithMasks`: the shared renderer gets the session as its `AiMaskSource`
+  for that render only), stores it under its own key (`...:ai`: the thumbnail cache key includes the AI masks'
+  availability, so it is rendered once) and puts it in the memory cache under the cell's key. The grid cell and the
+  filmstrip cell call it after `load` (`ThumbnailSource.upgrade`, default null) and swap the image; scrolling away
+  cancels it. A failed model is not retried until the app restarts. Edits without an AI part pay one memoised recipe
+  lookup (`aiParts`).
+- **Presets' previews** (`PresetThumbnails.useMasks`): the preview renderer takes the editor's session as its source, so
+  a base recipe with AI parts renders them once they are ready; the cell's cache key carries which masks are ready
+  (`aiReady`), so each preview is rendered again when one arrives. Presets never contain masks (ADR 0019); this only
+  concerns the photo's own masks under a preset.
+
+Measured on the S24 Ultra (24 MP ZV-E10 RAW, sky + subject masks, models freed before each export, `AiMaskReuseTest`):
+export with the masks in the cache 4.6 s, without 6.4 s (decode proxy + CPU model input + two models + refinement);
+before M4/F every editor-made mask missed, so every export paid the 6.4 s.
+

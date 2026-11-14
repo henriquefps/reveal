@@ -58,6 +58,9 @@ interface FilmstripThumbs {
 
     /** Loads (or renders) the thumbnail; `null` when it cannot be read. */
     suspend fun load(row: PhotoRow): ImageBitmap?
+
+    /** The edited thumbnail once its AI masks are ready (docs/adr/0022 "M4/F"); null when there is nothing to add. */
+    suspend fun upgrade(row: PhotoRow): ImageBitmap? = null
 }
 
 /**
@@ -125,6 +128,7 @@ private fun FilmstripCell(row: PhotoRow, current: Boolean, thumbs: FilmstripThum
     var image by remember(row.id, row.editTime) { mutableStateOf(thumbs.cached(row)) }
     LaunchedEffect(row.id, row.editTime, row.unavailable) {
         if (image == null && !row.unavailable) image = thumbs.load(row)
+        if (image != null && row.editTime != null) thumbs.upgrade(row)?.let { image = it }
     }
     val description = cellDescription(row)
     Box(

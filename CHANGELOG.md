@@ -6,6 +6,13 @@ All notable changes to Reveal are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+- The sync server moved to Hoard (SRV/M): it is now `hoard-server` (github.com/henriquefps/hoard, `server/`, image
+  `ghcr.io/henriquefps/hoard-server`), and `sync-server/` and its workflows are gone from this repository. The protocol
+  did not change (`/v1`, `rvk1_` keys, `revealsync://` pairing); the protocol of record is Hoard's ADR 0013 (ADR 0017
+  is marked superseded). `scripts/sync/local-server.sh` runs the pinned `hoard-server:0.4.0` image; the fingerprint
+  vectors are copied under `core/image/src/test/resources/`.
+
 ## [0.7.1] - 2026-11-14
 
 ### Fixed

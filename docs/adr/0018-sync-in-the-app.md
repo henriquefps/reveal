@@ -4,7 +4,7 @@ Status: accepted (MS/2). Date: 2026-11-11.
 
 ## Context
 
-ADR 0017 defines the `reveal-sync` protocol and server. `docs/plan/sync.md` ("App side") asks the app for: pairing and a
+ADR 0017 defines the `reveal-sync` protocol and server (since SRV/M the server is Hoard's `hoard-server` and the protocol of record is Hoard's ADR 0013; same `/v1`). `docs/plan/sync.md` ("App side") asks the app for: pairing and a
 Sync screen, a background job that pushes and pulls edits and library metadata with an offline queue, conflict copies
 that are never dropped, the server's NAS photos in the library, smart previews so a device without the original can
 still edit, an originals backup for photos only a device has, and the cloud state on library cells. `distribution.md`
@@ -154,7 +154,7 @@ TalkBack; "Delete conflict copies" in the selection menu deletes them here and p
   in one run. Uploads: chunks, an interrupted chunk, a run killed mid-way resuming from `HEAD` in a new uploader, an
   existing blob not sent again. Pairing links, pairing, unpairing, error codes.
 - JVM, `:core:data`: the 5 → 6 migration, every trigger, the quiet flag. `:core:pipeline`: `SmartPreviewCodecTest`.
-- Instrumented, `:app` `SyncFlowTest` against the real `reveal-sync` run locally (see CLAUDE.md "Sync (app)"): pair,
+- Instrumented, `:app` `SyncFlowTest` against the real server (`hoard-server`, the pinned image) run locally (see CLAUDE.md "Sync (app)"): pair,
   the NAS RAW's capture time read by range, its export (downloaded first) and a preview-only photo's export waiting;
   `TwoDevicePassTest` (two real devices); `SyncPullMeasurementsTest` (library open and scroll frames during a
   10,000-record first pull, against a baseline).

@@ -25,9 +25,18 @@ data class HandoffRequest(
 
 /**
  * What the sender (Hoard) decided about one item when it handed it over (ADR 0011 "Culling"). Each field is optional:
- * null = not sent, the photo keeps what it has. [label] `""` clears the colour label.
+ * null = not sent, the photo keeps what it has. [label] `""` clears the colour label. The `*At` times (Unix ms, when
+ * the decision was made; a sender may add them, ADR 0027) date the change Reveal pushes to the sync server; without
+ * one the hand-off's time is used.
  */
-data class HandoffCulling(val rating: Int? = null, val flag: PickFlag? = null, val label: String? = null) {
+data class HandoffCulling(
+    val rating: Int? = null,
+    val flag: PickFlag? = null,
+    val label: String? = null,
+    val ratingAt: Long? = null,
+    val flagAt: Long? = null,
+    val labelAt: Long? = null,
+) {
     val isEmpty: Boolean get() = rating == null && flag == null && label == null
 }
 
@@ -67,6 +76,14 @@ object HandoffIntents {
 
     /** `String`: colour label (`xmp:Label`, e.g. `Red`); `""` clears it. At most 64 characters. */
     const val KEY_LABEL = "label"
+
+    /**
+     * Optional `Long`s (any [EXTRA_CULLING_VERSION]; Hoard's planned version 2): when each decision was made, Unix ms.
+     * Read only together with their field; a value ≤ 0 is ignored.
+     */
+    const val KEY_RATING_AT = "ratingModifiedAt"
+    const val KEY_FLAG_AT = "flagModifiedAt"
+    const val KEY_LABEL_AT = "labelModifiedAt"
 
     private val actions = setOf(
         ACTION_DEVELOP,
@@ -118,7 +135,15 @@ object HandoffIntents {
             else -> null
         }
         val label = item.typed<String>(KEY_LABEL)?.trim()?.take(MAX_LABEL)
-        return HandoffCulling(rating, flag, label)
+        val time = { key: String -> item.typed<Long>(key)?.takeIf { it > 0 } }
+        return HandoffCulling(
+            rating = rating,
+            flag = flag,
+            label = label,
+            ratingAt = rating?.let { time(KEY_RATING_AT) },
+            flagAt = flag?.let { time(KEY_FLAG_AT) },
+            labelAt = label?.let { time(KEY_LABEL_AT) },
+        )
     }
 
     /**
@@ -133,6 +158,9 @@ object HandoffIntents {
                     culling.rating?.let { putInt(KEY_RATING, it) }
                     culling.flag?.let { putString(KEY_FLAG, it.name.lowercase()) }
                     culling.label?.let { putString(KEY_LABEL, it) }
+                    culling.ratingAt?.let { putLong(KEY_RATING_AT, it) }
+                    culling.flagAt?.let { putLong(KEY_FLAG_AT, it) }
+                    culling.labelAt?.let { putLong(KEY_LABEL_AT, it) }
                 },
             )
         }

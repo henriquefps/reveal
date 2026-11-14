@@ -5,6 +5,8 @@ package dev.hfps.reveal.sync.engine
 import android.util.Log
 import dev.hfps.reveal.data.db.MetaEntity
 import dev.hfps.reveal.data.db.RevealDatabase
+import dev.hfps.reveal.sync.account.ClientDevice
+import dev.hfps.reveal.sync.api.DeviceReport
 import dev.hfps.reveal.sync.api.PushChange
 import dev.hfps.reveal.sync.api.ServerInfo
 import dev.hfps.reveal.sync.api.SyncApi
@@ -23,6 +25,8 @@ data class SyncReport(
     val lookedUp: Int,
     /** The one-off clean-up of 0.5.3 when this run did it, else null. */
     val cleanup: CleanupReport? = null,
+    /** Culling through the server's culling records (ADR 0027), null when the server does not list `culling`. */
+    val culling: CullingReport? = null,
 )
 
 /** The server behind the paired URL is another one (a reset, or the URL now points elsewhere). */
@@ -38,10 +42,13 @@ class SyncEngine(
     private val db: RevealDatabase,
     private val store: SyncStore,
     serverLibrary: ServerLibrary? = null,
+    /** What this installation reports to a server with `device-identity` (null: nothing, as before 0.8). */
+    private val device: ClientDevice? = null,
     private val clock: () -> Long = System::currentTimeMillis,
 ) {
     private val library = serverLibrary ?: ServerLibrary(db, store, clock)
     private val meta = db.metaDao()
+    val culling = CullingSync(db, clock)
 
     /**
      * Runs a sync against [api]. [serverId] is the paired server's id (another one throws [ServerChangedException]).
@@ -49,6 +56,12 @@ class SyncEngine(
     suspend fun sync(api: SyncApi, serverId: String): SyncReport {
         val info = api.server()
         if (info.serverId != serverId) throw ServerChangedException(serverId, info.serverId)
+        // Culling per field through the server's culling records (ADR 0027), when it has them; otherwise inside the
+        // photo records, as before. The capability is declared before any photo record goes up under this version,
+        // so the server stops bridging this device's records (Hoard ADR 0016 "Client rules" 5).
+        val serverCulling = info.has(FEATURE_CULLING)
+        store.cullingInRecords = !serverCulling
+        if (info.has(FEATURE_DEVICE_IDENTITY)) report(api, serverId, serverCulling)
         val devices = runCatching { api.devices().devices }.getOrDefault(emptyList())
         val names = devices.associate { it.id to it.name }
         val deviceName = { id: String -> names[id] }
@@ -89,6 +102,7 @@ class SyncEngine(
             if (marked > 0) pushed += push(api, info).first
             meta.put(MetaEntity(KEY_ORIENTATION, ORIENTATION_VERSION))
         }
+        val cullingReport = if (serverCulling) culling.run(api, info) else null
         val nas = pullNas(api, info)
         val lookups = lookup(api, info)
         var cleaned: CleanupReport? = null
@@ -100,7 +114,32 @@ class SyncEngine(
             meta.delete(KEY_CLEANUP_PULLED)
         }
         meta.put(MetaEntity(KEY_LAST_SYNC, clock().toString()))
-        return SyncReport(pushed, conflicts, pulled, copies, parked, nas, lookups, cleaned)
+        return SyncReport(pushed, conflicts, pulled, copies, parked, nas, lookups, cleaned, cullingReport)
+    }
+
+    /**
+     * `PATCH /v1/device` with the app id, model and (with [culling]) `features: ["culling"]` (Hoard ADR 0017 "Client
+     * calls" 2), once per server and whenever what is reported changes (an update, a renamed build).
+     */
+    private suspend fun report(api: SyncApi, serverId: String, culling: Boolean) {
+        val device = device ?: return
+        val report = DeviceReport(
+            app = device.app,
+            manufacturer = device.manufacturer,
+            model = device.model,
+            features = if (culling) listOf(FEATURE_CULLING) else null,
+        )
+        val signature = serverId + " " + SyncApi.json.encodeToString(DeviceReport.serializer(), report)
+        if (meta.get(KEY_DEVICE_REPORTED) == signature) return
+        try {
+            val view = api.reportDevice(report)
+            meta.put(MetaEntity(KEY_DEVICE_REPORTED, signature))
+            view.physicalDevice?.id?.let { meta.put(MetaEntity(KEY_PHYSICAL_DEVICE, it)) }
+        } catch (e: SyncHttpException) {
+            // An answer worth a retry stops the run; anything else (a field the server refuses) is tried next run.
+            if (e.transient || e.unauthorized) throw e
+            Log.w(TAG, "The server refused the device report: ${e.code}")
+        }
     }
 
     // ------------------------------------------------------------------ push
@@ -251,10 +290,13 @@ class SyncEngine(
             KEY_CLEANUP,
             KEY_CLEANUP_PULLED,
             KEY_ORIENTATION,
+            KEY_DEVICE_REPORTED,
+            KEY_PHYSICAL_DEVICE,
         )
         for (key in keys) {
             meta.delete(key)
         }
+        culling.forget()
     }
 
     companion object {
@@ -263,6 +305,12 @@ class SyncEngine(
         const val KEY_NAS_CURSOR = "sync.nasCursor"
         const val KEY_TRACKING = "sync.tracking"
         const val KEY_LAST_SYNC = "sync.lastSync"
+
+        /** What was last reported with `PATCH /v1/device` (server id + body), and the physical device id read. */
+        const val KEY_DEVICE_REPORTED = "sync.device.reported"
+        const val KEY_PHYSICAL_DEVICE = "sync.device.physical"
+        const val FEATURE_CULLING = "culling"
+        const val FEATURE_DEVICE_IDENTITY = "device-identity"
 
         /** The one-off clean-up of 0.5.3 is done (its version), and its re-pull is done (a run cut short resumes). */
         const val KEY_CLEANUP = "sync.cleanup"

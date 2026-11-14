@@ -52,6 +52,7 @@ import dev.hfps.reveal.designsystem.theme.RevealTheme
 import dev.hfps.reveal.feature.settings.storage.StorageScreen
 import dev.hfps.reveal.feature.settings.sync.SwitchRow
 import dev.hfps.reveal.feature.settings.sync.SyncSettingsScreen
+import dev.hfps.reveal.feature.settings.sync.ThisDeviceScreen
 import dev.hfps.reveal.sync.SyncRepository
 import javax.inject.Inject
 import kotlinx.coroutines.flow.SharingStarted
@@ -105,10 +106,16 @@ class SettingsViewModel @Inject constructor(
     fun setAuthorship(value: Authorship) = preferences.setAuthorship(value)
 }
 
-/** Adds the settings destinations (Settings, its Sync and Storage screens). */
-fun NavGraphBuilder.settingsScreen(onBack: () -> Unit, onSync: () -> Unit, onStorage: () -> Unit = {}) {
+/** Adds the settings destinations (Settings, its Sync, This device and Storage screens). */
+fun NavGraphBuilder.settingsScreen(
+    onBack: () -> Unit,
+    onSync: () -> Unit,
+    onStorage: () -> Unit = {},
+    onThisDevice: () -> Unit = {},
+) {
     composable<SettingsRoute> { SettingsScreen(onBack = onBack, onSync = onSync, onStorage = onStorage) }
-    composable<SyncSettingsRoute> { SyncSettingsScreen(onBack = onBack) }
+    composable<SyncSettingsRoute> { SyncSettingsScreen(onBack = onBack, onThisDevice = onThisDevice) }
+    composable<ThisDeviceRoute> { ThisDeviceScreen(onBack = onBack) }
     composable<StorageRoute> { StorageScreen(onBack = onBack) }
 }
 

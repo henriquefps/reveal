@@ -112,6 +112,57 @@ class SyncTriggersTest {
         assertThat(dirty()).isEmpty()
     }
 
+    private suspend fun queued() = db.cullingDao().pendingOf(photoId).associate { it.field to it.blind }
+
+    @Test
+    fun `a culling change queues that field once, never while sync applies, and re-arms a refused one`() = runBlocking {
+        val dao = db.cullingDao()
+        assertThat(queued()).isEmpty()
+        db.photoDao().setRating(listOf(photoId), 4)
+        db.photoDao().setRating(listOf(photoId), 5)
+        assertThat(queued()).containsExactly("rating", false)
+        // Same value: nothing new queued for the flag.
+        db.photoDao().setFlag(listOf(photoId), PickFlag.NONE)
+        assertThat(queued().keys).containsExactly("rating")
+        db.photoDao().setCulling(photoId, 5, "Red", PickFlag.REJECT)
+        assertThat(queued().keys).containsExactly("rating", "flag", "label")
+
+        // An import dates it: then it is blind (pushed without the server's revision).
+        dao.date(photoId, listOf("label"), 1_000)
+        assertThat(dao.pendingOf(photoId).single { it.field == "label" }.modifiedAt).isEqualTo(1_000)
+        assertThat(queued()["label"]).isTrue()
+
+        // Refused, then the user changes it again: pending again, not blind.
+        val label = dao.pendingOf(photoId).single { it.field == "label" }
+        dao.refused(photoId, "label", label.modifiedAt, 9)
+        assertThat(dao.pendingOf(photoId).single { it.field == "label" }.state)
+            .isEqualTo(CullingPendingEntity.STATE_INVALID)
+        db.photoDao().setCulling(photoId, 5, "Green", PickFlag.REJECT)
+        with(dao.pendingOf(photoId).single { it.field == "label" }) {
+            assertThat(state).isEqualTo(CullingPendingEntity.STATE_PENDING)
+            assertThat(blind).isFalse()
+        }
+
+        db.openHelper.writableDatabase.execSQL("DELETE FROM culling_pending")
+        db.metaDao().put(MetaEntity(SyncTriggers.APPLYING, "1"))
+        db.photoDao().setRating(listOf(photoId), 1)
+        db.metaDao().delete(SyncTriggers.APPLYING)
+        assertThat(queued()).isEmpty()
+        Unit
+    }
+
+    @Test
+    fun `a new photo queues the culling values it starts with`() = runBlocking {
+        val id = db.photoDao().insertPhoto(
+            PhotoEntity(
+                sourceId = db.photoDao().get(photoId)!!.sourceId, folder = "", folderDocumentId = "r", stemKey = "b",
+                name = "B.ARW", format = PhotoFormat.RAW, hasRaw = true, sortTime = 0, addedAt = 0, rating = 3,
+            ),
+        )
+        assertThat(db.cullingDao().pendingOf(id).map { it.field }).containsExactly("rating")
+        Unit
+    }
+
     @Test
     fun `a marked record stays one row and remembers it changed`() = runBlocking {
         val before = db.syncDao().record("photo", photoUuid)!!

@@ -285,3 +285,9 @@ the 512 MB heap out during a fling). Release-build numbers at 120 Hz on the owne
   name never inherits another one's edits.
 - Editing a lone RAW at 100 % in the viewer waits for M2's tiles; pairs and JPEGs already zoom to real pixels.
 - Hoard reads `xmp:Rating` only; to round-trip picks it can read/write `digiKam:PickLabel` (noted for the hand-off).
+
+## Amendment R0.8 (docs/adr/0027): culling in sidecars
+
+A sidecar write touches only the culling fields the user changed (rating and flag share `xmp:Rating` +
+`digiKam:PickLabel`); a reject read from `xmp:Rating="-1"` keeps the photo's stars; an import applies only the fields
+that changed in the file since it was last read (`sidecar_culling`).

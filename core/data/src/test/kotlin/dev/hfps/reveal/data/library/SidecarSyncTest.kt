@@ -6,15 +6,20 @@ import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.google.common.truth.Truth.assertThat
 import dev.hfps.reveal.data.FileDocumentTree
+import dev.hfps.reveal.data.db.MetaEntity
 import dev.hfps.reveal.data.db.PhotoQuerySql
 import dev.hfps.reveal.data.db.RevealDatabase
+import dev.hfps.reveal.data.db.SidecarCullingEntity
 import dev.hfps.reveal.data.db.SourceEntity
+import dev.hfps.reveal.data.db.SyncTriggers
 import dev.hfps.reveal.data.index.LibraryIndexer
+import dev.hfps.reveal.data.model.CullingField
 import dev.hfps.reveal.data.model.PhotoQuery
 import dev.hfps.reveal.data.model.PickFlag
 import dev.hfps.reveal.data.model.SourceState
 import dev.hfps.reveal.data.synthetic.SyntheticExif
 import dev.hfps.reveal.data.synthetic.SyntheticShoot
+import dev.hfps.reveal.data.xmp.SidecarCulling
 import dev.hfps.reveal.data.xmp.XmpFields
 import dev.hfps.reveal.data.xmp.XmpReader
 import java.io.File
@@ -37,13 +42,12 @@ class SidecarSyncTest {
 
     @Before
     fun setUp() {
-        db =
+        db = RevealDatabase.configure(
             Room.inMemoryDatabaseBuilder(
                 ApplicationProvider.getApplicationContext<Context>(),
                 RevealDatabase::class.java,
-            )
-                .allowMainThreadQueries()
-                .build()
+            ),
+        ).allowMainThreadQueries().build()
         root = temp.newFolder("shoot")
     }
 
@@ -134,5 +138,117 @@ class SidecarSyncTest {
         db.photoDao().setRating(listOf(id), 5)
         assertThat(sync().write(listOf(id))).isEqualTo(SidecarOutcome(0, 1))
         assertThat(File(root, "A.xmp").readText()).isEqualTo("<x:xmpmeta broken")
+    }
+
+    /** A value pulled from the sync server: set with the triggers quiet, as the sync engine does. */
+    private suspend fun pulled(block: suspend () -> Unit) {
+        db.metaDao().put(MetaEntity(SyncTriggers.APPLYING, "1"))
+        block()
+        db.metaDao().delete(SyncTriggers.APPLYING)
+    }
+
+    private suspend fun indexedRaw(stem: String, sidecar: String?): Pair<Long, Long> {
+        File(root, "$stem.ARW").writeBytes(SyntheticShoot.raw(SyntheticShoot.markerOnlyJpeg(10, 10), SyntheticExif()))
+        sidecar?.let { File(root, "$stem.xmp").writeText(it) }
+        File(root, "$stem.xmp").takeIf { it.exists() }?.setLastModified(1_700_000_000_000L)
+        val sourceId = source(writable = true)
+        LibraryIndexer(db).index(sourceId, FileDocumentTree(root))
+        return sourceId to db.photoDao().rows(PhotoQuerySql.toQuery(PhotoQuery())).single().id
+    }
+
+    @Test
+    fun `only the culling field the user changed is written, and an edit leaves them all alone`() = runTest {
+        val (_, id) = indexedRaw(
+            "DSC00003",
+            SyntheticShoot.sidecar(rating = 2, label = "Red", creatorTool = "darktable"),
+        )
+        // The label came back from the server as cleared (another app): not the user's decision on this device.
+        pulled { db.cullingDao().setLabel(id, null) }
+
+        db.photoDao().setRating(listOf(id), 4)
+        sync().write(listOf(id), fields = setOf(CullingField.RATING))
+        val sidecar = File(root, "DSC00003.xmp")
+        assertThat(
+            XmpReader.readCulling(sidecar.readBytes()),
+        ).isEqualTo(SidecarCulling(rating = 4, PickFlag.NONE, "Red"))
+
+        // An edit-only write (ADR 0026) with a pulled rating of 5 in the database: the file keeps the user's 4.
+        pulled { db.cullingDao().setRating(id, 5) }
+        val edits = SidecarSync(db, { FileDocumentTree(root) }, "Reveal 0.8.0", writeEdits = { true }) {
+            OffsetDateTime.parse("2026-11-14T10:00:00Z")
+        }
+        assertThat(edits.write(listOf(id), editsOnly = true).written).isEqualTo(1)
+        assertThat(
+            XmpReader.readCulling(sidecar.readBytes()),
+        ).isEqualTo(SidecarCulling(rating = 4, PickFlag.NONE, "Red"))
+        // What the file holds is remembered for the next import.
+        assertThat(db.cullingDao().sidecar(id)).isEqualTo(SidecarCullingEntity(id, 4, "NONE", "Red"))
+    }
+
+    @Test
+    fun `an edit-only write creates a sidecar without culling properties`() = runTest {
+        val (_, id) = indexedRaw("DSC00004", sidecar = null)
+        pulled { db.cullingDao().setRating(id, 3) }
+        val edits = SidecarSync(db, { FileDocumentTree(root) }, "Reveal 0.8.0", writeEdits = { true }) {
+            OffsetDateTime.parse("2026-11-14T10:00:00Z")
+        }
+        val versionId = db.photoDao().firstVersion(id)!!
+        val recipe = dev.hfps.reveal.pipeline.recipe.Recipe().let { it.copy(light = it.light.copy(exposureEv = 1f)) }
+        dev.hfps.reveal.data.edit.EditRepository(db).commit(
+            versionId,
+            recipe,
+            dev.hfps.reveal.pipeline.recipe.RecipeDiff.between(dev.hfps.reveal.pipeline.recipe.Recipe(), recipe),
+        )
+        assertThat(edits.write(listOf(id), editsOnly = true).written).isEqualTo(1)
+        val text = File(root, "DSC00004.xmp").readText()
+        assertThat(text).doesNotContain("xmp:Rating")
+        assertThat(text).doesNotContain("PickLabel")
+        assertThat(XmpReader.readCulling(text.toByteArray()).isEmpty).isTrue()
+    }
+
+    @Test
+    fun `a changed sidecar imports only the fields that changed in it, dated by its mtime`() = runTest {
+        val (sourceId, id) =
+            indexedRaw("DSC00005", SyntheticShoot.sidecar(rating = 2, label = "Red", creatorTool = "darktable"))
+        db.openHelper.writableDatabase.execSQL("DELETE FROM culling_pending")
+        // Another device rated it 5 since (pulled); Lightroom then changes only the label in the file.
+        pulled { db.cullingDao().setRating(id, 5) }
+        val sidecar = File(root, "DSC00005.xmp")
+        sidecar.writeText(SyntheticShoot.sidecar(rating = 2, label = "Green", creatorTool = "darktable"))
+        sidecar.setLastModified(1_700_000_100_000L)
+
+        LibraryIndexer(db).index(sourceId, FileDocumentTree(root))
+
+        with(db.photoDao().get(id)!!) {
+            assertThat(rating).isEqualTo(5)
+            assertThat(label).isEqualTo("Green")
+        }
+        val queued = db.cullingDao().pendingOf(id).single()
+        assertThat(queued.field).isEqualTo("label")
+        assertThat(queued.modifiedAt).isEqualTo(sidecar.lastModified())
+        assertThat(queued.blind).isTrue()
+
+        // Lightroom clears the label (removes xmp:Label): it is cleared here too.
+        sidecar.writeText(SyntheticShoot.sidecar(rating = 2, creatorTool = "darktable"))
+        sidecar.setLastModified(1_700_000_200_000L)
+        LibraryIndexer(db).index(sourceId, FileDocumentTree(root))
+        assertThat(db.photoDao().get(id)!!.label).isNull()
+        assertThat(db.photoDao().get(id)!!.rating).isEqualTo(5)
+    }
+
+    @Test
+    fun `a reject in a sidecar keeps the photo's stars`() = runTest {
+        val (sourceId, id) = indexedRaw("DSC00006", SyntheticShoot.sidecar(rating = 4, creatorTool = "Lightroom"))
+        assertThat(db.photoDao().get(id)!!.rating).isEqualTo(4)
+        val sidecar = File(root, "DSC00006.xmp")
+        sidecar.writeText(SyntheticShoot.sidecar(rating = -1, creatorTool = "Lightroom"))
+        sidecar.setLastModified(1_700_000_100_000L)
+
+        LibraryIndexer(db).index(sourceId, FileDocumentTree(root))
+
+        with(db.photoDao().get(id)!!) {
+            assertThat(flag).isEqualTo(PickFlag.REJECT)
+            assertThat(rating).isEqualTo(4)
+        }
     }
 }

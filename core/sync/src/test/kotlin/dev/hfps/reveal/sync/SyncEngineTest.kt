@@ -102,6 +102,9 @@ class SyncEngineTest {
         phone.now += 1_000
         phone.edit(phone.version(p)) { it.copy(light = it.light.copy(exposureEv = -1f)) }
         tablet.now += 2_000
+        // The record's modifiedAt comes from the sync triggers (SQLite's wall clock, ms): two edits in the same
+        // millisecond would tie and the device ids (random) would decide.
+        Thread.sleep(5)
         tablet.edit(tablet.version(t)) { it.copy(light = it.light.copy(exposureEv = 1.5f)) }
         tablet.sync()
         phone.sync()

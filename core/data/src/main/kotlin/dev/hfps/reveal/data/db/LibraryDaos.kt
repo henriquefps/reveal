@@ -290,6 +290,29 @@ interface PhotoDao {
         xmpModified: Long?,
     )
 
+    /**
+     * A sidecar import (ADR 0027): only the culling fields the file changed (`set*`), and the sidecar's state. The
+     * sync triggers queue each field that really changes.
+     */
+    @Suppress("LongParameterList")
+    @Query(
+        "UPDATE photos SET rating = CASE WHEN :setRating THEN :rating ELSE rating END, " +
+            "flag = CASE WHEN :setFlag THEN :flag ELSE flag END, " +
+            "label = CASE WHEN :setLabel THEN :label ELSE label END, " +
+            "xmp_document_id = :xmpDocumentId, xmp_modified = :xmpModified WHERE id = :id",
+    )
+    suspend fun applySidecar(
+        id: Long,
+        setRating: Boolean,
+        rating: Int,
+        setFlag: Boolean,
+        flag: PickFlag,
+        setLabel: Boolean,
+        label: String?,
+        xmpDocumentId: String?,
+        xmpModified: Long?,
+    )
+
     @Query("UPDATE photos SET xmp_document_id = :xmpDocumentId, xmp_modified = :xmpModified WHERE id = :id")
     suspend fun setSidecar(id: Long, xmpDocumentId: String?, xmpModified: Long?)
 

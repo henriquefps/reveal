@@ -179,3 +179,8 @@ Lightroom Classic and mobile imports, Lightroom's defaults ignored, write then n
 fast-forward, sidecar behind, both conflict directions, Lightroom editing a Reveal sidecar, Hoard rating it, newer app,
 malformed sidecar, a second library reading the first's sidecars), `XmpSidecarFlowTest` (instrumented over SAF).
 Fixtures in `core/data/src/test/resources/xmp/` are hand-written in each app's layout (no real or owner files).
+
+## Amendment R0.8 (docs/adr/0027)
+
+An edit-only write no longer touches `xmp:Rating`, `digiKam:PickLabel` or `xmp:Label`, and a sidecar it creates has
+none of them; a sidecar import applies only the culling fields that changed in the file since it was last read.

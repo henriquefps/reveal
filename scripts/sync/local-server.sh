@@ -16,7 +16,7 @@
 # Override for a try-out: HOARD_SERVER_IMAGE=<image:tag>.
 set -euo pipefail
 
-HOARD_SERVER_VERSION="0.4.0"
+HOARD_SERVER_VERSION="0.8.0"
 image="${HOARD_SERVER_IMAGE:-ghcr.io/henriquefps/hoard-server:$HOARD_SERVER_VERSION}"
 
 cmd="${1:?start|pair|stop}"; dir="${2:?work dir}"

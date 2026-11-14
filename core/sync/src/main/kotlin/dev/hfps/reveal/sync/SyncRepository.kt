@@ -1,14 +1,20 @@
 package dev.hfps.reveal.sync
 
 import android.util.Log
+import dev.hfps.reveal.data.db.MetaEntity
 import dev.hfps.reveal.data.db.RevealDatabase
 import dev.hfps.reveal.data.index.LibraryIndexer
 import dev.hfps.reveal.data.library.DocumentTreeFactory
+import dev.hfps.reveal.sync.account.ClientDevice
 import dev.hfps.reveal.sync.account.PairingLink
 import dev.hfps.reveal.sync.account.SyncAccount
 import dev.hfps.reveal.sync.account.SyncAccountStore
 import dev.hfps.reveal.sync.account.SyncOptions
+import dev.hfps.reveal.sync.api.DeviceCandidate
+import dev.hfps.reveal.sync.api.DeviceEntry
+import dev.hfps.reveal.sync.api.DeviceView
 import dev.hfps.reveal.sync.api.PairRequest
+import dev.hfps.reveal.sync.api.PhysicalDevice
 import dev.hfps.reveal.sync.api.SyncApi
 import dev.hfps.reveal.sync.api.SyncHttpException
 import dev.hfps.reveal.sync.blobs.BlobUploader
@@ -61,6 +67,30 @@ data class SyncStatus(
     val serverPhotos: Int = 0,
 )
 
+/**
+ * "This device" as the paired server knows it (Hoard ADR 0017): this installation, the phone it is grouped into (with
+ * the other apps there, e.g. Hoard) and the phones it could join. [supported] false: the server predates device
+ * identity (nothing to show but the device name).
+ */
+data class ThisDevice(
+    val supported: Boolean,
+    val deviceId: String,
+    val name: String,
+    val app: String?,
+    val model: String?,
+    val features: List<String> = emptyList(),
+    val physicalDevice: PhysicalDevice? = null,
+    val candidates: List<DeviceCandidate> = emptyList(),
+) {
+    /** The other apps grouped with this one on the same phone. */
+    val others: List<DeviceEntry> get() = physicalDevice?.devices.orEmpty().filter { it.id != deviceId }
+}
+
+/** Why a claim failed. */
+enum class ClaimProblem { SAME_APP, NOT_FOUND, UNREACHABLE, SERVER_ERROR }
+
+class ClaimException(val problem: ClaimProblem, cause: Throwable? = null) : IOException(problem.name, cause)
+
 /** Why pairing failed. */
 enum class PairProblem { INVALID_LINK, INVALID_TOKEN, OTHER_SERVER, UNREACHABLE, SERVER_ERROR }
 
@@ -84,8 +114,27 @@ class SyncRepository(
     private val library: ServerLibrary = ServerLibrary(db, store),
     private val newApi: (url: String, key: String?) -> SyncApi = { url, key -> SyncApi(url, key) },
 ) {
-    /** The device's name, platform and app version, sent when pairing. */
-    data class ClientInfo(val deviceName: String, val platform: String, val appVersion: String)
+    /**
+     * The device's name, platform and app version, sent when pairing, and how it describes itself to a server with
+     * device identity ([device], Hoard ADR 0017).
+     */
+    data class ClientInfo(
+        val deviceName: String,
+        val platform: String,
+        val appVersion: String,
+        val device: ClientDevice? = null,
+    )
+
+    private val candidates = MutableStateFlow<List<DeviceCandidate>>(emptyList())
+
+    /**
+     * Right after pairing: the phones this one may be (another app paired there with the same model), for the one
+     * question of Hoard ADR 0017 ("Is this the same phone as Hoard on Pixel 8?"). Empty when there is nothing to ask.
+     */
+    val pairCandidates: StateFlow<List<DeviceCandidate>> = candidates.asStateFlow()
+
+    /** The question was answered (or dismissed): not asked again. */
+    fun dismissCandidates() = candidates.update { emptyList() }
 
     private val mutex = Mutex()
     private val runtime = MutableStateFlow(SyncStatus())
@@ -121,7 +170,15 @@ class SyncRepository(
     suspend fun pair(link: PairingLink): SyncAccount = withContext(Dispatchers.IO) {
         val response = try {
             newApi(link.url, null).pair(
-                PairRequest(link.token, clientInfo.deviceName, clientInfo.platform, clientInfo.appVersion),
+                PairRequest(
+                    token = link.token,
+                    deviceName = clientInfo.deviceName,
+                    platform = clientInfo.platform,
+                    appVersion = clientInfo.appVersion,
+                    app = clientInfo.device?.app,
+                    manufacturer = clientInfo.device?.manufacturer,
+                    model = clientInfo.device?.model,
+                ),
             )
         } catch (e: SyncHttpException) {
             throw PairException(
@@ -146,6 +203,10 @@ class SyncRepository(
                     System.currentTimeMillis(),
                 )
             accounts.save(account, response.apiKey)
+            response.physicalDeviceId?.let { db.metaDao().put(MetaEntity(SyncEngine.KEY_PHYSICAL_DEVICE, it)) }
+            // The device was reported with the pairing itself: the first sync does not need to send it again unless
+            // it also declares culling (the signature includes the features).
+            candidates.update { response.candidates.filter(DeviceCandidate::modelMatch) }
             runtime.update { SyncStatus() }
             account
         }
@@ -156,6 +217,7 @@ class SyncRepository(
         mutex.withLock {
             accounts.clear()
             forgetLocked()
+            dismissCandidates()
             runtime.update { SyncStatus() }
         }
     }
@@ -167,6 +229,67 @@ class SyncRepository(
     }
 
     fun setOptions(options: SyncOptions) = accounts.setOptions(options)
+
+    /** "This device" (Settings -> Sync -> This device); null when not paired. Throws [IOException] when offline. */
+    suspend fun thisDevice(): ThisDevice? = withContext(Dispatchers.IO) {
+        val account = accounts.account.value ?: return@withContext null
+        val api = api() ?: return@withContext null
+        val info = api.server()
+        if (!info.has(SyncEngine.FEATURE_DEVICE_IDENTITY)) {
+            val name = runCatching { api.devices().devices.firstOrNull { it.id == account.deviceId }?.name }
+                .getOrNull()
+            return@withContext ThisDevice(
+                supported = false,
+                deviceId = account.deviceId,
+                name = name ?: clientInfo.deviceName,
+                app = null,
+                model = null,
+            )
+        }
+        val view = api.device()
+        view.physicalDevice?.id?.let { db.metaDao().put(MetaEntity(SyncEngine.KEY_PHYSICAL_DEVICE, it)) }
+        thisDevice(view)
+    }
+
+    /**
+     * Joins this installation to physical device [physicalDeviceId] (another app's phone), or moves it out to one of
+     * its own when null (`POST /v1/device/claim`). Throws [ClaimException].
+     */
+    suspend fun claim(physicalDeviceId: String?): ThisDevice = withContext(Dispatchers.IO) {
+        val api = api() ?: throw ClaimException(ClaimProblem.SERVER_ERROR)
+        val view = try {
+            api.claim(physicalDeviceId)
+        } catch (e: SyncHttpException) {
+            throw ClaimException(
+                when {
+                    // `409 conflict`, `details.reason = same_app`: that phone already has a live Reveal of this
+                    // variant.
+                    e.status == HTTP_CONFLICT -> ClaimProblem.SAME_APP
+
+                    e.status == HTTP_NOT_FOUND -> ClaimProblem.NOT_FOUND
+
+                    else -> ClaimProblem.SERVER_ERROR
+                },
+                e,
+            )
+        } catch (e: IOException) {
+            throw ClaimException(ClaimProblem.UNREACHABLE, e)
+        }
+        view.physicalDevice?.id?.let { db.metaDao().put(MetaEntity(SyncEngine.KEY_PHYSICAL_DEVICE, it)) }
+        dismissCandidates()
+        thisDevice(view)
+    }
+
+    private fun thisDevice(view: DeviceView) = ThisDevice(
+        supported = true,
+        deviceId = view.deviceId,
+        name = view.name,
+        app = view.app,
+        model = listOfNotNull(view.manufacturer, view.model).joinToString(" ").takeIf { it.isNotBlank() },
+        features = view.features,
+        physicalDevice = view.physicalDevice,
+        candidates = view.candidates,
+    )
 
     /** One metadata sync; null when not paired. Problems end up in [status] (and are rethrown when worth a retry). */
     suspend fun syncMetadata(): SyncReport? = withContext(Dispatchers.IO) {
@@ -304,5 +427,7 @@ class SyncRepository(
         const val REFORMATS_PER_RUN = 3
         const val ORIGINALS_PER_RUN = 10
         const val HEADERS_PER_RUN = 300
+        const val HTTP_CONFLICT = 409
+        const val HTTP_NOT_FOUND = 404
     }
 }

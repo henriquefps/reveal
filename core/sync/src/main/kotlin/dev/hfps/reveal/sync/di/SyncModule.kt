@@ -17,6 +17,7 @@ import dev.hfps.reveal.data.library.DocumentTreeFactory
 import dev.hfps.reveal.data.storage.CacheBudget
 import dev.hfps.reveal.pipeline.preview.SmartPreviewMaker
 import dev.hfps.reveal.sync.SyncRepository
+import dev.hfps.reveal.sync.account.ClientDevice
 import dev.hfps.reveal.sync.account.KeystoreSecretStore
 import dev.hfps.reveal.sync.account.SyncAccountStore
 import dev.hfps.reveal.sync.api.SyncApi
@@ -66,7 +67,12 @@ object SyncModule {
 
     @Provides
     @Singleton
-    fun provideEngine(database: RevealDatabase, store: SyncStore): SyncEngine = SyncEngine(database, store)
+    fun provideEngine(@ApplicationContext context: Context, database: RevealDatabase, store: SyncStore): SyncEngine =
+        SyncEngine(database, store, device = clientDevice(context))
+
+    /** This installation as hoard-server's device identity knows it (Hoard ADR 0017): app id with variant, model. */
+    private fun clientDevice(context: Context): ClientDevice =
+        ClientDevice.of(context.packageName, Build.MANUFACTURER, Build.MODEL)
 
     @Provides
     @Singleton
@@ -127,7 +133,12 @@ object SyncModule {
             engine = engine,
             uploader = uploader,
             files = files,
-            clientInfo = SyncRepository.ClientInfo(name.take(MAX_NAME), "android", version.take(MAX_VERSION)),
+            clientInfo = SyncRepository.ClientInfo(
+                name.take(MAX_NAME),
+                "android",
+                version.take(MAX_VERSION),
+                clientDevice(context),
+            ),
             trees = trees,
         )
     }

@@ -6,6 +6,25 @@ All notable changes to Reveal are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- Culling syncs with Hoard through hoard-server (R0.8, docs/adr/0027): rating, pick/reject and colour label sync one
+  field at a time on the server's culling records (Hoard ADR 0016), so a rating made in Reveal and a pick made in
+  Hoard at the same moment both survive; decisions made offline keep their time; a label longer than the server takes
+  stays on this device. Ratings Hoard (or the server's web gallery) sets appear in the library within one foreground
+  sync (about 20 s on the emulator), and Reveal's go up within a few seconds. Older servers keep today's behaviour.
+- Settings -> Sync -> This device (Hoard ADR 0017): how the server knows this phone, Hoard on the same phone, and a
+  one-tap "Same phone?" question after pairing when Hoard is paired from a phone of the same model. Reveal reports its
+  app id (with the build variant: `reveal`, `reveal-debug`, `reveal-bench`), manufacturer and model.
+
+### Fixed
+- XMP sidecars (docs/adr/0027): writing an edit no longer rewrites the rating, pick and label in the sidecar, and a
+  rating or pick writes only that; a reject read from a sidecar (`xmp:Rating="-1"`) keeps the photo's stars; a changed
+  sidecar re-applies only the fields that changed in it (a label changed in Lightroom no longer brings back an old
+  rating). Values another app hands over that the server already has are not sent back to it.
+
+### Changed
+- Database v13 (culling tables). `scripts/sync/local-server.sh` pins `hoard-server:0.8.0`.
+
 ### Changed
 - The sync server moved to Hoard (SRV/M): it is now `hoard-server` (github.com/henriquefps/hoard, `server/`, image
   `ghcr.io/henriquefps/hoard-server`), and `sync-server/` and its workflows are gone from this repository. The protocol

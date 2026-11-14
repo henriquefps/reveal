@@ -384,6 +384,51 @@ class RevealDatabaseMigrationTest {
     }
 
     @Test
+    fun `12 to 13 adds the culling tables and remembers what each applied sidecar held`() {
+        val name = "migration-12-13.db"
+        helper.createDatabase(name, 12).use { db ->
+            db.execSQL(
+                "INSERT INTO sources (id, tree_uri, root_document_id, display_name, state, writable, added_at, kind, " +
+                    "backup) VALUES (1, 'content://t', 'r', 'DCIM', 'AVAILABLE', 1, 0, 'FOLDER', 1)",
+            )
+            // 1: a sidecar read 4 stars + Red; 2: a sidecar's reject (read as 0 + REJECT); 3: no sidecar.
+            val photo = { id: Int, rating: Int, flag: String, label: String?, xmp: String? ->
+                db.execSQL(
+                    "INSERT INTO photos (id, uuid, source_id, folder, folder_document_id, stem_key, name, format, " +
+                        "has_raw, sort_time, orientation, rating, label, flag, has_edit, metadata_state, " +
+                        "xmp_document_id, xmp_modified, added_at, hidden) VALUES (?, ?, 1, '', '', ?, ?, 'RAW', 1, " +
+                        "0, 1, ?, ?, ?, 0, 'READ', ?, 5, 0, 0)",
+                    arrayOf<Any?>(id, "u$id", "a$id", "A$id.ARW", rating, label, flag, xmp),
+                )
+            }
+            photo(1, 4, "NONE", "Red", "x1")
+            photo(2, 0, "REJECT", null, "x2")
+            photo(3, 2, "PICK", null, null)
+        }
+        helper.runMigrationsAndValidate(name, 13, true, *RevealDatabase.MIGRATIONS).use { db ->
+            db.query("SELECT photo_id, rating, flag, label FROM sidecar_culling ORDER BY photo_id").use { c ->
+                assertThat(c.count).isEqualTo(2)
+                c.moveToFirst()
+                assertThat(c.getLong(0)).isEqualTo(1)
+                assertThat(c.getInt(1)).isEqualTo(4)
+                assertThat(c.getString(2)).isEqualTo("NONE")
+                assertThat(c.getString(3)).isEqualTo("Red")
+                c.moveToNext()
+                assertThat(c.getLong(0)).isEqualTo(2)
+                // A reject read before 0.8 lost its stars: unknown, so the next read of the file does not clear them.
+                assertThat(c.isNull(1)).isTrue()
+                assertThat(c.getString(2)).isEqualTo("REJECT")
+            }
+            for (table in listOf("culling_records", "culling_files", "culling_pending")) {
+                db.query("SELECT COUNT(*) FROM $table").use { c ->
+                    assertThat(c.moveToFirst()).isTrue()
+                    assertThat(c.getInt(0)).isEqualTo(0)
+                }
+            }
+        }
+    }
+
+    @Test
     fun `every exported schema up to the current version exists`() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val folder = "dev.hfps.reveal.data.db.RevealDatabase"

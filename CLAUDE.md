@@ -157,7 +157,7 @@ REVEAL_COLOUR_SHEET_DIR=$PWD/build/calibration REVEAL_RENDER_OUT=$PWD/docs/scree
 
 ## Library (`:core:data`, `:feature:library`, M1, ADR 0006)
 
-Room `RevealDatabase` v11 (sources, photos, photo_files, versions, recipes, history, history_cursor, cache_entries; sync tables v6; preset tables v7, ADR 0019; `photo_files.unreadable_at` v8, ADR 0011; `photo_cloud.preview_format` v9; `photo_files.on_server` + `sync_deletes` v10, ADR 0018 FIX/V; `versions.edit_device/edited_at` + data fixes v11, FIX/W; `snapshots` + `export_presets` v12, ADR 0025);
+Room `RevealDatabase` v13 (sources, photos, photo_files, versions, recipes, history, history_cursor, cache_entries; sync tables v6; preset tables v7, ADR 0019; `photo_files.unreadable_at` v8, ADR 0011; `photo_cloud.preview_format` v9; `photo_files.on_server` + `sync_deletes` v10, ADR 0018 FIX/V; `versions.edit_device/edited_at` + data fixes v11, FIX/W; `snapshots` + `export_presets` v12, ADR 0025; culling sync tables v13, ADR 0027);
 schema change = new version + migration (or `AutoMigration`) + exported `core/data/schemas/*.json`, tested by
 `RevealDatabaseMigrationTest`. `LibraryRepository` (sources, SAF grants, volumes, indexing, ratings/flags with XMP
 write-back), `LibraryIndexer` (walk → diff → sidecars → headers → sidecar edits), `XmpReader`/`XmpWriter` (merge, never
@@ -236,6 +236,10 @@ group, Lightroom default, get/set; a new mappable recipe field = one entry there
 conflict copy; Lightroom's defaults never imported; `XmpPreferences.readEdits`). Never write darktable history, never
 create a sidecar for an unedited photo, never overwrite a newer app's `reveal:` block or a malformed sidecar.
 Fixtures: `core/data/src/test/resources/xmp/` (hand-written Lightroom Classic/mobile, darktable, Hoard).
+Culling in sidecars (ADR 0027): writes touch only the fields the user changed (`SidecarSync.write(…, fields)`; rating
+and flag share `xmp:Rating` + `digiKam:PickLabel`; an edit-only write touches none, never writes a value pulled from
+the server); reads go field by field (`XmpReader.readCulling` -> `SidecarCulling`: `-1` = reject, stars kept); imports
+apply only what changed since the file was last read (`library/SidecarImport`, `sidecar_culling`, dated by the mtime).
 
 ```sh
 ./gradlew :core:data:testDebugUnitTest --tests '*CameraRawTest*' --tests '*XmpDevelopTest*' --tests '*SidecarEditsTest*' --tests '*XmpTest*' --tests '*SidecarSyncTest*'
@@ -931,6 +935,28 @@ FIX/W (0.5.4, ADR 0018 amendment, DB v11): `photo.data.orientation` (Server phot
 (`:core:data/storage` `AppStorage`, `CacheBudget` + `CacheArea`: thumbnails and `ServerFiles.areas`;
 `feature/settings/storage/StorageScreen.kt`). A new disk cache: make it a `CacheArea`, register it with the budget,
 cap it at `budget::cap`, and add its directory to `AppStorage.AREA_DIRS`.
+
+Culling with hoard-server (R0.8, ADR 0027, DB v13; only when `/v1/server` lists `culling`, else culling stays in
+`photo` records): `engine/CullingSync` (seed once per server, push `POST /v1/culling` per field by main fingerprint,
+pull `GET /v1/items/changes?include=culling` with its own cursor, mirror every record in `culling_records` +
+`culling_files`, map photos by any member fingerprint or the derived id `CullingSync.derivedItemId`, apply quietly).
+Local decisions are queued by the sync triggers (v5) in `culling_pending` (one row per photo and field; `blind` =
+dated by a file/sidecar/hand-off time, pushed with `baseRev` 0; `invalid` = refused, kept local). Pulled photo records'
+rating/flag/label are ignored then (`SyncStore.cullingInRecords`). Device identity (Hoard ADR 0017):
+`account/ClientDevice` (app id with variant from the package), `PATCH /v1/device` with `features: ["culling"]` before
+any photo record push (`SyncEngine.report`), pairing candidates -> `SyncRepository.pairCandidates` (the "same phone?"
+question), `thisDevice()` / `claim()`, Settings -> Sync -> This device (`feature/settings/sync/ThisDeviceScreen.kt`,
+goldens `phone_this_device*`, `phone_same_phone_dark`). Hand-off values equal to the server's cached value are not
+pushed; `EXTRA_CULLING` may carry `ratingModifiedAt`/`flagModifiedAt`/`labelModifiedAt`.
+
+```sh
+./gradlew :core:sync:testDebugUnitTest --tests '*CullingSyncTest*' --tests '*DeviceIdentityTest*'
+# against the real server (loopback, three fresh links):
+REVEAL_SYNC_LINKS=$(for i in 1 2 3; do scripts/sync/local-server.sh pair <work dir>; done | paste -sd,) \
+  ./gradlew --no-configuration-cache :core:sync:testDebugUnitTest --tests '*RealServerCullingTest*'
+adb -s <serial> shell am instrument -w -e class dev.hfps.reveal.sync.CullingFlowTest -e syncLinks "'$L1,$L2'" dev.hfps.reveal.debug.test/androidx.test.runner.AndroidJUnitRunner
+adb -s <serial> logcat -d -s REVEAL_CULLING RevealSync
+```
 
 ```sh
 ./gradlew :core:sync:testDebugUnitTest --tests '*SyncPolishTest*'

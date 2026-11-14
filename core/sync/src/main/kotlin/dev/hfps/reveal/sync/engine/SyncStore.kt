@@ -85,6 +85,14 @@ class SyncStore(
     private val meta = db.metaDao()
     private val json = SyncApi.json
     private val presetSync = PresetSync(db, clock)
+
+    /**
+     * Rating, flag and label of pulled `photo` records apply (an older server). False while the server has culling
+     * records (ADR 0027): those three come from there, and a record's are ignored (they still go up in this device's
+     * records, for devices on an older Reveal).
+     */
+    @Volatile
+    var cullingInRecords: Boolean = true
     private val exportPresetSync = ExportPresetSync(db, clock)
 
     // ------------------------------------------------------------------ pairing
@@ -417,6 +425,7 @@ class SyncStore(
         }
     }
 
+    @Suppress("CyclomaticComplexMethod")
     private suspend fun applyPhoto(record: FeedRecord): Boolean {
         if (record.deleted) {
             val photo = sync.photoByUuid(record.id) ?: return true
@@ -438,8 +447,12 @@ class SyncStore(
         }
         val data = decode(record.data, PhotoData.serializer()) ?: return true
         val photo = localPhoto(record.id, data.fingerprint) ?: createServerPhoto(record.id, data)
-        val flag = PickFlag.entries.firstOrNull { it.name == data.flag } ?: PickFlag.NONE
-        sync.applyPhotoMetadata(photo.id, data.rating.coerceIn(0, MAX_RATING), flag, data.label, data.hidden)
+        if (cullingInRecords) {
+            val flag = PickFlag.entries.firstOrNull { it.name == data.flag } ?: PickFlag.NONE
+            sync.applyPhotoMetadata(photo.id, data.rating.coerceIn(0, MAX_RATING), flag, data.label, data.hidden)
+        } else if (photo.hidden != data.hidden) {
+            sync.applyPhotoHidden(photo.id, data.hidden)
+        }
         val cloud = sync.cloud(photo.id) ?: PhotoCloudEntity(photo.id)
         val preview = data.preview
         // The record says what the server holds: no preview there means none (a device dropped it, ADR 0018 "Smart

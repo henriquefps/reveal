@@ -8,6 +8,8 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.google.common.truth.Truth.assertThat
 import dev.hfps.image.source.FileFingerprint
 import dev.hfps.reveal.data.FileDocumentTree
+import dev.hfps.reveal.data.db.CullingFileEntity
+import dev.hfps.reveal.data.db.CullingRecordEntity
 import dev.hfps.reveal.data.db.PhotoQuerySql
 import dev.hfps.reveal.data.db.RevealDatabase
 import dev.hfps.reveal.data.db.SourceEntity
@@ -48,7 +50,8 @@ class HandoffRepositoryTest {
     @Before
     fun setUp() {
         val context = ApplicationProvider.getApplicationContext<Context>()
-        db = Room.inMemoryDatabaseBuilder(context, RevealDatabase::class.java).allowMainThreadQueries().build()
+        db = RevealDatabase.configure(Room.inMemoryDatabaseBuilder(context, RevealDatabase::class.java))
+            .allowMainThreadQueries().build()
         repo = HandoffRepository(context.contentResolver, db, LibraryIndexer(db), tree) { now }
         edits = EditRepository(db) { now }
     }
@@ -442,6 +445,32 @@ class HandoffRepositoryTest {
     }
 
     @Test
+    fun `values the sync server already holds are not pushed back, the others keep the sender's time`() = runTest {
+        val dir = temp.newFolder("cached")
+        val arw = raw(dir, "DSC00061.ARW")
+        val fingerprint = dev.hfps.image.source.FileFingerprint.of(File(arw.path!!).readBytes())
+        // The mirror of the server's culling record for the shot (ADR 0027): 3 stars, no flag yet.
+        db.cullingDao().putRecord(CullingRecordEntity("item-1", rev = 5, rating = 3, ratingRev = 5, ratingAt = 10))
+        db.cullingDao().addFiles(listOf(CullingFileEntity(fingerprint, "item-1")))
+
+        repo.receive(
+            HandoffRequest(
+                listOf(arw),
+                culling = mapOf(arw to HandoffCulling(rating = 3, flag = PickFlag.PICK, flagAt = 7_000)),
+            ),
+        )
+
+        val photo = rows().single()
+        assertThat(photo.rating).isEqualTo(3)
+        assertThat(photo.flag).isEqualTo(PickFlag.PICK)
+        val queued = db.cullingDao().pendingOf(photo.id)
+        // Hoard's 3 stars are the server's own value (its cache): nothing to tell the server.
+        assertThat(queued.map { it.field }).containsExactly("flag")
+        assertThat(queued.single().modifiedAt).isEqualTo(7_000)
+        assertThat(queued.single().blind).isTrue()
+    }
+
+    @Test
     fun `a sidecar changed after the previous hand-off wins, an older one does not`() = runTest {
         val dir = temp.newFolder("again")
         val sidecar = file(dir, "DSC00041.xmp", SyntheticShoot.sidecar(rating = 1).toByteArray())
@@ -469,7 +498,9 @@ class HandoffRepositoryTest {
         with(rows().single()) {
             assertThat(rating).isEqualTo(2)
             assertThat(label).isEqualTo("Green")
-            assertThat(flag).isEqualTo(PickFlag.NONE)
+            // The darktable sidecar says nothing about the flag (no pick label, not Hoard's): only the fields a sidecar
+            // changed are imported (ADR 0027), so the pick the first (Hoard) sidecar gave stays.
+            assertThat(flag).isEqualTo(PickFlag.PICK)
         }
     }
 

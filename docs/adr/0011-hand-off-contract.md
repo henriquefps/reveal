@@ -383,3 +383,8 @@ comes back, clearing the marks (full thumbnail, full-size export, original backu
 - Hand-offs are library photos like any other: they appear in "All photos" and "Recent", can be rated, edited and
   removed, and keep their edit history across hand-offs of the same photo.
 - The instrumented test cannot send from another uid; cross-app grants are the platform's, verified by Hoard's side.
+
+## Amendment R0.8 (docs/adr/0027)
+
+Culling values a sender passes that the paired server already holds for the shot are not pushed back to it; each
+`EXTRA_CULLING` item may carry `ratingModifiedAt`, `flagModifiedAt`, `labelModifiedAt` (Unix ms) dating the change.

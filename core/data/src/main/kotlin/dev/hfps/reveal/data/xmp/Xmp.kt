@@ -1,5 +1,6 @@
 package dev.hfps.reveal.data.xmp
 
+import dev.hfps.reveal.data.model.CullingField
 import dev.hfps.reveal.data.model.PickFlag
 import java.io.ByteArrayInputStream
 import java.io.IOException
@@ -22,7 +23,8 @@ import org.w3c.dom.Node
  *   (Hoard writes sidecars only for the shots "Copy picks" copies).
  * - [label]: `xmp:Label`, free text; Lightroom shows "Red", "Yellow", ... as colours.
  *
- * A reject keeps its stars in the database only: XMP has one `xmp:Rating` and -1 wins.
+ * A reject keeps its stars in the database only: XMP has one `xmp:Rating` and -1 wins. Reading a sidecar field by
+ * field (what it holds, what it leaves out) is [SidecarCulling].
  */
 data class XmpFields(val rating: Int = 0, val label: String? = null, val flag: PickFlag = PickFlag.NONE) {
     init {
@@ -32,6 +34,63 @@ data class XmpFields(val rating: Int = 0, val label: String? = null, val flag: P
     companion object {
         const val MAX_RATING = 5
     }
+}
+
+/**
+ * What a sidecar says about each culling field, field by field (Hoard ADR 0016 "The NAS sidecars", Reveal ADR 0027):
+ * null = the sidecar says nothing about it. [rating] comes from a non-negative `xmp:Rating` only: `-1` is the file form
+ * of a reject and leaves the stars unknown (a reject keeps its stars). [flag] from `digiKam:PickLabel` when present
+ * (1 reject, 3 pick, other none), else from a negative rating, else a Hoard "Copy picks" sidecar (pick). [label] is
+ * `xmp:Label` as written (blank = no label).
+ */
+data class SidecarCulling(val rating: Int? = null, val flag: PickFlag? = null, val label: String? = null) {
+    /** True when the sidecar holds no culling value at all (it is then ignored). */
+    val isEmpty: Boolean get() = rating == null && flag == null && label == null
+
+    /**
+     * The fields to import: those that differ from what the same sidecar held when last read ([last]; null = first
+     * read: every field it holds). A label present last time and absent now was cleared (Lightroom removes
+     * `xmp:Label`): it imports as no label. A field absent now and before, or unchanged, is not re-asserted.
+     */
+    fun changesSince(last: SidecarCulling?): CullingChanges = CullingChanges(
+        rating = rating?.takeIf { last == null || it != last.rating },
+        flag = flag?.takeIf { last == null || it != last.flag },
+        label = when {
+            label != null && (last == null || label != last.label) -> label.trim()
+            label == null && last?.label != null -> ""
+            else -> null
+        },
+    )
+
+    /** [XmpFields] of these values over [base] (the photo's): what the sidecar leaves out keeps [base]'s. */
+    fun over(base: XmpFields): XmpFields = XmpFields(
+        rating = rating?.coerceIn(0, XmpFields.MAX_RATING) ?: base.rating,
+        label = if (label != null) label.trim().takeIf { it.isNotEmpty() } else base.label,
+        flag = flag ?: base.flag,
+    )
+}
+
+/** Culling values to apply field by field; null = leave the field alone; [label] `""` = clear it. */
+data class CullingChanges(val rating: Int? = null, val flag: PickFlag? = null, val label: String? = null) {
+    val isEmpty: Boolean get() = rating == null && flag == null && label == null
+
+    val fields: Set<CullingField>
+        get() = buildSet {
+            if (rating != null) add(CullingField.RATING)
+            if (flag != null) add(CullingField.FLAG)
+            if (label != null) add(CullingField.LABEL)
+        }
+
+    /** [base] with these changes applied. */
+    fun over(base: XmpFields): XmpFields = XmpFields(
+        rating = rating?.coerceIn(0, XmpFields.MAX_RATING) ?: base.rating,
+        label = when (label) {
+            null -> base.label
+            "" -> null
+            else -> label
+        },
+        flag = flag ?: base.flag,
+    )
 }
 
 /** A sidecar or packet that is not well-formed XML, or not XMP: never overwritten. */
@@ -69,7 +128,30 @@ object XmpReader {
     /** Like [read], or null for anything unreadable (an embedded packet is best effort). */
     fun readOrNull(bytes: ByteArray): XmpFields? = runCatching { read(bytes) }.getOrNull()
 
-    fun read(document: Document): XmpFields {
+    /** Parses [bytes] field by field ([SidecarCulling]); throws [XmpException] when they are not well-formed XML. */
+    fun readCulling(bytes: ByteArray): SidecarCulling = readCulling(XmpDom.parse(bytes))
+
+    fun readCulling(document: Document): SidecarCulling {
+        val raw = raw(document)
+        val stars = raw.rating?.toInt()
+        val flag = when {
+            raw.pickLabel == PICK_LABEL_REJECT -> PickFlag.REJECT
+            raw.pickLabel == PICK_LABEL_ACCEPT -> PickFlag.PICK
+            raw.pickLabel != null -> PickFlag.NONE
+            stars != null && stars < 0 -> PickFlag.REJECT
+            raw.creatorTool?.trim()?.startsWith("Hoard") == true -> PickFlag.PICK
+            else -> null
+        }
+        return SidecarCulling(
+            rating = stars?.takeIf { it >= 0 }?.coerceAtMost(XmpFields.MAX_RATING),
+            flag = flag,
+            label = raw.label,
+        )
+    }
+
+    private class Raw(val rating: Double?, val label: String?, val pickLabel: Int?, val creatorTool: String?)
+
+    private fun raw(document: Document): Raw {
         var rating: Double? = null
         var label: String? = null
         var pickLabel: Int? = null
@@ -80,18 +162,24 @@ object XmpReader {
             pickLabel = pickLabel ?: XmpDom.property(description, XmpNs.DIGIKAM, "PickLabel")?.trim()?.toIntOrNull()
             creatorTool = creatorTool ?: XmpDom.property(description, XmpNs.XMP, "CreatorTool")
         }
-        val stars = rating?.toInt() ?: 0
+        return Raw(rating, label, pickLabel, creatorTool)
+    }
+
+    /** All three fields at once, a reject read as 0 stars (embedded packets; sidecars use [readCulling]). */
+    fun read(document: Document): XmpFields {
+        val raw = raw(document)
+        val stars = raw.rating?.toInt() ?: 0
         val flag = when {
             stars < 0 -> PickFlag.REJECT
-            pickLabel == PICK_LABEL_REJECT -> PickFlag.REJECT
-            pickLabel == PICK_LABEL_ACCEPT -> PickFlag.PICK
-            pickLabel != null -> PickFlag.NONE
-            creatorTool?.trim()?.startsWith("Hoard") == true -> PickFlag.PICK
+            raw.pickLabel == PICK_LABEL_REJECT -> PickFlag.REJECT
+            raw.pickLabel == PICK_LABEL_ACCEPT -> PickFlag.PICK
+            raw.pickLabel != null -> PickFlag.NONE
+            raw.creatorTool?.trim()?.startsWith("Hoard") == true -> PickFlag.PICK
             else -> PickFlag.NONE
         }
         return XmpFields(
             rating = stars.coerceIn(0, XmpFields.MAX_RATING),
-            label = label?.takeIf { it.isNotBlank() },
+            label = raw.label?.takeIf { it.isNotBlank() },
             flag = flag,
         )
     }
@@ -106,8 +194,9 @@ fun interface XmpExtension {
 }
 
 /**
- * Writes [XmpFields] into a sidecar. An existing sidecar is **merged**, not replaced: only `xmp:Rating`,
- * `xmp:Label`, `digiKam:PickLabel` and `xmp:MetadataDate` change; Lightroom's `crs:` develop settings,
+ * Writes [XmpFields] into a sidecar. An existing sidecar is **merged**, not replaced: only the culling properties of
+ * the fields asked for (ADR 0027: rating and flag share `xmp:Rating` + `digiKam:PickLabel`, label is `xmp:Label`) and
+ * `xmp:MetadataDate` change; Lightroom's `crs:` develop settings,
  * darktable's history and anything else stay as they were (same element order, comments and processing
  * instructions). A sidecar that does not parse is refused ([XmpException]); the caller keeps the change in the
  * database only.
@@ -119,14 +208,18 @@ object XmpWriter {
 
     /**
      * The new sidecar bytes (UTF-8, no BOM). [existing] = the current sidecar, or null to create one; [creatorTool]
-     * (`Reveal 0.2.0`) is written only into a new sidecar; [date] is ISO 8601 (`xmp:MetadataDate`).
+     * (`Reveal 0.2.0`) is written only into a new sidecar; [date] is ISO 8601 (`xmp:MetadataDate`). [write] = the
+     * culling fields the user changed: the others are left exactly as the sidecar has them (absent in a new one); an
+     * edit-only write passes none.
      */
+    @Suppress("LongParameterList", "CyclomaticComplexMethod")
     fun update(
         existing: ByteArray?,
         fields: XmpFields,
         creatorTool: String,
         date: String,
         extensions: List<XmpExtension> = emptyList(),
+        write: Set<CullingField> = CullingField.ALL,
     ): ByteArray {
         val document = if (existing == null || existing.all { it.toInt().toChar().isWhitespace() }) {
             XmpDom.parse(newSidecar(creatorTool).toByteArray(Charsets.UTF_8))
@@ -139,21 +232,28 @@ object XmpWriter {
         val target = descriptions.firstOrNull { d ->
             XmpDom.property(d, XmpNs.XMP, "Rating") != null || XmpDom.property(d, XmpNs.XMP, "Label") != null
         } ?: descriptions.first()
+        // Rating and flag share `xmp:Rating` (-1 = reject): writing either writes both properties of the pair.
+        val stars = CullingField.RATING in write || CullingField.FLAG in write
+        val label = CullingField.LABEL in write
         for (d in descriptions) {
-            XmpDom.removeProperty(d, XmpNs.XMP, "Rating")
-            XmpDom.removeProperty(d, XmpNs.XMP, "Label")
-            XmpDom.removeProperty(d, XmpNs.DIGIKAM, "PickLabel")
+            if (stars) {
+                XmpDom.removeProperty(d, XmpNs.XMP, "Rating")
+                XmpDom.removeProperty(d, XmpNs.DIGIKAM, "PickLabel")
+            }
+            if (label) XmpDom.removeProperty(d, XmpNs.XMP, "Label")
             XmpDom.removeProperty(d, XmpNs.XMP, "MetadataDate")
         }
-        val rating = if (fields.flag == PickFlag.REJECT) -1 else fields.rating
-        XmpDom.setAttribute(target, XmpNs.XMP, "Rating", rating.toString())
-        fields.label?.takeIf { it.isNotBlank() }?.let { XmpDom.setAttribute(target, XmpNs.XMP, "Label", it) }
-        val pick = when (fields.flag) {
-            PickFlag.NONE -> PICK_LABEL_NONE
-            PickFlag.PICK -> PICK_LABEL_ACCEPT
-            PickFlag.REJECT -> PICK_LABEL_REJECT
+        if (stars) {
+            val rating = if (fields.flag == PickFlag.REJECT) -1 else fields.rating
+            XmpDom.setAttribute(target, XmpNs.XMP, "Rating", rating.toString())
+            val pick = when (fields.flag) {
+                PickFlag.NONE -> PICK_LABEL_NONE
+                PickFlag.PICK -> PICK_LABEL_ACCEPT
+                PickFlag.REJECT -> PICK_LABEL_REJECT
+            }
+            XmpDom.setAttribute(target, XmpNs.DIGIKAM, "PickLabel", pick)
         }
-        XmpDom.setAttribute(target, XmpNs.DIGIKAM, "PickLabel", pick)
+        if (label) fields.label?.takeIf { it.isNotBlank() }?.let { XmpDom.setAttribute(target, XmpNs.XMP, "Label", it) }
         XmpDom.setAttribute(target, XmpNs.XMP, "MetadataDate", date)
         extensions.forEach { it.apply(document, target) }
         return XmlSerializer.serialize(document).toByteArray(Charsets.UTF_8)

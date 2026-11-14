@@ -110,4 +110,35 @@
     <string name="storage_clear_body">Miniaturas e prévias são refeitas quando você abre a biblioteca ou uma foto, e os arquivos do servidor são lidos de novo do seu servidor. Suas fotos e edições não são tocadas.</string>
     <string name="storage_cancel">Cancelar</string>
     <string name="storage_freed">%1$s liberados</string>
+    <!-- Este aparelho (Hoard ADR 0017, Reveal ADR 0027) -->
+    <string name="device_title">Este aparelho</string>
+    <string name="device_row_subtitle">Como o servidor conhece este celular, e o Hoard nele</string>
+    <string name="device_loading">Consultando o servidor…</string>
+    <string name="device_unreachable">Não foi possível falar com o servidor. Tente de novo quando este aparelho estiver na rede dele.</string>
+    <string name="device_retry">Tentar de novo</string>
+    <string name="device_section_this">No servidor</string>
+    <string name="device_unnamed">Aparelho sem nome</string>
+    <string name="device_unsupported">Este servidor é mais antigo e não agrupa os apps por celular. Atualize-o para ver o Hoard e o Reveal como um só celular.</string>
+    <string name="device_culling">Estrelas, escolhas e rótulos sincronizam um a um com o Hoard e seus outros aparelhos pelo servidor.</string>
+    <string name="device_section_phone">Apps neste celular</string>
+    <string name="device_phone_hint">Cada app se pareia com a própria chave. Agrupá-los diz ao servidor que rodam no mesmo celular.</string>
+    <string name="device_alone">Só este app por enquanto.</string>
+    <string name="device_leave">Não é o mesmo celular</string>
+    <string name="device_section_candidates">Este é um destes celulares?</string>
+    <string name="device_candidates_hint">Outros apps pareados com o servidor que ainda não estão agrupados com este.</string>
+    <string name="device_join">Mesmo celular</string>
+    <string name="device_claim_failed">Não foi possível agrupar</string>
+    <string name="device_claim_same_app">Esse celular já tem este app pareado. Remova o pareamento antigo no servidor primeiro.</string>
+    <string name="device_claim_not_found">Esse celular não está mais no servidor.</string>
+    <string name="device_claim_error">O servidor não conseguiu agrupar. Tente de novo daqui a pouco.</string>
+    <string name="device_ok">OK</string>
+    <string name="device_app_unknown">Outro app</string>
+    <string name="device_same_model">mesmo modelo</string>
+    <string name="device_app_variant">%1$s (%2$s)</string>
+    <string name="device_same_phone_title">Mesmo celular?</string>
+    <string name="device_same_phone_one">Este é o mesmo celular do %1$s em %2$s?</string>
+    <string name="device_same_phone_many">Qual destes é este celular?</string>
+    <string name="device_same_phone_yes">Mesmo celular</string>
+    <string name="device_same_phone_no">Outro aparelho</string>
+    <string name="device_same_phone_none">Nenhum</string>
 </resources>

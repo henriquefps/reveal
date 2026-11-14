@@ -19,6 +19,8 @@ import dev.hfps.reveal.data.db.SyncTriggers
 import dev.hfps.reveal.data.db.VersionEntity
 import dev.hfps.reveal.data.library.SidecarEditResult
 import dev.hfps.reveal.data.library.SidecarEdits
+import dev.hfps.reveal.data.library.SidecarImport
+import dev.hfps.reveal.data.model.CullingField
 import dev.hfps.reveal.data.model.FileRole
 import dev.hfps.reveal.data.model.MetadataState
 import dev.hfps.reveal.data.model.PhotoFormat
@@ -402,7 +404,7 @@ class LibraryIndexer(
                 val document = runCatching {
                     XmpDom.parse(tree.readBytes(job.sidecar.documentId, MAX_SIDECAR_BYTES))
                 }.getOrNull()
-                val fields = document?.let { runCatching { XmpReader.read(it) }.getOrNull() }
+                val fields = document?.let { runCatching { XmpReader.readCulling(it) }.getOrNull() }
                 val edits = document?.let { XmpDevelop.read(it) }
                 if (edits != null && edits.hasEdits) develop += DevelopJob(job.photoId, edits, job.sidecar.name)
                 job to fields
@@ -413,14 +415,8 @@ class LibraryIndexer(
                         // Unreadable: remember it so it is not re-read until it changes; the ratings stay.
                         photos.setSidecar(job.photoId, job.sidecar.documentId, job.sidecar.modified)
                     } else {
-                        photos.applyXmp(
-                            job.photoId,
-                            fields.rating,
-                            fields.label,
-                            fields.flag,
-                            job.sidecar.documentId,
-                            job.sidecar.modified,
-                        )
+                        // Only what changed in the file since it was last read, dated by its mtime (ADR 0027).
+                        SidecarImport.apply(db, job.photoId, fields, job.sidecar.documentId, job.sidecar.modified)
                     }
                 }
             }
@@ -433,7 +429,13 @@ class LibraryIndexer(
     // ------------------------------------------------------------------ 4. headers
 
     /** One photo's header read result. */
-    private class Header(val photoId: Long, val metadata: PhotoMetadata?, val embedded: XmpFields?)
+    private class Header(
+        val photoId: Long,
+        val metadata: PhotoMetadata?,
+        val embedded: XmpFields?,
+        /** The newest mtime of the files read (dates an embedded rating). */
+        val modified: Long? = null,
+    )
 
     private suspend fun readHeaders(
         sourceId: Long,
@@ -491,6 +493,10 @@ class LibraryIndexer(
         val unrated = photo.rating == 0 && photo.flag == PickFlag.NONE && photo.label == null
         if (photo.xmpDocumentId == null && unrated && embedded != XmpFields()) {
             photos.applyXmp(photo.id, embedded.rating, embedded.label, embedded.flag, null, null)
+            // A value inside the file is a decision as old as the file (ADR 0027): queued with its time, not now.
+            header.modified?.takeIf { it > 0 }?.let { at ->
+                db.cullingDao().date(photo.id, CullingField.entries.map { it.key }, at)
+            }
         }
     }
 
@@ -517,7 +523,7 @@ class LibraryIndexer(
         }
         val metadata = listOfNotNull(rawMetadata, rendered?.first).reduceOrNull { acc, next -> acc.orElse(next) }
         val embedded = raw?.second ?: rendered?.second ?: metadata?.rating?.let(::fromRatingTag)
-        return Header(photoId, metadata, embedded)
+        return Header(photoId, metadata, embedded, files.maxOfOrNull { it.modified })
     }
 
     /** The TIFF/XMP rating as read by `ImageInspector`: -1 = rejected. */

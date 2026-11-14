@@ -107,4 +107,37 @@
     <string name="storage_clear_body">Thumbnails and previews are made again when you open the library or a photo, and server files are read again from your server. Your photos and edits are not touched.</string>
     <string name="storage_cancel">Cancel</string>
     <string name="storage_freed">Freed %1$s</string>
+    <!-- This device (Hoard ADR 0017, Reveal ADR 0027) -->
+    <string name="device_title">This device</string>
+    <string name="device_row_subtitle">How the server knows this phone, and Hoard on it</string>
+    <string name="device_loading">Asking the server…</string>
+    <string name="device_unreachable">The server cannot be reached. Try again when this device is on its network.</string>
+    <string name="device_retry">Try again</string>
+    <string name="device_section_this">On the server</string>
+    <string name="device_unnamed">Unnamed device</string>
+    <string name="device_unsupported">This server is older and does not group apps by phone. Update it to see Hoard and Reveal as one phone.</string>
+    <string name="device_culling">Ratings, picks and labels sync one by one with Hoard and your other devices through the server.</string>
+    <string name="device_section_phone">Apps on this phone</string>
+    <string name="device_phone_hint">Each app pairs with its own key. Grouping them tells the server they run on the same phone.</string>
+    <string name="device_alone">Only this app so far.</string>
+    <string name="device_leave">Not the same phone</string>
+    <string name="device_section_candidates">Is this one of these phones?</string>
+    <string name="device_candidates_hint">Other apps paired with the server that are not grouped with this one yet.</string>
+    <string name="device_join">Same phone</string>
+    <string name="device_claim_failed">Could not group them</string>
+    <string name="device_claim_same_app">That phone already has this app paired. Remove the old pairing on the server first.</string>
+    <string name="device_claim_not_found">That phone is no longer on the server.</string>
+    <string name="device_claim_error">The server could not group them. Try again in a moment.</string>
+    <string name="device_ok">OK</string>
+    <string name="device_app_unknown">Another app</string>
+    <string name="device_same_model">same model</string>
+    <string name="device_app_reveal" translatable="false">Reveal</string>
+    <string name="device_app_hoard" translatable="false">Hoard</string>
+    <string name="device_app_variant">%1$s (%2$s)</string>
+    <string name="device_same_phone_title">Same phone?</string>
+    <string name="device_same_phone_one">Is this the same phone as %1$s on %2$s?</string>
+    <string name="device_same_phone_many">Which of these is this phone?</string>
+    <string name="device_same_phone_yes">Same phone</string>
+    <string name="device_same_phone_no">Another device</string>
+    <string name="device_same_phone_none">None</string>
 </resources>

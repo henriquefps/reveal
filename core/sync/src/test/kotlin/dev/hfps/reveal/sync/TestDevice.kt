@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import dev.hfps.image.source.FileFingerprint
+import dev.hfps.reveal.data.db.CullingPendingEntity
 import dev.hfps.reveal.data.db.PhotoEntity
 import dev.hfps.reveal.data.db.PhotoFileEntity
 import dev.hfps.reveal.data.db.RevealDatabase
@@ -12,10 +13,12 @@ import dev.hfps.reveal.data.db.VersionEntity
 import dev.hfps.reveal.data.edit.EditRepository
 import dev.hfps.reveal.data.model.FileRole
 import dev.hfps.reveal.data.model.PhotoFormat
+import dev.hfps.reveal.data.model.PickFlag
 import dev.hfps.reveal.data.model.SourceState
 import dev.hfps.reveal.data.preset.PresetRepository
 import dev.hfps.reveal.pipeline.recipe.Recipe
 import dev.hfps.reveal.pipeline.recipe.RecipeDiff
+import dev.hfps.reveal.sync.account.ClientDevice
 import dev.hfps.reveal.sync.api.SyncApi
 import dev.hfps.reveal.sync.engine.SyncEngine
 import dev.hfps.reveal.sync.engine.SyncReport
@@ -31,12 +34,13 @@ class TestDevice(
     private val serverId: String,
     settings: List<SyncedSetting> = emptyList(),
     var now: Long = 1_700_000_000_000L,
+    device: ClientDevice? = null,
 ) : AutoCloseable {
     private val context = ApplicationProvider.getApplicationContext<Context>()
     val db: RevealDatabase = RevealDatabase.configure(Room.inMemoryDatabaseBuilder(context, RevealDatabase::class.java))
         .allowMainThreadQueries().build()
     val store = SyncStore(db, settings) { now }
-    val engine = SyncEngine(db, store) { now }
+    val engine = SyncEngine(db, store, device = device) { now }
     val edits = EditRepository(db) { now }
     val presets = PresetRepository(
         db,
@@ -168,6 +172,38 @@ class TestDevice(
     }
 
     fun pending(): Int = runBlocking { db.syncDao().dirty(10_000).size }
+
+    // ------------------------------------------------------------------ culling (ADR 0027)
+
+    fun photo(photoId: Long): PhotoEntity = runBlocking { checkNotNull(db.photoDao().get(photoId)) }
+
+    /** A rating tap in the library (the path the UI takes); [at] dates the decision instead of the wall clock. */
+    fun rate(photoId: Long, rating: Int, at: Long? = null) = runBlocking {
+        db.photoDao().setRating(listOf(photoId), rating)
+        at?.let { date(photoId, "rating", it) }
+    }
+
+    fun flag(photoId: Long, flag: PickFlag, at: Long? = null) = runBlocking {
+        db.photoDao().setFlag(listOf(photoId), flag)
+        at?.let { date(photoId, "flag", it) }
+    }
+
+    fun label(photoId: Long, label: String?, at: Long? = null) = runBlocking {
+        db.photoDao().setCulling(photoId, photo(photoId).rating, label, photo(photoId).flag)
+        at?.let { date(photoId, "label", it) }
+    }
+
+    /** Dates a queued user decision (keeps it a decision made looking at the server's value, not a blind one). */
+    private fun date(photoId: Long, field: String, at: Long) {
+        db.openHelper.writableDatabase.execSQL(
+            "UPDATE culling_pending SET modified_at = ? WHERE photo_id = ? AND field = ?",
+            arrayOf<Any>(at, photoId, field),
+        )
+    }
+
+    fun cullingPending(photoId: Long): List<CullingPendingEntity> = runBlocking { db.cullingDao().pendingOf(photoId) }
+
+    fun queued(): Int = runBlocking { db.cullingDao().pendingCount() }
 
     override fun close() = db.close()
 }

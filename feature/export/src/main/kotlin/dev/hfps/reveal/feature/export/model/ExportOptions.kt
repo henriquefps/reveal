@@ -1,25 +1,53 @@
+// Bit depths (8, 10, 16) are the formats' own.
+@file:Suppress("MagicNumber")
+
 package dev.hfps.reveal.feature.export.model
 
 import dev.hfps.reveal.pipeline.cpu.OutputSpace
 import dev.hfps.reveal.pipeline.export.ExportSize
+import dev.hfps.reveal.pipeline.export.OutputSharpening
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
 /**
- * Output file formats (docs/adr/0009). PNG, 16-bit TIFF and an original copy land in M5: add an entry, its encoder
- * (`ImageEncoders`) and its strings; nothing else switches on the list.
+ * Output file formats (docs/adr/0009 "Formats"). [depths] are the bit depths the format offers (the first is the
+ * default); [rendered] is false for the original copy (no develop, no encoder). A new format: an entry, its writer in
+ * `ExportEngine`, its strings and its chip in the sheet.
  */
 @Serializable
-enum class ExportFormat(val mimeType: String, val extension: String, val hasQuality: Boolean) {
+enum class ExportFormat(
+    val mimeType: String,
+    val extension: String,
+    val hasQuality: Boolean,
+    val depths: List<Int> = listOf(8),
+    val rendered: Boolean = true,
+) {
     @SerialName("jpeg")
     JPEG("image/jpeg", "jpg", hasQuality = true),
 
+    /** HEIC: 8-bit (sRGB through the platform's HeifWriter, P3 through Reveal's container) or 10-bit. */
     @SerialName("heif")
-    HEIF("image/heic", "heic", hasQuality = true),
+    HEIF("image/heic", "heic", hasQuality = true, depths = listOf(8, 10)),
+
+    /** AV1 still image (Reveal's container), 8 or 10 bits, where the device has an AV1 encoder. */
+    @SerialName("avif")
+    AVIF("image/avif", "avif", hasQuality = true, depths = listOf(8, 10)),
+
+    /** Lossless PNG, 8 or 16 bits per channel. */
+    @SerialName("png")
+    PNG("image/png", "png", hasQuality = false, depths = listOf(8, 16)),
+
+    /** 16-bit TIFF (Deflate) for further editing. */
+    @SerialName("tiff")
+    TIFF("image/tiff", "tif", hasQuality = false, depths = listOf(16)),
+
+    /** The original file as it is (RAW or JPEG), with the edit in an XMP sidecar if asked: no develop. */
+    @SerialName("original")
+    ORIGINAL("application/octet-stream", "", hasQuality = false, rendered = false),
 }
 
-/** The colour space of the file (an ICC profile in JPEG). HEIF is sRGB in M1 (docs/adr/0009, "HEIF"). */
+/** The colour space of the file (its ICC profile; HEIF/AVIF also say it in `nclx`, docs/adr/0009). */
 @Serializable
 enum class ExportColour(val space: OutputSpace) {
     @SerialName("srgb")
@@ -106,13 +134,22 @@ data class ExportOptions(
     val metadata: MetadataOptions = MetadataOptions(),
     val destination: ExportDestination = ExportDestination.Pictures,
     val naming: NamingOptions = NamingOptions(),
+    /** Bits per channel for the formats that offer a choice ([ExportFormat.depths]); others use their only depth. */
+    val bitDepth: Int = 8,
+    /** Output sharpening at the output size; null = off (the default). */
+    val sharpening: OutputSharpening? = null,
+    /** [ExportFormat.ORIGINAL]: also write an XMP sidecar carrying the edit next to the copy. */
+    val originalSidecar: Boolean = true,
 ) {
     init {
         require(quality in 1..MAX_QUALITY) { "quality must be 1..100" }
     }
 
-    /** The colour actually written: HEIF is sRGB in M1. */
-    val effectiveColour: ExportColour get() = if (format == ExportFormat.HEIF) ExportColour.SRGB else colour
+    /** The colour actually written (every rendered format embeds its profile). */
+    val effectiveColour: ExportColour get() = colour
+
+    /** The bit depth actually written: [bitDepth] when [format] offers it, else the format's default. */
+    val effectiveDepth: Int get() = if (bitDepth in format.depths) bitDepth else format.depths.first()
 
     fun encode(): String = JSON.encodeToString(serializer(), this)
 

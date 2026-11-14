@@ -61,9 +61,10 @@ object ColorMath {
     }
 
     /** Bradford chromatic adaptation taking XYZ under [from] to XYZ under [to]. */
-    fun adaptation(from: Chromaticity, to: Chromaticity): Matrix3 {
-        val source = xyz(from)
-        val target = xyz(to)
+    fun adaptation(from: Chromaticity, to: Chromaticity): Matrix3 = adaptation(xyz(from), xyz(to))
+
+    /** Bradford chromatic adaptation between two whites given as XYZ (an ICC profile's exact D50, for example). */
+    fun adaptation(source: Triple<Double, Double, Double>, target: Triple<Double, Double, Double>): Matrix3 {
         val (fx, fy, fz) = bradford.apply(source.first, source.second, source.third)
         val (tx, ty, tz) = bradford.apply(target.first, target.second, target.third)
         val scale = Matrix3(tx / fx, 0.0, 0.0, 0.0, ty / fy, 0.0, 0.0, 0.0, tz / fz)

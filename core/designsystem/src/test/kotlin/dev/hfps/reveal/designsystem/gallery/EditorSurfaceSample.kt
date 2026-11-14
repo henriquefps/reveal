@@ -1,8 +1,7 @@
 @file:Suppress("MagicNumber")
 
-package dev.hfps.reveal.ui.gallery
+package dev.hfps.reveal.designsystem.gallery
 
-import androidx.annotation.StringRes
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -26,10 +25,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import dev.hfps.reveal.R
 import dev.hfps.reveal.designsystem.components.Eyebrow
 import dev.hfps.reveal.designsystem.icons.PhosphorFill
 import dev.hfps.reveal.designsystem.icons.PhosphorRegular
@@ -60,7 +57,7 @@ internal fun EditorSurfaceSample(modifier: Modifier = Modifier) {
             contentAlignment = Alignment.Center,
         ) {
             Text(
-                text = stringResource(R.string.editor_photo_area),
+                text = "Photo area: neutral grey, zero chroma",
                 style = RevealTheme.typography.monoSmall,
                 color = Color.Black,
             )
@@ -72,33 +69,33 @@ internal fun EditorSurfaceSample(modifier: Modifier = Modifier) {
             border = BorderStroke(1.dp, c.hairline),
         ) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Eyebrow(stringResource(R.string.editor_panel_light))
-                ValueRow(R.string.editor_exposure, R.string.editor_exposure_value, 0.7f)
-                ValueRow(R.string.editor_contrast, R.string.editor_contrast_value, 0.44f)
-                ValueRow(R.string.editor_highlights, R.string.editor_highlights_value, 0.18f)
+                Eyebrow("Light")
+                ValueRow("Exposure", "+0.70", 0.7f)
+                ValueRow("Contrast", "−12", 0.44f)
+                ValueRow("Highlights", "−64", 0.18f)
             }
         }
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceEvenly,
         ) {
-            Tool(PhosphorFill.Sun, R.string.tool_light, active = true)
-            Tool(PhosphorRegular.Palette, R.string.tool_colour)
-            Tool(PhosphorRegular.Sparkle, R.string.tool_effects)
-            Tool(PhosphorRegular.Crop, R.string.tool_crop)
-            Tool(PhosphorRegular.MagicWand, R.string.tool_masks)
-            Tool(PhosphorRegular.Drop, R.string.tool_heal)
+            Tool(PhosphorFill.Sun, "Light", active = true)
+            Tool(PhosphorRegular.Palette, "Colour")
+            Tool(PhosphorRegular.Sparkle, "Effects")
+            Tool(PhosphorRegular.Crop, "Crop")
+            Tool(PhosphorRegular.MagicWand, "Masks")
+            Tool(PhosphorRegular.Drop, "Heal")
         }
     }
 }
 
 @Composable
-private fun ValueRow(@StringRes label: Int, @StringRes value: Int, fraction: Float) {
+private fun ValueRow(label: String, value: String, fraction: Float) {
     val c = RevealTheme.colors
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            Text(stringResource(label), style = RevealTheme.typography.ui, color = c.cardForeground)
-            Text(stringResource(value), style = RevealTheme.typography.value, color = c.cardForeground)
+            Text(label, style = RevealTheme.typography.ui, color = c.cardForeground)
+            Text(value, style = RevealTheme.typography.value, color = c.cardForeground)
         }
         Box(
             modifier = Modifier
@@ -118,7 +115,7 @@ private fun ValueRow(@StringRes label: Int, @StringRes value: Int, fraction: Flo
 }
 
 @Composable
-private fun Tool(icon: ImageVector, @StringRes label: Int, active: Boolean = false) {
+private fun Tool(icon: ImageVector, label: String, active: Boolean = false) {
     val color = if (active) RevealTheme.colors.primary else RevealTheme.colors.mutedForeground
     Column(
         modifier = Modifier.padding(vertical = 4.dp),
@@ -126,6 +123,6 @@ private fun Tool(icon: ImageVector, @StringRes label: Int, active: Boolean = fal
         verticalArrangement = Arrangement.spacedBy(2.dp),
     ) {
         Icon(imageVector = icon, contentDescription = null, modifier = Modifier.size(24.dp), tint = color)
-        Text(stringResource(label), style = RevealTheme.typography.ui.copy(fontSize = 12.sp), color = color)
+        Text(label, style = RevealTheme.typography.ui.copy(fontSize = 12.sp), color = color)
     }
 }

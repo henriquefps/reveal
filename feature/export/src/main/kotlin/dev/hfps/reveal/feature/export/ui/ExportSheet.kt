@@ -11,6 +11,7 @@ import android.text.format.Formatter
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
@@ -62,6 +63,7 @@ import dev.hfps.reveal.designsystem.icons.PhosphorRegular
 import dev.hfps.reveal.designsystem.theme.RevealTheme
 import dev.hfps.reveal.feature.export.R
 import dev.hfps.reveal.feature.export.destination.ShareCache
+import dev.hfps.reveal.feature.export.encode.EncoderSupport
 import dev.hfps.reveal.feature.export.engine.ExportFailure
 import dev.hfps.reveal.feature.export.model.BuiltInExportPreset
 import dev.hfps.reveal.feature.export.model.ExportColour
@@ -70,9 +72,14 @@ import dev.hfps.reveal.feature.export.model.ExportFormat
 import dev.hfps.reveal.feature.export.model.ExportNaming
 import dev.hfps.reveal.feature.export.model.ExportOptions
 import dev.hfps.reveal.feature.export.model.ExportPreset
+import dev.hfps.reveal.feature.export.model.ExportPresets
 import dev.hfps.reveal.feature.export.model.MetadataLevel
 import dev.hfps.reveal.feature.export.model.NameTemplate
+import dev.hfps.reveal.feature.export.model.OriginalCopy
 import dev.hfps.reveal.pipeline.export.ExportSize
+import dev.hfps.reveal.pipeline.export.OutputSharpening
+import dev.hfps.reveal.pipeline.export.SharpenAmount
+import dev.hfps.reveal.pipeline.export.SharpenMedium
 import kotlin.math.roundToInt
 
 /** Test tags of the export sheet (instrumented tests are locale-independent). */
@@ -86,6 +93,14 @@ object ExportTags {
     const val PROGRESS = "export_progress"
     const val FORMAT_JPEG = "export_format_jpeg"
     const val FORMAT_HEIF = "export_format_heif"
+    const val FORMAT_AVIF = "export_format_avif"
+    const val FORMAT_PNG = "export_format_png"
+    const val FORMAT_TIFF = "export_format_tiff"
+    const val FORMAT_ORIGINAL = "export_format_original"
+    const val COLOUR_SRGB = "export_colour_srgb"
+    const val COLOUR_P3 = "export_colour_p3"
+    const val ORIGINAL_SIDECAR = "export_original_sidecar"
+    const val SHARPEN_OFF = "export_sharpen_off"
     const val DEST_PICTURES = "export_dest_pictures"
     const val DEST_FOLDER = "export_dest_folder"
     const val DEST_SHARE = "export_dest_share"
@@ -97,6 +112,14 @@ object ExportTags {
 
     /** The chip of the preset [key] (`builtin:instagram`, `builtin:web`, `builtin:full` or a user preset's uuid). */
     fun preset(key: String) = "export_preset_$key"
+
+    /** The chip of bit depth [bits]. */
+    fun depth(bits: Int) = "export_depth_$bits"
+
+    /** The chip of sharpening medium [medium] / level [amount]. */
+    fun sharpen(medium: SharpenMedium) = "export_sharpen_${medium.name.lowercase()}"
+
+    fun sharpenAmount(amount: SharpenAmount) = "export_sharpen_amount_${amount.name.lowercase()}"
 }
 
 /**
@@ -218,6 +241,7 @@ private fun OptionsSection(state: ExportUiState, actions: ExportSheetActions) {
         val set = actions.onOptions
         PresetsSection(state, actions)
         FormatSection(state, set)
+        if (!options.format.rendered) OriginalSection(state, set)
         if (options.format.hasQuality) {
             RevealSlider(
                 label = stringResource(R.string.export_quality),
@@ -228,10 +252,14 @@ private fun OptionsSection(state: ExportUiState, actions: ExportSheetActions) {
                 onReset = { set(options.copy(quality = ExportOptions.DEFAULT_QUALITY)) },
             )
         }
-        SizeSection(state, set)
-        MetadataSection(state, set)
+        if (options.format.rendered) {
+            SizeSection(state, set)
+            SharpeningSection(state, set)
+            MetadataSection(state, set)
+        }
         DestinationSection(state, actions)
-        NamingSection(state, set)
+        // The original copy keeps the original's name.
+        if (options.format.rendered) NamingSection(state, set)
         EstimateRow(state)
         if (state.previewOnly > 0) {
             Note(
@@ -371,50 +399,165 @@ private fun PresetsSection(state: ExportUiState, actions: ExportSheetActions) {
     }
 }
 
+/** The format chips the device can write (HEIF and AVIF only with an encoder), with their notes. */
 @Composable
 private fun FormatSection(state: ExportUiState, set: (ExportOptions) -> Unit) {
     Column(verticalArrangement = Arrangement.spacedBy(SECTION_GAP)) {
         val options = state.options
-        val heif = state.support?.heif ?: false
+        val support = state.support
+        fun pick(format: ExportFormat) = set(ExportPresets.usable(options.copy(format = format), support))
         Eyebrow(stringResource(R.string.export_format))
         ChipRow {
+            for ((format, tag) in offeredFormats(support)) {
+                val label = if (format == ExportFormat.ORIGINAL) {
+                    stringResource(R.string.export_format_original)
+                } else {
+                    format.name
+                }
+                RevealChip(label, options.format == format, { pick(format) }, Modifier.testTag(tag))
+            }
+        }
+        formatNote(options.format, support)?.let { Note(stringResource(it)) }
+        if (options.format.rendered) ColourAndDepth(state, set)
+    }
+}
+
+/** The format chips: HEIF and AVIF only once the encoders are known to exist. */
+private fun offeredFormats(support: EncoderSupport?): List<Pair<ExportFormat, String>> =
+    FORMAT_CHIPS.filter { (format, _) ->
+        if (support == null) format != ExportFormat.HEIF && format != ExportFormat.AVIF else support.offers(format)
+    }
+
+/** The note under the format chips, if any. */
+private fun formatNote(format: ExportFormat, support: EncoderSupport?): Int? = when {
+    support != null && !support.heif -> R.string.export_heif_unsupported
+    format == ExportFormat.AVIF -> R.string.export_avif_note
+    format == ExportFormat.PNG || format == ExportFormat.TIFF -> R.string.export_lossless_note
+    else -> null
+}
+
+/** Colour space (every rendered format embeds its profile) and bit depth (the depths this device can write). */
+@Composable
+private fun ColourAndDepth(state: ExportUiState, set: (ExportOptions) -> Unit) {
+    val options = state.options
+    val support = state.support
+    val p3 = support == null || support.depths(options.format, ExportColour.DISPLAY_P3).isNotEmpty()
+    Eyebrow(stringResource(R.string.export_colour))
+    ChipRow {
+        RevealChip(
+            "sRGB",
+            options.colour == ExportColour.SRGB,
+            { set(ExportPresets.usable(options.copy(colour = ExportColour.SRGB), support)) },
+            Modifier.testTag(ExportTags.COLOUR_SRGB),
+        )
+        if (p3) {
             RevealChip(
-                "JPEG",
-                options.format == ExportFormat.JPEG,
-                { set(options.copy(format = ExportFormat.JPEG)) },
-                Modifier.testTag(ExportTags.FORMAT_JPEG),
+                "Display P3",
+                options.colour == ExportColour.DISPLAY_P3,
+                { set(ExportPresets.usable(options.copy(colour = ExportColour.DISPLAY_P3), support)) },
+                Modifier.testTag(ExportTags.COLOUR_P3),
             )
-            if (heif) {
+        }
+    }
+    if (options.colour == ExportColour.DISPLAY_P3) Note(stringResource(R.string.export_colour_p3_note))
+    val depths = support?.depths(options.format, options.colour) ?: options.format.depths
+    if (options.format.depths.size > 1 || options.format == ExportFormat.TIFF) {
+        Eyebrow(stringResource(R.string.export_depth))
+        ChipRow {
+            for (bits in depths) {
                 RevealChip(
-                    "HEIF",
-                    options.format == ExportFormat.HEIF,
-                    { set(options.copy(format = ExportFormat.HEIF)) },
-                    Modifier.testTag(ExportTags.FORMAT_HEIF),
+                    stringResource(R.string.export_depth_bits, bits),
+                    options.effectiveDepth == bits,
+                    { set(options.copy(bitDepth = bits)) },
+                    Modifier.testTag(ExportTags.depth(bits)),
                 )
             }
         }
-        when {
-            state.support != null && !heif -> Note(stringResource(R.string.export_heif_unsupported))
-            options.format == ExportFormat.HEIF -> Note(stringResource(R.string.export_heif_note))
-        }
-        if (options.format == ExportFormat.JPEG) {
-            Eyebrow(stringResource(R.string.export_colour))
-            ChipRow {
-                RevealChip(
-                    "sRGB",
-                    options.colour == ExportColour.SRGB,
-                    { set(options.copy(colour = ExportColour.SRGB)) },
-                )
-                RevealChip(
-                    "Display P3",
-                    options.colour == ExportColour.DISPLAY_P3,
-                    { set(options.copy(colour = ExportColour.DISPLAY_P3)) },
-                )
-            }
-            if (options.colour == ExportColour.DISPLAY_P3) Note(stringResource(R.string.export_colour_p3_note))
+        if (depths.size < options.format.depths.size) {
+            Note(stringResource(R.string.export_depth_unsupported, options.format.depths.max()))
         }
     }
 }
+
+/** The original copy: what it is, and whether an XMP sidecar with the edit goes with it. */
+@Composable
+private fun OriginalSection(state: ExportUiState, set: (ExportOptions) -> Unit) {
+    val options = state.options
+    Column(verticalArrangement = Arrangement.spacedBy(SECTION_GAP)) {
+        Note(stringResource(R.string.export_original_note))
+        Box(Modifier.testTag(ExportTags.ORIGINAL_SIDECAR)) {
+            SwitchRow(stringResource(R.string.export_original_sidecar), options.originalSidecar) {
+                set(options.copy(originalSidecar = it))
+            }
+        }
+        if (options.originalSidecar && !OriginalCopy.sidecarFits(options.destination)) {
+            Note(stringResource(R.string.export_original_sidecar_gallery), warning = true)
+        }
+    }
+}
+
+/** Output sharpening (docs/adr/0009): off, or a medium and a level; applied at the export's size. */
+@Composable
+private fun SharpeningSection(state: ExportUiState, set: (ExportOptions) -> Unit) {
+    val options = state.options
+    val sharpening = options.sharpening
+    Column(verticalArrangement = Arrangement.spacedBy(SECTION_GAP)) {
+        Eyebrow(stringResource(R.string.export_sharpening))
+        ChipRow {
+            RevealChip(
+                stringResource(R.string.export_sharpening_off),
+                sharpening == null,
+                { set(options.copy(sharpening = null)) },
+                Modifier.testTag(ExportTags.SHARPEN_OFF),
+            )
+            for ((medium, label) in SHARPEN_MEDIA) {
+                RevealChip(
+                    stringResource(label),
+                    sharpening?.medium == medium,
+                    {
+                        val amount = sharpening?.amount ?: SharpenAmount.STANDARD
+                        set(options.copy(sharpening = OutputSharpening(medium, amount)))
+                    },
+                    Modifier.testTag(ExportTags.sharpen(medium)),
+                )
+            }
+        }
+        if (sharpening != null) {
+            ChipRow {
+                for ((amount, label) in SHARPEN_AMOUNTS) {
+                    RevealChip(
+                        stringResource(label),
+                        sharpening.amount == amount,
+                        { set(options.copy(sharpening = sharpening.copy(amount = amount))) },
+                        Modifier.testTag(ExportTags.sharpenAmount(amount)),
+                    )
+                }
+            }
+            Note(stringResource(R.string.export_sharpening_note))
+        }
+    }
+}
+
+private val FORMAT_CHIPS = listOf(
+    ExportFormat.JPEG to ExportTags.FORMAT_JPEG,
+    ExportFormat.HEIF to ExportTags.FORMAT_HEIF,
+    ExportFormat.AVIF to ExportTags.FORMAT_AVIF,
+    ExportFormat.PNG to ExportTags.FORMAT_PNG,
+    ExportFormat.TIFF to ExportTags.FORMAT_TIFF,
+    ExportFormat.ORIGINAL to ExportTags.FORMAT_ORIGINAL,
+)
+
+private val SHARPEN_MEDIA = listOf(
+    SharpenMedium.SCREEN to R.string.export_sharpening_screen,
+    SharpenMedium.MATTE to R.string.export_sharpening_matte,
+    SharpenMedium.GLOSSY to R.string.export_sharpening_glossy,
+)
+
+private val SHARPEN_AMOUNTS = listOf(
+    SharpenAmount.LOW to R.string.export_sharpening_low,
+    SharpenAmount.STANDARD to R.string.export_sharpening_standard,
+    SharpenAmount.HIGH to R.string.export_sharpening_high,
+)
 
 private enum class SizeChoice { FULL, WEB, INSTAGRAM, LONG_EDGE, MEGAPIXELS, PERCENT }
 

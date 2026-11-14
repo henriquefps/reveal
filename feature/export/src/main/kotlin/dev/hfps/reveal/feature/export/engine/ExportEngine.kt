@@ -15,6 +15,15 @@ import dev.hfps.image.source.BlockCachedSource
 import dev.hfps.image.source.SourceInputStream
 import dev.hfps.image.source.readRange
 import dev.hfps.image.standard.StandardDecoder
+import dev.hfps.image.write.ColourInfo
+import dev.hfps.image.write.HeifContainer
+import dev.hfps.image.write.IccProfiles
+import dev.hfps.image.write.ImageCodec
+import dev.hfps.image.write.ImageMetadata
+import dev.hfps.image.write.OutputProfile
+import dev.hfps.image.write.PngWriter
+import dev.hfps.image.write.TiffFields
+import dev.hfps.image.write.TiffWriter
 import dev.hfps.reveal.data.export.Authorship
 import dev.hfps.reveal.data.mask.AiMasks
 import dev.hfps.reveal.data.mask.MaskInputs
@@ -23,6 +32,7 @@ import dev.hfps.reveal.feature.export.destination.DestinationUnavailableExceptio
 import dev.hfps.reveal.feature.export.destination.Destinations
 import dev.hfps.reveal.feature.export.encode.EmbeddedMetadata
 import dev.hfps.reveal.feature.export.encode.ImageEncoders
+import dev.hfps.reveal.feature.export.encode.TileCodecEncoder
 import dev.hfps.reveal.feature.export.metadata.ExifWriter
 import dev.hfps.reveal.feature.export.metadata.OutputFacts
 import dev.hfps.reveal.feature.export.metadata.SourceMetadata
@@ -32,8 +42,10 @@ import dev.hfps.reveal.feature.export.model.ExportDestination
 import dev.hfps.reveal.feature.export.model.ExportFormat
 import dev.hfps.reveal.feature.export.model.ExportNaming
 import dev.hfps.reveal.feature.export.model.ExportOptions
+import dev.hfps.reveal.feature.export.model.OriginalCopy
 import dev.hfps.reveal.pipeline.cpu.DevelopParams
 import dev.hfps.reveal.pipeline.cpu.OutputSettings
+import dev.hfps.reveal.pipeline.cpu.OutputSharpenOp
 import dev.hfps.reveal.pipeline.cpu.OutputSpace
 import dev.hfps.reveal.pipeline.export.ExportPlan
 import dev.hfps.reveal.pipeline.gl.GlesRequirementException
@@ -54,6 +66,8 @@ import dev.hfps.reveal.pipeline.recipe.MaskComponent
 import dev.hfps.reveal.pipeline.recipe.Recipe
 import java.io.File
 import java.io.IOException
+import java.io.InputStream
+import java.io.OutputStream
 import java.util.UUID
 
 /** One photo to export: the file to develop, its recipe and what names and metadata need. */
@@ -66,6 +80,8 @@ data class ExportItem(
     val renderedUri: Uri? = null,
     /** Number of this item in the "sequence" name template. */
     val sequence: Int = 1,
+    /** [ExportFormat.ORIGINAL] with a sidecar: the XMP to write next to the copy (the edit, culling), else null. */
+    val sidecar: ByteArray? = null,
 )
 
 /** Why an item failed; each has a clear status in the sheet and the notification. */
@@ -94,7 +110,9 @@ data class ExportResult(
     val decodeMs: Long,
     val renderMs: Long,
     val encodeMs: Long,
-    val stats: TiledRenderStats,
+    val stats: TiledRenderStats?,
+    /** Further files the item wrote (the original copy's XMP sidecar). */
+    val extra: List<Uri> = emptyList(),
 )
 
 /**
@@ -124,6 +142,7 @@ class ExportEngine(
         progress: (Float) -> Unit = {},
         onPartial: (Uri) -> Unit = {},
     ): ExportResult {
+        if (!options.format.rendered) return copyOriginal(item, options, cancel, progress, onPartial)
         val input = try {
             ImageInput.fromUri(context.contentResolver, item.uri, item.name)
         } catch (e: IllegalArgumentException) {
@@ -156,11 +175,14 @@ class ExportEngine(
         }
         val decoded = System.nanoTime()
         val colour = options.effectiveColour
+        val route = Route.of(options)
+        val work = File(context.cacheDir, "export").apply { mkdirs() }
         val plan: ExportPlan
-        val sink: BitmapSink
+        val output: RenderOutput
         val stats: TiledRenderStats
         try {
-            // Defringe, Detail and texture read a neighbourhood: each tile's input carries their apron.
+            // Defringe, Detail and texture read a neighbourhood: each tile's input carries their apron; output
+            // sharpening reads one at the output size (docs/adr/0009 "Output sharpening").
             val reach = DevelopParams.reach(item.recipe)
             plan = ExportPlan.of(
                 source.width,
@@ -171,10 +193,11 @@ class ExportEngine(
                 reach,
                 source.colour.lens,
                 item.recipe.optics,
+                outputMargin = OutputSharpenOp.radius(options.sharpening),
             )
-            checkStorage(plan, options)
-            sink = try {
-                BitmapSink(plan.output.width, plan.output.height, colourSpace(colour.space))
+            checkStorage(plan, options, route)
+            output = try {
+                RenderOutput.create(route, plan.output.width, plan.output.height, colourSpace(colour.space), work)
             } catch (e: OutOfMemoryError) {
                 throw ExportException(ExportFailure.OUT_OF_MEMORY, e)
             }
@@ -185,22 +208,24 @@ class ExportEngine(
                     item.recipe,
                     plan,
                     OutputSettings(colour.space),
-                    sink,
+                    output.sink,
+                    high = route.high,
                     masks = context,
                     // Remove fills (docs/adr/0023): the editor's when it made them for the same original.
                     heals = RemoveFills.shared,
                     cancel = cancel,
+                    sharpen = options.sharpening,
                 ) {
                     progress(it * RENDER_SHARE)
                 }
             } catch (e: RenderCancelledException) {
-                sink.bitmap.recycle()
+                output.close()
                 throw e
             } catch (e: GlesRequirementException) {
-                sink.bitmap.recycle()
+                output.close()
                 throw ExportException(ExportFailure.GPU_UNSUPPORTED, e)
             } finally {
-                sink.releaseBands()
+                output.releaseBands()
             }
         } finally {
             // The full-size linear image (about 150-350 MB native) goes as soon as the render is done.
@@ -208,7 +233,6 @@ class ExportEngine(
             masks?.close()
         }
         val rendered = System.nanoTime()
-        val bitmap = sink.bitmap
         val fileName = ExportNaming.fileName(
             item.name,
             metadata.snapshot?.field(DATE_TIME_ORIGINAL)?.text ?: metadata.fallback?.captureTime,
@@ -216,24 +240,16 @@ class ExportEngine(
             options.naming,
             options.format,
         )
-        val work = File(context.cacheDir, "export").apply { mkdirs() }
         val encoded = File(work, "${UUID.randomUUID()}.${options.format.extension}")
         try {
-            val facts = OutputFacts(bitmap.width, bitmap.height, colour, software)
-            val embedded = EmbeddedMetadata(
-                ExifWriter.build(metadata, facts, options.metadata, authorship),
-                if (options.format == ExportFormat.JPEG) {
-                    XmpPacket.build(options.metadata, authorship, metadata.rating, software)
-                } else {
-                    null
-                },
-            )
+            val facts = OutputFacts(plan.output.width, plan.output.height, colour, software)
+            val xmp = if (route.xmp) XmpPacket.build(options.metadata, authorship, metadata.rating, software) else null
             try {
-                ImageEncoders.of(options.format).encode(bitmap, options.quality, embedded, encoded)
+                output.use {
+                    encode(route, it, options, EmbeddedFields(metadata, facts, authorship, xmp), encoded, cancel)
+                }
             } catch (e: IOException) {
                 throw ExportException(ExportFailure.LOW_STORAGE.takeIf { lowSpace() } ?: ExportFailure.FAILED, e)
-            } finally {
-                bitmap.recycle()
             }
             progress(ENCODE_SHARE)
             val encodedAt = System.nanoTime()
@@ -255,10 +271,140 @@ class ExportEngine(
                 encodeMs = (encodedAt - rendered) / NANOS_PER_MS,
                 stats = stats,
             )
-            Log.i(TAG, "exported ${plan.output.width}x${plan.output.height} ${options.format} $result")
+            Log.i(TAG, "exported ${plan.output.width}x${plan.output.height} ${options.format} $route $result")
             return result
         } finally {
             encoded.delete()
+        }
+    }
+
+    /** What an encoder embeds besides the pixels. */
+    private class EmbeddedFields(
+        val source: SourceMetadata,
+        val facts: OutputFacts,
+        val authorship: Authorship,
+        val xmp: String?,
+    )
+
+    /** Encodes the developed [output] as [route] says into [target] (a new file in the cache). */
+    @Suppress("LongParameterList")
+    private fun encode(
+        route: Route,
+        output: RenderOutput,
+        options: ExportOptions,
+        fields: EmbeddedFields,
+        target: File,
+        cancel: () -> Boolean,
+    ) {
+        val level = options.metadata
+        val icc = IccProfiles.of(profile(options.effectiveColour))
+        when (route) {
+            Route.BITMAP_JPEG, Route.BITMAP_HEIF -> {
+                val exif = ExifWriter.build(fields.source, fields.facts, level, fields.authorship)
+                val bitmap = checkNotNull(output.bitmap)
+                ImageEncoders.of(
+                    options.format,
+                ).encode(bitmap, options.quality, EmbeddedMetadata(exif, fields.xmp), target)
+            }
+
+            Route.PNG_8, Route.PNG_16 -> {
+                val exif = ExifWriter.build(fields.source, fields.facts, level, fields.authorship)
+                target.outputStream().buffered(BUFFER).use { out ->
+                    PngWriter.write(
+                        checkNotNull(output.raster),
+                        ImageMetadata(icc, exif, fields.xmp),
+                        out,
+                        cancel = cancel,
+                    )
+                }
+            }
+
+            Route.TIFF_16 -> {
+                val tiff = ExifWriter.fields(fields.source, fields.facts, level, fields.authorship) ?: TiffFields()
+                TiffWriter.write(
+                    checkNotNull(output.raster),
+                    tiff,
+                    ImageMetadata(icc, null, fields.xmp),
+                    target,
+                    cancel = cancel,
+                )
+            }
+
+            Route.HEIF_TILES, Route.AVIF_TILES -> {
+                val codec = if (route == Route.HEIF_TILES) ImageCodec.HEVC else ImageCodec.AV1
+                val coded = TileCodecEncoder(codec, options.effectiveDepth)
+                    .encode(checkNotNull(output.raster), options.quality, cancel)
+                val exif = ExifWriter.build(fields.source, fields.facts, level, fields.authorship)
+                target.outputStream().buffered(BUFFER).use { out ->
+                    HeifContainer.write(coded, ColourInfo.of(profile(options.effectiveColour)), exif, fields.xmp, out)
+                }
+            }
+        }
+    }
+
+    /**
+     * [ExportFormat.ORIGINAL] (docs/adr/0009 "Original copy"): the original file as it is, under its own name, and
+     * with [ExportItem.sidecar] next to it as `<stem>.xmp` when asked and the destination can hold one (a folder or the
+     * share sheet; the gallery takes images only).
+     */
+    @Suppress("ThrowsCount", "NestedBlockDepth", "CyclomaticComplexMethod", "TooGenericExceptionCaught")
+    private fun copyOriginal(
+        item: ExportItem,
+        options: ExportOptions,
+        cancel: () -> Boolean,
+        progress: (Float) -> Unit,
+        onPartial: (Uri) -> Unit,
+    ): ExportResult {
+        val started = System.nanoTime()
+        val work = File(context.cacheDir, "export").apply { mkdirs() }
+        val copy = File(work, UUID.randomUUID().toString())
+        val sidecarFile = File(work, UUID.randomUUID().toString() + ".xmp")
+        try {
+            try {
+                val input = context.contentResolver.openInputStream(item.uri) ?: throw IOException("no stream")
+                input.use { i -> copy.outputStream().use { o -> copyWithCancel(i, o, cancel) } }
+            } catch (e: IOException) {
+                throw ExportException(if (isAccessError(e)) ExportFailure.SOURCE_MISSING else ExportFailure.FAILED, e)
+            } catch (e: RuntimeException) {
+                throw if (isAccessError(e)) ExportException(ExportFailure.SOURCE_MISSING, e) else e
+            }
+            progress(ENCODE_SHARE)
+            val name = OriginalCopy.fileName(item.name)
+            val uri = try {
+                destinations.deliver(copy, name, OriginalCopy.mimeType(name), options.destination, onPartial)
+            } catch (e: DestinationUnavailableException) {
+                throw ExportException(ExportFailure.DESTINATION_UNAVAILABLE, e)
+            }
+            val extra = ArrayList<Uri>()
+            val sidecar = item.sidecar
+            if (options.originalSidecar && sidecar != null && OriginalCopy.sidecarFits(options.destination)) {
+                sidecarFile.writeBytes(sidecar)
+                val delivered = destinations.displayName(uri) ?: name
+                val sidecarName = OriginalCopy.sidecarName(delivered)
+                extra += try {
+                    destinations.deliver(sidecarFile, sidecarName, OriginalCopy.SIDECAR_MIME, options.destination) {}
+                } catch (e: DestinationUnavailableException) {
+                    throw ExportException(ExportFailure.DESTINATION_UNAVAILABLE, e)
+                }
+            }
+            progress(1f)
+            val ms = (System.nanoTime() - started) / NANOS_PER_MS
+            val result = ExportResult(uri, name, 0, 0, copy.length(), 0, 0, ms, null, extra)
+            Log.i(TAG, "copied the original $result")
+            return result
+        } finally {
+            copy.delete()
+            sidecarFile.delete()
+        }
+    }
+
+    private fun copyWithCancel(input: InputStream, output: OutputStream, cancel: () -> Boolean) {
+        val buffer = ByteArray(BUFFER)
+        while (true) {
+            if (cancel()) throw RenderCancelledException()
+            val n = input.read(buffer)
+            if (n < 0) break
+            output.write(buffer, 0, n)
         }
     }
 
@@ -341,9 +487,10 @@ class ExportEngine(
         return BitmapTileSource(bitmap, inspected?.orientation ?: 1).withLens(LensResolver.resolve(null, inspected))
     }
 
-    private fun checkStorage(plan: ExportPlan, options: ExportOptions) {
-        // Upper bound of a high-quality JPEG/HEIF, twice (the encoded cache file and its copy) plus a margin.
-        val needed = plan.output.pixels * BYTES_PER_PIXEL_BOUND * 2 + MARGIN_BYTES
+    private fun checkStorage(plan: ExportPlan, options: ExportOptions, route: Route) {
+        // Upper bound of the encoded file, twice (the encoded cache file and its copy), the raster the encoders read
+        // (in the cache) and a margin.
+        val needed = plan.output.pixels * (route.encodedBound * 2 + route.rasterBytes) + MARGIN_BYTES
         if (destinations.freeBytes(options.destination) < needed) throw ExportException(ExportFailure.LOW_STORAGE)
     }
 
@@ -358,7 +505,7 @@ class ExportEngine(
         private const val NANOS_PER_MS = 1_000_000L
         private const val RENDER_SHARE = 0.85f
         private const val ENCODE_SHARE = 0.95f
-        private const val BYTES_PER_PIXEL_BOUND = 2L
+        private const val BUFFER = 256 * 1024
         private const val MARGIN_BYTES = 32L * 1024 * 1024
 
         fun colourSpace(space: OutputSpace): ColorSpace = when (space) {
@@ -368,5 +515,11 @@ class ExportEngine(
 
         /** For callers that only know the user-facing colour choice. */
         fun colourSpace(colour: ExportColour): ColorSpace = colourSpace(colour.space)
+
+        /** The ICC profile written for [colour]. */
+        fun profile(colour: ExportColour): OutputProfile = when (colour) {
+            ExportColour.SRGB -> OutputProfile.SRGB
+            ExportColour.DISPLAY_P3 -> OutputProfile.DISPLAY_P3
+        }
     }
 }

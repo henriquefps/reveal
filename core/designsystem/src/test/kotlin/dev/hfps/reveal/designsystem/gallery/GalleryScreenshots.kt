@@ -1,4 +1,4 @@
-package dev.hfps.reveal.ui.gallery
+package dev.hfps.reveal.designsystem.gallery
 
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
@@ -17,8 +17,10 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 
 /**
- * Design-system gallery goldens under `app/src/test/screenshots/gallery/`.
- * Record with `./gradlew :app:recordRoborazziDebug`; `./gradlew qa` / `verifyRoborazziDebug` compare against them.
+ * Design-system component goldens under `core/designsystem/src/test/screenshots/gallery/` (the former in-app
+ * "Design system" page, now test-only: tokens, type, icons, controls and the editor surface).
+ * Record with `./gradlew :core:designsystem:recordRoborazziDebug`; `./gradlew qa` / `verifyRoborazziDebug` compare
+ * against them.
  */
 @RunWith(AndroidJUnit4::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)

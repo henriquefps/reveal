@@ -31,6 +31,7 @@ import dev.hfps.reveal.feature.export.engine.ExportEngine
 import dev.hfps.reveal.feature.export.engine.ExportException
 import dev.hfps.reveal.feature.export.engine.ExportFailure
 import dev.hfps.reveal.feature.export.engine.ExportItem
+import dev.hfps.reveal.feature.export.model.ExportOptions
 import dev.hfps.reveal.pipeline.gl.GlesRequirementException
 import dev.hfps.reveal.pipeline.gl.RenderCancelledException
 import dev.hfps.reveal.pipeline.gl.TiledRenderer
@@ -130,11 +131,23 @@ class ExportWorker(context: Context, params: WorkerParameters) : CoroutineWorker
         // A previous run was killed while writing this item: remove its partial file first.
         state.partialUri?.let { run.destinations.deletePartial(it.toUri()) }
         val target = run.job.items[index].versionId?.let { run.graph.library().exportTarget(it) }
-        val resolved = resolve(run.graph, run.job.items[index], run.job.firstSequence + index, target)
+        val resolved = resolve(run.graph, run.job.items[index], run.job.firstSequence + index, target, run.job.options)
         try {
             if (resolved == null) throw ExportException(ExportFailure.SOURCE_MISSING)
-            val item = readyItem(run, index, previewIfUnreadable(run, index, resolved, target), target, state)
-                ?: return !isStopped
+            // An original copy is the original or nothing: never its smart preview.
+            val original = !run.job.options.format.rendered
+            val readable = if (original) resolved else previewIfUnreadable(run, index, resolved, target)
+            val item =
+                readyItem(
+                    run,
+                    index,
+                    readable,
+                    target.takeUnless {
+                        original && it?.reach == OriginalReach.PREVIEW
+                    },
+                    state,
+                )
+                    ?: return !isStopped
             val result = runInterruptible(Dispatchers.IO) {
                 run.engine.export(
                     item,
@@ -147,7 +160,13 @@ class ExportWorker(context: Context, params: WorkerParameters) : CoroutineWorker
                 )
             }
             jobs.update(run.jobId, index) {
-                ItemState(ItemStatus.DONE, result.uri.toString(), result.fileName, previewSize = it.previewSize)
+                ItemState(
+                    ItemStatus.DONE,
+                    result.uri.toString(),
+                    result.fileName,
+                    previewSize = it.previewSize,
+                    extraUris = result.extra.map(Uri::toString),
+                )
             }
             Log.i(TAG, "item ${index + 1}/${run.total}: $result")
             return true
@@ -222,6 +241,8 @@ class ExportWorker(context: Context, params: WorkerParameters) : CoroutineWorker
     } catch (e: CancellationException) {
         throw e
     } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
+        // The original copy has no preview to fall back to.
+        if (!run.job.options.format.rendered) throw e
         previewInstead(run, index, item, target?.previewUri ?: throw e, e)
     }
 
@@ -303,6 +324,7 @@ class ExportWorker(context: Context, params: WorkerParameters) : CoroutineWorker
         item: ExportJobItem,
         sequence: Int,
         target: ExportTarget?,
+        options: ExportOptions,
     ): ExportItem? {
         val recipe = item.recipeJson?.let { runCatching { RecipeCodec.Default.decode(it) }.getOrNull() }
         val versionId = item.versionId
@@ -314,6 +336,11 @@ class ExportWorker(context: Context, params: WorkerParameters) : CoroutineWorker
                 rating = target.rating,
                 renderedUri = target.renderedUri,
                 sequence = sequence,
+                sidecar = if (!options.format.rendered && options.originalSidecar) {
+                    graph.library().exportSidecar(target.versionId, recipe)
+                } else {
+                    null
+                },
             )
 
             item.uri != null && recipe != null -> item.uri.toUri().let { uri ->

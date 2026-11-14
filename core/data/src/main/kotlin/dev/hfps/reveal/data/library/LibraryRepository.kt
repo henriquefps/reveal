@@ -40,6 +40,7 @@ import dev.hfps.reveal.data.storage.StorageVolumes
 import dev.hfps.reveal.data.storage.isAccessError
 import dev.hfps.reveal.data.sync.RemoteEdits
 import dev.hfps.reveal.data.sync.ServerTree
+import dev.hfps.reveal.pipeline.recipe.Recipe
 import java.io.IOException
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CancellationException
@@ -776,6 +777,10 @@ class LibraryRepository(
         val fingerprint = main.fingerprint ?: return null
         return ServerTree.smartUri(authority, fingerprint, main.name)
     }
+
+    /** The XMP sidecar for an original-file export of [versionId] (docs/adr/0009 "Original copy"). */
+    suspend fun exportSidecar(versionId: Long, recipe: Recipe? = null): ByteArray? =
+        withContext(Dispatchers.IO) { sidecars.exportSidecar(versionId, recipe) }
 
     /** What an export of [versionId] reads (no side effect, unlike [editTarget]); null when the version is gone. */
     @Suppress("CyclomaticComplexMethod") // one branch per place an original can be read from (ADR 0011, 0018)

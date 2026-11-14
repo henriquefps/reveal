@@ -1,6 +1,7 @@
 package dev.hfps.reveal.pipeline.gl
 
 import dev.hfps.reveal.pipeline.cpu.LanczosResampleOp
+import dev.hfps.reveal.pipeline.cpu.OutputSharpenOp
 
 /**
  * GLSL of the tiled export (docs/adr/0009): the Lanczos-3 resampling passes (`LanczosResampleOp`, line for line) and
@@ -146,6 +147,60 @@ void main() {
         return;
     }
     outColor = vec4(catmullRom(vec2(ix, iy)), 1.0);
+}
+"""
+
+    /**
+     * Output sharpening (`OutputSharpenOp`, line for line; docs/adr/0009 "Output sharpening"): target pixel `p` is
+     * output pixel `uCore + p`; the source texture holds the resampled output box starting at `uSrc` (texel 0), which
+     * the plan grew by the radius (clamped to the output, so every clamped tap is inside it). Linear working-space RGB
+     * in and out (RGBA32F); the post-crop finish and the output transform follow in [OUTPUT_FRAG].
+     */
+    val SHARPEN_FRAG: String = HEADER + """
+const float LUMA_R = ${OutputSharpenOp.LUMA_R};
+const float LUMA_G = ${OutputSharpenOp.LUMA_G};
+const float LUMA_B = ${OutputSharpenOp.LUMA_B};
+const float EPSILON = ${OutputSharpenOp.EPSILON};
+const int MAX_RADIUS = ${OutputSharpenOp.MAX_RADIUS};
+
+uniform sampler2D uStage;
+uniform ivec2 uCore;       // output position of this target's pixel (0, 0)
+uniform ivec2 uSrc;        // output position of the source texture's texel 0
+uniform ivec2 uSize;       // output size (taps clamp to it)
+uniform int uRadius;
+uniform float uWeights[MAX_RADIUS + 1];
+uniform vec2 uAmount;      // x = amount, y = limit
+out vec4 outColor;
+
+float lightness(vec3 c) {
+    float y = LUMA_R * c.r + LUMA_G * c.g + LUMA_B * c.b;
+    return pow(max(y, 0.0), 1.0 / 3.0);
+}
+
+vec3 fetch(ivec2 q) {
+    return texelFetch(uStage, clamp(q, ivec2(0), uSize - 1) - uSrc, 0).rgb;
+}
+
+void main() {
+    ivec2 o = uCore + ivec2(gl_FragCoord.xy);
+    vec3 c = fetch(o);
+    float l0 = lightness(c);
+    if (l0 <= EPSILON) {
+        outColor = vec4(c, 1.0);
+        return;
+    }
+    float blur = 0.0;
+    for (int dy = -uRadius; dy <= uRadius; dy++) {
+        float row = 0.0;
+        for (int dx = -uRadius; dx <= uRadius; dx++) {
+            row += uWeights[abs(dx)] * lightness(fetch(o + ivec2(dx, dy)));
+        }
+        blur += uWeights[abs(dy)] * row;
+    }
+    float d = clamp(uAmount.x * (l0 - blur), -uAmount.y, uAmount.y);
+    float l1 = max(l0 + d, 0.0);
+    float k = l1 / l0;
+    outColor = vec4(c * (k * k * k), 1.0);
 }
 """
 

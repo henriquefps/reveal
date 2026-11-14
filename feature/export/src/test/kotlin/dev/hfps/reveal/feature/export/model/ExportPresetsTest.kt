@@ -2,6 +2,7 @@ package dev.hfps.reveal.feature.export.model
 
 import com.google.common.truth.Truth.assertThat
 import dev.hfps.reveal.data.export.StoredExportPreset
+import dev.hfps.reveal.feature.export.encode.EncoderSupport
 import dev.hfps.reveal.pipeline.export.ExportSize
 import org.junit.Test
 
@@ -50,10 +51,43 @@ class ExportPresetsTest {
             "HEIF to a folder",
             ExportOptions(format = ExportFormat.HEIF, destination = folder),
         )
-        val here = ExportPresets.resolve(preset, heif = false) { false }
+        val none = EncoderSupport(heif = false, heicCodec = false, hevcMain10 = false)
+        val here = ExportPresets.resolve(preset, none) { false }
         assertThat(here.destination).isEqualTo(ExportDestination.Pictures)
         assertThat(here.format).isEqualTo(ExportFormat.JPEG)
-        val granted = ExportPresets.resolve(preset, heif = true) { it == folder.treeUri }
+        val all = EncoderSupport(true, true, true, heifTiles = true, heif10 = true, avif8 = true, avif10 = true)
+        val granted = ExportPresets.resolve(preset, all) { it == folder.treeUri }
         assertThat(granted).isEqualTo(preset.options)
+    }
+
+    @Test
+    fun `formats and depths fall back to what the encoders can write`() {
+        // A device whose HEVC encoders take no P010 (no 10-bit HEIF) and with the software AV1 encoder.
+        val support = EncoderSupport(true, true, true, heifTiles = true, heif10 = false, avif8 = true, avif10 = true)
+        val heif10 = ExportOptions(format = ExportFormat.HEIF, colour = ExportColour.DISPLAY_P3, bitDepth = 10)
+        assertThat(ExportPresets.usable(heif10, support)).isEqualTo(heif10.copy(bitDepth = 8))
+        val avif10 = ExportOptions(format = ExportFormat.AVIF, colour = ExportColour.DISPLAY_P3, bitDepth = 10)
+        assertThat(ExportPresets.usable(avif10, support)).isEqualTo(avif10)
+        // No AV1 encoder: AVIF becomes JPEG (P3 kept); no tile encoder: a P3 HEIF becomes sRGB.
+        val noAv1 = support.copy(avif8 = false, avif10 = false)
+        assertThat(ExportPresets.usable(avif10, noAv1).format).isEqualTo(ExportFormat.JPEG)
+        assertThat(ExportPresets.usable(avif10, noAv1).colour).isEqualTo(ExportColour.DISPLAY_P3)
+        val noTiles = support.copy(heifTiles = false)
+        assertThat(ExportPresets.usable(heif10.copy(bitDepth = 8), noTiles).colour).isEqualTo(ExportColour.SRGB)
+        // Not detected yet: unchanged.
+        assertThat(ExportPresets.usable(avif10, null)).isEqualTo(avif10)
+        // Lossless formats and the original copy need no encoder.
+        for (format in listOf(ExportFormat.PNG, ExportFormat.TIFF, ExportFormat.ORIGINAL)) {
+            assertThat(ExportPresets.usable(ExportOptions(format = format), noAv1).format).isEqualTo(format)
+        }
+    }
+
+    @Test
+    fun `built-in presets are unchanged by the new options`() {
+        for (preset in BuiltInExportPreset.entries) {
+            assertThat(preset.options.format).isEqualTo(ExportFormat.JPEG)
+            assertThat(preset.options.sharpening).isNull()
+            assertThat(preset.options.effectiveDepth).isEqualTo(8)
+        }
     }
 }

@@ -21,6 +21,7 @@ import dev.hfps.reveal.feature.export.engine.ExportFailure
 import dev.hfps.reveal.feature.export.model.BuiltInExportPreset
 import dev.hfps.reveal.feature.export.model.ExportColour
 import dev.hfps.reveal.feature.export.model.ExportDestination
+import dev.hfps.reveal.feature.export.model.ExportFormat
 import dev.hfps.reveal.feature.export.model.ExportOptions
 import dev.hfps.reveal.feature.export.model.ExportPreset
 import dev.hfps.reveal.feature.export.model.ExportPresets
@@ -31,7 +32,10 @@ import dev.hfps.reveal.feature.export.ui.ExportSheetContent
 import dev.hfps.reveal.feature.export.ui.ExportUiState
 import dev.hfps.reveal.feature.settings.SettingsContent
 import dev.hfps.reveal.pipeline.export.ExportSize
+import dev.hfps.reveal.pipeline.export.OutputSharpening
 import dev.hfps.reveal.pipeline.export.PixelSize
+import dev.hfps.reveal.pipeline.export.SharpenAmount
+import dev.hfps.reveal.pipeline.export.SharpenMedium
 import dev.hfps.reveal.pipeline.recipe.Recipe
 import org.junit.Rule
 import org.junit.Test
@@ -48,6 +52,17 @@ class ExportScreenshotTest {
     val composeRule = createComposeRule()
 
     private val support = EncoderSupport(heif = true, heicCodec = false, hevcMain10 = false)
+
+    /** AV1 at both depths, HEVC tiles at 8 bits only (the 10-bit HEIF chip hidden, with the note). */
+    private val ownerDevices = EncoderSupport(
+        heif = true,
+        heicCodec = true,
+        hevcMain10 = true,
+        heifTiles = true,
+        heif10 = false,
+        avif8 = true,
+        avif10 = true,
+    )
     private val single = ExportUiState(
         request = ExportRequest.Current(null, "content://x", "DSC00002.ARW", Recipe()),
         options = ExportOptions(colour = ExportColour.DISPLAY_P3),
@@ -110,6 +125,68 @@ class ExportScreenshotTest {
     /** A built-in preset picked (Instagram 4:5): the chip is selected, "Save as preset" is not offered. */
     @Test fun presetBuiltIn() = shoot("preset_builtin_light") {
         RevealTheme(darkTheme = false) { Sheet(ExportSamples.presetBuiltIn) }
+    }
+
+    /** W2/E: a device with AV1 at 8 and 10 bits and an 8-bit-only HEVC: AVIF 10-bit P3 with matte sharpening. */
+    @Test fun avifSharpened() = shoot("editor_avif_sharpened") {
+        EditorTheme {
+            Sheet(
+                single.copy(
+                    options = ExportOptions(
+                        format = ExportFormat.AVIF,
+                        quality = 85,
+                        colour = ExportColour.DISPLAY_P3,
+                        bitDepth = 10,
+                        sharpening = OutputSharpening(SharpenMedium.MATTE, SharpenAmount.HIGH),
+                    ),
+                    support = ownerDevices,
+                    estimateBytes = 6_400_000,
+                ),
+            )
+        }
+    }
+
+    /** HEIF where the encoder has no 10-bit input: the 10-bit chip is gone and the sheet says why. */
+    @Test fun heifEightBitOnly() = shoot("library_heif_8bit_light") {
+        RevealTheme(darkTheme = false) {
+            Sheet(
+                single.copy(
+                    options = ExportOptions(format = ExportFormat.HEIF, colour = ExportColour.DISPLAY_P3),
+                    support = ownerDevices,
+                ),
+            )
+        }
+    }
+
+    /** A 16-bit PNG (lossless note, no quality slider). */
+    @Test fun png16() = shoot("editor_png16") {
+        EditorTheme {
+            Sheet(
+                single.copy(
+                    options = ExportOptions(format = ExportFormat.PNG, bitDepth = 16),
+                    support = ownerDevices,
+                    estimateBytes = 98_000_000,
+                ),
+            )
+        }
+    }
+
+    /** The original copy with a sidecar, to the gallery: only destination and the warning remain. */
+    @Test fun originalCopy() = shoot("library_original_light") {
+        RevealTheme(darkTheme = false) {
+            Sheet(
+                single.copy(
+                    options = ExportOptions(format = ExportFormat.ORIGINAL),
+                    support = ownerDevices,
+                    estimateBytes = 24_500_000,
+                ),
+            )
+        }
+    }
+
+    /** A device without an AV1 encoder: no AVIF chip. */
+    @Test fun noAvif() = shoot("editor_no_avif") {
+        EditorTheme { Sheet(single.copy(support = support)) }
     }
 
     @Test fun settings() = shoot("settings_light") {

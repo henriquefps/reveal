@@ -131,12 +131,7 @@ class ExportViewModel @Inject constructor(
         viewModelScope.launch(Dispatchers.Default) {
             val support = EncoderSupport.detect()
             _state.update {
-                val options = if (!support.heif && it.options.format == ExportFormat.HEIF) {
-                    it.options.copy(format = ExportFormat.JPEG)
-                } else {
-                    it.options
-                }
-                it.copy(support = support, options = options)
+                it.copy(support = support, options = ExportPresets.usable(it.options, support))
             }
         }
         viewModelScope.launch { preferences.authorship.collect { a -> _state.update { it.copy(authorship = a) } } }
@@ -156,7 +151,7 @@ class ExportViewModel @Inject constructor(
 
     /** Applies [preset]'s options in one tap (made usable on this device: folder grant, HEIF support). */
     fun pickPreset(preset: ExportPreset) {
-        val options = ExportPresets.resolve(preset, _state.value.support?.heif ?: true, ::folderGranted)
+        val options = ExportPresets.resolve(preset, _state.value.support, ::folderGranted)
         _state.update { it.copy(activePreset = preset.key) }
         setOptions(options)
     }
@@ -298,9 +293,8 @@ class ExportViewModel @Inject constructor(
                                 }.getOrDefault(ExportFailure.FAILED)
                                 )
                     }
-                    val uris = states.filter {
-                        it.status == ItemStatus.DONE
-                    }.mapNotNull { it.resultUri?.toUri() }
+                    val settled = states.filter { it.status == ItemStatus.DONE }
+                    val uris = settled.flatMap { s -> listOfNotNull(s.resultUri) + s.extraUris }.map { it.toUri() }
                     _state.update {
                         it.copy(
                             run = ExportRun(
@@ -311,7 +305,7 @@ class ExportViewModel @Inject constructor(
                                 finished = true,
                                 cancelled = info.state == WorkInfo.State.CANCELLED,
                                 failures = failures,
-                                exported = uris.size,
+                                exported = settled.size,
                                 waiting = states.count { it.status == ItemStatus.WAITING },
                                 results = if (share) emptyList() else uris,
                             ),

@@ -118,7 +118,8 @@ adb -s emulator-<port> logcat -d -s REVEAL_PARITY REVEAL_BENCH     # measured er
 Slot 12 (Effects, ADR 0014) and the post-crop vignette and grain: see "Effects and Detail speed" below.
 
 Debug canvas: `adb -s emulator-<port> shell am start -n dev.hfps.reveal.debug/dev.hfps.reveal.debug.PipelineDebugActivity`
-(debug build only: `app/src/debug`, hosting `EditorDebugScreen` on a synthetic image).
+(debug build only: `app/src/debug`, hosting `EditorDebugScreen` on a synthetic image). The design-system gallery is gone from the app: its pages are
+test-only component goldens in `:core:designsystem` (`gallery/GalleryScreenshots.kt`, `./gradlew :core:designsystem:recordRoborazziDebug`).
 
 Geometry (slot 13, ADR 0002 "Geometry"; the lens/Transform warp: ADR 0015 below): `geometry/GeometryMapping` (output
 <-> image, used by `cpu/GeometryOp`, the output pass and the export tiles via `sourceRegion`; build it with
@@ -410,6 +411,24 @@ then per output tile: develop the input region, geometry operator (slot 13), Lan
 (JPEG = `Bitmap.compress` + `JpegSegments` for EXIF/XMP, HEIF = HeifWriter 8-bit sRGB) -> `Destinations` (MediaStore
 `Pictures/Reveal`, SAF folder, share cache swept at start). Metadata: `ExifSnapshot` (`:core:image`) -> `ExifWriter`.
 Sizes and tiles: `ExportSize`, `ExportPlan` (`:core:pipeline/export`). Author/copyright: Settings (`ExportPreferences`).
+
+Formats (W2/E, ADR 0009 "W2/E"): `ExportFormat` JPEG/HEIF/AVIF/PNG/TIFF/ORIGINAL (`depths`, `rendered`),
+`ExportOptions.bitDepth/sharpening/originalSidecar`; `engine/RenderOutput.kt` `Route` picks bitmap (JPEG, HEIF 8-bit
+sRGB via `HeifWriter`) or a memory-mapped `RgbRaster` (8 or 16-bit, `RasterSink`) for Reveal's writers in `:core:image`
+`write/`: `PngWriter`, `TiffWriter`, `HeifContainer` (+ `HevcConfig`/`Av1Config`, `YuvTiles`), `IccProfiles` (every
+file's ICC). HEIF P3/10-bit and AVIF: `encode/TileCodecEncoder` (512 px tiles, BT.709 full range, P010 for 10 bits)
+-> `HeifContainer` (`colr` nclx + prof). `EncoderSupport.detect` decides what the sheet offers; `ExportPresets.usable`
+falls back. Output sharpening: `cpu/OutputSharpenOp` = `ExportShaders.SHARPEN_FRAG`, after the Lanczos passes, tiles
+grown by `ExportPlan(outputMargin = OutputSharpenOp.radius(..))`. Original copy: `copyOriginal` + `OriginalCopy`, sidecar
+from `LibraryRepository.exportSidecar` (`SidecarSync.exportSidecar`; folders and share only). A new format: an
+`ExportFormat` entry, a `Route`, its writer, its chip and strings, and a case in `ExportFormatsTest`.
+
+```sh
+./gradlew :core:image:testDebugUnitTest --tests '*write*' && ./gradlew :core:pipeline:testDebugUnitTest --tests '*OutputSharpenOpTest*' --tests '*ExportPlanTest*'
+ls core/image/build/heif-samples/ && avifdec --info core/image/build/heif-samples/grid-p3.avif   # host check of the container
+adb -s <serial> shell am instrument -w -e class dev.hfps.reveal.export.ExportFormatsTest [-e keep true] dev.hfps.reveal.debug.test/androidx.test.runner.AndroidJUnitRunner   # GPU: the tablet
+adb -s <serial> shell am instrument -w -e class dev.hfps.reveal.pipeline.TiledRendererTest#sharpenedTilesStitchAndMatchTheCpuReference dev.hfps.reveal.pipeline.test/androidx.test.runner.AndroidJUnitRunner
+```
 
 ```sh
 adb -s emulator-<port> shell am instrument -w -e class dev.hfps.reveal.pipeline.TiledRendererTest dev.hfps.reveal.pipeline.test/androidx.test.runner.AndroidJUnitRunner

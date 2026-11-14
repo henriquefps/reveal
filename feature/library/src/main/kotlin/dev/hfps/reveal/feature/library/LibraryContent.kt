@@ -286,10 +286,6 @@ private fun OverflowMenu(state: LibraryUiState, actions: LibraryActions, wide: B
                 open = false
                 actions.onOpenPhoto()
             }
-            MenuItem(PhosphorRegular.Palette, stringResource(R.string.library_menu_gallery)) {
-                open = false
-                actions.onGallery()
-            }
             MenuItem(PhosphorRegular.Info, stringResource(R.string.library_menu_about)) {
                 open = false
                 actions.onAbout()

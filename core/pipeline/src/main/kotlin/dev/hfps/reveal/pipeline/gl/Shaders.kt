@@ -213,6 +213,8 @@ layout(std140) uniform Output {
     vec4 overlayColour;
     ivec4 overlayInfo;
     vec4 overlayCell;        // the coverage layer's cell origin (texels) and the coverage texture's size
+    // Visualise spots (docs/adr/0023): x = on, y = gain, z = level of the local mean.
+    vec4 spots;
 };
 
 uniform sampler2D uStage;
@@ -371,6 +373,17 @@ void main() {
                 c = mix(c, tc, idx.b);
             }
         }
+    }
+    if (spots.x != 0.0 && insideImage) {
+        // Visualise spots: the relative difference between the pixel's luminance and its neighbourhood's (a coarse
+        // level of the working texture at an explicit LOD), stretched around mid-grey, shown in grey.
+        vec2 uv = clamp(maskPoint, vec2(0.5), image.xy - 0.5) / image.xy;
+        vec3 local = textureLod(uStage, uv, spots.z).rgb;
+        const vec3 Y = vec3(0.2627, 0.6780, 0.0593);
+        float l = dot(c, Y);
+        float lm = dot(local, Y);
+        float v = clamp(0.5 + spots.y * (l - lm) / (lm + 0.02), 0.0, 1.0);
+        c = vec3(v <= 0.04045 ? v / 12.92 : pow((v + 0.055) / 1.055, 2.4));
     }
     if (overlayInfo.x != 0 && insideImage) {
         // The mask's coverage at the image point (display only: bilinear at an explicit LOD 0).

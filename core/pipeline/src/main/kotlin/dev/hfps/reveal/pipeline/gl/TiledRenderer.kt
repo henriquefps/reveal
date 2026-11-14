@@ -15,6 +15,9 @@ import dev.hfps.reveal.pipeline.export.ExportPlan
 import dev.hfps.reveal.pipeline.export.PixelBox
 import dev.hfps.reveal.pipeline.export.PixelSize
 import dev.hfps.reveal.pipeline.geometry.GeometryMapping
+import dev.hfps.reveal.pipeline.heal.HealOp
+import dev.hfps.reveal.pipeline.heal.HealedTileSource
+import dev.hfps.reveal.pipeline.heal.RemoveSource
 import dev.hfps.reveal.pipeline.input.TileSource
 import dev.hfps.reveal.pipeline.mask.AiMask
 import dev.hfps.reveal.pipeline.mask.MaskContext
@@ -144,6 +147,17 @@ class TiledRenderer private constructor(requestedTile: Int, private val share: E
     @Volatile
     var onAiReady: (() -> Unit)? = null
 
+    /** Where the zoom tiles' Remove spots get their fills (docs/adr/0023; set by `ZoomTiles`). */
+    @Volatile
+    var healSource: RemoveSource = RemoveSource.NONE
+
+    /** Called (any thread) when a Remove fill the zoom asked for becomes ready. */
+    @Volatile
+    var onHealReady: (() -> Unit)? = null
+
+    /** The zoom's source with its healing (kept while the base source is). */
+    private var zoomHealed: HealedTileSource? = null
+
     /**
      * Develops [source] with [recipe] as [plan] says and streams the output to [sink]. Blocking (runs on the renderer's
      * GL thread); [cancel] is polled between tiles ([RenderCancelledException]); [progress] gets 0..1.
@@ -151,6 +165,7 @@ class TiledRenderer private constructor(requestedTile: Int, private val share: E
      * @param high true writes unquantised encoded floats to [TileSink.acceptHigh] (10/16-bit encoders) instead of
      *   dithered 8-bit.
      * @param masks the AI masks' source and photo key (docs/adr/0022); the render waits for masks not ready yet.
+     * @param heals where Remove spots get their fills (docs/adr/0023); the render waits for fills not ready yet.
      */
     @Suppress("LongParameterList")
     fun render(
@@ -161,6 +176,7 @@ class TiledRenderer private constructor(requestedTile: Int, private val share: E
         sink: TileSink,
         high: Boolean = false,
         masks: MaskContext = MaskContext.NONE,
+        heals: RemoveSource = RemoveSource.NONE,
         cancel: () -> Boolean = { false },
         progress: (Float) -> Unit = {},
     ): TiledRenderStats = onGl {
@@ -169,7 +185,13 @@ class TiledRenderer private constructor(requestedTile: Int, private val share: E
         require(plan.reach >= DevelopParams.from(source.colour, recipe).reach) {
             "plan apron ${plan.reach} below the reach of defringe, Detail and Effects"
         }
-        renderOnGl(source, recipe, plan, output, sink, high, cancel, progress, masks)
+        // Healing (docs/adr/0023): every tile reads the healed image; the spots are computed once, before the tiles.
+        val healed = if (HealOp.active(recipe.heals)) {
+            HealedTileSource(source, recipe.heals, heals, wait = true)
+        } else {
+            source
+        }
+        renderOnGl(healed, recipe, plan, output, sink, high, cancel, progress, masks)
     }
 
     @Suppress("LongParameterList", "LongMethod")
@@ -267,16 +289,18 @@ class TiledRenderer private constructor(requestedTile: Int, private val share: E
         var reconstruct = false
         val t0 = System.nanoTime()
         if (hp != null) {
-            val threshold = HighlightReconstructionOp.T0 * checkNotNull(uploader.source.colour.saturation)
-            uploader.watchClip = threshold
-            uploader.reachedClip = false
+            // Highlight reconstruction's chroma comes from the photo before healing (docs/adr/0023).
+            val base = (uploader.source as? HealedTileSource)?.let { Uploader(it.base) } ?: uploader
+            val threshold = HighlightReconstructionOp.T0 * checkNotNull(base.source.colour.saturation)
+            base.watchClip = threshold
+            base.reachedClip = false
             for (tile in prepass) {
                 step()
-                uploader.upload(tile)
+                base.upload(tile)
                 light.reconstructRows(sourceTex, params.wbMultipliers, hp, tile.x, tile.y, tile.width, tile.height)
             }
-            uploader.watchClip = Float.MAX_VALUE
-            if (uploader.reachedClip) {
+            base.watchClip = Float.MAX_VALUE
+            if (base.reachedClip) {
                 light.reconstructFinish()
                 reconstruct = true
             }
@@ -447,8 +471,9 @@ class TiledRenderer private constructor(requestedTile: Int, private val share: E
      * when what they depend on changed (white balance, matrix, exposure, highlights/shadows on). Blocking; returns the
      * milliseconds spent (0 when cached).
      */
-    fun prepareZoom(source: TileSource, recipe: Recipe): Long = onGl {
+    fun prepareZoom(base: TileSource, recipe: Recipe): Long = onGl {
         var start = System.nanoTime()
+        val source = zoomSource(base, recipe)
         val params = DevelopParams.from(source.colour, recipe)
         sceneImage = source.width to source.height
         prepareMasks(params, source, maskContext, wait = false)
@@ -467,8 +492,14 @@ class TiledRenderer private constructor(requestedTile: Int, private val share: E
             auto = maskPlan?.takeIf { autoMask() }?.let { plan ->
                 params.withoutDetail().withoutMasks() to plan.brushes.map { it.data.toList() }
             },
+            // The guide and the Effects grid are built from the healed image (docs/adr/0023).
+            heals = if (guided(params) || params.effects.gridActive || autoMask()) {
+                recipe.heals to (source as? HealedTileSource)?.pending
+            } else {
+                null
+            },
         )
-        if (key != gridKey || zoomSource !== source) {
+        if (key != gridKey || zoomSource !== base) {
             if (light.grid?.let { it.width != source.width || it.height != source.height } != false) {
                 light.allocate(source.width, source.height)
             }
@@ -487,7 +518,7 @@ class TiledRenderer private constructor(requestedTile: Int, private val share: E
                 LongArray(3),
             )
             gridKey = key
-            zoomSource = source
+            zoomSource = base
             GLES30.glFinish()
         } else {
             start = System.nanoTime()
@@ -504,7 +535,7 @@ class TiledRenderer private constructor(requestedTile: Int, private val share: E
      */
     @Suppress("LongParameterList")
     fun developTile(
-        source: TileSource,
+        base: TileSource,
         recipe: Recipe,
         core: PixelBox,
         border: Int,
@@ -513,8 +544,9 @@ class TiledRenderer private constructor(requestedTile: Int, private val share: E
         slotY: Int,
         slot: Int,
     ): Long = onGl {
-        check(zoomSource === source && gridKey != null) { "prepareZoom first" }
+        check(zoomSource === base && gridKey != null) { "prepareZoom first" }
         val start = System.nanoTime()
+        val source = zoomSource(base, recipe)
         val params = DevelopParams.from(source.colour, recipe)
         sceneImage = source.width to source.height
         val region = ExportPlan.grow(core, border + params.reach, source.width, source.height)
@@ -581,7 +613,23 @@ class TiledRenderer private constructor(requestedTile: Int, private val share: E
         val vignette: Any?,
         val masks: Int,
         val auto: Any? = null,
+        val heals: Any? = null,
     )
+
+    /**
+     * The zoom's [base] with [recipe]'s healing (docs/adr/0023): kept across tiles and edits (a new spot recomputes
+     * only what changed); missing Remove fills render nothing until [onHealReady] says they arrived.
+     */
+    private fun zoomSource(base: TileSource, recipe: Recipe): TileSource {
+        if (!HealOp.active(recipe.heals)) return base
+        val kept = zoomHealed?.takeIf { it.base === base }
+        val ready = { onHealReady?.invoke() ?: Unit }
+        if (kept == null) {
+            return HealedTileSource(base, recipe.heals, healSource, onReady = ready).also { zoomHealed = it }
+        }
+        kept.update(recipe.heals, ready)
+        return kept
+    }
 
     /** The parameters and whole-image size the scene pass uses (vignetting is centred on the whole image). */
     private var sceneParams: DevelopParams? = null
@@ -781,7 +829,7 @@ class TiledRenderer private constructor(requestedTile: Int, private val share: E
             while (y < region.height) {
                 val rows = minOf(UPLOAD_ROWS, region.height - y)
                 val n = region.width * rows * RGBA
-                source.read(region.x, region.y + y, region.width, rows, band)
+                synchronized(source) { source.read(region.x, region.y + y, region.width, rows, band) }
                 if (!reachedClip && watchClip != Float.MAX_VALUE) reachedClip = reaches(n)
                 floats.clear()
                 floats.put(band, 0, n)

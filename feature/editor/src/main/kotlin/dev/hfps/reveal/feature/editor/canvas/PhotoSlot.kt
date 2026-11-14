@@ -181,7 +181,7 @@ fun PhotoSlot(
         if (phase is EditorPhase.Ready) {
             if (!state.view.cropping) CompareOverlay(state.view.compare, actions.onCompare)
             modeOverlay?.invoke(this)
-            if (layer != null && layerHost != null && modeOverlay == null) layer.overlay(this, layerHost)
+            if (layer != null && layerHost != null) layer.overlay(this, layerHost)
             AnimatedVisibility(
                 visible = chromeVisible && state.view.histogram && !state.view.eyedropper && !state.view.cropping &&
                     state.view.targeted == null,

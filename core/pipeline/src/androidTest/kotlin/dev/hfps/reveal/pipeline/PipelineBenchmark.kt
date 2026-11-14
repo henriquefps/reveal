@@ -4,6 +4,9 @@ import android.util.Log
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import dev.hfps.reveal.pipeline.gl.GpuDevelopRenderer
+import dev.hfps.reveal.pipeline.heal.PatchFill
+import dev.hfps.reveal.pipeline.heal.PixelReader
+import dev.hfps.reveal.pipeline.heal.RemoveSpec
 import dev.hfps.reveal.pipeline.mask.Dabs
 import dev.hfps.reveal.pipeline.mask.MaskContext
 import dev.hfps.reveal.pipeline.recipe.BandValues
@@ -18,6 +21,7 @@ import dev.hfps.reveal.pipeline.recipe.Detail
 import dev.hfps.reveal.pipeline.recipe.Effects
 import dev.hfps.reveal.pipeline.recipe.Geometry
 import dev.hfps.reveal.pipeline.recipe.GradeWheel
+import dev.hfps.reveal.pipeline.recipe.Heal
 import dev.hfps.reveal.pipeline.recipe.Light
 import dev.hfps.reveal.pipeline.recipe.LocalAdjustments
 import dev.hfps.reveal.pipeline.recipe.Mask
@@ -29,6 +33,7 @@ import dev.hfps.reveal.pipeline.recipe.Recipe
 import dev.hfps.reveal.pipeline.recipe.StrokePoint
 import dev.hfps.reveal.pipeline.recipe.Transform
 import dev.hfps.reveal.pipeline.recipe.WhiteBalance
+import dev.hfps.reveal.pipeline.synthetic.HealScenes
 import dev.hfps.reveal.pipeline.synthetic.SyntheticImages
 import kotlinx.coroutines.runBlocking
 import org.junit.Test
@@ -229,6 +234,102 @@ class PipelineBenchmark {
                 profileDrag("all tools: $name", image, frame) { at(base, it) }
             } else {
                 drag("all tools on, drag $name", image, PROXY_SCALE, frame, target = true) { at(base, it) }
+            }
+        }
+    }
+
+    /**
+     * Healing (docs/adr/0023 "Speed"): on a 2400 x 1600 proxy with 30 dust spots and the Light, Detail and Effects
+     * stages on (highlights/shadows use the guide, so a spot also redraws the guide's rows), a source drag of one spot
+     * and a new spot every frame, both pipelined at fit (the target: 8.3 ms per frame); a global exposure drag with the
+     * 30 spots (healing must not slow it); and the time a Remove fill takes once (patch method, two sizes), on its
+     * worker thread. `REVEAL_BENCH heal ...`.
+     */
+    @Suppress("LongMethod", "CyclomaticComplexMethod")
+    @Test
+    fun healSpotAndSourceDrag(): Unit = runBlocking {
+        var image = HealScenes.texturedGradient(WIDTH, HEIGHT, texture = 0.03f)
+        val dust = List(HEAL_SPOTS) { i ->
+            val x = 120f + (i * 709) % (WIDTH - 240)
+            val y = 120f + (i * 433) % (HEIGHT - 240)
+            x to y
+        }
+        for ((x, y) in dust) image = HealScenes.withDust(image, x, y, 10f)
+        val spots = dust.mapIndexed { i, (x, y) ->
+            HealScenes.spot("s$i", Heal.KIND_HEAL, WIDTH, HEIGHT, x, y, 14f, ox = 45f, oy = 10f)
+        }
+        val base = Recipe(
+            light = Light(0.1f, contrast = 10f, highlights = -30f, shadows = 25f),
+            detail = ALL_DETAIL,
+            effects = ALL_EFFECTS,
+        )
+        val frame = frameArgument()
+        val only = InstrumentationRegistry.getArguments().getString("only")
+        val drags: List<Pair<String, (Float) -> Recipe>> = listOf(
+            "heal: drag a spot's source (30 spots, every stage on)" to { t ->
+                base.copy(heals = spots.mapIndexed { i, s -> if (i == 0) s.copy(dx = s.dx + 0.04f * t) else s })
+            },
+            "heal: drag a spot's source (30 spots, no other edit)" to { t ->
+                Recipe(heals = spots.mapIndexed { i, s -> if (i == 0) s.copy(dx = s.dx + 0.04f * t) else s })
+            },
+            "heal: global exposure with 30 spots" to { t ->
+                base.copy(light = base.light.copy(exposureEv = -1f + 2f * t), heals = spots)
+            },
+            "heal: global exposure without spots (reference)" to { t ->
+                base.copy(light = base.light.copy(exposureEv = -1f + 2f * t))
+            },
+        )
+        for ((name, at) in drags) {
+            if (only != null && !name.contains(only)) continue
+            coolDown()
+            drag(name, image, PROXY_SCALE, frame, target = true, recipeAt = at)
+        }
+        if (only == null || "new spot".contains(only)) {
+            coolDown()
+            val renderer = GpuDevelopRenderer.create()
+            try {
+                renderer.setInput(image, PROXY_SCALE)
+                // One new spot per frame on top of the 30 dust spots: each frame heals one more (120 frames).
+                val more = List(NEW_SPOTS) { i ->
+                    val x = 150f + (i * 997) % (WIDTH - 300)
+                    val y = 150f + (i * 577) % (HEIGHT - 300)
+                    HealScenes.spot("n$i", Heal.KIND_HEAL, WIDTH, HEIGHT, x, y, 14f, ox = -40f, oy = 12f)
+                }
+                val growth = (1..more.size).map { base.copy(heals = spots + more.take(it)) }
+                warmUp(renderer, growth, frame)
+                renderer.benchmark(listOf(base.copy(heals = spots)), frame)
+                val piped = renderer.benchmarkPipelined(growth, frame)
+                val g = piped.gpuMs.sorted()
+                val gpu = if (g.isEmpty()) "" else ", GPU per frame p50 ${p(g, 50)}, p95 ${p(g, 95)}"
+                val met = piped.msPerFrame <= TARGET_P50 && (g.isEmpty() || meets(g))
+                val ms = "%.2f".format(piped.msPerFrame)
+                val verdict = if (met) "[target met]" else "[target MISSED]"
+                Log.i(
+                    TAG,
+                    "heal: a new spot every frame (every stage on): ${renderer.info.renderer}: pipelined " +
+                        "$ms ms per frame$gpu $verdict",
+                )
+            } finally {
+                renderer.close()
+            }
+        }
+        if (only == null || "remove".contains(only)) {
+            val reader = PixelReader.of(image)
+            for (radius in listOf(60f, 180f)) {
+                val spot = HealScenes.spot("r$radius", Heal.KIND_REMOVE, WIDTH, HEIGHT, 1200f, 800f, radius)
+                val spec = checkNotNull(RemoveSpec.of(spot, WIDTH, HEIGHT))
+                val key = RemoveSpec.key(RemoveSpec.identity(reader), spec, spot, spot.method)
+                val start = System.nanoTime()
+                val crop = spec.read(spot, reader, image, RemoveSpec.seed(key))
+                val read = (System.nanoTime() - start) / 1e6
+                val fill = PatchFill.fill(crop.input)
+                val total = (System.nanoTime() - start) / 1e6
+                Log.i(
+                    TAG,
+                    "heal: Remove fill of a ${2 * radius.toInt()} px region (crop ${spec.width}x${spec.height}, " +
+                        "factor ${spec.factor}): read ${"%.0f".format(read)} ms, total ${"%.0f".format(total)} ms, " +
+                        "offsets ${fill.offsets != null}",
+                )
             }
         }
     }
@@ -571,6 +672,8 @@ class PipelineBenchmark {
         const val WARMUP_MS = 2000L
         const val NANOS_PER_MS = 1_000_000L
         const val PROXY_SCALE = 2.5f
+        const val HEAL_SPOTS = 30
+        const val NEW_SPOTS = 120
 
         /** The editor's photo frame on the owner's phone (S24 Ultra at 1080 x 2340, a 3:2 photo in portrait). */
         const val FRAME = "1080x720"

@@ -80,6 +80,12 @@ enum class HistoryField(val group: RecipeGroup) {
     MASK_ADJUST(RecipeGroup.MASKS),
     MASK_ORDER(RecipeGroup.MASKS),
 
+    // Healing (docs/adr/0023): the value is the spot's kind key (`heal`, `clone`, `remove`, `redEye`).
+    HEAL_ADD(RecipeGroup.HEALS),
+    HEAL_DELETE(RecipeGroup.HEALS),
+    HEAL_SOURCE(RecipeGroup.HEALS),
+    HEAL_EDIT(RecipeGroup.HEALS),
+
     // Colour tools (docs/adr/0013). Scalar fields share their ControlId's name.
     TREATMENT(RecipeGroup.PROFILE),
     CURVE_SHADOWS(RecipeGroup.LIGHT),
@@ -165,6 +171,26 @@ object RecipeDiff {
         optics(before.optics, after.optics)
         geometry(before.geometry, after.geometry)
         masks(before.masks, after.masks)
+        heals(before.heals, after.heals)
+    }
+
+    /**
+     * Healing spots matched by id (docs/adr/0023): removed, added, then per kept spot a moved source and any other
+     * change (shape, size, kind, feather, opacity, method, darken). The order of the spots is not a step.
+     */
+    private fun MutableList<HistoryStep>.heals(before: List<Heal>, after: List<Heal>) {
+        val old = before.associateBy { it.id }
+        val new = after.associateBy { it.id }
+        before.filter { it.id !in new }.forEach { add(HistoryStep(HistoryField.HEAL_DELETE, it.kind)) }
+        after.filter { it.id !in old }.forEach { add(HistoryStep(HistoryField.HEAL_ADD, it.kind)) }
+        for (heal in after) {
+            val was = old[heal.id] ?: continue
+            if (changed(was.dx, heal.dx) || changed(was.dy, heal.dy) || was.autoSource != heal.autoSource) {
+                add(HistoryStep(HistoryField.HEAL_SOURCE, heal.kind))
+            }
+            val rest = heal.copy(dx = was.dx, dy = was.dy, autoSource = was.autoSource)
+            if (rest != was) add(HistoryStep(HistoryField.HEAL_EDIT, heal.kind))
+        }
     }
 
     /**

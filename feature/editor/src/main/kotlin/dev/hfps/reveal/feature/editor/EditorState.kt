@@ -4,6 +4,8 @@ import androidx.compose.runtime.Immutable
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.ImageBitmap
 import dev.hfps.reveal.feature.editor.edit.AsShot
+import dev.hfps.reveal.feature.editor.heal.HealActions
+import dev.hfps.reveal.feature.editor.heal.HealUiState
 import dev.hfps.reveal.feature.editor.masks.MaskActions
 import dev.hfps.reveal.feature.editor.masks.MasksUiState
 import dev.hfps.reveal.feature.editor.open.OpenError
@@ -175,6 +177,8 @@ data class EditorUiState(
     val previewOnly: PreviewOnly? = null,
     /** The Masks tool (docs/adr/0022 "M4/B (editor)"): selection, brush, overlay, AI states. */
     val masks: MasksUiState = MasksUiState(),
+    /** The Heal mode (docs/adr/0023 "Editor"): selection, settings, Visualise spots, Remove's progress. */
+    val heal: HealUiState = HealUiState(),
 ) {
     val ready: Boolean get() = phase is EditorPhase.Ready
 }
@@ -315,4 +319,6 @@ class EditorActions(
     val masks: MaskActions = MaskActions.NONE,
     /** The Masks panel is on screen (`true`) or not: the overlay and the photo tools work only while it is. */
     val onMasksPanel: (Boolean) -> Unit = {},
+    // ------------------------------------------------------------------ healing (docs/adr/0023)
+    val heal: HealActions = HealActions.NONE,
 )

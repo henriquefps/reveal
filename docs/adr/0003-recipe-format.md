@@ -12,7 +12,7 @@ Recipe(v=1, profile, light, colour, effects, detail, optics, geometry, masks[], 
 ```
 
 - **Defaults mean "no change"**: `Recipe()` renders the original; `Recipe.isDefault()` says so.
-- **Groups without operators yet** (`effects`, `detail`, `optics`) are empty `data object`s; `masks` and `heals` are
+- (Since M4/M5 `masks` is ADR 0022's and `heals` ADR 0023's model.) **Groups without operators yet** (`effects`, `detail`, `optics`) are empty `data object`s; `masks` and `heals` are
   empty lists of `Mask(id)` / `Heal(id)`. They reserve the JSON names; adding fields later is additive. The fields
   of `profile`, `light`, `colour` and `geometry` are in "Fields (M1)".
 - Every field has an explicit `@SerialName`; Kotlin renames never change stored JSON.

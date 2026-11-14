@@ -15,6 +15,8 @@ import dev.hfps.reveal.feature.editor.canvas.PhotoController
 import dev.hfps.reveal.feature.editor.crop.CropControls
 import dev.hfps.reveal.feature.editor.crop.CropOverlay
 import dev.hfps.reveal.feature.editor.crop.CropSession
+import dev.hfps.reveal.feature.editor.heal.HealControls
+import dev.hfps.reveal.feature.editor.heal.HealPhotoLayer
 import dev.hfps.reveal.feature.editor.masks.MaskPhotoLayer
 import dev.hfps.reveal.feature.editor.masks.MasksPanel
 import dev.hfps.reveal.feature.editor.panels.ColourPanel
@@ -90,6 +92,8 @@ sealed interface ToolBehaviour {
         val onActive: (EditorActions, Boolean) -> Unit = { _, _ -> },
         val done: (EditorActions) -> Unit = {},
         val cancel: (EditorActions) -> Unit = {},
+        /** What the mode draws and handles on the photo (the Heal mode's spots and brush), if anything. */
+        val photo: PhotoLayer? = null,
     ) : ToolBehaviour
 
     /** A one-shot action (Auto). */
@@ -195,7 +199,14 @@ object EditorTools {
             R.string.editor_tool_heal,
             PhosphorRegular.Bandaids,
             PhosphorFill.Bandaids,
-            ToolBehaviour.Unavailable,
+            ToolBehaviour.Mode(
+                title = R.string.editor_tool_heal,
+                controls = { HealControls(it) },
+                onActive = { actions, active -> actions.heal.setOpen(active) },
+                done = { it.heal.done() },
+                cancel = { it.heal.cancel() },
+                photo = HealPhotoLayer.layer,
+            ),
         ),
     )
 

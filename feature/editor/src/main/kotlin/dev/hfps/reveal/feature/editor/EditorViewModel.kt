@@ -40,6 +40,8 @@ import dev.hfps.reveal.data.sync.RemoteEdits
 import dev.hfps.reveal.feature.editor.edit.AsShot
 import dev.hfps.reveal.feature.editor.edit.OpticsAnalysis
 import dev.hfps.reveal.feature.editor.edit.RecipeControls
+import dev.hfps.reveal.feature.editor.heal.HealEditor
+import dev.hfps.reveal.feature.editor.heal.HealUiState
 import dev.hfps.reveal.feature.editor.masks.MaskEditor
 import dev.hfps.reveal.feature.editor.masks.MasksUiState
 import dev.hfps.reveal.feature.editor.masks.PreLocalImage
@@ -75,6 +77,7 @@ import dev.hfps.reveal.pipeline.geometry.ImageLines
 import dev.hfps.reveal.pipeline.gl.ClippingWarnings
 import dev.hfps.reveal.pipeline.gl.CompareMode
 import dev.hfps.reveal.pipeline.gl.GpuDevelopRenderer
+import dev.hfps.reveal.pipeline.heal.RemoveFills
 import dev.hfps.reveal.pipeline.input.colourOnly
 import dev.hfps.reveal.pipeline.preset.ApplyContext
 import dev.hfps.reveal.pipeline.preset.Preset
@@ -203,6 +206,25 @@ class EditorViewModel @Inject constructor(
             override fun kindName(kind: MaskKind): String = context.getString(maskKindName(kind))
 
             override fun copyName(name: String): String = context.getString(R.string.masks_copy_name, name)
+        },
+    )
+
+    // ------------------------------------------------------------------ healing (docs/adr/0023 "Editor")
+
+    /** The Heal mode's verbs ([EditorActions.heal]). */
+    internal val healEditor: HealEditor = HealEditor(
+        viewModelScope,
+        object : HealEditor.Host {
+            override val ui: EditorUiState get() = _state.value
+
+            override fun updateHeal(change: (HealUiState) -> HealUiState) =
+                _state.update { it.copy(heal = change(it.heal)) }
+
+            override fun edit(change: (Recipe) -> Recipe) = this@EditorViewModel.edit(change)
+
+            override fun commit() = this@EditorViewModel.commit()
+
+            override fun renderer(): GpuDevelopRenderer? = this@EditorViewModel.renderer()
         },
     )
 
@@ -1067,6 +1089,7 @@ class EditorViewModel @Inject constructor(
         _state.update { it.copy(edit = it.edit.copy(recipe = recipe, history = history)) }
         renderer()?.setRecipe(recipe)
         maskEditor.onRecipeShown()
+        healEditor.onRecipeShown()
     }
 
     private fun updateView(change: (ViewOptions) -> ViewOptions) {
@@ -1085,6 +1108,10 @@ class EditorViewModel @Inject constructor(
         renderer.onHistogram = { histogram -> _state.update { it.copy(histogram = histogram) } }
         renderer.histogramEnabled = current.view.histogram
         maskSession?.let { renderer.setMaskSource(it, MASK_PHOTO_KEY) }
+        // Remove's fills (docs/adr/0023): shared with the zoom and with the exports of this process.
+        renderer.setHealSource(RemoveFills.shared)
+        renderer.onHeals = { status -> healEditor.onStatus(status) }
+        healEditor.pushView()
         maskEditor.pushOverlay()
         maskEditor.scheduleThumbnails()
     }
@@ -1098,6 +1125,7 @@ class EditorViewModel @Inject constructor(
         @Suppress("OPT_IN_USAGE")
         kotlinx.coroutines.GlobalScope.launch(Dispatchers.Default) { aiMasks.release() }
         renderer()?.onHistogram = null
+        renderer()?.onHeals = null
         EditorMetrics.renderer = null
         EditorMetrics.setControl = null
         EditorMetrics.recipes = null

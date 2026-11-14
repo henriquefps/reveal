@@ -505,4 +505,28 @@
     <string name="masks_type_luminance">Luminance range</string>
     <string name="masks_type_radial">Radial gradient</string>
     <string name="masks_type_unknown">Unknown part</string>
+    <!-- Heal mode (docs/adr/0023) -->
+    <string name="heal_kind_heal">Heal</string>
+    <string name="heal_kind_clone">Clone</string>
+    <string name="heal_kind_remove">Remove</string>
+    <string name="heal_kind_red_eye">Red eye</string>
+    <string name="heal_size">Size</string>
+    <string name="heal_feather">Feather</string>
+    <string name="heal_opacity">Opacity</string>
+    <string name="heal_darken">Darken</string>
+    <string name="heal_visualise">Visualise spots</string>
+    <string name="heal_visualise_strength">Visualise contrast</string>
+    <string name="heal_delete">Delete spot</string>
+    <string name="heal_new_source">New source</string>
+    <string name="heal_removing">Removing…</string>
+    <string name="heal_remove_failed">This removal could not be computed</string>
+    <string name="heal_hint">Tap a spot or paint over it. Drag a spot\'s source to choose where it copies from.</string>
+    <string name="heal_full">This photo has the most spots it can hold</string>
+    <string name="heal_source">Source of the spot</string>
+    <string name="heal_target">Spot</string>
+    <string name="heal_photo_actions">Healing on the photo</string>
+    <plurals name="heal_spot_count">
+        <item quantity="one">%d spot</item>
+        <item quantity="other">%d spots</item>
+    </plurals>
 </resources>

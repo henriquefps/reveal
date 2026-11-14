@@ -1,6 +1,5 @@
-package dev.hfps.reveal.ui.gallery
+package dev.hfps.reveal.designsystem.gallery
 
-import androidx.annotation.StringRes
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -15,19 +14,17 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.dp
-import dev.hfps.reveal.R
 import dev.hfps.reveal.designsystem.components.Eyebrow
 import dev.hfps.reveal.designsystem.components.RevealChip
 import dev.hfps.reveal.designsystem.theme.RevealTheme
 import dev.hfps.reveal.designsystem.theme.ThemeMode
 
 private val ThemeLabels = listOf(
-    ThemeMode.System to R.string.theme_system,
-    ThemeMode.Light to R.string.theme_light,
-    ThemeMode.Dark to R.string.theme_dark,
+    ThemeMode.System to "System",
+    ThemeMode.Light to "Light",
+    ThemeMode.Dark to "Dark",
 )
 
 @OptIn(ExperimentalLayoutApi::class)
@@ -35,56 +32,56 @@ private val ThemeLabels = listOf(
 internal fun FoundationsPage(themeMode: ThemeMode, onThemeModeChange: (ThemeMode) -> Unit) {
     val c = RevealTheme.colors
     val swatches = listOf(
-        R.string.swatch_background to c.background,
-        R.string.swatch_card to c.card,
-        R.string.swatch_primary to c.primary,
-        R.string.swatch_muted to c.muted,
-        R.string.swatch_muted_foreground to c.mutedForeground,
-        R.string.swatch_destructive to c.destructive,
-        R.string.swatch_warning to c.warning,
-        R.string.swatch_border to c.border,
-        R.string.swatch_ring to c.ring,
+        "Background" to c.background,
+        "Card" to c.card,
+        "Primary" to c.primary,
+        "Muted" to c.muted,
+        "Muted text" to c.mutedForeground,
+        "Destructive" to c.destructive,
+        "Warning" to c.warning,
+        "Border" to c.border,
+        "Ring" to c.ring,
     )
     Column(verticalArrangement = Arrangement.spacedBy(24.dp)) {
-        Section(R.string.gallery_section_theme) {
+        Section("Theme") {
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 ThemeLabels.forEach { (mode, label) ->
                     RevealChip(
-                        label = stringResource(label),
+                        label = label,
                         selected = mode == themeMode,
                         onClick = { onThemeModeChange(mode) },
                     )
                 }
             }
         }
-        Section(R.string.gallery_section_colour) {
+        Section("Colour") {
             FlowRow(
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                swatches.forEach { (label, color) -> Swatch(stringResource(label), color) }
+                swatches.forEach { (label, color) -> Swatch(label, color) }
             }
         }
-        Section(R.string.gallery_section_type) {
+        Section("Type scale") {
             val t = RevealTheme.typography
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Eyebrow(stringResource(R.string.type_eyebrow))
-                TypeLine(R.string.type_ui, t.ui)
-                TypeLine(R.string.type_body, t.body)
-                TypeLine(R.string.type_body_large, t.bodyLarge)
-                TypeLine(R.string.type_title, t.title)
-                TypeLine(R.string.type_number, t.number)
-                TypeLine(R.string.type_number_large, t.numberLarge)
-                TypeLine(R.string.type_mono, t.mono)
-                TypeLine(R.string.type_mono_small, t.monoSmall)
+                Eyebrow("Eyebrow 12")
+                TypeLine("UI 14: buttons, labels, menus", t.ui)
+                TypeLine("Body 15: detail values and row titles", t.body)
+                TypeLine("Body 16: longer reading text", t.bodyLarge)
+                TypeLine("Title 18 semibold", t.title)
+                TypeLine("20 tabular: 1,284 photos", t.number)
+                TypeLine("24 tabular: +0.70 EV", t.numberLarge)
+                TypeLine("Mono 13: DSC01234.ARW", t.mono)
+                TypeLine("Mono 12: 5600 K · f/2.8 · 1/250", t.monoSmall)
             }
         }
     }
 }
 
 @Composable
-private fun TypeLine(@StringRes text: Int, style: TextStyle) {
-    Text(text = stringResource(text), style = style, color = RevealTheme.colors.cardForeground)
+private fun TypeLine(text: String, style: TextStyle) {
+    Text(text = text, style = style, color = RevealTheme.colors.cardForeground)
 }
 
 @Composable
@@ -106,12 +103,12 @@ private fun Swatch(label: String, color: Color) {
 }
 
 @Composable
-internal fun Section(@StringRes title: Int, content: @Composable () -> Unit) {
+internal fun Section(title: String, content: @Composable () -> Unit) {
     Column(
         modifier = Modifier.padding(horizontal = 16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Eyebrow(stringResource(title))
+        Eyebrow(title)
         content()
     }
 }

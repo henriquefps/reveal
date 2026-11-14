@@ -51,6 +51,8 @@ data class ItemState(
     val waitingSince: Long? = null,
     /** Exported from a local smart preview at its size: the original could not be read (ADR 0011). */
     val previewSize: Boolean = false,
+    /** Further files of the item (the original copy's XMP sidecar), shared with it. */
+    val extraUris: List<String> = emptyList(),
 )
 
 /**

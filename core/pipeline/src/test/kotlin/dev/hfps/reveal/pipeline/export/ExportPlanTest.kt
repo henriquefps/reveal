@@ -119,4 +119,42 @@ class ExportPlanTest {
             assertThat(input.right - box.right).isEqualTo(minOf(72, 1100 - box.right))
         }
     }
+
+    @Test
+    fun `an output margin grows every tile's resampled box and the tiles still cover the output once`() {
+        for (size in listOf(ExportSize.Original, ExportSize.LongEdge(700))) {
+            val geometry = Geometry(crop = CropRect(0.05f, 0.1f, 0.95f, 0.9f), angle = 4f)
+            val plan = ExportPlan.of(3000, 2000, geometry, size, 512, reach = 8, outputMargin = 3)
+            var covered = 0L
+            for (t in plan.outputTiles()) {
+                covered += t.output.width.toLong() * t.output.height
+                // Three pixels around the core, unless the output's edge clamps it.
+                assertThat(t.output.x - t.source.x).isEqualTo(minOf(3, t.output.x))
+                assertThat(t.source.bottom - t.output.bottom).isEqualTo(minOf(3, plan.output.height - t.output.bottom))
+                assertThat(t.source.right).isAtMost(plan.output.width)
+                // The geometry box covers the taps of the whole grown box.
+                if (plan.resamples) {
+                    val cols = LanczosResampleOp.sourceSpan(
+                        t.source.x until t.source.right,
+                        0,
+                        plan.scaleX,
+                        plan.geometrySize.width,
+                    )
+                    assertThat(t.geometry.x).isAtMost(cols.first)
+                    assertThat(t.geometry.right - 1).isAtLeast(cols.last)
+                } else {
+                    assertThat(t.geometry).isEqualTo(t.source)
+                }
+                t.input?.let {
+                    assertThat(it.width).isAtMost(512)
+                    assertThat(it.height).isAtMost(512)
+                }
+            }
+            assertThat(covered).isEqualTo(plan.output.pixels)
+        }
+        // Without a margin the resampled box is the tile itself.
+        ExportPlan.of(3000, 2000, Geometry(), ExportSize.WEB, 512).outputTiles().forEach {
+            assertThat(it.source).isEqualTo(it.output)
+        }
+    }
 }

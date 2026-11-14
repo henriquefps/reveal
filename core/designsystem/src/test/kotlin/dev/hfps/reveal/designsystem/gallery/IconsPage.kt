@@ -1,4 +1,4 @@
-package dev.hfps.reveal.ui.gallery
+package dev.hfps.reveal.designsystem.gallery
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -10,7 +10,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
-import dev.hfps.reveal.R
 import dev.hfps.reveal.designsystem.icons.PhosphorFill
 import dev.hfps.reveal.designsystem.icons.PhosphorRegular
 import dev.hfps.reveal.designsystem.theme.RevealTheme
@@ -34,8 +33,8 @@ private val FillIcons: List<ImageVector> = with(PhosphorFill) {
 @Composable
 @Suppress("MultipleEmitters", "ktlint:compose:multiple-emitters-check")
 internal fun IconsPage() {
-    Section(R.string.gallery_section_icons_regular) { IconGrid(RegularIcons, RevealTheme.colors.foreground) }
-    Section(R.string.gallery_section_icons_fill) { IconGrid(FillIcons, RevealTheme.colors.primary) }
+    Section("Phosphor regular") { IconGrid(RegularIcons, RevealTheme.colors.foreground) }
+    Section("Phosphor fill") { IconGrid(FillIcons, RevealTheme.colors.primary) }
 }
 
 @OptIn(ExperimentalLayoutApi::class)

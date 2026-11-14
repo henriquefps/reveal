@@ -9,9 +9,11 @@ import android.os.HandlerThread
 import dev.hfps.reveal.pipeline.cpu.DevelopParams
 import dev.hfps.reveal.pipeline.cpu.HighlightReconstructionOp
 import dev.hfps.reveal.pipeline.cpu.OutputSettings
+import dev.hfps.reveal.pipeline.cpu.OutputSharpenOp
 import dev.hfps.reveal.pipeline.cpu.OutputTransformOp
 import dev.hfps.reveal.pipeline.cpu.PostParams
 import dev.hfps.reveal.pipeline.export.ExportPlan
+import dev.hfps.reveal.pipeline.export.OutputSharpening
 import dev.hfps.reveal.pipeline.export.PixelBox
 import dev.hfps.reveal.pipeline.export.PixelSize
 import dev.hfps.reveal.pipeline.geometry.GeometryMapping
@@ -98,6 +100,7 @@ class TiledRenderer private constructor(requestedTile: Int, private val share: E
     private var resampleProgram = 0
     private var geometryProgram = 0
     private var outputProgram = 0
+    private var sharpenProgram = 0
     private var developUbo = 0
     private var lightUbo = 0
     private var lookUbo = 0
@@ -169,6 +172,8 @@ class TiledRenderer private constructor(requestedTile: Int, private val share: E
      *   dithered 8-bit.
      * @param masks the AI masks' source and photo key (docs/adr/0022); the render waits for masks not ready yet.
      * @param heals where Remove spots get their fills (docs/adr/0023); the render waits for fills not ready yet.
+     * @param sharpen output sharpening at the output size (docs/adr/0009); the [plan]'s output margin must cover its
+     *   radius (`ExportPlan.of(..., outputMargin = OutputSharpenOp.radius(sharpen))`).
      */
     @Suppress("LongParameterList")
     fun render(
@@ -181,6 +186,7 @@ class TiledRenderer private constructor(requestedTile: Int, private val share: E
         masks: MaskContext = MaskContext.NONE,
         heals: RemoveSource = RemoveSource.NONE,
         cancel: () -> Boolean = { false },
+        sharpen: OutputSharpening? = null,
         progress: (Float) -> Unit = {},
     ): TiledRenderStats = onGl {
         require(plan.maxTile <= tileSize) { "plan tiles ${plan.maxTile} exceed the allocated $tileSize" }
@@ -188,6 +194,7 @@ class TiledRenderer private constructor(requestedTile: Int, private val share: E
         require(plan.reach >= DevelopParams.from(source.colour, recipe).reach) {
             "plan apron ${plan.reach} below the reach of defringe, Detail and Effects"
         }
+        require(plan.outputMargin >= OutputSharpenOp.radius(sharpen)) { "plan margin below the sharpening radius" }
         // Healing (docs/adr/0023): every tile reads the healed image; the spots are computed once, before the tiles.
         val healed = if (HealOp.active(recipe.heals)) {
             HealedTileSource(source, recipe.heals, heals, wait = true)
@@ -195,7 +202,8 @@ class TiledRenderer private constructor(requestedTile: Int, private val share: E
             source
         }
         try {
-            renderOnGl(healed, recipe, plan, output, sink, high, cancel, progress, masks)
+            val sharpening = sharpen?.let(OutputSharpenOp::params)
+            renderOnGl(healed, recipe, plan, output, sink, high, cancel, progress, masks, sharpening)
         } finally {
             // Fills still missing after the wait are not wanted any more (docs/adr/0023 "FIX/H").
             (healed as? HealedTileSource)?.close()
@@ -213,6 +221,7 @@ class TiledRenderer private constructor(requestedTile: Int, private val share: E
         cancel: () -> Boolean,
         progress: (Float) -> Unit,
         masks: MaskContext,
+        sharpening: OutputSharpenOp.Params?,
     ): TiledRenderStats {
         ensureOutputTarget(high)
         gridKey = null
@@ -256,11 +265,17 @@ class TiledRenderer private constructor(requestedTile: Int, private val share: E
                 geometryPass(plan, box, input, stage)
                 stage = colsTex
             }
+            // The resampled box is the tile's output grown by the sharpening radius (tile.source).
+            val src = tile.source
             if (plan.resamples) {
-                val out = tile.output
-                resample(rowsFbo, stage, horizontal = true, plan, out, box, out.width, box.height)
-                resample(colsFbo, rowsTex, horizontal = false, plan, out, box, out.width, out.height)
+                resample(rowsFbo, stage, horizontal = true, plan, src, box, src.width, box.height)
+                resample(colsFbo, rowsTex, horizontal = false, plan, src, box, src.width, src.height)
                 stage = colsTex
+            }
+            if (sharpening != null) {
+                // Reads colsTex or workTex, never rowsTex (free once the resampling is done).
+                sharpenPass(stage, tile.output, src, plan, sharpening)
+                stage = rowsTex
             }
             outputPass(stage, tile.output, matrix, output, high, post, plan.output)
             readBack(tile.output, band, high, sink)
@@ -785,6 +800,24 @@ class TiledRenderer private constructor(requestedTile: Int, private val share: E
         GlSupport.checkError("export output pass")
     }
 
+    /** Output sharpening of the tile's [core] from the resampled [src] box in [stage] into rowsTex. */
+    private fun sharpenPass(stage: Int, core: PixelBox, src: PixelBox, plan: ExportPlan, p: OutputSharpenOp.Params) {
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, rowsFbo)
+        GLES30.glViewport(0, 0, core.width, core.height)
+        val program = sharpenProgram
+        GLES30.glUseProgram(program)
+        fun loc(name: String) = GLES30.glGetUniformLocation(program, name)
+        GLES30.glUniform2i(loc("uCore"), core.x, core.y)
+        GLES30.glUniform2i(loc("uSrc"), src.x, src.y)
+        GLES30.glUniform2i(loc("uSize"), plan.output.width, plan.output.height)
+        GLES30.glUniform1i(loc("uRadius"), p.radius)
+        GLES30.glUniform1fv(loc("uWeights"), p.weights.size, p.weights, 0)
+        GLES30.glUniform2f(loc("uAmount"), p.amount, p.limit)
+        bind(stage, stage)
+        GLES30.glDrawArrays(GLES30.GL_TRIANGLES, 0, 3)
+        GlSupport.checkError("export sharpening")
+    }
+
     private fun readBand(high: Boolean): ByteBuffer =
         ByteBuffer.allocateDirect(tileSize * BAND_ROWS * (if (high) RGBA * Float.SIZE_BYTES else RGBA))
             .order(ByteOrder.nativeOrder())
@@ -873,6 +906,7 @@ class TiledRenderer private constructor(requestedTile: Int, private val share: E
         resampleProgram = GlSupport.compile(Shaders.FULLSCREEN_VERT, ExportShaders.RESAMPLE_FRAG)
         geometryProgram = GlSupport.compile(Shaders.FULLSCREEN_VERT, ExportShaders.GEOMETRY_FRAG)
         outputProgram = GlSupport.compile(Shaders.FULLSCREEN_VERT, ExportShaders.OUTPUT_FRAG)
+        sharpenProgram = GlSupport.compile(Shaders.FULLSCREEN_VERT, ExportShaders.SHARPEN_FRAG)
         copyProgram = GlSupport.compile(Shaders.FULLSCREEN_VERT, ZoomShaders.COPY_FRAG)
         sampler(copyProgram, "uSrc", 0)
         block(sceneProgram, "Develop", DEVELOP_BINDING)
@@ -890,6 +924,7 @@ class TiledRenderer private constructor(requestedTile: Int, private val share: E
         sampler(geometryProgram, "uLensLut", LENS_UNIT)
         sampler(sceneProgram, "uVignetteLut", LENS_UNIT)
         sampler(outputProgram, "uStage", 0)
+        sampler(sharpenProgram, "uStage", 0)
         val ids = IntArray(3)
         GLES30.glGenBuffers(3, ids, 0)
         developUbo = ids[0]
@@ -1057,6 +1092,7 @@ class TiledRenderer private constructor(requestedTile: Int, private val share: E
                         resampleProgram,
                         geometryProgram,
                         outputProgram,
+                        sharpenProgram,
                     )) {
                         GLES30.glDeleteProgram(p)
                     }

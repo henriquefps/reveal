@@ -137,6 +137,12 @@ parity), PNG and 16-bit TIFF (encoders and a 16-bit readback), AVIF and 10-bit P
 file copy", a megapixel/percentage preset row beyond the chips, and per-preset file-name templates beyond the three
 templates and the suffix the sheet has. The preset format carries whatever `ExportOptions` gains.
 
+*Amended by W2/E (ADR 0009 "W2/E"):* output sharpening, PNG, 16-bit TIFF, AVIF, Display P3 / 10-bit HEIF and the
+original copy are in; `ExportOptions` gained `bitDepth`, `sharpening` and `originalSidecar` (decoded with defaults, so
+older presets open unchanged: sharpening off). `ExportPresets.resolve` now takes the device's `EncoderSupport` and
+`ExportPresets.usable` falls back per format, colour and depth. Still open: a megapixel/percentage preset row and
+per-preset name templates.
+
 ## Database (version 12)
 
 Auto-migration 11 → 12: `snapshots` and `export_presets` (tables only), exported schema `12.json`, checked by

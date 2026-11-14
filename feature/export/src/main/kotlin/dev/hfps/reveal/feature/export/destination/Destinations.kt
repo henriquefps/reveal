@@ -8,6 +8,7 @@ import android.os.Environment
 import android.os.StatFs
 import android.provider.DocumentsContract
 import android.provider.MediaStore
+import android.provider.OpenableColumns
 import androidx.core.content.FileProvider
 import androidx.core.net.toUri
 import dev.hfps.reveal.feature.export.model.ExportDestination
@@ -91,6 +92,13 @@ class Destinations(private val context: Context) {
         if (failure is DestinationUnavailableException) throw failure
         return result.getOrNull() ?: throw DestinationUnavailableException(failure)
     }
+
+    /** The display name [uri] was stored under (a provider may have de-duplicated it), or null. */
+    fun displayName(uri: Uri): String? = runCatching {
+        resolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
+            if (c.moveToFirst()) c.getString(0) else null
+        }
+    }.getOrNull()
 
     /** Deletes a half-written target of an interrupted run (best effort). */
     fun deletePartial(uri: Uri) {

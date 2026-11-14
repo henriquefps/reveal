@@ -6,6 +6,7 @@ package dev.hfps.reveal.feature.export.metadata
 import dev.hfps.image.format.ExifField
 import dev.hfps.image.format.ExifSnapshot
 import dev.hfps.image.format.PhotoMetadata
+import dev.hfps.image.write.TiffFields
 import dev.hfps.reveal.data.export.Authorship
 import dev.hfps.reveal.feature.export.model.ExportColour
 import dev.hfps.reveal.feature.export.model.MetadataLevel
@@ -63,13 +64,24 @@ object ExifWriter {
      * The TIFF stream for [source] exported as [facts] under [options], or null when nothing is to be written
      * ([MetadataLevel.NONE] without the capture time).
      */
-    @Suppress("CyclomaticComplexMethod")
     fun build(
         source: SourceMetadata,
         facts: OutputFacts,
         options: MetadataOptions,
         authorship: Authorship,
-    ): ByteArray? {
+    ): ByteArray? = fields(source, facts, options, authorship)?.let { write(it.ifd0, it.exif, it.gps) }
+
+    /**
+     * The fields of [build] by directory (a TIFF export writes them into its own IFD0 and sub-IFDs), or null when
+     * nothing is to be written.
+     */
+    @Suppress("CyclomaticComplexMethod")
+    fun fields(
+        source: SourceMetadata,
+        facts: OutputFacts,
+        options: MetadataOptions,
+        authorship: Authorship,
+    ): TiffFields? {
         val snapshot = source.snapshot ?: source.fallback?.let(::fromMetadata)
         val keepTime = options.keepCaptureTime
         val captureFields = if (keepTime) {
@@ -108,7 +120,7 @@ object ExifWriter {
         exif[TAG_COLOR_SPACE] = short(TAG_COLOR_SPACE, space)
         exif[TAG_PIXEL_X] = long(TAG_PIXEL_X, facts.width.toLong())
         exif[TAG_PIXEL_Y] = long(TAG_PIXEL_Y, facts.height.toLong())
-        return write(ifd0.values.toList(), exif.values.toList(), gps.values.toList())
+        return TiffFields(ifd0.values.toList(), exif.values.toList(), gps.values.toList())
     }
 
     /** The EXIF payload of a JPEG APP1 / HEIF `Exif` item: `Exif\0\0` + the TIFF stream. */

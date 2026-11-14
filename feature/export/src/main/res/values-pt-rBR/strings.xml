@@ -7,8 +7,7 @@
         <item quantity="other">%1$d fotos</item>
     </plurals>
     <string name="export_format">Formato</string>
-    <string name="export_heif_note">Neste aparelho o HEIF é salvo em 8 bits sRGB.</string>
-    <string name="export_heif_unsupported">Este aparelho não tem codificador HEIF: só JPEG.</string>
+    <string name="export_heif_unsupported">Este aparelho não tem codificador HEIF.</string>
     <string name="export_colour">Espaço de cor</string>
     <string name="export_colour_p3_note">Display P3 mantém cores mais saturadas; apps sem gerenciamento de cor podem mostrá-las mais apagadas.</string>
     <string name="export_quality">Qualidade</string>
@@ -116,4 +115,22 @@
     <string name="export_preset_update">Atualizar predefinição</string>
     <string name="export_preset_delete">Excluir</string>
     <string name="export_preset_modified">Alterada desde que você escolheu “%1$s”.</string>
+    <string name="export_format_original">Arquivo original</string>
+    <string name="export_avif_note">AVIF demora mais para codificar que JPEG ou HEIF.</string>
+    <string name="export_lossless_note">Sem perdas: arquivos grandes, para continuar editando em outros apps.</string>
+    <string name="export_depth">Profundidade de cor</string>
+    <string name="export_depth_bits">%1$d bits</string>
+    <string name="export_depth_unsupported">O codificador deste aparelho não grava %1$d bits neste formato.</string>
+    <string name="export_sharpening">Nitidez de saída</string>
+    <string name="export_sharpening_off">Desligada</string>
+    <string name="export_sharpening_screen">Tela</string>
+    <string name="export_sharpening_matte">Papel fosco</string>
+    <string name="export_sharpening_glossy">Papel brilhante</string>
+    <string name="export_sharpening_low">Baixa</string>
+    <string name="export_sharpening_standard">Padrão</string>
+    <string name="export_sharpening_high">Alta</string>
+    <string name="export_sharpening_note">Aplicada no tamanho da exportação, depois de redimensionar. O editor não a mostra.</string>
+    <string name="export_original_note">O arquivo original como está: sem edição, sem redimensionar, com o próprio nome e metadados.</string>
+    <string name="export_original_sidecar">Incluir um XMP com a edição</string>
+    <string name="export_original_sidecar_gallery">A galeria guarda só imagens: escolha uma pasta ou Compartilhar para levar o XMP junto.</string>
 </resources>

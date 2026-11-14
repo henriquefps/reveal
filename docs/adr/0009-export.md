@@ -1,6 +1,7 @@
 # ADR 0009: Export
 
-Status: accepted (M1, Export). Date: 2026-11-11. Amended by ADR 0012 (the Detail apron of every tile) and ADR 0014 (the Effects pre-pass, texture's apron, the post-crop vignette and grain in the output pass). Builds on ADR 0002 (tiles seam, output transforms, dither,
+Status: accepted (M1, Export). Date: 2026-11-11. Amended by W2/E (2026-11-14, "W2/E" below: formats, colour
+management, output sharpening, original copy), ADR 0012 (the Detail apron of every tile) and ADR 0014 (the Effects pre-pass, texture's apron, the post-crop vignette and grain in the output pass). Builds on ADR 0002 (tiles seam, output transforms, dither,
 sampling), 0004 (full decode, memory), 0006 (versions and recipes), 0007 (Light operators' grid), 0008 (profiles).
 
 Export renders the photo with the same shaders as the preview at full resolution, in tiles, encodes it to JPEG or
@@ -223,10 +224,120 @@ emulator (192 MB Java heap limit: nothing large is on the Java heap). A 6 GB pho
 is the low-memory killer while the app is in the background with a 60 MP export, which the per-item resume covers.
 The numbers on a busy host (other builds running) were 2-4x higher; the phone decides.
 
+## W2/E: formats, colour management, output sharpening, original copy
+
+### Formats
+
+| Format | Depth | Colour | Written by | Metadata |
+| --- | --- | --- | --- | --- |
+| JPEG | 8 | sRGB / P3 (ICC by the platform) | `Bitmap.compress` (unchanged) | EXIF, XMP |
+| HEIF | 8 sRGB | `nclx` by the codec | `HeifWriter` (unchanged) | EXIF |
+| HEIF | 8 P3, 10 | `nclx` + ICC | `TileCodecEncoder` (HEVC) + `HeifContainer` | EXIF, XMP |
+| AVIF | 8, 10 | `nclx` + ICC | `TileCodecEncoder` (AV1) + `HeifContainer` | EXIF, XMP |
+| PNG | 8, 16 | ICC (`iCCP`) | `PngWriter` | `eXIf`, XMP (`iTXt`) |
+| TIFF | 16 | ICC (tag 34675) | `TiffWriter` (Deflate + predictor 2) | IFD0 + EXIF/GPS IFDs, XMP (tag 700) |
+| Original | as is | as is | a byte copy | the file's own; optional XMP sidecar |
+
+Writers live in `:core:image` `write/` (pure Kotlin, JVM-tested: `ImageWritersTest`, `HeifContainerTest`,
+`YuvTilesTest`); no native library was added. Options evaluated for TIFF: libtiff via the NDK (complete, a large C
+library to build and maintain for one baseline layout) and TwelveMonkeys / Apache Commons Imaging (JVM, but
+`java.awt`-based or heavy); a 300-line writer of the one layout we need (chunky RGB, strips, Deflate) was chosen, read
+back by a strict test decoder. PNG likewise (the platform's encoder writes 8 bits only and no `eXIf`/XMP).
+
+**HEIF and AVIF: our own container.** The platform cannot label Display P3 (MediaCodec's `KEY_COLOR_STANDARD` has
+BT.601/709/2020 only, the muxer writes no ICC) and its only 10-bit path is HDR (BT.2020 PQ). Reveal therefore encodes
+tiles itself and writes the ISOBMFF file: `TileCodecEncoder` converts each 512 x 512 tile to Y'CbCr 4:2:0 with
+**BT.709 coefficients, full range** (`YuvTiles`, 8 bits or 10 as P010), one intra frame per tile, constant-quality mode
+when the encoder has one; `HeifContainer` writes a `grid` item over the tiles with `hvcC`/`av1C` (built from the
+encoder's parameter sets / sequence header: `HevcConfig`, `Av1Config`), `ispe`, `pixi` and **two `colr` boxes**:
+`nclx` (primaries 1 or 12 = P3-D65, transfer 13 = sRGB, matrix 1, full range) and `prof` (the ICC profile), plus the
+Exif item and the XMP `mime` item. Checked on the host: libavif (`avifdec --info`) reads the primaries, transfer,
+matrix, range, ICC, XMP and Exif; ffmpeg 9 decodes the HEIC tile grid (`yuv420p10le(pc, bt709/smpte432/iec61966-2-1)`).
+HEIF 8-bit sRGB keeps `HeifWriter` (the HEIC tile codec, unchanged output).
+
+**Feature detection** (`EncoderSupport`): HEIF P3 needs an HEVC encoder taking 512 px YUV420Flexible frames; 10-bit
+HEIF needs Main10 *and* P010 input; AVIF needs an AV1 encoder (8: YUV420Flexible, 10: Main10 + P010). The sheet hides
+what is false, presets fall back (`ExportPresets.usable`). On the Galaxy Tab S9 (Snapdragon 8 Gen 2, Android 16)
+everything is offered: HEIF tiles at 8 and 10 bits through `c2.qti.hevc.encoder.cq` (constant quality, 512 px, P010 for
+10 bits) and AVIF at 8 and 10 bits through the platform's software `c2.android.av1.encoder` (Android 14+, CQ). A device
+without P010 HEVC input hides the 10-bit chip and says so.
+
+**The Exif item** is a 4-byte offset to the TIFF header followed by the payload: HEIC as Apple and Android write it
+(`Exif\0\0` + TIFF, offset 6), AVIF as libavif writes it (TIFF first, offset 0), because libavif hands everything after
+the offset field to applications (`avifdec` copied `Exif\0\0` into a PNG `eXIf` chunk that ffmpeg then refused).
+exiftool `-validate` reports OK for both.
+
+### Colour management end to end
+
+The develop stays in linear Rec.2020 (ADR 0002); the output pass converts to the output's primaries (sRGB or Display
+P3), clamps and applies the sRGB transfer, then writes 8-bit dithered values or (`high`) unquantised floats read back
+as RGBA32F and stored as 16-bit levels in a memory-mapped raster (`RgbRaster`, page cache, never the Java heap; 144 MB
+at 24 MP). Each file then says exactly that: the ICC profile of its space (`IccProfiles`: ICC v4.4 matrix/TRC, Bradford
+D65 -> D50 colorants, `para` sRGB curve, MD5 id; JVM-tested against the JDK's CMM) and, in HEIF/AVIF, the matching
+`nclx`. `ExportFormatsTest` decodes every format exported in Display P3 with the platform decoder into sRGB and
+compares it with the lossless sRGB export (tolerances and results below).
+
+### Output sharpening
+
+`OutputSharpenOp` (CPU reference, `ExportShaders.SHARPEN_FRAG` line for line): an unsharp mask on the cube-root
+luminance of the linear working RGB (the halo is the same size in dark and light tones), the pixel scaled by
+`(L'/L)^3` (lightness only, hue and saturation kept), the change limited to 0.06 in cube-root units (halos at hard
+edges). Gaussian sigma by medium: screen 0.6, glossy 0.9, matte 1.2 output pixels (radius `ceil(2.5 sigma)`, at most
+3); amount: medium base 0.9 / 1.2 / 1.5 times 0.55 / 1 / 1.6 for low / standard / high. It runs **at the output size,
+after the Lanczos passes and before the post-crop vignette and grain** (so grain is not sharpened) and the output
+transform. Tiles: `ExportPlan(outputMargin = radius)` grows each tile's resampled box by the radius (clamped to the
+output, `OutputTile.source`) and shrinks the tile edge by twice that; the sharpen pass writes the core into rowsTex.
+Tested: tiles stitch bit-identically to one tile, and the GPU matches the CPU reference (`TiledRendererTest
+#sharpenedTilesStitchAndMatchTheCpuReference`, max 3 levels, mean 0.1, resampled and full size); JVM goldens in
+`OutputSharpenOpTest`. Fixed pixel radii (no ppi): print sharpening for a given print size is a later refinement.
+
+### Original copy
+
+`ExportFormat.ORIGINAL`: the original's bytes (from the device, or downloaded from the sync server first like any
+export; never a smart preview), under its own name, MIME type by extension (`OriginalCopy`). With `originalSidecar`,
+`SidecarSync.exportSidecar(versionId, recipe)` builds `<stem>.xmp`: the photo's own sidecar merged (another app's
+fields kept, a malformed one replaced by a fresh one; the original sidecar is never touched), the culling fields and
+the version's edit (ADR 0026 `reveal:` + `crs:`). The sidecar goes to folders and the share sheet; MediaStore's
+`Pictures/` accepts image types only, so the gallery gets the file alone (the sheet says so).
+
+### Measurements (Galaxy Tab S9 Ultra, Adreno 740, Android 16)
+
+`ExportFormatsTest#fullSizeArwInEveryFormat`, the CC0 ZV-E10 ARW (6024 x 4024) with a Light edit, full size:
+
+| Export | Decode | Render | Encode | File |
+| --- | --- | --- | --- | --- |
+| JPEG q92 P3 | 1.4 s | 1.3 s | 0.3 s | 5.2 MB |
+| JPEG q92 sRGB + glossy/standard sharpening | 1.4 s | 1.4 s | 0.3 s | 7.4 MB |
+| PNG 16-bit P3 | 1.4 s | 2.2 s | 11.0 s | 125 MB |
+| TIFF 16-bit P3 | 1.5 s | 2.2 s | 5.3 s | 126 MB |
+| HEIF q90 sRGB 8-bit (`HeifWriter`) | 1.5 s | 1.2 s | 0.5 s | 15.1 MB |
+| HEIF q90 P3 8-bit (tiles, CQ 90) | 1.5 s | 2.2 s | 3.6 s | 4.4 MB |
+| HEIF q90 P3 10-bit (tiles, CQ 90) | 1.4 s | 2.1 s | 3.8 s | 8.0 MB |
+| AVIF q95 P3 8-bit (software AV1, CQ 95) | 1.4 s | 2.1 s | 3.4 s | 1.8 MB |
+| AVIF q85 P3 10-bit (software AV1, CQ 85) | 1.4 s | 2.1 s | 3.6 s | 1.3 MB |
+
+The high-depth render (RGBA32F readback into the 16-bit raster) costs about 0.9 s more than the 8-bit one (bulk row
+copies; per-sample buffer calls made it 6.5 s). Quality against the 16-bit P3 PNG (ffmpeg / libavif decodes, PSNR in
+dB, R G B): JPEG q92 32.4 / 38.9 / 34.2; HEIF P3 8-bit 32.3 / 42.3 / 35.2; HEIF P3 10-bit 33.1 / 44.3 / 37.0; AVIF q95
+30.6 / 42.2 / 33.9. The tile encoders match or beat JPEG on luma (green) at a fraction of its size; the software AV1
+encoder spends least on chroma (red). Exported with exiftool 13.63: every file carries its ICC profile (Display P3 /
+sRGB), the camera EXIF, author, copyright, rating and XMP; HEIF/AVIF show `ColorPrimaries SMPTE EG 432-1`, `sRGB`
+transfer, `BT.709` matrix, full range.
+
+Colour round trip (`ExportFormatsTest#displayP3ExportsRoundTripToTheSrgbExport`, 1200 x 800 synthetic patches, each
+P3 export decoded by the platform into sRGB vs the lossless sRGB export, 8-bit levels): PNG 16 mean 0.03 / max 1;
+PNG 8 mean 0.37 / max 6; JPEG mean 0.79 / p99 7; HEIF 8 0.74 / 8; HEIF 10 0.92 / 8; AVIF 8 0.82 / 10; AVIF 10
+1.04 / 12 (tolerances: lossless max 3 and 8, lossy mean 2-2.5, p99 16). Every file decodes labelled Display P3.
+Output sharpening GPU vs CPU (`TiledRendererTest`): max 1 level resampled, 2 at full size, mean <= 0.06.
+
 ## Limits and follow-ups
 
-- HEIF is 8-bit sRGB (above); 10-bit with the HDR output later. AVIF, PNG, 16-bit TIFF, original copy and export
-  presets are M5: add an `ExportFormat` entry and its `ImageEncoder`.
-- Output sharpening (screen/matte/glossy) is not in M1 (it belongs after the resampling, slot 13).
+- 10-bit HEIF needs an HEVC encoder with P010 input (feature-detected); HDR output (Rec.2020 PQ) later.
+- TIFF uses Adobe Deflate (compression 8, Adobe's TIFF supplement): Photoshop, Lightroom, darktable and libtiff read
+  it; exiftool's baseline-TIFF validation calls it "invalid" (its only remaining TIFF warning besides `Rating`).
+- PNG 16-bit encodes in about 10 s at 24 MP (adaptive filters + Deflate in Kotlin, 125 MB): fine for a background
+  export, a native zlib/filter path would be the next step if it matters.
 - JPEG chroma is 4:2:0 (platform encoder).
-- The estimate for a selection uses the first photo.
+- The estimate for a selection uses the first photo; lossless and AVIF/HEIF-tile estimates run the real writer on the
+  768 px proxy.
+- Output sharpening uses fixed pixel radii per medium (no print size / ppi input).

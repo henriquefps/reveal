@@ -1,6 +1,7 @@
 package dev.hfps.reveal.feature.export.model
 
 import dev.hfps.reveal.data.export.StoredExportPreset
+import dev.hfps.reveal.feature.export.encode.EncoderSupport
 import dev.hfps.reveal.pipeline.export.ExportSize
 
 /**
@@ -86,10 +87,10 @@ object ExportPresets {
 
     /**
      * [preset]'s options made usable on this device: a folder whose grant is not here (a preset from another device, or
-     * a folder since forgotten) falls back to Pictures/Reveal, HEIF without an encoder to JPEG. The naming suffix and
-     * template are the preset's.
+     * a folder since forgotten) falls back to Pictures/Reveal, and the format to what the encoders can do ([usable]).
+     * The naming suffix and template are the preset's.
      */
-    fun resolve(preset: ExportPreset, heif: Boolean, folderGranted: (String) -> Boolean): ExportOptions {
+    fun resolve(preset: ExportPreset, support: EncoderSupport?, folderGranted: (String) -> Boolean): ExportOptions {
         var options = preset.options
         val folder = options.destination as? ExportDestination.Folder
         if (folder != null &&
@@ -97,7 +98,21 @@ object ExportPresets {
         ) {
             options = options.copy(destination = ExportDestination.Pictures)
         }
-        if (!heif && options.format == ExportFormat.HEIF) options = options.copy(format = ExportFormat.JPEG)
-        return options
+        return usable(options, support)
+    }
+
+    /**
+     * [options] within what [support] says the device can write (null = not detected yet: unchanged): a format it does
+     * not offer becomes JPEG; a Display P3 HEIF without a tile encoder becomes sRGB; a depth it cannot write becomes
+     * the deepest it can.
+     */
+    fun usable(options: ExportOptions, support: EncoderSupport?): ExportOptions {
+        if (support == null) return options
+        var out = options
+        if (!support.offers(out.format)) out = out.copy(format = ExportFormat.JPEG)
+        if (support.depths(out.format, out.colour).isEmpty()) out = out.copy(colour = ExportColour.SRGB)
+        val depths = support.depths(out.format, out.colour)
+        if (out.effectiveDepth !in depths && depths.isNotEmpty()) out = out.copy(bitDepth = depths.max())
+        return out
     }
 }

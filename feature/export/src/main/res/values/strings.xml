@@ -6,8 +6,7 @@
         <item quantity="other">%1$d photos</item>
     </plurals>
     <string name="export_format">Format</string>
-    <string name="export_heif_note">HEIF is saved as 8-bit sRGB on this device.</string>
-    <string name="export_heif_unsupported">This device has no HEIF encoder: JPEG only.</string>
+    <string name="export_heif_unsupported">This device has no HEIF encoder.</string>
     <string name="export_colour">Colour space</string>
     <string name="export_colour_p3_note">Display P3 keeps more saturated colours; apps without colour management may show them duller.</string>
     <string name="export_quality">Quality</string>
@@ -108,4 +107,22 @@
     <string name="export_preset_update">Update preset</string>
     <string name="export_preset_delete">Delete</string>
     <string name="export_preset_modified">Changed since you picked “%1$s”.</string>
+    <string name="export_format_original">Original file</string>
+    <string name="export_avif_note">AVIF takes longer to encode than JPEG or HEIF.</string>
+    <string name="export_lossless_note">Lossless: large files, for further editing in other apps.</string>
+    <string name="export_depth">Bit depth</string>
+    <string name="export_depth_bits">%1$d-bit</string>
+    <string name="export_depth_unsupported">This device\'s encoder cannot write %1$d-bit files in this format.</string>
+    <string name="export_sharpening">Output sharpening</string>
+    <string name="export_sharpening_off">Off</string>
+    <string name="export_sharpening_screen">Screen</string>
+    <string name="export_sharpening_matte">Matte paper</string>
+    <string name="export_sharpening_glossy">Glossy paper</string>
+    <string name="export_sharpening_low">Low</string>
+    <string name="export_sharpening_standard">Standard</string>
+    <string name="export_sharpening_high">High</string>
+    <string name="export_sharpening_note">Applied at the export\'s size, after resizing. The editor does not show it.</string>
+    <string name="export_original_note">The original file as it is: no edit, no resizing, its own name and metadata.</string>
+    <string name="export_original_sidecar">Include an XMP sidecar with the edit</string>
+    <string name="export_original_sidecar_gallery">The gallery holds images only: choose a folder or Share to take the sidecar too.</string>
 </resources>

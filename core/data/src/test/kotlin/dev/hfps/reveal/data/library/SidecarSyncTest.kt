@@ -15,8 +15,11 @@ import dev.hfps.reveal.data.model.PickFlag
 import dev.hfps.reveal.data.model.SourceState
 import dev.hfps.reveal.data.synthetic.SyntheticExif
 import dev.hfps.reveal.data.synthetic.SyntheticShoot
+import dev.hfps.reveal.data.xmp.XmpDevelop
 import dev.hfps.reveal.data.xmp.XmpFields
 import dev.hfps.reveal.data.xmp.XmpReader
+import dev.hfps.reveal.pipeline.recipe.Light
+import dev.hfps.reveal.pipeline.recipe.Recipe
 import java.io.File
 import java.time.OffsetDateTime
 import kotlinx.coroutines.test.runTest
@@ -135,4 +138,31 @@ class SidecarSyncTest {
         assertThat(sync().write(listOf(id))).isEqualTo(SidecarOutcome(0, 1))
         assertThat(File(root, "A.xmp").readText()).isEqualTo("<x:xmpmeta broken")
     }
+
+    @Test
+    fun `an original-file export gets the version's edit merged into the photo's sidecar, which stays as it was`() =
+        runTest {
+            File(root, "B.ARW").writeBytes(SyntheticShoot.raw(SyntheticShoot.markerOnlyJpeg(10, 10), SyntheticExif()))
+            val own = File(root, "B.xmp")
+            own.writeText(SyntheticShoot.sidecar(rating = 3, label = "Red", creatorTool = "darktable"))
+            val before = own.readText()
+            val sourceId = source(writable = true)
+            LibraryIndexer(db).index(sourceId, FileDocumentTree(root))
+            val id = db.photoDao().rows(PhotoQuerySql.toQuery(PhotoQuery())).single().id
+            val versionId = checkNotNull(db.photoDao().firstVersion(id))
+            val edit = Recipe(light = Light(exposureEv = 0.5f))
+            val bytes = checkNotNull(sync().exportSidecar(versionId, edit))
+            assertThat(XmpReader.read(bytes)).isEqualTo(XmpFields(rating = 3, label = "Red"))
+            val develop = XmpDevelop.read(bytes)
+            assertThat(develop.reveal?.recipe).isEqualTo(edit)
+            assertThat(develop.crs).containsKey("Exposure2012")
+            // darktable's tool name stays: the export merges, never replaces.
+            assertThat(String(bytes)).contains("darktable")
+            assertThat(own.readText()).isEqualTo(before)
+            // A malformed sidecar is not merged: the export gets a fresh one.
+            own.writeText("<x:xmpmeta broken")
+            assertThat(
+                XmpDevelop.read(checkNotNull(sync().exportSidecar(versionId, edit))).reveal?.recipe,
+            ).isEqualTo(edit)
+        }
 }

@@ -6,6 +6,22 @@ All notable changes to Reveal are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- Export formats (W2/E, docs/adr/0009 "W2/E"): **PNG** (8 or 16 bits), **16-bit TIFF** (Deflate, for further editing),
+  **AVIF** (8 or 10 bits) and **HEIF in Display P3** (8 bits, 10 where the device's HEVC encoder takes 10-bit input),
+  next to JPEG. Every format embeds its ICC profile (sRGB or Display P3); HEIF and AVIF also say their colour in the
+  file's `nclx` box, PNG, TIFF, HEIF and AVIF carry EXIF and XMP. The sheet shows only what the device's encoders can
+  write (on the Galaxy Tab S9: all of them, 10-bit HEIF through the Qualcomm HEVC tile encoder, AVIF through the
+  platform's software AV1 encoder).
+- Output sharpening (screen, matte paper, glossy paper; low, standard, high), applied at the export's size after
+  resizing; off by default.
+- "Original file": the original as it is, under its own name, optionally with an XMP sidecar carrying the edit and the
+  rating/label/flag (to a folder or the share sheet; the gallery holds images only).
+- Export presets carry the new options; the built-in presets are unchanged.
+
+### Removed
+- The "Design system" page (library menu): its component goldens now live in `:core:designsystem` tests.
+
 ### Changed
 - The sync server moved to Hoard (SRV/M): it is now `hoard-server` (github.com/henriquefps/hoard, `server/`, image
   `ghcr.io/henriquefps/hoard-server`), and `sync-server/` and its workflows are gone from this repository. The protocol

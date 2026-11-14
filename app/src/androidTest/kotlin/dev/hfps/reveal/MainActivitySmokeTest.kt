@@ -15,7 +15,7 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 
-/** The app launches, Hilt builds its graph, the library is the start screen; its menu reaches the gallery and About. */
+/** The app launches, Hilt builds its graph, the library is the start screen; its menu reaches About. */
 @OptIn(ExperimentalTestApi::class)
 @RunWith(AndroidJUnit4::class)
 class MainActivitySmokeTest {
@@ -37,11 +37,7 @@ class MainActivitySmokeTest {
     }
 
     @Test
-    fun menuReachesTheGalleryAndAbout() {
-        composeRule.onNodeWithTag(LibraryTags.MENU).performClick()
-        composeRule.onNodeWithText(text(LibraryR.string.library_menu_gallery)).performClick()
-        composeRule.onNodeWithText(text(R.string.gallery_page_foundations)).assertIsDisplayed()
-        composeRule.activityRule.scenario.onActivity { it.onBackPressedDispatcher.onBackPressed() }
+    fun menuReachesAbout() {
         composeRule.onNodeWithTag(LibraryTags.MENU).performClick()
         composeRule.onNodeWithText(text(LibraryR.string.library_menu_about)).performClick()
         composeRule.onNodeWithText("LibRaw 0.22.3").assertIsDisplayed()

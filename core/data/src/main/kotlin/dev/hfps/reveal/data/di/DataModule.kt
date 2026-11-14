@@ -298,6 +298,7 @@ object DataModule {
     @Singleton
     fun provideFillCacheArea(@ApplicationContext context: Context, budget: CacheBudget): FillCacheArea = FillCacheArea(
         FillDiskCache(File(context.cacheDir, FillCacheArea.DIR), cap = budget::cap, onWrite = budget::requestTrim),
+        programs = File(context.codeCacheDir, FillCacheArea.GPU_PROGRAMS),
     ).also(budget::register)
 
     /**
@@ -307,18 +308,25 @@ object DataModule {
      */
     @Provides
     @Singleton
-    fun provideInpaintService(@ApplicationContext context: Context, fills: FillCacheArea): InpaintService =
-        InpaintService(
-            loader = InpaintService.assets(context.assets, File(context.codeCacheDir, FillCacheArea.GPU_PROGRAMS).path),
-            cache = fills.cache,
-            hasMemoryFor = { model ->
-                val activity = context.getSystemService(ActivityManager::class.java)
-                val info = ActivityManager.MemoryInfo().also { activity.getMemoryInfo(it) }
-                val need = runCatching { context.assets.openFd(MaskModels.assetPath(model)).use { it.length } }
-                    .getOrDefault(0L) * InpaintService.MEMORY_PER_FILE_BYTE
-                !info.lowMemory && info.availMem - info.threshold > need
-            },
-        )
+    fun provideInpaintService(
+        @ApplicationContext context: Context,
+        fills: FillCacheArea,
+        budget: CacheBudget,
+    ): InpaintService = InpaintService(
+        loader = InpaintService.assets(
+            context.assets,
+            File(context.codeCacheDir, FillCacheArea.GPU_PROGRAMS).path,
+            onLoaded = budget::requestTrim,
+        ),
+        cache = fills.cache,
+        hasMemoryFor = { model ->
+            val activity = context.getSystemService(ActivityManager::class.java)
+            val info = ActivityManager.MemoryInfo().also { activity.getMemoryInfo(it) }
+            val need = runCatching { context.assets.openFd(MaskModels.assetPath(model)).use { it.length } }
+                .getOrDefault(0L) * InpaintService.MEMORY_PER_FILE_BYTE
+            !info.lowMemory && info.availMem - info.threshold > need
+        },
+    )
 
     @Provides
     @Singleton

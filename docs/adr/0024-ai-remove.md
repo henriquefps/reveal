@@ -123,9 +123,16 @@ downscale, upscale and blend on the CPU):
 | first export (BATCH_MATMUL left constant) | GPU (39 of 1,844 nodes) | 3,522 ms | 22,523 ms | 15,839 ms | — | 1,413 MB | — |
 | MI-GAN 512 (spike) | GPU | 1,890 ms | 61 ms | 47 ms | 93 ms | 89 MB | mean 0.0008 |
 
+`InpaintDeviceTest` on the S24 Ultra (4/4): a 360 x 300 crop's first fill 5.0 s (load and compile included), from the
+cache 154 ms; the hole's GPU vs CPU mean |Δ| **0.0083** (512 x 384 crop; GPU 2.5 s with its compile, CPU 6.4 s);
+PSS **97 MiB before, 644 MiB with the model held, 215 MiB after release** (≈ 118 MiB stay with the GPU driver's
+allocator); a GPU load **2.8 s with an empty program cache, 0.97 s with it filled**, the programs taking **107 MB**
+on disk (counted with "AI masks and fills": trimmed by the budget, deleted by "Clear cache", compiled again when
+needed). With the release after each fill, a fill on the phone costs ≈ 1.3 s (load from the program cache + run).
+
 x86_64 emulator, LiteRT CPU (`InpaintDeviceTest`, a 360 x 300 crop): 15.0 s the model, 18.7 s with the load; a cached
 fill 174 ms. The GPU program cache's effect on a cold load and the hole's GPU/CPU parity on a photo come from
-`InpaintDeviceTest` on the phone (CLAUDE.md "AI Remove").
+`InpaintDeviceTest` (above).
 
 ## Runtime (`:core:ml` `inpaint/`)
 

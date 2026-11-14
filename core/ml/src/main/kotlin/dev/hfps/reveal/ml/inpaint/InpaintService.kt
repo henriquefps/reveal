@@ -167,13 +167,18 @@ class InpaintService(
 
         /**
          * Loads a bundled model from the APK's assets with LiteRT (GPU, else CPU), keeping the GPU's compiled programs
-         * in [gpuCacheDir] (null: no program cache) so later loads skip most of the compile.
+         * in [gpuCacheDir] (null: no program cache) so later loads skip most of the compile; [onLoaded] after each load
+         * (the app's budget trims, the programs being a cache it counts).
          */
-        fun assets(assets: AssetManager, gpuCacheDir: String?): (InpaintModelSpec) -> InferenceEngine = { model ->
+        fun assets(
+            assets: AssetManager,
+            gpuCacheDir: String?,
+            onLoaded: () -> Unit = {},
+        ): (InpaintModelSpec) -> InferenceEngine = { model ->
             LiteRtEngine.load(
                 LiteRtEngine.Source.Asset(assets, MaskModels.assetPath(model)),
                 gpuCache = gpuCacheDir?.let { LiteRtEngine.GpuCache(it, model.key) },
-            )
+            ).also { onLoaded() }
         }
     }
 }

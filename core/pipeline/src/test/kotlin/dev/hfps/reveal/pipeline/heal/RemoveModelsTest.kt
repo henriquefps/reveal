@@ -111,7 +111,14 @@ class RemoveModelsTest {
         val bh = 1200
         val sigma = 0.02f
         val rnd = Random(7)
-        val noisy = PipelineInput.linearSrgb(big, bh, FloatArray(big * bh * 3) { 0.3f + sigma * rnd.nextGaussian().toFloat() })
+        val noisy = PipelineInput.linearSrgb(
+            big,
+            bh,
+            FloatArray(big * bh * 3) {
+                0.3f +
+                    sigma * rnd.nextGaussian().toFloat()
+            },
+        )
         val large = HealScenes.spot("g", Heal.KIND_REMOVE, big, bh, 800f, 600f, 160f, feather = 0f).copy(method = model)
         assertThat(checkNotNull(RemoveSpec.of(large, big, bh)).factor).isGreaterThan(1)
         val source = fills().also { it.register(model, Grey()) }

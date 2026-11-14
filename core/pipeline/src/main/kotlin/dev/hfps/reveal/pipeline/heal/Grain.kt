@@ -4,7 +4,6 @@ package dev.hfps.reveal.pipeline.heal
 
 import kotlin.math.abs
 import kotlin.math.max
-import kotlin.math.min
 import kotlin.math.sqrt
 
 /**
@@ -65,37 +64,39 @@ class Grain(private val sigma: FloatArray, private val amount: Float, private va
         @Suppress("LongParameterList", "ReturnCount")
         fun of(rgb: FloatArray, w: Int, h: Int, outside: (Int, Int) -> Boolean, scale: Float, seed: Long): Grain? {
             if (scale >= 1f || w < 3 || h < 3) return null
-            val count = (w - 2) * (h - 2)
-            val stride = max(1, count / MAX_SAMPLES)
-            val samples = Array(3) { FloatArray(min(count, MAX_SAMPLES + 1)) }
-            var n = 0
+            val samples = residuals(rgb, w, h, outside)
+            val n = samples[0].size
+            if (n < MIN_SAMPLES) return null
+            val sigma = FloatArray(3) { c -> MAD * samples[c].also { it.sort() }[n / 2] / RESIDUAL }
+            return Grain(sigma, sqrt(1f - scale * scale), seed)
+        }
+
+        /**
+         * |pixel - mean of its 4 neighbours| per channel, at (up to [MAX_SAMPLES], evenly strided) pixels whose cross
+         * lies entirely [outside] the spot.
+         */
+        @Suppress("NestedBlockDepth")
+        private fun residuals(rgb: FloatArray, w: Int, h: Int, outside: (Int, Int) -> Boolean): Array<FloatArray> {
+            fun ring(x: Int, y: Int) = outside(x, y) && outside(x - 1, y) && outside(x + 1, y) && cross(x, y, outside)
+            val stride = max(1, (w - 2) * (h - 2) / MAX_SAMPLES)
+            val out = Array(3) { ArrayList<Float>() }
             var i = 0
             for (y in 1 until h - 1) {
                 for (x in 1 until w - 1) {
-                    if (i++ % stride != 0 || n >= samples[0].size) continue
-                    if (!outside(x, y) || !outside(x - 1, y) || !outside(x + 1, y) ||
-                        !outside(x, y - 1) || !outside(x, y + 1)
-                    ) {
-                        continue
+                    if (i++ % stride == 0 && out[0].size < MAX_SAMPLES && ring(x, y)) {
+                        for (c in 0..2) out[c] += abs(rgb[(y * w + x) * 3 + c] - neighbours(rgb, w, x, y, c))
                     }
-                    for (c in 0..2) {
-                        val p = rgb[(y * w + x) * 3 + c]
-                        val m = (
-                            rgb[(y * w + x - 1) * 3 + c] + rgb[(y * w + x + 1) * 3 + c] +
-                                rgb[((y - 1) * w + x) * 3 + c] + rgb[((y + 1) * w + x) * 3 + c]
-                            ) / 4f
-                        samples[c][n] = abs(p - m)
-                    }
-                    n++
                 }
             }
-            if (n < MIN_SAMPLES) return null
-            val sigma = FloatArray(3) { c ->
-                val s = samples[c].copyOf(n).also { it.sort() }
-                MAD * s[n / 2] / RESIDUAL
-            }
-            return Grain(sigma, sqrt(1f - scale * scale), seed)
+            return Array(3) { out[it].toFloatArray() }
         }
+
+        private fun cross(x: Int, y: Int, outside: (Int, Int) -> Boolean) = outside(x, y - 1) && outside(x, y + 1)
+
+        private fun neighbours(rgb: FloatArray, w: Int, x: Int, y: Int, c: Int): Float = (
+            rgb[(y * w + x - 1) * 3 + c] + rgb[(y * w + x + 1) * 3 + c] +
+                rgb[((y - 1) * w + x) * 3 + c] + rgb[((y + 1) * w + x) * 3 + c]
+            ) / 4f
 
         private const val MIN_SAMPLES = 64
     }

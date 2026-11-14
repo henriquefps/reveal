@@ -407,12 +407,6 @@ class HealEngine(
     }
 
     /**
-     * The fill's pixels over (x0, y0, w, h) at this resolution: through the offsets (the 4 crop pixels around the
-     * point, bilinear weights, each copying the pixel its offset points at; whole pixels, no resampling), else the
-     * fill's colours (bilinear, decoded), else the image itself.
-     */
-    @Suppress("LongMethod", "CyclomaticComplexMethod", "NestedBlockDepth")
-    /**
      * A model's fill (no offsets) is upsampled where this render is finer than the crop: grain matched to the ring of
      * pixels around the spot ([Grain], docs/adr/0024). The patch method copies the photo's own pixels: none.
      */
@@ -435,7 +429,12 @@ class HealEngine(
         )
     }
 
-    @Suppress("LongParameterList")
+    /**
+     * The fill's pixels over (x0, y0, w, h) at this resolution: through the offsets (the 4 crop pixels around the
+     * point, bilinear weights, each copying the pixel its offset points at; whole pixels, no resampling), else the
+     * fill's colours (bilinear, decoded, plus [grain] where the render is finer than the crop), else the image itself.
+     */
+    @Suppress("LongMethod", "CyclomaticComplexMethod", "NestedBlockDepth", "LongParameterList")
     private fun propose(
         fill: RemoveFill,
         x0: Int,

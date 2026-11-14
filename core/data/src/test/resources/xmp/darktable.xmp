@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/" x:xmptk="XMP Core 4.4.0-Exiv2">
+ <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about=""
+    xmlns:exif="http://ns.adobe.com/exif/1.0/"
+    xmlns:xmp="http://ns.adobe.com/xap/1.0/"
+    xmlns:xmpMM="http://ns.adobe.com/xap/1.0/mm/"
+    xmlns:dc="http://purl.org/dc/elements/1.1/"
+    xmlns:darktable="http://darktable.sf.net/"
+   exif:DateTimeOriginal="2026:05:02 10:12:03.250"
+   xmp:Rating="2"
+   xmpMM:DerivedFrom="DSC00003.ARW"
+   darktable:import_timestamp="63891234567000000"
+   darktable:change_timestamp="63891234999000000"
+   darktable:export_timestamp="-1"
+   darktable:print_timestamp="-1"
+   darktable:xmp_version="5"
+   darktable:raw_params="0"
+   darktable:auto_presets_applied="1"
+   darktable:last_modified="0"
+   darktable:history_end="2"
+   darktable:iop_order_version="4">
+   <darktable:masks_history>
+    <rdf:Seq/>
+   </darktable:masks_history>
+   <darktable:history>
+    <rdf:Seq>
+     <rdf:li
+      darktable:num="0"
+      darktable:operation="exposure"
+      darktable:enabled="1"
+      darktable:modversion="6"
+      darktable:params="00000000000080b9cdcc4c3f000000000000c84201000000"
+      darktable:multi_name=""
+      darktable:multi_priority="0"
+      darktable:blendop_version="13"
+      darktable:blendop_params="gz12eJxjYIAAGQYYOOHEgAZY0QWwAgBbagMN"/>
+     <rdf:li
+      darktable:num="1"
+      darktable:operation="colorbalancergb"
+      darktable:enabled="1"
+      darktable:modversion="5"
+      darktable:params="gz02eJxjZGBgsGCAAJtLHAA="
+      darktable:multi_name="&amp; &lt;basic&gt;"
+      darktable:multi_priority="0"
+      darktable:blendop_version="13"
+      darktable:blendop_params="gz12eJxjYIAAGQYYOOHEgAZY0QWwAgBbagMN"/>
+    </rdf:Seq>
+   </darktable:history>
+   <darktable:colorlabels>
+    <rdf:Seq>
+     <rdf:li>0</rdf:li>
+    </rdf:Seq>
+   </darktable:colorlabels>
+  </rdf:Description>
+ </rdf:RDF>
+</x:xmpmeta>

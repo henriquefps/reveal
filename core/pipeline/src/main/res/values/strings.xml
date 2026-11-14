@@ -139,6 +139,7 @@
     <string name="history_action_snapshot">Snapshot applied</string>
     <string name="history_action_snapshot_named">Snapshot: %1$s</string>
     <string name="history_action_virtual_copy">Virtual copy</string>
+    <string name="history_action_xmp_import">Imported from XMP</string>
     <string name="history_lens_corrections">Lens corrections %1$s</string>
     <string name="history_remove_ca">Remove chromatic aberration %1$s</string>
     <string name="history_value_toggle_on">on</string>

@@ -37,6 +37,7 @@ import dev.hfps.reveal.data.storage.DocumentTree
 import dev.hfps.reveal.data.storage.SafDocumentTree
 import dev.hfps.reveal.data.storage.StorageVolumes
 import dev.hfps.reveal.data.storage.isAccessError
+import dev.hfps.reveal.data.sync.RemoteEdits
 import dev.hfps.reveal.data.sync.ServerTree
 import java.io.IOException
 import java.util.concurrent.ConcurrentHashMap
@@ -208,10 +209,12 @@ class LibraryRepository(
     private val serverAuthority: String? = null,
     /** Local previews of hand-offs (ADR 0011 "Unreadable hand-offs"); null in tests without them. */
     private val previews: LocalPreviews? = null,
+    /** Settings → "Apply edits from XMP sidecars" (ADR 0026). */
+    readEdits: () -> Boolean = { true },
 ) {
     private val sourceDao = db.sourceDao()
     private val photoDao = db.photoDao()
-    private val indexer = LibraryIndexer(db, clock)
+    private val indexer = LibraryIndexer(db, readEdits, clock)
     private val merge = HandoffMerge(db, clock)
     private val fallbacks = HandoffFallbacks(db, previews, serverAuthority)
     private val jobs = ConcurrentHashMap<Long, Job>()
@@ -498,6 +501,9 @@ class LibraryRepository(
                 sourceDao.setIndexed(sourceId, clock())
                 reports.update { it + (sourceId to report) }
                 Log.i(TAG, "Indexed source $sourceId: $report")
+                // Edits read from sidecars (ADR 0026): an open editor reloads; sidecars older than the photo catch up.
+                if (report.editedVersions.isNotEmpty()) RemoteEdits.announce(report.editedVersions)
+                if (report.sidecarsBehind.isNotEmpty()) sidecars.write(report.sidecarsBehind, editsOnly = true)
                 fingerprint(source)
             } catch (e: CancellationException) {
                 throw e

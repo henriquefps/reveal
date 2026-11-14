@@ -483,6 +483,9 @@ data class HandoffTwin(
     @ColumnInfo(name = "folder_role") val folderRole: dev.hfps.reveal.data.model.FileRole,
 )
 
+/** A master version's recipe change ([EditDao.changedMasters]). */
+data class ChangedRecipe(val photoId: Long, val updatedAt: Long)
+
 @Dao
 interface EditDao {
     /** Who changed the version's edit last and when (ADR 0018 FIX/W); no sync trigger watches these columns. */
@@ -518,6 +521,18 @@ interface EditDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun setCursor(cursor: HistoryCursorEntity)
+
+    /** The newest `recipes.updated_at`: emits on every recipe change (ADR 0026, the sidecar writer's trigger). */
+    @Query("SELECT MAX(updated_at) FROM recipes")
+    fun observeLastChange(): Flow<Long?>
+
+    /** Master versions (position 0) whose recipe changed after [after] (Unix ms), oldest change first. */
+    @Query(
+        "SELECT v.photo_id AS photoId, r.updated_at AS updatedAt FROM recipes r " +
+            "JOIN versions v ON v.id = r.version_id " +
+            "WHERE v.position = 0 AND r.updated_at > :after ORDER BY r.updated_at",
+    )
+    suspend fun changedMasters(after: Long): List<ChangedRecipe>
 
     /** The most recently changed edited recipe of any version but [excludeVersionId] ("Previous"). */
     @Query(

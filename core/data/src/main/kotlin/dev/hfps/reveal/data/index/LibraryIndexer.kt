@@ -17,6 +17,8 @@ import dev.hfps.reveal.data.db.PhotoFileEntity
 import dev.hfps.reveal.data.db.RevealDatabase
 import dev.hfps.reveal.data.db.SyncTriggers
 import dev.hfps.reveal.data.db.VersionEntity
+import dev.hfps.reveal.data.library.SidecarEditResult
+import dev.hfps.reveal.data.library.SidecarEdits
 import dev.hfps.reveal.data.model.FileRole
 import dev.hfps.reveal.data.model.MetadataState
 import dev.hfps.reveal.data.model.PhotoFormat
@@ -24,7 +26,10 @@ import dev.hfps.reveal.data.model.PickFlag
 import dev.hfps.reveal.data.storage.DocumentEntry
 import dev.hfps.reveal.data.storage.DocumentTree
 import dev.hfps.reveal.data.storage.fingerprint
+import dev.hfps.reveal.data.xmp.SidecarDevelop
 import dev.hfps.reveal.data.xmp.SidecarNames
+import dev.hfps.reveal.data.xmp.XmpDevelop
+import dev.hfps.reveal.data.xmp.XmpDom
 import dev.hfps.reveal.data.xmp.XmpFields
 import dev.hfps.reveal.data.xmp.XmpReader
 import java.util.TimeZone
@@ -56,6 +61,12 @@ data class IndexReport(
     val saveMs: Long,
     val sidecarMs: Long,
     val metadataMs: Long,
+    /** Photos whose sidecar edit became an "Imported from XMP" step or a conflict copy (ADR 0026). */
+    val editsImported: Int = 0,
+    /** Versions whose edit a sidecar changed (an open editor reloads them). */
+    val editedVersions: List<Long> = emptyList(),
+    /** Photos whose sidecar holds an older edit than the photo: to be rewritten. */
+    val sidecarsBehind: List<Long> = emptyList(),
 ) {
     val totalMs: Long get() = listMs + saveMs + sidecarMs + metadataMs
 }
@@ -68,8 +79,14 @@ data class IndexReport(
  * sub-seconds, size, orientation; embedded XMP of JPEGs) of the photos marked pending, a few at a time. Files are
  * never copied or written.
  */
-class LibraryIndexer(private val db: RevealDatabase, private val clock: () -> Long = System::currentTimeMillis) {
+class LibraryIndexer(
+    private val db: RevealDatabase,
+    /** Settings → "Apply edits from XMP sidecars" (ADR 0026); off = sidecars give ratings only. */
+    private val readEdits: () -> Boolean = { true },
+    private val clock: () -> Long = System::currentTimeMillis,
+) {
     private val photos = db.photoDao()
+    private val sidecarEdits = SidecarEdits(db, clock = clock)
 
     /** Indexes [sourceId] through [tree]. Throws when the tree cannot be listed (nothing is deleted then). */
     suspend fun index(sourceId: Long, tree: DocumentTree, onProgress: (IndexProgress) -> Unit = {}): IndexReport {
@@ -82,12 +99,18 @@ class LibraryIndexer(private val db: RevealDatabase, private val clock: () -> Lo
         val saveMs = msSince(t)
 
         t = System.nanoTime()
-        val sidecars = readSidecars(tree, save.sidecarQueue, onProgress)
-        val sidecarMs = msSince(t)
+        val developJobs = ArrayList<DevelopJob>()
+        val sidecars = readSidecars(tree, save.sidecarQueue, developJobs, onProgress)
+        var sidecarMs = msSince(t)
 
         t = System.nanoTime()
         val headers = readHeaders(sourceId, tree, onProgress = onProgress)
         val metadataMs = msSince(t)
+
+        // Edits after the headers: a crop needs the photo's orientation and size.
+        t = System.nanoTime()
+        val develop = applyDevelop(developJobs)
+        sidecarMs += msSince(t)
         onProgress(IndexProgress(IndexPhase.DONE, 0, 0))
         return IndexReport(
             files = folders.sumOf { it.images.size },
@@ -101,7 +124,35 @@ class LibraryIndexer(private val db: RevealDatabase, private val clock: () -> Lo
             saveMs = saveMs,
             sidecarMs = sidecarMs,
             metadataMs = metadataMs,
+            editsImported = develop.imported,
+            editedVersions = develop.versions,
+            sidecarsBehind = develop.behind,
         )
+    }
+
+    /** A sidecar whose develop part is to be reconciled with its photo's edit. */
+    private class DevelopJob(val photoId: Long, val develop: SidecarDevelop, val name: String)
+
+    private class DevelopResult(val imported: Int, val versions: List<Long>, val behind: List<Long>)
+
+    private suspend fun applyDevelop(jobs: List<DevelopJob>): DevelopResult {
+        if (jobs.isEmpty() || !readEdits()) return DevelopResult(0, emptyList(), emptyList())
+        var imported = 0
+        val versions = ArrayList<Long>()
+        val behind = ArrayList<Long>()
+        for (job in jobs) {
+            currentCoroutineContext().ensureActive()
+            val outcome = runCatching { sidecarEdits.reconcile(job.photoId, job.develop, job.name) }
+                .onFailure { if (it is CancellationException) throw it }
+                .getOrNull() ?: continue
+            when (outcome.result) {
+                SidecarEditResult.IMPORTED, SidecarEditResult.CONFLICT -> imported++
+                SidecarEditResult.SIDECAR_BEHIND -> behind += job.photoId
+                SidecarEditResult.NONE -> Unit
+            }
+            versions += outcome.versionIds
+        }
+        return DevelopResult(imported, versions, behind)
     }
 
     /** Reads the headers of the photos of [sourceId] still `PENDING` (the hand-off source has no walk, ADR 0011). */
@@ -341,16 +392,20 @@ class LibraryIndexer(private val db: RevealDatabase, private val clock: () -> Lo
     private suspend fun readSidecars(
         tree: DocumentTree,
         jobs: List<SidecarJob>,
+        develop: MutableList<DevelopJob>,
         onProgress: (IndexProgress) -> Unit,
     ): Int {
         var done = 0
         jobs.chunked(BATCH).forEach { batch ->
             currentCoroutineContext().ensureActive()
             val results = batch.map { job ->
-                job to
-                    runCatching {
-                        XmpReader.read(tree.readBytes(job.sidecar.documentId, MAX_SIDECAR_BYTES))
-                    }.getOrNull()
+                val document = runCatching {
+                    XmpDom.parse(tree.readBytes(job.sidecar.documentId, MAX_SIDECAR_BYTES))
+                }.getOrNull()
+                val fields = document?.let { runCatching { XmpReader.read(it) }.getOrNull() }
+                val edits = document?.let { XmpDevelop.read(it) }
+                if (edits != null && edits.hasEdits) develop += DevelopJob(job.photoId, edits, job.sidecar.name)
+                job to fields
             }
             db.withTransaction {
                 for ((job, fields) in results) {

@@ -76,6 +76,7 @@ object HistoryLabels {
         HistoryAction.LENS_PROFILE to R.string.history_action_lens_profile,
         HistoryAction.SNAPSHOT to R.string.history_action_snapshot,
         HistoryAction.VIRTUAL_COPY to R.string.history_action_virtual_copy,
+        HistoryAction.XMP_IMPORT to R.string.history_action_xmp_import,
     )
 
     private val GROUP_NAMES: Map<RecipeGroup, Int> = mapOf(

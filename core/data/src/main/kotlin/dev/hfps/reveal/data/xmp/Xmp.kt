@@ -45,15 +45,17 @@ object XmpNs {
     const val DIGIKAM = "http://www.digikam.org/ns/1.0/"
     const val XMLNS = "http://www.w3.org/2000/xmlns/"
 
-    /**
-     * Reveal's own namespace, reserved for the recipe in the sidecar (M5, `docs/plan/architecture.md` "The recipe"):
-     * the writer leaves every `reveal:` property it finds untouched, and [XmpWriter.update] takes the extensions
-     * that will write them.
-     */
+    /** Adobe Camera Raw settings (Lightroom, Camera Raw; darktable's Lightroom import reads some): ADR 0026. */
+    const val CRS = "http://ns.adobe.com/camera-raw-settings/1.0/"
+
+    /** `tiff:Orientation`: the picture's orientation after the user's quarter turns and flips (ADR 0026). */
+    const val TIFF = "http://ns.adobe.com/tiff/1.0/"
+
+    /** Reveal's own namespace: the recipe and its ancestry in the sidecar (ADR 0026, [XmpDevelop]). */
     const val REVEAL = "https://reveal.hfps.dev/ns/1.0/"
 
     /** Preferred prefixes when a namespace has to be declared. */
-    val prefixes = mapOf(XMP to "xmp", DIGIKAM to "digiKam", REVEAL to "reveal")
+    val prefixes = mapOf(XMP to "xmp", DIGIKAM to "digiKam", REVEAL to "reveal", CRS to "crs", TIFF to "tiff")
 }
 
 /** Reads [XmpFields] from a sidecar or an embedded packet. */
@@ -96,8 +98,8 @@ object XmpReader {
 }
 
 /**
- * Something else Reveal writes into the sidecar's main `rdf:Description` (the M5 recipe in [XmpNs.REVEAL]). It
- * receives the element after the library fields are set.
+ * Something else Reveal writes into the sidecar's main `rdf:Description` (the recipe and the Camera Raw overlap,
+ * [XmpDevelop]). It receives the element after the library fields are set.
  */
 fun interface XmpExtension {
     fun apply(document: Document, description: Element)
@@ -221,6 +223,71 @@ internal object XmpDom {
         }
     }
 
+    /** An `rdf:Seq` (or `rdf:Bag`/`rdf:Alt`) property's items, or null when the property is absent or not a list. */
+    @Suppress("ReturnCount")
+    fun list(description: Element, ns: String, name: String): List<String>? {
+        val property =
+            children(description).firstOrNull { it.namespaceURI == ns && it.localName == name } ?: return null
+        val container = children(property).firstOrNull { it.namespaceURI == XmpNs.RDF } ?: return null
+        return children(container).filter {
+            it.namespaceURI == XmpNs.RDF && it.localName == "li"
+        }.map { it.textContent }
+    }
+
+    /** Removes every property of [ns] (attributes and elements) from [description]. */
+    fun removeNamespace(description: Element, ns: String) {
+        attributes(description).filter { it.namespaceURI == ns }.forEach { description.removeAttributeNode(it) }
+        children(description).filter { it.namespaceURI == ns }.forEach { removeProperty(description, ns, it.localName) }
+    }
+
+    /** True when [description] has any property of [ns]. */
+    fun hasNamespace(description: Element, ns: String): Boolean =
+        attributes(description).any { it.namespaceURI == ns } || children(description).any { it.namespaceURI == ns }
+
+    /** Appends `<ns:name>text</ns:name>` (a property too long or structured for an attribute). */
+    fun appendText(description: Element, ns: String, name: String, text: String) {
+        description.appendChild(propertyElement(description, ns, name).apply { textContent = text })
+    }
+
+    /** Appends `<ns:name><rdf:Seq><rdf:li>item</rdf:li>...</rdf:Seq></ns:name>`. */
+    fun appendSeq(description: Element, ns: String, name: String, items: List<String>) {
+        val document = description.ownerDocument
+        val property = propertyElement(description, ns, name)
+        val rdf = description.lookupPrefix(XmpNs.RDF) ?: "rdf"
+        val seq = document.createElementNS(XmpNs.RDF, "$rdf:Seq")
+        for (item in items) seq.appendChild(document.createElementNS(XmpNs.RDF, "$rdf:li").apply { textContent = item })
+        property.appendChild(seq)
+        description.appendChild(property)
+    }
+
+    private fun propertyElement(description: Element, ns: String, name: String): Element {
+        val prefix = description.lookupPrefix(ns) ?: declare(description, ns)
+        // One indentation step deeper than the description, as XMP tools lay sidecars out; the closing indentation
+        // moves to the end ([closeIndent]), so repeated writes never accumulate blank lines.
+        val last = description.lastChild
+        if (last != null && last.nodeType == Node.TEXT_NODE && last.nodeValue.isBlank()) description.removeChild(last)
+        description.appendChild(description.ownerDocument.createTextNode("\n" + " ".repeat(depth(description) + 1)))
+        return description.ownerDocument.createElementNS(ns, "$prefix:$name")
+    }
+
+    /** Ends [description]'s children with the indentation of its closing tag (after [appendText]/[appendSeq]). */
+    fun closeIndent(description: Element) {
+        val last = description.lastChild ?: return
+        if (last.nodeType == Node.ELEMENT_NODE) {
+            description.appendChild(description.ownerDocument.createTextNode("\n" + " ".repeat(depth(description))))
+        }
+    }
+
+    private fun depth(element: Element): Int {
+        var n = 0
+        var node: Node? = element.parentNode
+        while (node != null && node.nodeType == Node.ELEMENT_NODE) {
+            n++
+            node = node.parentNode
+        }
+        return n
+    }
+
     fun setAttribute(element: Element, ns: String, name: String, value: String) {
         val prefix = element.lookupPrefix(ns) ?: declare(element, ns)
         element.setAttributeNS(ns, "$prefix:$name", value)
@@ -235,7 +302,7 @@ internal object XmpDom {
         return prefix
     }
 
-    private fun children(element: Element): List<Element> {
+    fun children(element: Element): List<Element> {
         val nodes = element.childNodes
         return (0 until nodes.length).mapNotNull { nodes.item(it) as? Element }
     }

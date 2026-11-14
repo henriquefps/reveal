@@ -10,6 +10,11 @@
     <string name="settings_sync">Sincronizar com o seu servidor</string>
     <string name="settings_sync_off">Não pareado</string>
     <string name="settings_section_photos">Fotos</string>
+    <string name="settings_section_xmp">Arquivos XMP</string>
+    <string name="settings_xmp_write">Gravar edições nos arquivos XMP</string>
+    <string name="settings_xmp_write_note">Ao lado de cada foto editada, nas pastas em que o Reveal pode gravar. O Lightroom e o darktable usam os ajustes básicos.</string>
+    <string name="settings_xmp_read">Aplicar edições dos arquivos XMP</string>
+    <string name="settings_xmp_read_note">Uma edição de outro aparelho ou do Lightroom vira um passo que você pode desfazer.</string>
     <string name="settings_gallery">Acesso à galeria</string>
     <string name="settings_gallery_full">Permitido: fotos compartilhadas pela galeria continuam legíveis</string>
     <string name="settings_gallery_partial">Só as fotos selecionadas</string>

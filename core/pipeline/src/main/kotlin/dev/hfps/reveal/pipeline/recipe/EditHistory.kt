@@ -40,6 +40,9 @@ enum class HistoryAction {
 
     /** The first step of a virtual copy made from another version's edit (docs/adr/0025). */
     VIRTUAL_COPY,
+
+    /** Edits read from the photo's XMP sidecar: another device's or app's recipe, or Camera Raw values (ADR 0026). */
+    XMP_IMPORT,
 }
 
 /**

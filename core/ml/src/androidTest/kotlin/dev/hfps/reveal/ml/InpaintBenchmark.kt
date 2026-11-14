@@ -42,17 +42,19 @@ class InpaintBenchmark {
             for (backend in listOf("GPU", "CPU")) measure(file, backend, photo)?.let { outputs[backend] = it }
             val gpu = outputs["GPU"]
             val cpu = outputs["CPU"]
-            if (gpu != null && cpu != null) {
-                var sum = 0.0
-                var max = 0f
-                for (i in gpu.indices) {
-                    val d = abs(gpu[i] - cpu[i])
-                    sum += d
-                    if (d > max) max = d
-                }
-                Log.i(TAG, "inpaint parity ${file.name} meanAbs=${f4(sum / gpu.size)} maxAbs=${f4(max.toDouble())}")
-            }
+            if (gpu != null && cpu != null) parity(file.name, gpu, cpu)
         }
+    }
+
+    private fun parity(name: String, gpu: FloatArray, cpu: FloatArray) {
+        var sum = 0.0
+        var max = 0f
+        for (i in gpu.indices) {
+            val d = abs(gpu[i] - cpu[i])
+            sum += d
+            if (d > max) max = d
+        }
+        Log.i(TAG, "inpaint parity $name meanAbs=${f4(sum / gpu.size)} maxAbs=${f4(max.toDouble())}")
     }
 
     @Suppress("ExplicitGarbageCollectionCall", "LongMethod") // the memory delta of one model needs a settled heap
@@ -179,7 +181,8 @@ class InpaintBenchmark {
                     val a01 = a[(y0 * S + x1) * ch + c]
                     val a10 = a[(y1 * S + x0) * ch + c]
                     val a11 = a[(y1 * S + x1) * ch + c]
-                    out[(y * n + x) * ch + c] = (a00 * (1 - wx) + a01 * wx) * (1 - wy) + (a10 * (1 - wx) + a11 * wx) * wy
+                    val top = a00 * (1 - wx) + a01 * wx
+                    out[(y * n + x) * ch + c] = top * (1 - wy) + (a10 * (1 - wx) + a11 * wx) * wy
                 }
             }
         }

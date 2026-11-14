@@ -33,9 +33,9 @@ import dev.hfps.reveal.feature.export.ui.ExportUiState
 import dev.hfps.reveal.feature.settings.SettingsContent
 import dev.hfps.reveal.pipeline.export.ExportSize
 import dev.hfps.reveal.pipeline.export.OutputSharpening
+import dev.hfps.reveal.pipeline.export.PixelSize
 import dev.hfps.reveal.pipeline.export.SharpenAmount
 import dev.hfps.reveal.pipeline.export.SharpenMedium
-import dev.hfps.reveal.pipeline.export.PixelSize
 import dev.hfps.reveal.pipeline.recipe.Recipe
 import org.junit.Rule
 import org.junit.Test

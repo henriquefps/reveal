@@ -503,6 +503,24 @@
     <string name="masks_type_luminance">Intervalo de luminância</string>
     <string name="masks_type_radial">Gradiente radial</string>
     <string name="masks_type_unknown">Parte desconhecida</string>
+    <!-- Virtual copies and snapshots (docs/adr/0025). -->
+    <string name="editor_menu_save_snapshot">Salvar instantâneo…</string>
+    <string name="editor_menu_create_copy">Criar cópia virtual</string>
+    <string name="editor_copy_name">Cópia %1$d</string>
+    <string name="editor_copy_created">Cópia virtual criada</string>
+    <string name="editor_snapshots_title">Instantâneos</string>
+    <string name="editor_snapshots_empty">Salve a edição como está agora para voltar a ela depois.</string>
+    <string name="editor_snapshot_save">Salvar</string>
+    <string name="editor_snapshot_save_title">Salvar instantâneo</string>
+    <string name="editor_snapshot_save_confirm">Salvar</string>
+    <string name="editor_snapshot_name">Nome</string>
+    <string name="editor_snapshot_default_name">Instantâneo %1$d</string>
+    <string name="editor_snapshot_rename">Renomear</string>
+    <string name="editor_snapshot_rename_title">Renomear instantâneo</string>
+    <string name="editor_snapshot_delete">Excluir</string>
+    <string name="editor_snapshot_cancel">Cancelar</string>
+    <string name="editor_snapshot_menu">Opções de %1$s</string>
+    <string name="editor_history_steps">Etapas</string>
     <!-- Heal mode (docs/adr/0023) -->
     <string name="heal_kind_heal">Corrigir</string>
     <string name="heal_kind_clone">Clonar</string>

@@ -111,3 +111,6 @@ subtract
 smiley
 hand-tap
 pen-nib
+copy-simple
+stack
+camera

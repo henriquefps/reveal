@@ -83,6 +83,20 @@ object EditorTags {
     const val EYEDROPPER_HINT = "editor-eyedropper-hint"
     const val HISTORY_LIST = "editor-history"
     const val MENU_HISTORY = "editor-menu-history"
+
+    /** More ⋯ → "Create virtual copy" and "Save snapshot…" (docs/adr/0025). */
+    const val MENU_CREATE_COPY = "editor-menu-create-copy"
+    const val MENU_SAVE_SNAPSHOT = "editor-menu-save-snapshot"
+
+    /** The History panel's snapshots section, its "Save snapshot" button and each snapshot's row and menu. */
+    const val SNAPSHOTS = "editor-snapshots"
+    const val SNAPSHOT_SAVE = "editor-snapshot-save"
+    const val SNAPSHOT_RENAME = "editor-snapshot-rename"
+    const val SNAPSHOT_DELETE = "editor-snapshot-delete"
+
+    fun snapshot(id: Long): String = "editor-snapshot-$id"
+
+    fun snapshotMenu(id: Long): String = "editor-snapshot-menu-$id"
     const val MENU_MASK_LAB = "editor-menu-mask-lab"
     const val MENU_COPY = "editor-menu-copy"
     const val MENU_PASTE = "editor-menu-paste"

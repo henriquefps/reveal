@@ -49,6 +49,9 @@ object HistoryLabels {
             action == HistoryAction.PRESET && name != null ->
                 context.getString(R.string.history_action_preset_named, name)
 
+            action == HistoryAction.SNAPSHOT && name != null ->
+                context.getString(R.string.history_action_snapshot_named, name)
+
             else -> action(context, action, groups)
         }
 
@@ -71,6 +74,8 @@ object HistoryLabels {
         HistoryAction.AUTO_MIX to R.string.history_action_auto_mix,
         HistoryAction.CURVE_PRESET to R.string.history_action_curve_preset,
         HistoryAction.LENS_PROFILE to R.string.history_action_lens_profile,
+        HistoryAction.SNAPSHOT to R.string.history_action_snapshot,
+        HistoryAction.VIRTUAL_COPY to R.string.history_action_virtual_copy,
     )
 
     private val GROUP_NAMES: Map<RecipeGroup, Int> = mapOf(

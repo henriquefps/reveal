@@ -157,7 +157,7 @@ REVEAL_COLOUR_SHEET_DIR=$PWD/build/calibration REVEAL_RENDER_OUT=$PWD/docs/scree
 
 ## Library (`:core:data`, `:feature:library`, M1, ADR 0006)
 
-Room `RevealDatabase` v11 (sources, photos, photo_files, versions, recipes, history, history_cursor, cache_entries; sync tables v6; preset tables v7, ADR 0019; `photo_files.unreadable_at` v8, ADR 0011; `photo_cloud.preview_format` v9; `photo_files.on_server` + `sync_deletes` v10, ADR 0018 FIX/V; `versions.edit_device/edited_at` + data fixes v11, FIX/W);
+Room `RevealDatabase` v11 (sources, photos, photo_files, versions, recipes, history, history_cursor, cache_entries; sync tables v6; preset tables v7, ADR 0019; `photo_files.unreadable_at` v8, ADR 0011; `photo_cloud.preview_format` v9; `photo_files.on_server` + `sync_deletes` v10, ADR 0018 FIX/V; `versions.edit_device/edited_at` + data fixes v11, FIX/W; `snapshots` + `export_presets` v12, ADR 0025);
 schema change = new version + migration (or `AutoMigration`) + exported `core/data/schemas/*.json`, tested by
 `RevealDatabaseMigrationTest`. `LibraryRepository` (sources, SAF grants, volumes, indexing, ratings/flags with XMP
 write-back), `LibraryIndexer` (walk → diff → sidecars → headers), `XmpReader`/`XmpWriter` (merge, never overwrite a
@@ -194,6 +194,35 @@ The full suite excludes the measurement classes:
 `-e notClass dev.hfps.reveal.editor.EditorMeasurementsTest,dev.hfps.reveal.library.LibraryMeasurementsTest,dev.hfps.reveal.editor.FilmstripMeasurementsTest,dev.hfps.reveal.sync.SyncPullMeasurementsTest,dev.hfps.reveal.editor.PresetsMeasurementsTest`.
 Frame measurements must not use a Compose test rule (it holds frames while it synchronizes): launch with
 `ActivityScenario` and inject touches with `input swipe`.
+
+## Versions, snapshots and export presets (`:core:data`, `:feature:library`, `:feature:editor`, `:feature:export`, M5/V, ADR 0025)
+
+A virtual copy is a `versions` row (position > 0, `copy_of` null, `name` "Copy N"); conflict copies keep `copy_of`
+(ADR 0018) and `VersionInfo.isCopy` tells them apart. `edit/VersionRepository` (`createCopy(versionId, CopySource
+.CURRENT|ORIGINAL, nameFor)`: a copy of an edit starts with one `HistoryAction.VIRTUAL_COPY` step; `createCopies`,
+`rename`, `delete` (never the last version; position 0 goes to the next; a server-known version becomes a tombstone,
+there is no delete trigger on purpose), snapshots: `createSnapshot`, `renameSnapshot`, `deleteSnapshot`,
+`snapshotRecipe`, `applySnapshot` = one `HistoryAction.SNAPSHOT` step named after it). Grid cells are versions
+everywhere: `PhotoRow.versionName/edited` (edited = the cell's own non-default recipe, `PhotoQuerySql.EDITED_SQL`;
+counts over `CELLS_FROM`), the library's `selected` holds **version ids** (`selectedVersions` for edits/exports,
+`selectedPhotoIds` for rating/flag/remove, `selectedCopies`), the viewer pages `ViewerPage(photoId, versionId)`
+(`ViewerRoute.versionId`, `PhotoImages.display/developed(..., versionId)`) and has a Versions sheet
+(`viewer/VersionsSheet.kt`, `VersionsTags`); the editor's More ⋯ has "Save snapshot…" and "Create virtual copy"
+(`EditorUiState.versions`, `EditorTags.MENU_*`), the History panel starts with `panels/SnapshotsSection.kt`. Culling
+stays per photo (XMP sidecars). Names in dialogs: `RevealTextDialog` (`:core:designsystem`).
+Export presets: `:feature:export/model/ExportPresets.kt` (`BuiltInExportPreset` instagram/web/full, `ExportPreset.User`,
+`ExportPresets.resolve` = this device's fallbacks), stored by `:core:data` `export/ExportPresetRepository`
+(`export_presets`, options = `ExportOptions` JSON); the sheet's Presets row (`ExportTags.preset(key)`, `PRESET_*`).
+Sync: snapshots ride in `version.data.snapshots`; export presets are `setting` records `export-preset.<uuid>`
+(`SyncTriggers.EXPORT_PRESET_PREFIX`, `engine/ExportPresetSync`); triggers v4.
+
+```sh
+./gradlew :core:data:testDebugUnitTest --tests '*VersionRepositoryTest*' --tests '*ExportPresetRepositoryTest*' --tests '*SyncTriggersTest*' --tests '*RevealDatabaseMigrationTest*'
+./gradlew :core:sync:testDebugUnitTest --tests '*VersionsSyncTest*'     # copies, snapshots, export presets on two devices
+./gradlew :feature:export:testDebugUnitTest --tests '*ExportPresetsTest*' && ./gradlew :feature:library:testDebugUnitTest --tests '*LibraryStateTest*'
+adb -s <serial> shell am instrument -w -e class dev.hfps.reveal.library.VersionsFlowTest,dev.hfps.reveal.export.ExportPresetsFlowTest dev.hfps.reveal.debug.test/androidx.test.runner.AndroidJUnitRunner
+adb -s <serial> shell am instrument -w -e class dev.hfps.reveal.editor.SnapshotsFlowTest dev.hfps.reveal.debug.test/androidx.test.runner.AndroidJUnitRunner   # editor GL: the phone
+```
 
 ## Hand-off from other apps (`:core:data/handoff`, ADR 0011)
 

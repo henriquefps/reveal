@@ -21,7 +21,15 @@ import dev.hfps.reveal.sync.SyncStatus
 import org.junit.Test
 
 class LibraryStateTest {
-    private fun row(id: Long, at: Long?, title: String?, remote: Boolean = false, conflict: Boolean = false) = PhotoRow(
+    private fun row(
+        id: Long,
+        at: Long?,
+        title: String?,
+        remote: Boolean = false,
+        conflict: Boolean = false,
+        photoId: Long = id,
+        position: Int = 0,
+    ) = PhotoRow(
         id = id,
         sourceId = 1,
         name = "p$id.jpg",
@@ -38,7 +46,8 @@ class LibraryStateTest {
         handoffTitle = title,
         remote = remote,
         conflict = conflict,
-    )
+        versionPosition = position,
+    ).copy(id = photoId)
 
     private val card = SourceItem(1, "Card", null, true, SourceState.AVAILABLE, true, 12, null)
 
@@ -96,9 +105,30 @@ class LibraryStateTest {
     @Test
     fun `selection actions apply to the selected rows of any filtered grid`() {
         val rows = listOf(row(1, null, null, remote = true), row(2, null, null), row(3, null, null, conflict = true))
-        val state = LibraryUiState(entries = buildGridEntries(rows, PhotoQuery()), selected = setOf(1, 3))
+        // The selection holds version ids (docs/adr/0025).
+        val state = LibraryUiState(entries = buildGridEntries(rows, PhotoQuery()), selected = setOf(101, 103))
         assertThat(state.selectedRemote).containsExactly(1L)
         assertThat(state.selectedConflictCopies).containsExactly(103L)
+    }
+
+    @Test
+    fun `a virtual copy is selected on its own, photo actions reach its photo once`() {
+        // Photo 1 with a virtual copy (version 102) and a conflict copy (version 103), photo 4 alone.
+        val rows = listOf(
+            row(1, null, null),
+            row(2, null, null, photoId = 1, position = 1),
+            row(3, null, null, photoId = 1, position = 2, conflict = true),
+            row(4, null, null),
+        )
+        val state = LibraryUiState(entries = buildGridEntries(rows, PhotoQuery()), selected = setOf(102, 103, 104))
+        assertThat(state.versionIds).containsExactly(101L, 102L, 103L, 104L).inOrder()
+        assertThat(state.selectedVersions).containsExactly(102L, 103L, 104L).inOrder()
+        assertThat(state.selectedPhotoIds).containsExactly(1L, 4L).inOrder()
+        assertThat(state.selectedCopies).containsExactly(102L)
+        assertThat(state.selectedConflictCopies).containsExactly(103L)
+        assertThat(state.versionsOfPhotos(listOf(1L))).containsExactly(101L, 102L, 103L)
+        // Each cell has its own grid key.
+        assertThat(state.entries.map { it.key }).containsNoDuplicates()
     }
 
     @Test

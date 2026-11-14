@@ -31,6 +31,7 @@ import com.github.takahirom.roborazzi.RoborazziOptions
 import com.github.takahirom.roborazzi.captureRoboImage
 import com.github.takahirom.roborazzi.captureScreenRoboImage
 import dev.hfps.reveal.data.db.PhotoRow
+import dev.hfps.reveal.data.edit.SnapshotInfo
 import dev.hfps.reveal.data.editor.EditorLayout
 import dev.hfps.reveal.data.mask.AiMaskState
 import dev.hfps.reveal.data.mask.AiMasks
@@ -55,6 +56,7 @@ import dev.hfps.reveal.feature.editor.EditorUiState
 import dev.hfps.reveal.feature.editor.PreviewOnly
 import dev.hfps.reveal.feature.editor.TargetedTarget
 import dev.hfps.reveal.feature.editor.UnreadableHandoff
+import dev.hfps.reveal.feature.editor.VersionsState
 import dev.hfps.reveal.feature.editor.ViewOptions
 import dev.hfps.reveal.feature.editor.edit.AsShot
 import dev.hfps.reveal.feature.editor.heal.HealEdits
@@ -389,6 +391,15 @@ class EditorPhoneScreenshotTest : EditorScreenshotBase("phone") {
         Editor(tool = ToolId.HISTORY, snap = PanelSnap.EXPANDED, history = Photos.history)
     }
 
+    /** A virtual copy's History panel with its snapshots (docs/adr/0025). */
+    @Test fun historySnapshots() = shoot("history_snapshots") {
+        Editor(tool = ToolId.HISTORY, snap = PanelSnap.EXPANDED, history = Photos.history, versions = Photos.versions)
+    }
+
+    @Test fun historyNoSnapshots() = shoot("history_no_snapshots") {
+        Editor(tool = ToolId.HISTORY, snap = PanelSnap.EXPANDED, versions = VersionsState(library = true))
+    }
+
     @Test fun pasteChooser() = shoot("paste_chooser") {
         EditorTheme {
             Box(
@@ -469,6 +480,10 @@ class EditorLandscapeScreenshotTest : EditorScreenshotBase("landscape") {
     }
 
     @Test fun transform() = transformTab("transform")
+
+    @Test fun historySnapshots() = shoot("history_snapshots") {
+        Editor(tool = ToolId.HISTORY, history = Photos.history, versions = Photos.versions)
+    }
 }
 
 /**
@@ -516,6 +531,10 @@ class EditorTabletScreenshotTest : EditorScreenshotBase("tablet") {
     @Test fun detail() = shoot("detail") { Editor(tool = ToolId.DETAIL, detail = Photos.detail) }
 
     @Test fun history() = shoot("history") { Editor(tool = ToolId.HISTORY, history = Photos.history) }
+
+    @Test fun historySnapshots() = shoot("history_snapshots") {
+        Editor(tool = ToolId.HISTORY, history = Photos.history, versions = Photos.versions)
+    }
 
     /** The panel dragged to its widest and the filmstrip hidden (both remembered). */
     @Test fun widePanelNoFilmstrip() = shoot("wide_panel_no_filmstrip") {
@@ -624,6 +643,11 @@ abstract class EditorScreenshotBase(private val size: String) {
     @get:Rule
     val composeRule = createComposeRule()
 
+    init {
+        // Snapshot times are formatted in the default zone: the same on every machine (CI runs in UTC).
+        java.util.TimeZone.setDefault(java.util.TimeZone.getTimeZone("UTC"))
+    }
+
     /** The filmstrip the layout shows (tablet classes); none on phones. */
     protected open val strip: FilmstripUi? get() = null
 
@@ -671,6 +695,7 @@ abstract class EditorScreenshotBase(private val size: String) {
         previewOnly: PreviewOnly? = null,
         phase: EditorPhase = EditorPhase.Ready(null, Photos.WIDTH, Photos.HEIGHT, 1f),
         masks: MasksUiState = MasksUiState(),
+        versions: VersionsState = VersionsState(),
         heal: HealUiState = HealUiState(),
     ) {
         val recipe = base.copy(geometry = geometry, detail = detail, effects = effects, optics = optics)
@@ -696,6 +721,7 @@ abstract class EditorScreenshotBase(private val size: String) {
                     histogram = Photos.histogram,
                     presets = presets,
                     masks = masks,
+                    versions = versions,
                     heal = heal,
                 ),
                 actions = EditorActions(onBack = {}, presetThumbnails = TestPresets.thumbnails),
@@ -854,6 +880,16 @@ private object Photos {
     // The synthetic scene's values are display-like (grey near 0.18); a camera exposes a RAW about 1.3 EV lower
     // (grey near 0.06), which is what Standard's baseline gain expects (docs/adr/0008). Exposed like a camera so the
     // screenshots show a normal photo instead of a blown-out one.
+
+    /** A virtual copy with two snapshots (docs/adr/0025); fixed times, formatted in the test's locale. */
+    val versions = VersionsState(
+        library = true,
+        copyName = "Copy 1",
+        snapshots = listOf(
+            SnapshotInfo(2, "s2", 7, "Warmer, before the crop", 1_786_000_000_000),
+            SnapshotInfo(1, "s1", 7, "Snapshot 1", 1_785_900_000_000),
+        ),
+    )
 
     /** A history of five steps, the last one undone (the current step is a paste). */
     val history: EditHistory = run {
@@ -1232,7 +1268,7 @@ private object Strip {
             flag = listOf(PickFlag.NONE, PickFlag.PICK, PickFlag.NONE, PickFlag.REJECT)[i % 4],
             hasEdit = i % 3 != 1,
             versionId = 100L + i,
-            editTime = null,
+            editTime = if (i % 3 != 1) 1L else null,
         )
     }
 

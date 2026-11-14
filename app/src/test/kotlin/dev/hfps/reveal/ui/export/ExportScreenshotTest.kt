@@ -9,15 +9,21 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onRoot
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import com.github.takahirom.roborazzi.ExperimentalRoborazziApi
 import com.github.takahirom.roborazzi.captureRoboImage
+import com.github.takahirom.roborazzi.captureScreenRoboImage
 import dev.hfps.reveal.data.export.Authorship
+import dev.hfps.reveal.designsystem.components.RevealBottomSheet
 import dev.hfps.reveal.designsystem.theme.EditorTheme
 import dev.hfps.reveal.designsystem.theme.RevealTheme
 import dev.hfps.reveal.feature.export.encode.EncoderSupport
 import dev.hfps.reveal.feature.export.engine.ExportFailure
+import dev.hfps.reveal.feature.export.model.BuiltInExportPreset
 import dev.hfps.reveal.feature.export.model.ExportColour
 import dev.hfps.reveal.feature.export.model.ExportDestination
 import dev.hfps.reveal.feature.export.model.ExportOptions
+import dev.hfps.reveal.feature.export.model.ExportPreset
+import dev.hfps.reveal.feature.export.model.ExportPresets
 import dev.hfps.reveal.feature.export.ui.ExportRequest
 import dev.hfps.reveal.feature.export.ui.ExportRun
 import dev.hfps.reveal.feature.export.ui.ExportSheetActions
@@ -98,21 +104,97 @@ class ExportScreenshotTest {
         }
     }
 
+    /** A user preset picked and then changed: "Update preset", "Rename", "Delete" (docs/adr/0025). */
+    @Test fun presetModified() = shoot("preset_modified_dark") { EditorTheme { Sheet(ExportSamples.presetModified) } }
+
+    /** A built-in preset picked (Instagram 4:5): the chip is selected, "Save as preset" is not offered. */
+    @Test fun presetBuiltIn() = shoot("preset_builtin_light") {
+        RevealTheme(darkTheme = false) { Sheet(ExportSamples.presetBuiltIn) }
+    }
+
     @Test fun settings() = shoot("settings_light") {
         RevealTheme(darkTheme = false) {
             SettingsContent("Ana Example", "© 2026 Ana Example", {}, {}, {})
         }
     }
 
-    @Composable
-    private fun Sheet(state: ExportUiState) {
-        Box(Modifier.fillMaxSize().background(RevealTheme.colors.card)) {
-            ExportSheetContent(state, ExportSheetActions())
-        }
-    }
-
     private fun shoot(name: String, content: @Composable () -> Unit) {
         composeRule.setContent(content)
         composeRule.onRoot().captureRoboImage("src/test/screenshots/export/phone_$name.png")
+    }
+}
+
+@Composable
+private fun Sheet(state: ExportUiState) {
+    Box(Modifier.fillMaxSize().background(RevealTheme.colors.card)) {
+        ExportSheetContent(state, ExportSheetActions())
+    }
+}
+
+/** Export sheet states with presets (docs/adr/0025), shared by the phone, landscape and tablet goldens. */
+private object ExportSamples {
+    private val support = EncoderSupport(heif = true, heicCodec = false, hevcMain10 = false)
+    private val prints = ExportPreset.User(
+        "u1",
+        "Prints A3",
+        ExportOptions(quality = 100, size = ExportSize.LongEdge(4960)),
+    )
+    private val presets = ExportPresets.builtIns + prints + ExportPreset.User("u2", "Family album", ExportOptions())
+    private val base = ExportUiState(
+        request = ExportRequest.Versions(listOf(1, 2, 3)),
+        support = support,
+        authorship = Authorship("Ana Example", "© 2026 Ana Example"),
+        fullSize = PixelSize(6024, 4024),
+        estimateBytes = 9_100_000,
+        presets = presets,
+    )
+
+    val presetModified = base.copy(
+        options = prints.options.copy(quality = 95),
+        outputSize = PixelSize(4960, 3313),
+        activePreset = prints.key,
+    )
+
+    val presetBuiltIn = base.copy(
+        options = BuiltInExportPreset.INSTAGRAM.options,
+        outputSize = PixelSize(1080, 721),
+        estimateBytes = 410_000,
+        activePreset = "builtin:instagram",
+    )
+}
+
+@RunWith(AndroidJUnit4::class)
+@GraphicsMode(GraphicsMode.Mode.NATIVE)
+@Config(sdk = [35], qualifiers = "w844dp-h390dp-xhdpi")
+class ExportLandscapeScreenshotTest {
+    @get:Rule
+    val composeRule = createComposeRule()
+
+    @Test fun presets() {
+        composeRule.setContent { EditorTheme { Sheet(ExportSamples.presetModified) } }
+        composeRule.onRoot().captureRoboImage("src/test/screenshots/export/landscape_presets.png")
+    }
+}
+
+@RunWith(AndroidJUnit4::class)
+@GraphicsMode(GraphicsMode.Mode.NATIVE)
+@Config(sdk = [35], qualifiers = "w1495dp-h934dp-mdpi")
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class, ExperimentalRoborazziApi::class)
+class ExportTabletScreenshotTest {
+    @get:Rule
+    val composeRule = createComposeRule()
+
+    /** The sheet is a centred dialog from 840 dp (RevealBottomSheet). */
+    @Test fun presets() {
+        composeRule.setContent {
+            RevealTheme(darkTheme = false) {
+                Box(Modifier.fillMaxSize().background(RevealTheme.colors.background)) {
+                    RevealBottomSheet(onDismissRequest = {}) {
+                        ExportSheetContent(ExportSamples.presetBuiltIn, ExportSheetActions())
+                    }
+                }
+            }
+        }
+        captureScreenRoboImage("src/test/screenshots/export/tablet_presets.png")
     }
 }

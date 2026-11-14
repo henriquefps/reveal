@@ -34,6 +34,12 @@ enum class HistoryAction {
 
     /** The lens profile's corrections a new photo starts with (docs/adr/0015, "Defaults"). */
     LENS_PROFILE,
+
+    /** A snapshot's recipe applied (docs/adr/0025); [StepLabel.name] is the snapshot's name. */
+    SNAPSHOT,
+
+    /** The first step of a virtual copy made from another version's edit (docs/adr/0025). */
+    VIRTUAL_COPY,
 }
 
 /**

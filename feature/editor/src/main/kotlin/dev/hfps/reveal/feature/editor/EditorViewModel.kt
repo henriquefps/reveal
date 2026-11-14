@@ -21,10 +21,12 @@ import dev.hfps.image.proxy.ProxySource
 import dev.hfps.image.proxy.ProxyStep
 import dev.hfps.image.source.CancelToken
 import dev.hfps.image.source.CancelledException
+import dev.hfps.reveal.data.edit.CopySource
 import dev.hfps.reveal.data.edit.EditClipboard
 import dev.hfps.reveal.data.edit.EditRepository
 import dev.hfps.reveal.data.edit.HistoryOp
 import dev.hfps.reveal.data.edit.HistoryWriter
+import dev.hfps.reveal.data.edit.VersionRepository
 import dev.hfps.reveal.data.handoff.GalleryAccess
 import dev.hfps.reveal.data.handoff.GalleryAccessState
 import dev.hfps.reveal.data.handoff.HandoffApps
@@ -100,6 +102,7 @@ import dev.hfps.reveal.pipeline.recipe.GuideLine
 import dev.hfps.reveal.pipeline.recipe.HistoryAction
 import dev.hfps.reveal.pipeline.recipe.Optics
 import dev.hfps.reveal.pipeline.recipe.Recipe
+import dev.hfps.reveal.pipeline.recipe.RecipeDiff
 import dev.hfps.reveal.pipeline.recipe.RecipeGroup
 import dev.hfps.reveal.pipeline.recipe.RecipePaste
 import dev.hfps.reveal.pipeline.recipe.RecipeRanges
@@ -133,7 +136,7 @@ import kotlinx.coroutines.withContext
  * and the view options, pushing both to the renderer. Survives configuration changes; leaving the screen cancels the
  * decode and closes the renderer.
  */
-@Suppress("LargeClass")
+@Suppress("LargeClass", "LongParameterList")
 @HiltViewModel
 class EditorViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
@@ -145,6 +148,7 @@ class EditorViewModel @Inject constructor(
     private val smartCorrection: SmartCorrection,
     private val handoffPreviews: HandoffPreviewer,
     private val aiMasks: AiMasks,
+    private val versions: VersionRepository,
 ) : ViewModel() {
     private val route: EditorRoute = savedStateHandle.toRoute<EditorRoute>()
 
@@ -164,6 +168,44 @@ class EditorViewModel @Inject constructor(
         handoffPreviews.editorOpened()
     }
 
+    // ------------------------------------------------------------------ virtual copies and snapshots (docs/adr/0025)
+
+    /**
+     * A virtual copy of this version with its current (committed) edit, named by [nameFor] ("Copy 1"); returns the new
+     * version's id (the screen moves to it), or null for a photo without a library version.
+     */
+    suspend fun createCopy(nameFor: (Int) -> String): Long? {
+        val id = versionId ?: return null
+        writer.flush()
+        return versions.createCopy(id, CopySource.CURRENT, nameFor)
+    }
+
+    /** Saves the committed recipe as a snapshot of this version (blank [name] = [fallback]). */
+    fun saveSnapshot(name: String, fallback: String) {
+        val id = versionId ?: return
+        val recipe = _state.value.edit.committed
+        viewModelScope.launch { versions.createSnapshot(id, name, recipe, fallback) }
+    }
+
+    /** Applies a snapshot: its recipe becomes one history step named after it (undo goes back). */
+    fun applySnapshot(snapshotId: Long) {
+        viewModelScope.launch {
+            val (snapshot, recipe) = versions.snapshotRecipe(snapshotId) ?: return@launch
+            val changes = RecipeDiff.between(_state.value.edit.committed, recipe)
+            if (changes.isEmpty()) return@launch
+            val groups = RecipeGroup.entries.filter { group -> changes.any { it.field.group == group } }
+            editAndCommit(HistoryAction.SNAPSHOT, groups, name = snapshot.name) { recipe }
+        }
+    }
+
+    fun renameSnapshot(snapshotId: Long, name: String) {
+        viewModelScope.launch { versions.renameSnapshot(snapshotId, name) }
+    }
+
+    fun deleteSnapshot(snapshotId: Long) {
+        viewModelScope.launch { versions.deleteSnapshot(snapshotId) }
+    }
+
     init {
         EditorMetrics.start()
     }
@@ -179,6 +221,28 @@ class EditorViewModel @Inject constructor(
     private val _state =
         MutableStateFlow(EditorUiState(fileName = route.uri?.let { opener.displayNameOrEmpty(it.toUri()) }.orEmpty()))
     val state: StateFlow<EditorUiState> = _state.asStateFlow()
+
+    // Virtual copies and snapshots of this version (docs/adr/0025).
+    init {
+        versionId?.let { id ->
+            viewModelScope.launch {
+                val version = versions.version(id)
+                _state.update {
+                    it.copy(
+                        versions = it.versions.copy(
+                            library = version != null,
+                            copyName = version?.takeIf { v -> v.position > 0 }?.name,
+                        ),
+                    )
+                }
+            }
+            viewModelScope.launch {
+                versions.observeSnapshots(id).collect { list ->
+                    _state.update { it.copy(versions = it.versions.copy(snapshots = list)) }
+                }
+            }
+        }
+    }
 
     // ------------------------------------------------------------------ masks (docs/adr/0022 "M4/B (editor)")
 
@@ -1048,19 +1112,21 @@ class EditorViewModel @Inject constructor(
     private fun editAndCommit(
         action: HistoryAction? = null,
         groups: List<RecipeGroup> = emptyList(),
+        name: String? = null,
         change: (Recipe) -> Recipe,
     ) {
         edit(change)
-        commitWith(action, groups)
+        commitWith(action, groups, name = name)
     }
 
     private fun commitWith(
         action: HistoryAction?,
         groups: List<RecipeGroup> = emptyList(),
         onlyIfEmpty: Boolean = false,
+        name: String? = null,
     ) {
         val edit = _state.value.edit
-        val history = edit.history.commit(edit.recipe, action, groups)
+        val history = edit.history.commit(edit.recipe, action, groups, name)
         if (history == null) {
             if (edit.recipe != edit.committed) show(edit.committed, edit.history)
             return

@@ -139,8 +139,14 @@ object LibraryTags {
     /** The cloud badge of cell [id], by `CloudState` name. */
     fun cloudBadge(id: Long, state: String) = "library-cloud-$id-$state"
 
-    /** A photo's later version (a sync conflict copy) in the grid. */
+    /** A photo's later version (a virtual copy or a sync conflict copy) in the grid. */
     fun copy(versionId: Long) = "library-copy-$versionId"
+
+    /** The name badge of a later version's cell. */
+    fun copyBadge(versionId: Long) = "library-copy-badge-$versionId"
+    const val CREATE_COPY = "library-create-copy"
+    const val SELECTION_MENU = "library-selection-menu"
+    const val DELETE_COPIES = "library-delete-copies"
 
     fun source(id: Long) = "library-source-$id"
 }
@@ -162,6 +168,7 @@ private val PhoneMaxWidth = 600.dp
 @Composable
 fun PhotoGrid(
     entries: List<GridEntry>,
+    /** Selected cells by version id. */
     selected: Set<Long>,
     thumbnails: ThumbnailSource,
     onOpen: (PhotoRow) -> Unit,
@@ -206,9 +213,9 @@ fun PhotoGrid(
                 entries = entries,
                 selected = selected,
                 thumbnails = thumbnails,
-                onLongClick = { row -> onSelectionChange(currentSelected + row.id) },
+                onLongClick = { row -> onSelectionChange(currentSelected + row.versionId) },
             ) { row ->
-                if (currentSelected.isEmpty()) onOpen(row) else onSelectionChange(currentSelected.toggle(row.id))
+                if (currentSelected.isEmpty()) onOpen(row) else onSelectionChange(currentSelected.toggle(row.versionId))
             }
         }
     }
@@ -244,7 +251,7 @@ private fun LazyGridScope.photoItems(
 
             is GridEntry.Photo -> PhotoCell(
                 row = entry.row,
-                selected = entry.row.id in selected,
+                selected = entry.row.versionId in selected,
                 selecting = selected.isNotEmpty(),
                 thumbnails = thumbnails,
                 onClick = { onClick(entry.row) },
@@ -297,14 +304,22 @@ private fun Modifier.photoDragSelect(
     var anchor: Long? = null
     var current: Long? = null
     var before: Set<Long> = emptySet()
-    fun keyAt(offset: Offset): Long? = state.layoutInfo.visibleItemsInfo.firstOrNull { item ->
-        val position = item.offset
-        offset.x.toInt() in position.x until position.x + item.size.width &&
-            offset.y.toInt() in position.y until position.y + item.size.height
-    }?.key as? Long
+
+    // Selection keys are version ids (docs/adr/0025): a virtual copy's cell is selected on its own.
+    fun keyAt(offset: Offset): Long? {
+        val key = state.layoutInfo.visibleItemsInfo.firstOrNull { item ->
+            val position = item.offset
+            offset.x.toInt() in position.x until position.x + item.size.width &&
+                offset.y.toInt() in position.y until position.y + item.size.height
+        }?.key ?: return null
+        return entries().firstNotNullOfOrNull { entry ->
+            (entry as? GridEntry.Photo)?.row?.takeIf { it.gridKey == key }
+        }
+            ?.versionId
+    }
 
     fun range(from: Long, to: Long): Set<Long> {
-        val ids = entries().mapNotNull { (it as? GridEntry.Photo)?.row?.id }
+        val ids = entries().mapNotNull { (it as? GridEntry.Photo)?.row?.versionId }
         val a = ids.indexOf(from)
         val b = ids.indexOf(to)
         if (a < 0 || b < 0) return emptySet()
@@ -478,8 +493,14 @@ private fun Badges(row: PhotoRow, showEdited: Boolean, modifier: Modifier = Modi
             formatBadge(row.format)?.let { label -> LabelBadge(stringResource(label)) }
             if (row.versionPosition > 0) {
                 LabelBadge(
-                    stringResource(if (row.conflict) R.string.library_badge_conflict else R.string.library_badge_copy),
+                    when {
+                        row.conflict -> stringResource(R.string.library_badge_conflict)
+
+                        // A virtual copy shows its name ("Copy 1", or what the user called it, docs/adr/0025).
+                        else -> row.versionName ?: stringResource(R.string.library_badge_copy)
+                    },
                     highlight = row.conflict,
+                    modifier = Modifier.testTag(LibraryTags.copyBadge(row.versionId)),
                 )
             }
         }
@@ -507,7 +528,7 @@ private fun Badges(row: PhotoRow, showEdited: Boolean, modifier: Modifier = Modi
                     )
                 }
             }
-            if (row.hasEdit && showEdited) {
+            if (row.edited && showEdited) {
                 Box(
                     Modifier
                         .padding(4.dp)
@@ -664,12 +685,12 @@ internal fun cellDescription(row: PhotoRow): String {
         PickFlag.REJECT -> parts += stringResource(R.string.library_flag_rejected)
         PickFlag.NONE -> Unit
     }
-    if (row.hasEdit) parts += stringResource(R.string.library_edited)
+    if (row.edited) parts += stringResource(R.string.library_edited)
     if (row.versionPosition > 0) {
         parts += if (row.conflict) {
             stringResource(R.string.library_conflict_copy_from, row.copyDevice.orEmpty())
         } else {
-            stringResource(R.string.library_badge_copy)
+            row.versionName ?: stringResource(R.string.library_badge_copy)
         }
     }
     // The cloud state is read from the badge's own description (merged into the cell).

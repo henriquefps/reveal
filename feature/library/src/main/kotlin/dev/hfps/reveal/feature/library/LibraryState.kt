@@ -82,6 +82,10 @@ data class LibraryUiState(
     val entries: List<GridEntry> = emptyList(),
     val photoCount: Int = 0,
     val photosLoaded: Boolean = false,
+    /**
+     * The selected grid cells by **version id** (docs/adr/0025): a virtual copy is selected on its own. Photo actions
+     * (rating, flag, remove) act on [selectedPhotoIds], edit actions (paste, reset, export) on the versions.
+     */
     val selected: Set<Long> = emptySet(),
     val searchOpen: Boolean = false,
     /** The filter sheet is open. */
@@ -109,6 +113,8 @@ data class LibraryUiState(
     val deleteServerPrompt: Int? = null,
     /** The conflict chooser of a tapped conflict copy (ADR 0018 FIX/W); null = closed. */
     val conflictChoice: ConflictChoice? = null,
+    /** Asking before deleting the selected virtual copies (their edits go too); null = not asking. */
+    val deleteCopiesPrompt: List<Long>? = null,
 ) {
     val filters: PhotoFilters get() = query.filters
 
@@ -130,8 +136,28 @@ data class LibraryUiState(
 
     val photoIds: List<Long> get() = entries.mapNotNull { (it as? GridEntry.Photo)?.row?.id }.distinct()
 
+    /** Every cell's version, in grid order ("Select all"). */
+    val versionIds: List<Long> get() = entries.mapNotNull { (it as? GridEntry.Photo)?.row?.versionId }
+
     private fun selectedRows(): List<PhotoRow> =
-        entries.mapNotNull { entry -> (entry as? GridEntry.Photo)?.row?.takeIf { it.id in selected } }
+        entries.mapNotNull { entry -> (entry as? GridEntry.Photo)?.row?.takeIf { it.versionId in selected } }
+
+    /** The photos of the selected cells, in grid order, once each (a photo and its copy are one photo). */
+    val selectedPhotoIds: List<Long> get() = selectedRows().map { it.id }.distinct()
+
+    /** The selected versions in grid order: what edits and exports act on. */
+    val selectedVersions: List<Long> get() = selectedRows().map { it.versionId }
+
+    /** Every listed version of [photoIds] (to drop them from the selection when the photos go). */
+    fun versionsOfPhotos(photoIds: Collection<Long>): Set<Long> {
+        val ids = photoIds.toHashSet()
+        return entries.mapNotNullTo(HashSet()) { (it as? GridEntry.Photo)?.row?.takeIf { r -> r.id in ids }?.versionId }
+    }
+
+    /** The selected virtual copies (not conflict copies): what "Delete copy" removes. */
+    val selectedCopies: List<Long> get() = selectedRows().filter {
+        it.versionPosition > 0 && !it.conflict
+    }.map { it.versionId }
 
     /** The selected photos Reveal cannot show at all: what "Try again" and "Remove from Reveal" act on. */
     val selectedUnavailable: List<Long> get() = selectedRows().filter { it.unavailable }.map { it.id }.distinct()
@@ -184,6 +210,12 @@ data class LibraryActions(
     val onApplyPreset: () -> Unit = {},
     /** Deletes the sync conflict copies of the selected photos, here and on the other devices. */
     val onDeleteConflictCopies: () -> Unit = {},
+    /** A virtual copy of every selected cell's edit (docs/adr/0025). */
+    val onCreateCopies: () -> Unit = {},
+    /** Deletes the selected virtual copies (asks first). */
+    val onDeleteCopies: () -> Unit = {},
+    val onDeleteCopiesConfirm: () -> Unit = {},
+    val onDeleteCopiesDismiss: () -> Unit = {},
     /** A tap on an unavailable photo: the explanation sheet. */
     val onOpenUnavailable: (PhotoRow) -> Unit = {},
 

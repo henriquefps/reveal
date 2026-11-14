@@ -5,7 +5,9 @@ import dagger.hilt.InstallIn
 import dagger.hilt.components.SingletonComponent
 import dev.hfps.reveal.data.db.RevealDatabase
 import dev.hfps.reveal.data.edit.EditRepository
+import dev.hfps.reveal.data.edit.VersionRepository
 import dev.hfps.reveal.data.editor.EditorLayoutPreferences
+import dev.hfps.reveal.data.export.ExportPresetRepository
 import dev.hfps.reveal.data.handoff.HandoffPreviewer
 import dev.hfps.reveal.data.handoff.HandoffRepository
 import dev.hfps.reveal.data.library.LibraryRepository
@@ -43,4 +45,8 @@ interface DebugAccess {
     fun handoffPreviewer(): HandoffPreviewer
 
     fun aiMasks(): AiMasks
+
+    fun versions(): VersionRepository
+
+    fun exportPresets(): ExportPresetRepository
 }

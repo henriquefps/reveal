@@ -505,6 +505,24 @@
     <string name="masks_type_luminance">Luminance range</string>
     <string name="masks_type_radial">Radial gradient</string>
     <string name="masks_type_unknown">Unknown part</string>
+    <!-- Virtual copies and snapshots (docs/adr/0025). -->
+    <string name="editor_menu_save_snapshot">Save snapshot…</string>
+    <string name="editor_menu_create_copy">Create virtual copy</string>
+    <string name="editor_copy_name">Copy %1$d</string>
+    <string name="editor_copy_created">Virtual copy created</string>
+    <string name="editor_snapshots_title">Snapshots</string>
+    <string name="editor_snapshots_empty">Save the edit as it is now to come back to it later.</string>
+    <string name="editor_snapshot_save">Save</string>
+    <string name="editor_snapshot_save_title">Save snapshot</string>
+    <string name="editor_snapshot_save_confirm">Save</string>
+    <string name="editor_snapshot_name">Name</string>
+    <string name="editor_snapshot_default_name">Snapshot %1$d</string>
+    <string name="editor_snapshot_rename">Rename</string>
+    <string name="editor_snapshot_rename_title">Rename snapshot</string>
+    <string name="editor_snapshot_delete">Delete</string>
+    <string name="editor_snapshot_cancel">Cancel</string>
+    <string name="editor_snapshot_menu">Options for %1$s</string>
+    <string name="editor_history_steps">Steps</string>
     <!-- Heal mode (docs/adr/0023) -->
     <string name="heal_kind_heal">Heal</string>
     <string name="heal_kind_clone">Clone</string>

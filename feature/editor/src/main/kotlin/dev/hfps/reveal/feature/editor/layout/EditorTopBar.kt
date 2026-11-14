@@ -64,6 +64,7 @@ import dev.hfps.reveal.feature.editor.EditorActions
 import dev.hfps.reveal.feature.editor.EditorTags
 import dev.hfps.reveal.feature.editor.EditorUiState
 import dev.hfps.reveal.feature.editor.R
+import dev.hfps.reveal.feature.editor.panels.SnapshotNameDialog
 import dev.hfps.reveal.feature.editor.tools.EditorTool
 import dev.hfps.reveal.feature.editor.tools.EditorTools
 import dev.hfps.reveal.pipeline.gl.CompareMode
@@ -88,7 +89,8 @@ fun EditorTopBar(
     onTool: (EditorTool) -> Unit = {},
 ) {
     RevealTopBar(
-        title = if (compact) "" else state.fileName,
+        // A virtual copy names itself after the file (docs/adr/0025).
+        title = if (compact) "" else listOfNotNull(state.fileName, state.versions.copyName).joinToString(" · "),
         onBack = actions.onBack,
         backContentDescription = stringResource(R.string.editor_back),
         titleStyle = RevealTheme.typography.mono,
@@ -336,6 +338,7 @@ private fun MoreMenu(
     modifier: Modifier = Modifier,
 ) {
     var open by remember { mutableStateOf(false) }
+    var snapshotDialog by remember { mutableStateOf(false) }
     val view = state.view
     val edit = state.edit
     val ready = state.ready
@@ -374,6 +377,20 @@ private fun MoreMenu(
                     },
                 )
             }
+            ActionItem(
+                R.string.editor_menu_save_snapshot,
+                PhosphorRegular.Camera,
+                EditorTags.MENU_SAVE_SNAPSHOT,
+                enabled = ready && state.versions.library,
+                onClick = run { snapshotDialog = true },
+            )
+            ActionItem(
+                R.string.editor_menu_create_copy,
+                PhosphorRegular.CopySimple,
+                EditorTags.MENU_CREATE_COPY,
+                enabled = ready && state.versions.library,
+                onClick = run(actions.onCreateCopy),
+            )
             ActionItem(
                 R.string.editor_menu_copy,
                 PhosphorRegular.Copy,
@@ -420,6 +437,16 @@ private fun MoreMenu(
                 actions.onClipping(view.clipping.copy(highlights = !view.clipping.highlights))
             }
         }
+    }
+    if (snapshotDialog) {
+        SnapshotNameDialog(
+            snapshots = state.versions.snapshots.size,
+            onSave = {
+                snapshotDialog = false
+                actions.onSaveSnapshot(it)
+            },
+            onDismiss = { snapshotDialog = false },
+        )
     }
 }
 

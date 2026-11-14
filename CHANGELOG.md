@@ -6,6 +6,8 @@ All notable changes to Reveal are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-11-14
+
 ### Added
 - Virtual copies (M5/V, docs/adr/0025): several independent edits of one photo, each a cell of its own in the library
   with its name on the badge ("Copy 1", renamable), its own history, snapshots, thumbnail and exports. Create one from

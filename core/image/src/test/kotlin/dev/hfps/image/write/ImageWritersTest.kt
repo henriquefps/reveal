@@ -144,10 +144,10 @@ class ImageWritersTest {
 
     @Test
     fun `the 16-bit raster stores encoded floats rounded to the nearest level`() {
-        val raster = RgbRaster16(4, 3, File(tmp.root, "raster"))
+        val raster = RgbRaster(4, 3, 16, File(tmp.root, "raster"))
         raster.use {
             val band = FloatArray(2 * 2 * 4) { i -> if (i % 4 == 3) 1f else (i / 4) / 3f }
-            it.putEncoded(1, 1, 2, 2, band)
+            it.putEncoded(1, 1, 2, 2, java.nio.FloatBuffer.wrap(band))
             assertThat(it.sample(1, 1, 0)).isEqualTo(0)
             assertThat(it.sample(2, 1, 0)).isEqualTo((65535 / 3f + 0.5f).toInt())
             assertThat(it.sample(2, 2, 2)).isEqualTo(65535)
@@ -155,6 +155,17 @@ class ImageWritersTest {
             val row = IntArray(12)
             Rgb8View(it).row(2, row)
             assertThat(row[2 * 3]).isEqualTo(255)
+            val part = IntArray(6)
+            it.row(1, 1, 2, part)
+            assertThat(part[3]).isEqualTo(it.sample(2, 1, 0))
+        }
+        RgbRaster(3, 2, 8, File(tmp.root, "raster8")).use {
+            val rgba = java.nio.ByteBuffer.wrap(byteArrayOf(10, 20, 30, -1, 40, 50, 60, -1))
+            it.putRgba8(1, 1, 2, 1, rgba)
+            assertThat(it.sample(2, 1, 2)).isEqualTo(60)
+            val row = IntArray(9)
+            it.row(1, row)
+            assertThat(row.toList()).containsExactly(0, 0, 0, 10, 20, 30, 40, 50, 60).inOrder()
         }
     }
 

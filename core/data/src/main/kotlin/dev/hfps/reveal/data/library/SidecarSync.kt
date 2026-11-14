@@ -153,14 +153,53 @@ class SidecarSync(
     }
 
     /**
-     * The master version's edit as the sidecar carries it (ADR 0026): its recipe, the digests of the history steps
-     * before it, when it was made. Null when the recipe cannot be read (a newer app's: never written back older).
+     * The sidecar of an original-file export (docs/adr/0009 "Original copy"): the photo's own sidecar when it can be
+     * read (merged, so another app's fields stay), its culling fields and version [versionId]'s edit ([recipe] when the
+     * editor passes the one on screen). Null when the version is gone or its recipe is a newer app's.
+     */
+    @Suppress("ReturnCount", "TooGenericExceptionCaught")
+    suspend fun exportSidecar(versionId: Long, recipe: Recipe? = null): ByteArray? {
+        val photoId = photos.photoIdOfVersion(versionId) ?: return null
+        val photo = photos.getAll(listOf(photoId)).firstOrNull() ?: return null
+        val develop = developState(photo, versionId, recipe)?.copy(onlyIfPresent = false) ?: return null
+        val existing = try {
+            val source = db.sourceDao().get(photo.sourceId)?.takeIf { it.state == SourceState.AVAILABLE }
+            val id = photo.xmpDocumentId
+            if (source == null || id == null) {
+                null
+            } else {
+                val tree = trees.open(source)
+                tree.stat(id)?.let { tree.readBytes(it.documentId, LibraryIndexer.MAX_SIDECAR_BYTES) }
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w(TAG, "Sidecar of photo $photoId not read for the export", e)
+            null
+        }
+        val fields =
+            XmpFields(rating = photo.rating.coerceIn(0, XmpFields.MAX_RATING), label = photo.label, flag = photo.flag)
+        val date = now().truncatedTo(ChronoUnit.SECONDS).format(DateTimeFormatter.ISO_OFFSET_DATE_TIME)
+        val extension = listOf(XmpDevelop.extension(develop))
+        // A malformed sidecar is never rewritten in place; the export gets a fresh one instead.
+        return runCatching { XmpWriter.update(existing, fields, creatorTool, date, extension) }.getOrNull()
+            ?: XmpWriter.update(null, fields, creatorTool, date, extension)
+    }
+
+    /**
+     * The master version's edit (or [versionId]'s, with [override] for its recipe) as the sidecar carries it (ADR
+     * 0026): its recipe, the digests of the history steps before it, when it was made. Null when the recipe cannot be
+     * read (a newer app's: never written back older).
      */
     @Suppress("ReturnCount")
-    private suspend fun developState(photo: PhotoEntity): DevelopState? {
-        val versionId = photos.firstVersion(photo.id) ?: return null
+    private suspend fun developState(
+        photo: PhotoEntity,
+        version: Long? = null,
+        override: Recipe? = null,
+    ): DevelopState? {
+        val versionId = version ?: photos.firstVersion(photo.id) ?: return null
         val entity = edits.recipe(versionId)
-        val recipe = if (entity == null) {
+        val recipe = override ?: if (entity == null) {
             Recipe()
         } else {
             runCatching { RecipeCodec.Default.decode(entity.json) }.getOrNull() ?: return null

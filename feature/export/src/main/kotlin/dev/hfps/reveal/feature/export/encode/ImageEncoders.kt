@@ -7,6 +7,8 @@ import android.media.MediaFormat
 import androidx.heifwriter.HeifWriter
 import dev.hfps.reveal.feature.export.metadata.ExifWriter
 import dev.hfps.reveal.feature.export.metadata.JpegSegments
+import dev.hfps.image.write.ImageCodec
+import dev.hfps.reveal.feature.export.model.ExportColour
 import dev.hfps.reveal.feature.export.model.ExportFormat
 import java.io.File
 import java.io.IOException
@@ -74,15 +76,52 @@ object HeifEncoder : ImageEncoder {
     }
 }
 
-/** What the device's encoders can do (shown in the sheet, docs/adr/0009). */
+/**
+ * What the device's encoders can do (docs/adr/0009 "Formats"): the sheet hides what is false, and presets from another
+ * device fall back ([dev.hfps.reveal.feature.export.model.ExportPresets.resolve]).
+ */
 data class EncoderSupport(
     /** An HEVC or HEIC encoder exists: HEIF export is offered. */
     val heif: Boolean,
     /** The device has the HEIC image codec (else HEIF goes through the HEVC video encoder in tiles). */
     val heicCodec: Boolean,
-    /** An HEVC encoder takes 10-bit input (Main10): kept for the HDR output of a later milestone. */
+    /** An HEVC encoder has the Main10 profile (whatever its input formats). */
     val hevcMain10: Boolean,
+    /** An HEVC encoder takes 512 px YUV420 tiles: HEIF in Display P3 (Reveal's container). */
+    val heifTiles: Boolean = false,
+    /** An HEVC encoder takes 10-bit P010 tiles in Main10: 10-bit HEIF. */
+    val heif10: Boolean = false,
+    /** An AV1 encoder takes 8-bit tiles. */
+    val avif8: Boolean = false,
+    /** An AV1 encoder takes 10-bit P010 tiles in Main10. */
+    val avif10: Boolean = false,
 ) {
+    /** AVIF is offered (at whichever depth the device has). */
+    val avif: Boolean get() = avif8 || avif10
+
+    /** Whether [format] can be written at [depth] bits in [colour] here. */
+    fun supports(format: ExportFormat, depth: Int, colour: ExportColour): Boolean = when (format) {
+        ExportFormat.HEIF -> when {
+            depth == 10 -> heif10
+            colour == ExportColour.SRGB -> heif
+            else -> heifTiles
+        }
+
+        ExportFormat.AVIF -> if (depth == 10) avif10 else avif8
+        else -> true
+    }
+
+    /** The bit depths of [format] this device can write. */
+    fun depths(format: ExportFormat, colour: ExportColour): List<Int> =
+        format.depths.filter { supports(format, it, colour) }
+
+    /** Whether [format] is offered at all. */
+    fun offers(format: ExportFormat): Boolean = when (format) {
+        ExportFormat.HEIF -> heif
+        ExportFormat.AVIF -> avif
+        else -> true
+    }
+
     companion object {
         /** Queries MediaCodec once per call (a few ms). */
         fun detect(): EncoderSupport {
@@ -99,16 +138,21 @@ data class EncoderSupport(
                 heif = heic || has(MediaFormat.MIMETYPE_VIDEO_HEVC),
                 heicCodec = heic,
                 hevcMain10 = main10,
+                heifTiles = TileCodecEncoder.find(ImageCodec.HEVC, 8) != null,
+                heif10 = TileCodecEncoder.find(ImageCodec.HEVC, 10) != null,
+                avif8 = TileCodecEncoder.find(ImageCodec.AV1, 8) != null,
+                avif10 = TileCodecEncoder.find(ImageCodec.AV1, 10) != null,
             )
         }
     }
 }
 
-/** The encoder of each format. */
+/** The bitmap encoders (8-bit, from an output bitmap): JPEG, and HEIF in sRGB through the platform's HeifWriter. */
 object ImageEncoders {
     fun of(format: ExportFormat): ImageEncoder = when (format) {
         ExportFormat.JPEG -> JpegEncoder
         ExportFormat.HEIF -> HeifEncoder
+        else -> error("$format is not written from a bitmap")
     }
 }
 

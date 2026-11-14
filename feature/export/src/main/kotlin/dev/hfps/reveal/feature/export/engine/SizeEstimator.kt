@@ -9,7 +9,13 @@ import dev.hfps.image.proxy.ProxyBuilder
 import dev.hfps.reveal.feature.export.encode.EmbeddedMetadata
 import dev.hfps.reveal.feature.export.encode.HeifEncoder
 import dev.hfps.reveal.feature.export.encode.JpegEncoder
-import dev.hfps.reveal.feature.export.model.ExportFormat
+import dev.hfps.image.write.ImageCodec
+import dev.hfps.image.write.ImageMetadata
+import dev.hfps.image.write.PngWriter
+import dev.hfps.image.write.RgbRows
+import dev.hfps.image.write.TiffFields
+import dev.hfps.image.write.TiffWriter
+import dev.hfps.reveal.feature.export.encode.TileCodecEncoder
 import dev.hfps.reveal.feature.export.model.ExportOptions
 import dev.hfps.reveal.pipeline.PipelineInput
 import dev.hfps.reveal.pipeline.cpu.CpuDevelop
@@ -39,6 +45,8 @@ class SizeEstimator private constructor(
     private val height: Int,
     private val recipe: Recipe,
     private val lens: LensProfile?,
+    /** Bytes of the original file (the original copy's size), or 0 when unknown. */
+    private val originalBytes: Long = 0,
 ) {
     /** Full-resolution size of the picture (the geometry operator's output: cropped, turned). */
     val pictureSize: PixelSize
@@ -63,6 +71,9 @@ class SizeEstimator private constructor(
 
     /** Estimated bytes of the exported file. */
     fun estimate(context: Context, options: ExportOptions): Long {
+        if (!options.format.rendered) return originalBytes
+        val route = Route.of(options)
+        if (route != Route.BITMAP_JPEG && route != Route.BITMAP_HEIF) return estimateRows(context, options, route)
         val colour = options.effectiveColour
         val rgba = OutputTransformOp.apply(linear, width, height, OutputSettings(colour.space))
         val bitmap = createBitmap(
@@ -74,17 +85,15 @@ class SizeEstimator private constructor(
         )
         try {
             bitmap.copyPixelsFromBuffer(ByteBuffer.wrap(rgba))
-            val bytes = when (options.format) {
-                ExportFormat.JPEG -> JpegEncoder.encodedSize(bitmap, options.quality)
-
-                ExportFormat.HEIF -> {
-                    val file = File(context.cacheDir, "estimate-${UUID.randomUUID()}.heic")
-                    try {
-                        HeifEncoder.encode(bitmap, options.quality, EmbeddedMetadata(null, null), file)
-                        file.length()
-                    } finally {
-                        file.delete()
-                    }
+            val bytes = if (route == Route.BITMAP_JPEG) {
+                JpegEncoder.encodedSize(bitmap, options.quality)
+            } else {
+                val file = File(context.cacheDir, "estimate-${UUID.randomUUID()}.heic")
+                try {
+                    HeifEncoder.encode(bitmap, options.quality, EmbeddedMetadata(null, null), file)
+                    file.length()
+                } finally {
+                    file.delete()
                 }
             }
             val perPixel = bytes.toDouble() / (width.toLong() * height)
@@ -95,15 +104,86 @@ class SizeEstimator private constructor(
         }
     }
 
+    /**
+     * PNG, TIFF, HEIF/AVIF tiles: the proxy as the encoders' rows (16-bit encoded values, or 8-bit dithered for PNG 8),
+     * through the real writer. Lossless sizes do not shrink at full resolution (no [FULL_RES_FACTOR]).
+     */
+    private fun estimateRows(context: Context, options: ExportOptions, route: Route): Long {
+        val rows = proxyRows(options, route)
+        val file = File(context.cacheDir, "estimate-${UUID.randomUUID()}")
+        val bytes = try {
+            when (route) {
+                Route.PNG_8, Route.PNG_16 -> {
+                    file.outputStream().buffered().use { PngWriter.write(rows, ImageMetadata(), it) }
+                }
+
+                Route.TIFF_16 -> TiffWriter.write(rows, TiffFields(), ImageMetadata(), file)
+
+                else -> {
+                    val codec = if (route == Route.HEIF_TILES) ImageCodec.HEVC else ImageCodec.AV1
+                    val coded = TileCodecEncoder(codec, options.effectiveDepth).encode(rows, options.quality)
+                    // Only the tiles' share: the edge tiles' padding is not in the estimate's pixels.
+                    file.writeBytes(coded.tiles.fold(ByteArray(0)) { a, b -> a + b })
+                }
+            }
+            file.length()
+        } finally {
+            file.delete()
+        }
+        val pixels = if (route == Route.HEIF_TILES || route == Route.AVIF_TILES) {
+            val t = TileCodecEncoder.TILE.toLong()
+            ((width + t - 1) / t) * ((height + t - 1) / t) * t * t
+        } else {
+            width.toLong() * height
+        }
+        val lossy = route == Route.HEIF_TILES || route == Route.AVIF_TILES
+        val factor = if (lossy && outputSize(options).pixels > width.toLong() * height * 2) FULL_RES_FACTOR else 1.0
+        return (bytes.toDouble() / pixels * outputSize(options).pixels * factor).toLong()
+    }
+
+    private fun proxyRows(options: ExportOptions, route: Route): RgbRows {
+        val space = options.effectiveColour.space
+        val samples = IntArray(width * height * 3)
+        if (route.high) {
+            val m = OutputTransformOp.workingToOutput(space).toFloatArray()
+            for (i in 0 until width * height) {
+                for (c in 0 until 3) {
+                    val lin = (m[c * 3] * linear[i * 3] + m[c * 3 + 1] * linear[i * 3 + 1] + m[c * 3 + 2] * linear[i * 3 + 2])
+                        .coerceIn(0f, 1f)
+                    samples[i * 3 + c] = (OutputTransformOp.oetf(lin) * MAX16 + 0.5f).toInt()
+                }
+            }
+        } else {
+            val rgba = OutputTransformOp.apply(linear, width, height, OutputSettings(space))
+            for (i in 0 until width * height) for (c in 0 until 3) samples[i * 3 + c] = rgba[i * 4 + c].toInt() and 0xFF
+        }
+        return ArrayRows(width, height, if (route.high) 16 else 8, samples)
+    }
+
+    private class ArrayRows(
+        override val width: Int,
+        override val height: Int,
+        override val bits: Int,
+        val samples: IntArray,
+    ) : RgbRows {
+        override fun row(y: Int, out: IntArray) {
+            samples.copyInto(out, 0, y * width * 3, (y + 1) * width * 3)
+        }
+    }
+
     companion object {
         const val PROXY_EDGE = 768
+        private const val MAX16 = 65535f
 
         /** Full-resolution files are this fraction of the proxy's bytes per pixel (sample RAWs, docs/adr/0009). */
         const val FULL_RES_FACTOR = 0.6
 
         /** Decodes and develops the proxy of [uri] with [recipe] (blocking; a background thread). */
-        fun prepare(context: Context, uri: Uri, name: String, recipe: Recipe): SizeEstimator =
-            ImageInput.fromUri(context.contentResolver, uri, name).use { input ->
+        fun prepare(context: Context, uri: Uri, name: String, recipe: Recipe): SizeEstimator {
+            val originalBytes = runCatching {
+                context.contentResolver.openFileDescriptor(uri, "r")?.use { it.statSize } ?: 0L
+            }.getOrDefault(0L)
+            return ImageInput.fromUri(context.contentResolver, uri, name).use { input ->
                 val orientation = if (input.type.isRaw) {
                     null
                 } else {
@@ -125,7 +205,9 @@ class SizeEstimator private constructor(
                     mapping.outputHeight,
                     recipe,
                     pipelineInput.lens,
+                    originalBytes.coerceAtLeast(0),
                 )
             }
+        }
     }
 }

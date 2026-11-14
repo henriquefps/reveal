@@ -113,8 +113,14 @@ class PresetsFlowTest {
                 compose.onNodeWithTag(EditorTags.PRESET_STRENGTH).performTouchInput { swipeRight() }
                 compose.waitUntil(TIMEOUT_MS) { history.current.light.contrast > 20f }
                 assertThat(history.entries).hasSize(1)
-                compose.onNodeWithTag(EditorTags.PRESET_STRENGTH).performTouchInput { swipeLeft() }
-                compose.waitForIdle()
+                // Down to 0: crossing the 100 % snap zone costs more than the slider's padding, so on a full-width
+                // track (a portrait tablet's docked panel) one edge-to-edge swipe stops short; swipe again (FIX/H).
+                repeat(MAX_SWIPES) {
+                    if (history.cursor != -1) {
+                        compose.onNodeWithTag(EditorTags.PRESET_STRENGTH).performTouchInput { swipeLeft() }
+                        compose.waitForIdle()
+                    }
+                }
                 // Strength 0 undoes the step (back to the photo as it was; redo would bring it back).
                 compose.waitUntil(TIMEOUT_MS) { history.cursor == -1 }
                 assertThat(history.current.light.contrast).isEqualTo(0f)
@@ -325,6 +331,7 @@ class PresetsFlowTest {
     private companion object {
         const val TIMEOUT_MS = 30_000L
         const val BATCH_TIMEOUT_MS = 120_000L
+        const val MAX_SWIPES = 3
         const val WRITE_MS = 500L
         const val PHOTOS = 50
     }

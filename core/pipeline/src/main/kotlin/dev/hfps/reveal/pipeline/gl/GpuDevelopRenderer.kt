@@ -6,6 +6,7 @@ import android.opengl.GLES20
 import android.opengl.GLES30
 import android.os.Handler
 import android.os.HandlerThread
+import android.os.Looper
 import android.view.Surface
 import dev.hfps.reveal.pipeline.PipelineInput
 import dev.hfps.reveal.pipeline.cpu.DevelopParams
@@ -23,6 +24,7 @@ import dev.hfps.reveal.pipeline.geometry.GeometryMapping
 import dev.hfps.reveal.pipeline.geometry.Warp
 import dev.hfps.reveal.pipeline.heal.HealEngine
 import dev.hfps.reveal.pipeline.heal.HealOp
+import dev.hfps.reveal.pipeline.heal.HealPatch
 import dev.hfps.reveal.pipeline.heal.PixelReader
 import dev.hfps.reveal.pipeline.heal.RemoveContext
 import dev.hfps.reveal.pipeline.heal.RemoveSource
@@ -46,10 +48,17 @@ import dev.hfps.reveal.pipeline.zoom.ZoomView
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.FloatBuffer
+import java.util.concurrent.CancellationException
+import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.ExecutionException
+import java.util.concurrent.FutureTask
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
+import java.util.concurrent.locks.LockSupport
 import kotlin.math.roundToInt
 import kotlinx.coroutines.CompletableDeferred
 
@@ -222,13 +231,22 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
     @Volatile
     private var aiEpoch = 0
 
-    // Healing (docs/adr/0023): the input with the spots' patches, the engine that makes them, and what changed.
+    // Healing (docs/adr/0023): the input with the spots' patches, the worker that makes them (docs/adr/0023 "FIX/H":
+    // never on this thread), and what changed.
     private var healedTex = 0
     private var healedFbo = 0
-    private var healEngine: HealEngine? = null
     private var healReader: GlSourceReader? = null
+
+    /** The spots last submitted to [healWorker] (this [healEpoch]). */
     private var healsKey: List<Heal>? = null
+
+    /** The patches the healed texture holds (the last result applied). */
+    private var healPatches: List<HealPatch?> = emptyList()
     private var healsVersion = 0
+
+    /** Results of the heal worker and its pixel reads, run on this thread in order ([drainHeals]). */
+    private val healInbox = ConcurrentLinkedQueue<Runnable>()
+    private val healWorker = HealWorker { result -> toGl { applyHealResult(result) } }
 
     /** The heal state stage 1 is asked to render: [healsVersion] (the healed input) or -1 (the photo unhealed). */
     private var wantHeals = -1
@@ -244,6 +262,10 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
     private var healChange: IntArray = NO_CHANGE
     private var removeSource: RemoveSource = RemoveSource.NONE
     private var fullSource: TileSource? = null
+
+    /** Set once [close] starts: the heal worker's pixel reads fail instead of waiting for this thread. */
+    @Volatile
+    private var closing = false
     private var healStatus = HealStatus()
     private var histogramDirty = false
     private var histogramPosted = false
@@ -494,14 +516,40 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
 
     /**
      * Where Remove spots get their fills (docs/adr/0023); [RemoveSource.NONE] renders them as nothing. The crops are
-     * read from the full-resolution source ([setFullResolution]) when there is one, else from the proxy.
+     * read from the full-resolution source ([setFullResolution]) when there is one, else from the proxy. [photoKey]
+     * (the file's fingerprint) lets fills outlive the process ([RemoveFills.store]); [originalSize] is the original's
+     * upright size when this renderer's image is a smaller copy of it (a thumbnail: docs/adr/0023 "FIX/H").
      */
-    fun setHealSource(source: RemoveSource) {
+    fun setHealSource(source: RemoveSource, photoKey: String? = null, originalSize: Pair<Int, Int>? = null) {
+        // The editor's spots: compile the healing code before the first one (docs/adr/0023 "FIX/H").
+        if (source !== RemoveSource.NONE && originalSize == null) healWorker.warmUp()
         handler.post {
             removeSource = source
+            healPhotoKey = photoKey
+            healOriginalSize = originalSize
             zoom.healSource = source
             resetHealing()
             requestFrame()
+        }
+    }
+
+    private var healPhotoKey: String? = null
+    private var healOriginalSize: Pair<Int, Int>? = null
+
+    /**
+     * Suspends until [recipe]'s Remove spots have their fills (or failed), at most [timeoutMs]: true when none is
+     * still computing. Offscreen renders (thumbnails) call it before [renderOutputImage].
+     */
+    suspend fun awaitHealFills(recipe: Recipe, timeoutMs: Long): Boolean {
+        val deadline = System.nanoTime() + timeoutMs * NANOS_PER_MS.toLong()
+        while (true) {
+            val pending = onGl {
+                prepareHeals(recipe.heals)
+                healStatus.pending.isNotEmpty() || !healWorker.idle
+            }
+            if (!pending) return true
+            if (System.nanoTime() > deadline) return false
+            kotlinx.coroutines.delay(HEAL_FILL_POLL_MS)
         }
     }
 
@@ -521,26 +569,41 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
      * The automatic source of [heal] (docs/adr/0023 "Source pick"): `(dx, dy)` as fractions of the image, searched on
      * the proxy with every spot of the current recipe applied; null when nothing fits.
      */
-    suspend fun pickHealSource(heal: Heal): Pair<Float, Float>? = onGl {
-        val image = checkNotNull(input) { "no input" }
-        val engine = healEngine
-        val reader = engine?.layerReader() ?: ensureHealReader()
-        SourcePicker.pick(heal, reader, image.colour)
+    suspend fun pickHealSource(heal: Heal): Pair<Float, Float>? {
+        val (reader, colour) = onGl {
+            val image = checkNotNull(input) { "no input" }
+            ensureHealReader() to image.colour
+        }
+        // On the heal worker (after the spots queued before), with every spot applied; never on the GL thread.
+        return onHealWorker { engine -> SourcePicker.pick(heal, engine?.layerReader() ?: reader, colour) }
     }
 
     /**
      * The proxy-resolution pixels of the image with the current recipe's spots applied over x0, y0, x1, y1 (RGB, the
      * input encoding); tests.
      */
-    suspend fun readHealed(x0: Int, y0: Int, x1: Int, y1: Int): FloatArray = onGl {
-        val engine = healEngine
-        if (engine != null) {
-            engine.layer(x0, y0, x1, y1)
-        } else {
-            val out = FloatArray((x1 - x0) * (y1 - y0) * PipelineInput.CHANNELS)
-            ensureHealReader().read(x0, y0, x1 - x0, y1 - y0, out)
-            out
+    suspend fun readHealed(x0: Int, y0: Int, x1: Int, y1: Int): FloatArray {
+        val reader = onGl {
+            prepareHeals(request.get().recipe.heals)
+            ensureHealReader()
         }
+        return onHealWorker { engine ->
+            engine?.layer(x0, y0, x1, y1) ?: FloatArray((x1 - x0) * (y1 - y0) * PipelineInput.CHANNELS).also {
+                reader.read(x0, y0, x1 - x0, y1 - y0, it)
+            }
+        }
+    }
+
+    /** True when the heal worker has nothing queued or computing (tests: the editor closed mid-fill). */
+    val healIdle: Boolean get() = healWorker.idle
+
+    /** Milliseconds of the heal worker's last update of the spots (measurements). */
+    val healUpdateMs: Double get() = healWorker.lastUpdateMs
+
+    private suspend fun <T> onHealWorker(block: (HealEngine?) -> T): T {
+        val result = CompletableDeferred<T>()
+        healWorker.onWorker(block) { r -> r.fold(result::complete, result::completeExceptionally) }
+        return result.await()
     }
 
     /** What the last coverage update did (brush bins, layers, time); for the benchmark. */
@@ -763,6 +826,10 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
     }
 
     override fun close() {
+        // The heal worker stops first (its pending Remove fills are released and cancelled; docs/adr/0023 "FIX/H"),
+        // and a pixel read it is waiting for fails instead of waiting for this thread.
+        closing = true
+        healWorker.close()
         val latch = CountDownLatch(1)
         handler.post {
             releaseGl()
@@ -823,7 +890,7 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         overlayExtra = overlayId(req)?.let { id ->
             shownRecipe.masks.firstOrNull { it.id == id }?.takeIf { m -> params.masks.masks.none { it.id == m.id } }
         }
-        prepareHeals(if (req.showOriginal) null else req.recipe.heals)
+        prepareHeals(if (req.showOriginal) null else req.recipe.heals, wait = false)
         prepareMasks(params)
         val tilesOn = tilesShown(req)
         val half = halfViewOnly(panes, mapping, tilesOn, req)
@@ -1225,100 +1292,165 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
     // ------------------------------------------------------------------ healing (docs/adr/0023)
 
     /**
-     * Brings the healed input to [heals] (the edit's spots; null renders the photo unhealed and keeps the spots): the
-     * engine recomputes the spots that changed, their rectangles are restored from the source and the patches written
-     * again ([applyHealPatches]); sets [wantHeals].
+     * Brings the healed input towards [heals] (the edit's spots; null renders the photo unhealed and keeps the spots)
+     * and sets [wantHeals]. The spots are computed on the heal worker (docs/adr/0023 "FIX/H"): changed spots are
+     * submitted and the healed texture keeps the last result until the new one arrives ([applyHealResult]). With
+     * [wait] (offscreen renders, tests, benchmarks) this returns once the worker has caught up, so the render shows
+     * every spot whose pixels are known (Remove fills still computing render nothing, as on screen).
      */
     @Suppress("ReturnCount")
-    private fun prepareHeals(heals: List<Heal>?) {
+    private fun prepareHeals(heals: List<Heal>?, wait: Boolean = true) {
+        drainHeals()
         if (heals == null) {
             wantHeals = -1
             return
         }
         val image = input ?: return
-        if (!HealOp.active(heals)) {
-            val engine = healEngine
-            if (engine != null && !engine.isEmpty) {
-                engine.update(emptyList())?.let { applyHealPatches(it) }
-            }
-            healsKey = heals
-            publishHealStatus()
-            wantHeals = -1
-            return
+        val active = HealOp.active(heals)
+        if (heals != healsKey && (active || healsKey != null)) {
+            if (active) ensureHealedTexture(image)
+            submitHeals(image, heals)
         }
-        if (heals != healsKey) {
-            val engine = healEngine ?: newHealEngine(image)
-            val epoch = healEpoch
-            val dirty = engine.update(heals) {
-                handler.post {
-                    if (healEpoch == epoch) {
-                        healsKey = null
-                        requestFrame()
-                    }
-                }
-            }
-            healsKey = heals
-            if (dirty != null) applyHealPatches(dirty)
-            publishHealStatus()
-            profiler.mark("healing (CPU)")
-        }
-        wantHeals = healsVersion
+        if (wait) awaitHeals()
+        wantHeals = if (active && healedTex != 0) healsVersion else -1
     }
 
     private var healEpoch = 0
 
-    /** A new engine on the proxy (Remove's crops from the full-resolution source when there is one). */
-    private fun newHealEngine(image: UploadedImage): HealEngine {
+    /** Submits [heals] to the worker; a new epoch's engine runs on the proxy (Remove crops from the original). */
+    private fun submitHeals(image: UploadedImage, heals: List<Heal>) {
         val reader = ensureHealReader()
         val original = fullSource?.let { PixelReader.of(it) } ?: reader
-        val engine = HealEngine(
-            image.width,
-            image.height,
-            reader,
-            image.colour,
-            RemoveContext(removeSource, original, image.colour),
-        )
-        healEngine = engine
-        if (healedTex == 0) {
-            healedTex = newTexture(1, image.width, image.height, GLES30.GL_NEAREST, GLES30.GL_NEAREST)
-            healedFbo = newFramebuffer(healedTex)
-            copySource(0, 0, image.width, image.height)
+        val source = removeSource
+        // Fills are stored by the file only when their crops come from the original (not the proxy before it loads).
+        val photoKey = healPhotoKey.takeIf { fullSource != null || healOriginalSize != null }
+        // A thumbnail's crops are defined on the original's size (its keys are the editor's), else on the original.
+        val size = healOriginalSize?.takeIf { fullSource == null } ?: (original.width to original.height)
+        healWorker.submit(healEpoch, heals) {
+            HealEngine(
+                image.width,
+                image.height,
+                reader,
+                image.colour,
+                RemoveContext(source, original, image.colour, photoKey, size.first, size.second),
+            )
         }
-        return engine
+        healsKey = heals
     }
 
-    /** The proxy's source pixels read back from the GPU (block cache). */
+    /** Waits (on this thread) until the worker has caught up, serving its pixel reads meanwhile. */
+    private fun awaitHeals() {
+        val deadline = System.nanoTime() + AWAIT_HEALS_NS
+        while (!healWorker.idle && System.nanoTime() < deadline) {
+            drainHeals()
+            LockSupport.parkNanos(HEAL_PARK_NS)
+        }
+        drainHeals()
+    }
+
+    /** Runs [block] on this thread in order with the other heal work (results, pixel reads). */
+    private fun toGl(block: () -> Unit) {
+        healInbox.add(Runnable(block))
+        handler.post(::drainHeals)
+    }
+
+    private fun drainHeals() {
+        while (true) {
+            val next = healInbox.poll() ?: return
+            next.run()
+        }
+    }
+
+    /** A worker result: the patches it made are written into the healed texture, and a frame is asked for. */
+    private fun applyHealResult(result: HealWorker.Result) {
+        if (result.epoch != healEpoch || input == null || healedTex == 0) return
+        healPatches = result.patches
+        result.dirty?.let(::applyHealPatches)
+        publishHealStatus(result.status)
+        requestFrame()
+    }
+
+    private fun ensureHealedTexture(image: UploadedImage) {
+        if (healedTex != 0) return
+        healedTex = newTexture(1, image.width, image.height, GLES30.GL_NEAREST, GLES30.GL_NEAREST)
+        healedFbo = newFramebuffer(healedTex)
+        copySource(0, 0, image.width, image.height)
+    }
+
+    /** The proxy's source pixels read back from the GPU (block cache; any thread: other threads hop to this one). */
     private fun ensureHealReader(): GlSourceReader {
         val image = checkNotNull(input) { "no input" }
         healReader?.let { return it }
         if (sourceFbo == 0) sourceFbo = newFramebuffer(sourceTex)
-        return GlSourceReader(image.width, image.height) { sourceFbo }.also { healReader = it }
+        val epoch = healEpoch
+        return GlSourceReader(image.width, image.height) { y, h ->
+            glCall {
+                // A reader of an older image (or a closed renderer) reads nothing.
+                if (epoch != healEpoch || closing) throw CancellationException("heal reader of an older image")
+                readSourceRows(y, h)
+            }
+        }.also { healReader = it }
+    }
+
+    /** The source texture's rows [y] until `y + h`, whole width, as RGBA floats (row 0 = the image's top row). */
+    private fun readSourceRows(y: Int, h: Int): FloatArray {
+        val w = checkNotNull(input).width
+        if (sourceFbo == 0) sourceFbo = newFramebuffer(sourceTex)
+        val pixels = FloatBuffer.allocate(w * h * RGBA)
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, sourceFbo)
+        // Texture row 0 is the image's top row (uploadInput): framebuffer y addresses texture rows directly.
+        GLES30.glReadPixels(0, y, w, h, GLES30.GL_RGBA, GLES30.GL_FLOAT, pixels)
+        GlSupport.checkError("healing readback")
+        return pixels.array()
     }
 
     /**
-     * The spots are computed again from scratch (a new Remove source or original): the healed input is the source again
-     * and every stage that read it runs again.
+     * Runs [block] on the GL thread and returns its result: directly when called there, else through [healInbox]
+     * (served by the looper or by [awaitHeals]); fails with [CancellationException] once the renderer closes.
+     */
+    private fun <T> glCall(block: () -> T): T {
+        if (Looper.myLooper() == thread.looper) return block()
+        val task = FutureTask(block)
+        toGl { task.run() }
+        while (true) {
+            try {
+                return task.get(GL_CALL_POLL_MS, TimeUnit.MILLISECONDS)
+            } catch (_: TimeoutException) {
+                if (closing) {
+                    task.cancel(false)
+                    throw CancellationException("renderer closed")
+                }
+            } catch (e: ExecutionException) {
+                throw e.cause ?: e
+            }
+        }
+    }
+
+    /**
+     * The spots are computed again from scratch (a new Remove source, original or image): the healed input is the
+     * source again, every stage that read it runs again, and the worker starts a new engine.
      */
     private fun resetHealing() {
         healEpoch++
-        healEngine = null
+        healReader = null
         healsKey = null
+        healPatches = emptyList()
         val image = input ?: return
         if (healedTex != 0) copySource(0, 0, image.width, image.height)
         healsVersion++
         healChanged(null)
-        publishHealStatus()
+        publishHealStatus(HealStatus())
     }
 
     /**
-     * Restores [dirty] of the healed input from the source and writes the engine's patches again: every patch that
-     * meets the restored area is written whole, so the area grows to a closed set first (a later patch that overlaps
-     * a rewritten one is rewritten after it).
+     * Restores [dirty] of the healed input from the source and writes the patches again: every patch that meets the
+     * restored area is written whole, so the area grows to a closed set first (a later patch that overlaps a rewritten
+     * one is rewritten after it).
      */
     @Suppress("NestedBlockDepth", "CyclomaticComplexMethod", "ComplexCondition")
     private fun applyHealPatches(dirty: IntArray) {
         val image = checkNotNull(input)
-        val patches = healEngine?.current.orEmpty()
+        val patches = healPatches
         val area = intArrayOf(
             dirty[0].coerceIn(0, image.width),
             dirty[1].coerceIn(0, image.height),
@@ -1346,16 +1478,14 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         for (p in patches) {
             if (p == null || !(p.x0 < area[2] && area[0] < p.x1 && p.y0 < area[3] && area[1] < p.y1)) continue
             val n = p.width * p.height
-            val rgba = FloatArray(n * RGBA)
-            for (i in 0 until n) {
-                rgba[i * RGBA] = p.rgb[i * PipelineInput.CHANNELS]
-                rgba[i * RGBA + 1] = p.rgb[i * PipelineInput.CHANNELS + 1]
-                rgba[i * RGBA + 2] = p.rgb[i * PipelineInput.CHANNELS + 2]
-                rgba[i * RGBA + 3] = 1f
-            }
             val floats = ByteBuffer.allocateDirect(n * RGBA * Float.SIZE_BYTES).order(ByteOrder.nativeOrder())
                 .asFloatBuffer()
-            floats.put(rgba)
+            for (i in 0 until n) {
+                floats.put(p.rgb[i * PipelineInput.CHANNELS])
+                floats.put(p.rgb[i * PipelineInput.CHANNELS + 1])
+                floats.put(p.rgb[i * PipelineInput.CHANNELS + 2])
+                floats.put(1f)
+            }
             floats.flip()
             GLES30.glTexSubImage2D(
                 GLES30.GL_TEXTURE_2D, 0, p.x0, p.y0, p.width, p.height, GLES30.GL_RGBA, GLES30.GL_FLOAT, floats,
@@ -1394,9 +1524,7 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         )
     }
 
-    private fun publishHealStatus() {
-        val engine = healEngine
-        val status = HealStatus(engine?.pending.orEmpty(), engine?.failed.orEmpty(), engine?.fellBack.orEmpty())
+    private fun publishHealStatus(status: HealStatus) {
         if (status != healStatus) {
             healStatus = status
             onHeals?.invoke(status)
@@ -1408,7 +1536,7 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         if (healedFbo != 0) GLES30.glDeleteFramebuffers(1, intArrayOf(healedFbo), 0)
         healedTex = 0
         healedFbo = 0
-        healEngine = null
+        healPatches = emptyList()
         healReader = null
         healsKey = null
         healEpoch++
@@ -2237,6 +2365,14 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         private const val LIGHT_BINDING = 2
         private const val RGBA = 4
         private const val UPLOAD_ROWS = 128
+
+        /** Longest an offscreen render waits for the heal worker, and its polling step (docs/adr/0023 "FIX/H"). */
+        private const val AWAIT_HEALS_NS = 120_000_000_000L
+        private const val HEAL_PARK_NS = 200_000L
+
+        /** How often a heal-worker read waiting for the GL thread checks that the renderer is not closing. */
+        private const val GL_CALL_POLL_MS = 50L
+        private const val HEAL_FILL_POLL_MS = 20L
         private const val NANOS_PER_MS = 1_000_000f
 
         /** Default surround outside the image, display-encoded `#1C1C1C` (the editor's `EditorNeutrals.Surround`). */
@@ -2601,50 +2737,51 @@ data class SpotsView(val strength: Float) {
 }
 
 /**
- * The proxy's source texture read back to the CPU for the healing engine (docs/adr/0023): blocks of [BLOCK] x [BLOCK]
- * pixels read once (`glReadPixels`, float) and kept. GL thread only.
+ * The proxy's source pixels for the healing engine (docs/adr/0023), by strips of [STRIP] whole rows read once through
+ * [fetch] (the renderer reads them on its GL thread; from another thread the call hops there) and kept as RGB floats.
+ * Each readback waits for the GPU, so strips (not small blocks) keep their number low (docs/adr/0023 "FIX/H").
+ * Thread-safe: the heal worker and the Remove fills read it off the GL thread.
  */
-private class GlSourceReader(override val width: Int, override val height: Int, private val fbo: () -> Int) :
-    PixelReader {
-    private val blocks = HashMap<Int, FloatArray>()
-    override val threadSafe: Boolean get() = false
+private class GlSourceReader(
+    override val width: Int,
+    override val height: Int,
+    private val fetch: (y: Int, h: Int) -> FloatArray,
+) : PixelReader {
+    private val strips = arrayOfNulls<FloatArray>((height + STRIP - 1) / STRIP)
+    private val lock = Any()
 
     override fun read(x: Int, y: Int, w: Int, h: Int, out: FloatArray) {
         val c = PipelineInput.CHANNELS
-        for (by in y / BLOCK..(y + h - 1) / BLOCK) {
-            for (bx in x / BLOCK..(x + w - 1) / BLOCK) {
-                val block = block(bx, by)
-                val bw = minOf(BLOCK, width - bx * BLOCK)
-                val x0 = maxOf(x, bx * BLOCK)
-                val x1 = minOf(x + w, bx * BLOCK + bw)
-                val y0 = maxOf(y, by * BLOCK)
-                val y1 = minOf(y + h, by * BLOCK + minOf(BLOCK, height - by * BLOCK))
-                for (row in y0 until y1) {
-                    System.arraycopy(
-                        block,
-                        ((row - by * BLOCK) * bw + (x0 - bx * BLOCK)) * c,
-                        out,
-                        ((row - y) * w + (x0 - x)) * c,
-                        (x1 - x0) * c,
-                    )
-                }
+        for (s in y / STRIP..(y + h - 1) / STRIP) {
+            val strip = strip(s)
+            val y0 = maxOf(y, s * STRIP)
+            val y1 = minOf(y + h, (s + 1) * STRIP, height)
+            for (row in y0 until y1) {
+                System.arraycopy(strip, ((row - s * STRIP) * width + x) * c, out, (row - y) * w * c, w * c)
             }
         }
     }
 
-    private fun block(bx: Int, by: Int): FloatArray = blocks.getOrPut(by * BLOCKS_PER_ROW + bx) {
-        val bw = minOf(BLOCK, width - bx * BLOCK)
-        val bh = minOf(BLOCK, height - by * BLOCK)
-        val pixels = FloatBuffer.allocate(bw * bh * 4)
-        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, fbo())
-        // Texture row 0 is the image's top row (uploadInput): framebuffer y addresses texture rows directly.
-        GLES30.glReadPixels(bx * BLOCK, by * BLOCK, bw, bh, GLES30.GL_RGBA, GLES30.GL_FLOAT, pixels)
-        GlSupport.checkError("healing readback")
-        FloatArray(bw * bh * PipelineInput.CHANNELS) { pixels.get((it / 3) * 4 + it % 3) }
+    private fun strip(s: Int): FloatArray {
+        synchronized(lock) { strips[s] }?.let { return it }
+        val y = s * STRIP
+        val h = minOf(STRIP, height - y)
+        val rgba = fetch(y, h)
+        val rgb = FloatArray(width * h * PipelineInput.CHANNELS)
+        var o = 0
+        var i = 0
+        repeat(width * h) {
+            rgb[o] = rgba[i]
+            rgb[o + 1] = rgba[i + 1]
+            rgb[o + 2] = rgba[i + 2]
+            o += PipelineInput.CHANNELS
+            i += RGBA_CHANNELS
+        }
+        return synchronized(lock) { strips[s] ?: rgb.also { strips[s] = it } }
     }
 
     private companion object {
-        const val BLOCK = 128
-        const val BLOCKS_PER_ROW = 1 shl 12
+        const val STRIP = 64
+        const val RGBA_CHANNELS = 4
     }
 }

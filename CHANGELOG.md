@@ -6,6 +6,24 @@ All notable changes to Reveal are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- Healing (FIX/H, docs/adr/0023 "FIX/H"): dragging a spot, its source or its size moves only its outline; the repair
+  is computed once on release, with the Remove progress while it runs. Healing never runs on the drawing thread any
+  more (the editor no longer freezes while a Remove recomputes), and every fill that is no longer wanted (the spot
+  moved again, the mode was cancelled, the photo closed) stops at once instead of running on until the app is killed:
+  on the Galaxy Tab S9 a 30-frame drag of a 300 px Remove stroke on a 24 MP RAW used to queue 7.3 s of Patch fills
+  (75 s with AI) after the release, now 0.28 s (2.8 s with AI).
+- Remove is faster on big photos: Patch searches big holes on a crop scaled to the hole (copying the photo's own
+  pixels at full resolution, so it stays sharp) and the healing code is warmed up when a photo opens; a new 300 px
+  Patch stroke on a 24 MP RAW shows in 0.7 s on the Tab S9 (was 1.5 s), a moved one in 0.3 s.
+- The healed photo is visible inside the Heal mode: only the selected spot shows its painted area, the others a thin
+  outline, and an eye button hides the outlines.
+- Library thumbnails and the viewer show every edit: a crop, a turn or a Transform made the edited thumbnail fail
+  (the original was shown instead), and healing spots were missing. Remove spots use the editor's fill (kept on disk
+  with the AI masks, Settings → Storage) or one made at the thumbnail's size, in the background.
+- Crashes while healing a RAW: the full-resolution image could be read by the zoom and Remove at the same time, or
+  after the photo closed.
+
 ## [0.7.0] - 2026-11-14
 
 ### Added

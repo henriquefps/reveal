@@ -115,7 +115,7 @@ private fun Modifier.healGestures(host: PhotoLayerHost): Modifier {
                     if (!pen && event.changes.count { it.pressed } > 1) {
                         // A second finger: the user wants to zoom, not paint.
                         if (stroking) actions.strokeCancel()
-                        if (dragging) actions.commit()
+                        if (dragging) actions.dragCancel()
                         controller.brushCursor = null
                         return@awaitEachGesture
                     }
@@ -296,8 +296,12 @@ private fun BoxScope.HealOverlay(host: PhotoLayerHost) {
         if (view == null) return@Canvas
         val thin = 1.5.dp.toPx()
         val under = 3.dp.toPx()
-        for (spot in state.edit.recipe.heals) {
-            val selected = spot.id == heal.selected
+        // Every spot as a thin outline; the selected one (or the one being dragged) in the accent colour with its
+        // stroke's area and its source (docs/adr/0023 "FIX/H": the healed photo stays visible around them). Hidden on
+        // request, so the result can be judged without them.
+        val spots = if (heal.overlayHidden) emptyList() else heal.shown(state.edit.recipe.heals)
+        for (spot in spots) {
+            val selected = spot.id == heal.selected || spot.id == heal.dragging?.id
             val colour = when {
                 spot.id in heal.failed -> failed
                 selected -> accent
@@ -305,8 +309,8 @@ private fun BoxScope.HealOverlay(host: PhotoLayerHost) {
             }
             val r = view.radius(spot)
             val target = slotPath(spot, view, sourceOf = false)
-            drawShape(target, r, shade, under, null)
-            drawShape(target, r, colour, if (selected) thin * 1.5f else thin, null)
+            drawShape(target, r, shade, under, null, wash = false)
+            drawShape(target, r, colour, if (selected) thin * 1.5f else thin, null, wash = selected)
             if (spot.id in heal.pending) {
                 target.firstOrNull()?.let { c ->
                     drawArc(
@@ -323,8 +327,8 @@ private fun BoxScope.HealOverlay(host: PhotoLayerHost) {
             if (selected && spot.hasSource) {
                 val source = slotPath(spot, view, sourceOf = true)
                 val dash = PathEffect.dashPathEffect(floatArrayOf(DASH, DASH))
-                drawShape(source, r, shade, under, null)
-                drawShape(source, r, if (hoveredSource) accent else line, thin, dash)
+                drawShape(source, r, shade, under, null, wash = false)
+                drawShape(source, r, if (hoveredSource) accent else line, thin, dash, wash = false)
                 val a = target.firstOrNull()
                 val b = source.firstOrNull()
                 if (a != null && b != null) {
@@ -362,8 +366,16 @@ private fun BoxScope.HealOverlay(host: PhotoLayerHost) {
     HoverTooltipLayer(tooltip, hover, Modifier.matchParentSize())
 }
 
-/** A circle (one point) or a stroke's outline (its path at the dab width). */
-private fun DrawScope.drawShape(points: List<Offset>, r: Float, colour: Color, width: Float, effect: PathEffect?) {
+/** A circle (one point) or a stroke's path; with [wash], the stroke's area as a light wash at the dab width. */
+@Suppress("LongParameterList")
+private fun DrawScope.drawShape(
+    points: List<Offset>,
+    r: Float,
+    colour: Color,
+    width: Float,
+    effect: PathEffect?,
+    wash: Boolean,
+) {
     if (points.isEmpty()) return
     if (points.size == 1) {
         drawCircle(colour, r, points[0], style = Stroke(width, pathEffect = effect))
@@ -372,12 +384,14 @@ private fun DrawScope.drawShape(points: List<Offset>, r: Float, colour: Color, w
     val path = Path()
     path.moveTo(points[0].x, points[0].y)
     for (i in 1 until points.size) path.lineTo(points[i].x, points[i].y)
-    // A stroke: its area as a light wash at the dab diameter, and its path.
-    drawPath(
-        path,
-        colour.copy(alpha = STROKE_WASH),
-        style = Stroke(2f * r, cap = StrokeCap.Round, join = StrokeJoin.Round),
-    )
+    // A stroke: its area as a light wash at the dab diameter (the selected spot only), and its path.
+    if (wash) {
+        drawPath(
+            path,
+            colour.copy(alpha = STROKE_WASH),
+            style = Stroke(2f * r, cap = StrokeCap.Round, join = StrokeJoin.Round),
+        )
+    }
     drawPath(path, colour, style = Stroke(width, cap = StrokeCap.Round, join = StrokeJoin.Round, pathEffect = effect))
 }
 

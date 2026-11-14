@@ -536,6 +536,8 @@
     <string name="heal_visualise_strength">Visualise contrast</string>
     <string name="heal_delete">Delete spot</string>
     <string name="heal_new_source">New source</string>
+    <string name="heal_hide_spots">Hide spots</string>
+    <string name="heal_show_spots">Show spots</string>
     <string name="heal_removing">Removing…</string>
     <string name="heal_remove_failed">This removal could not be computed</string>
     <string name="heal_remove_ai">AI</string>

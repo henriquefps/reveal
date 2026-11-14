@@ -47,6 +47,7 @@ object HealOp {
             val next = latch
             engine.update(heals) { next.countDown() }
         }
+        engine.close()
         val rgb = input.linearRgb.copyOf()
         engine.overlay(0, 0, input.width, input.height, rgb)
         return PipelineInput(

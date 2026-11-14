@@ -1,6 +1,7 @@
 package dev.hfps.reveal.feature.editor.heal
 
 import androidx.compose.runtime.Immutable
+import dev.hfps.reveal.pipeline.recipe.Heal
 import dev.hfps.reveal.pipeline.recipe.HealKind
 import dev.hfps.reveal.pipeline.recipe.StrokePoint
 
@@ -20,7 +21,7 @@ data class HealSettings(
     val removeMethod: String? = null,
 ) {
     /** The Remove method new spots get: the chosen one, else the app's model ([ai]), else the patch fill. */
-    fun method(ai: String?): String = removeMethod ?: ai ?: dev.hfps.reveal.pipeline.recipe.Heal.METHOD_PATCH
+    fun method(ai: String?): String = removeMethod ?: ai ?: Heal.METHOD_PATCH
 
     /** One step of the `[` / `]` keys: about 15 % bigger or smaller, within [MIN_SIZE]..[MAX_SIZE]. */
     fun resized(steps: Int): HealSettings {
@@ -69,7 +70,20 @@ data class HealUiState(
     val picking: Boolean = false,
     /** The last spot refused because the recipe has the most spots it may hold. */
     val full: Boolean = false,
+    /**
+     * The spot being dragged (its target or source moved, or its size slider held) as it will be on release: only the
+     * overlay shows it; the recipe, and so the healing, changes once on release (docs/adr/0023 "FIX/H").
+     */
+    val dragging: Heal? = null,
+    /** The spots' overlay is hidden, to look at the healed photo (docs/adr/0023 "FIX/H"). */
+    val overlayHidden: Boolean = false,
 ) {
+    /** [spots] as the overlay draws them: the dragged spot in its new place. */
+    fun shown(spots: List<Heal>): List<Heal> {
+        val drag = dragging ?: return spots
+        return spots.map { if (it.id == drag.id) drag else it }
+    }
+
     companion object {
         const val DEFAULT_VISUALISE: Float = 50f
     }
@@ -95,10 +109,13 @@ interface HealActions {
 
     fun setSetting(setting: HealSetting) {}
 
-    /** Per drag frame: a setting of new spots and of the selected one (not committed). */
+    /**
+     * Per drag frame: a setting of new spots and of the selected one (not committed; the size of the selected spot
+     * shows on its outline only until [commit]).
+     */
     fun setSettings(settings: HealSettings) {}
 
-    /** A slider was released: the working recipe becomes one step. */
+    /** A slider or a drag was released: the dragged spot is applied and the working recipe becomes one step. */
     fun commit() {}
 
     /** A tap on the photo at image fraction ([x], [y]): a new circle spot (its source picked automatically). */
@@ -118,11 +135,17 @@ interface HealActions {
 
     fun select(id: String?) {}
 
-    /** Per frame: the spot's source offset (image fractions); not committed. */
+    /** Per frame: the spot's source offset (image fractions); only its outline moves until [commit]. */
     fun moveSource(id: String, dx: Float, dy: Float) {}
 
-    /** Per frame: a circle spot's centre (image fractions), its source moving with it; not committed. */
+    /** Per frame: a circle spot's centre (image fractions), its source moving with it; outline only until [commit]. */
     fun moveTarget(id: String, x: Float, y: Float) {}
+
+    /** The drag was cancelled (a second finger): the spot stays where it was. */
+    fun dragCancel() {}
+
+    /** Hides or shows the spots' overlay. */
+    fun setOverlayHidden(hidden: Boolean) {}
 
     /** Picks the selected spot's source again (one step). */
     fun newSource(id: String) {}

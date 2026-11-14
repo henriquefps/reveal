@@ -294,7 +294,7 @@ class MasksFlowTest {
     }
 
     private fun typeValue(tag: String, text: String) {
-        compose.onNodeWithTag(tag).performScrollTo()
+        compose.scrollIntoView(tag)
         compose.onNodeWithTag(tag + RevealSliderTags.VALUE_SUFFIX, useUnmergedTree = true).performClick()
         compose.waitUntilAtLeastOneExists(hasTestTag(NumericInputTags.FIELD), TIMEOUT_MS)
         compose.onNodeWithTag(NumericInputTags.FIELD).performTextReplacement(text)
@@ -319,7 +319,8 @@ class MasksFlowTest {
 
     private fun click(tag: String) {
         compose.waitUntilAtLeastOneExists(hasTestTag(tag), TIMEOUT_MS)
-        compose.onNodeWithTag(tag).apply { runCatching { performScrollTo() } }.performClick()
+        compose.scrollIntoView(tag)
+        compose.onNodeWithTag(tag).performClick()
         compose.waitForIdle()
     }
 

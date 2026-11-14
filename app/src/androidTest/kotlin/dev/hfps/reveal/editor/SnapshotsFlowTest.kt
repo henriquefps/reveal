@@ -141,12 +141,14 @@ class SnapshotsFlowTest {
 
     private fun click(tag: String) {
         compose.waitUntilAtLeastOneExists(hasTestTag(tag), TIMEOUT_MS)
-        compose.onNodeWithTag(tag).apply { runCatching { performScrollTo() } }.performClick()
+        compose.scrollIntoView(tag)
+        compose.onNodeWithTag(tag).performClick()
         compose.waitForIdle()
     }
 
     private fun typeExposure(text: String) {
         showLight()
+        compose.scrollIntoView(EditorTags.EXPOSURE)
         compose.onNodeWithTag(
             EditorTags.EXPOSURE + RevealSliderTags.VALUE_SUFFIX,
             useUnmergedTree = true,

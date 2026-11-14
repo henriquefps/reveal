@@ -201,3 +201,80 @@ any render; a registration drops fills an earlier render made under the patch me
 a method may throw `RemoveUnavailableException` (an inpainting model without enough memory), and the spot is then
 filled by the patch method with `RemoveFill.fellBack` set, reported as `HealStatus.fellBack`. A fill without offsets
 gets grain where the render is finer than the crop (`heal/Grain.kt`). The patch method and its results are unchanged.
+
+## Amendment FIX/H: speed, live result, cancellation, thumbnails (0.7.1)
+
+Date: 2026-11-14. The owner's test of 0.7.0 on 24 MP RAWs (Galaxy S24 Ultra and Tab S9 Ultra): dragging a spot
+recomputed it every frame, a Remove after a drag froze the editor and kept running after the mode or the photo was
+closed, the result was hidden by the spots' overlay, a big Remove was slow, thumbnails missed healing (and every
+cropped or turned edit), and a few crashes.
+
+**Edits on release.** The editor sends a spot's drag (its target, its source, its size slider) only when it ends
+(`HealUiState.dragging` is the overlay's copy until then; a second finger cancels it). Feather, opacity and darken stay
+live (they do not change a fill's key). Only the selected spot shows its painted area; the others are thin outlines,
+and the eye button hides them all (`HealTags.OVERLAY_TOGGLE`).
+
+**Never on the GL thread.** The preview's engine moved to `gl/HealWorker`, one thread per renderer: the GL thread
+submits the newest spots (a burst of edits computes the last one) and keeps drawing with the healed texture it has;
+results come back in order through `healInbox` and are uploaded (`applyHealResult`), then a frame is asked for. The
+engine reads the proxy through `GlSourceReader`, now thread-safe: 64-row strips (each readback waits for the GPU, so
+few of them) fetched by a hop to the GL thread (`glCall`), failing with `CancellationException` once the renderer
+closes. Offscreen renders (tests, thumbnails, benchmarks) wait for the worker and serve its reads meanwhile; on-screen
+frames never wait. `pickHealSource` runs on the worker. Results are unchanged bit for bit (same engine, same order).
+
+**Cancellation.** `RemoveFills` keeps one job per key with the callers waiting for it; the worker takes the newest
+job first. `RemoveSource.release(onReady, keys)` drops a caller's interest; a job nobody waits for is removed from the
+queue, or, when running, cancelled through `RemoveInput.cancelled` (`PatchFill` polls it every 8 rows of each
+PatchMatch pass; `InpaintService` before loading the model, before running it and after): nothing is cached and the
+key is not marked failed. `HealEngine` releases the keys of spots that moved, changed or were deleted after every
+update and all of them in `close()` (the renderer's close, `HealedTileSource.close`: the zoom's and an export's).
+
+**Speed.** The patch method searches a crop whose factor also keeps the region's larger side at most
+`RemoveSpec.PATCH_REGION` (96) pixels (offsets copy the photo's own pixels at any resolution, so it stays sharp; small
+spots keep full resolution); model methods keep the 512 px crop. `RemoveSpec.VERSION` 2. `HealWarmUp` runs a small
+synthetic heal and patch Remove on the worker when a renderer gets its heal source, so the first real spot does not
+run interpreted code.
+
+**Measured on the Galaxy Tab S9 Ultra** (Adreno 740; `PipelineBenchmark#healSpotAndSourceDrag -e only 24mp` and
+`AiRemove24MpBenchmark`: the CC0 24 MP `sony-zv-e10.arw`, 2400 px proxy, the full decode as the original, a fresh
+`RemoveFills`; time from the edit to the frame that shows it; the stroke is 300 px long at the default size; the drag
+is 30 frames, then the release):
+
+| | 0.7.0 | FIX/H |
+| --- | --- | --- |
+| New Remove stroke, Patch (first of the session) | 1474 ms | **682 ms** (warm-up done at open: 734 ms) |
+| Drag-release of it, Patch, release only (the editor since FIX/H) | 431 ms | **291 ms** (fill 124 ms: crop read 46, patch 77) |
+| Drag-release, Patch, every drag frame sent (the editor in 0.7.0) | **7311 ms** | 276 ms (superseded fills cancelled) |
+| New Remove stroke, AI (model loaded, run, released) | 5118 ms | 4915 ms |
+| Drag-release, AI, release only | 2751 ms | 2956 ms |
+| Drag-release, AI, every drag frame sent | **75426 ms** | 2821 ms |
+| New heal spot | 32 ms (on the GL thread) | 102 ms (on the worker; frames go on meanwhile) |
+
+The heal spot's latency moved off the GL thread: the drawing thread no longer spends anything on healing, at the cost
+of the hop and the worker's scheduling. An AI fill stays bounded by ADR 0024's policy (the model loaded for each fill
+and released after it).
+
+**Thumbnails and the viewer.** `GpuEditedThumbnails` rendered `renderOutput` into a bitmap of the input's size: any
+crop, turn or Transform failed and the library showed the original; it now uses `renderOutputImage` (the geometry's
+size). Healing: fills outlive the process in a `RemoveFillStore` (`:core:data` `HealFillCacheArea`, `cache/heal-fills`,
+budgeted with the AI masks), keyed by `RemoveRequest.storeKey` (the file's fingerprint, the crop on the original, the
+shape, the method) and written by the editor's fills once their crop comes from the original. A thumbnail asks with
+the original's size (`RemoveContext.originalWidth/Height`): a stored fill (patch or AI) is used as is; a miss is a
+patch fill made on the thumbnail itself, in its own read-only `RemoveFills`. The grid's first thumbnail does not wait
+for fills (`renderQuick`); the complete one replaces it (`ThumbnailRepository.withAiMasks`, now also for Remove spots);
+the viewer's developed page waits. Edited thumbnails cached before are made again (`EDITED_VERSION` 2).
+`EditedThumbnailTest` compares a thumbnail of a recipe using every tool with the editor's render downscaled (tablet:
+mean 0.94, p95 3 levels; the removed object gone).
+
+**Crashes.** `NativeRawTileSource` shared its buffer position between threads (the zoom tiles and the Remove crops
+read it at once) and could be read after the zoom closed it (the photo closed mid-fill: freed native memory); reads
+and close are now synchronised and a read after close throws `CancellationException` (`BitmapTileSource` too). A fill
+that runs out of memory fails its spot instead of the app; a heal worker failure is logged and the last healed image
+stays. `HealCancelTest` closes the photo while a fill runs (the fill stops, no worker is left, the heap returns) and
+stresses 24 MP Remove drags with Patch and AI, rotation and trim-memory: no crash on the tablet.
+
+**Tests on hardware (item 7).** `MasksFlowTest` and `SnapshotsFlowTest` clicked controls that portrait devices had
+scrolled out of the docked panel: `performScrollTo` scrolls only the closest container (the masks row), not the panel.
+The UI was right; the tests now use `scrollIntoView` (every enclosing container). `PresetsFlowTest` (also failing on
+the tablet, in 0.7.0 too): one edge-to-edge swipe of the full-width strength slider stops at 5 % (crossing the 100 %
+snap zone costs more than the slider's padding); it swipes again until the step is undone.

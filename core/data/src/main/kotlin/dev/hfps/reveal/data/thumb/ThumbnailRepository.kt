@@ -40,6 +40,7 @@ import dev.hfps.reveal.pipeline.PipelineInput
 import dev.hfps.reveal.pipeline.input.PipelineInputMapper
 import dev.hfps.reveal.pipeline.preset.ApplyContext
 import dev.hfps.reveal.pipeline.preview.SmartPreviewCodec
+import dev.hfps.reveal.pipeline.recipe.HealKind
 import dev.hfps.reveal.pipeline.recipe.MaskComponent
 import java.io.File
 import java.io.IOException
@@ -152,9 +153,9 @@ class ThumbnailRepository(
 
     private suspend fun loadEdited(target: Target, versionId: Long, editTime: Long): Bitmap? {
         if (edited == null) return null
-        // An edit with AI masks has two thumbnails: the one made when its masks were ready (its own key: it is made
-        // once, never rendered twice) and, until then, this one without the AI parts ([withAiMasks] replaces it).
-        val withMasks = if (aiMasks != null && aiComponents(versionId, editTime).isNotEmpty()) {
+        // An edit with AI masks or Remove spots has two thumbnails: the complete one (its masks and fills ready; its
+        // own key: it is made once, never rendered twice) and, until then, this quick one ([withAiMasks] replaces it).
+        val withMasks = if (needsUpgrade(versionId, editTime)) {
             fromDisk(editedKey(target, versionId, editTime, ai = true))
         } else {
             null
@@ -167,7 +168,29 @@ class ThumbnailRepository(
     private fun editedKey(target: Target, versionId: Long, editTime: Long, ai: Boolean) = CacheKeys.key(
         target.identity,
         Variant.THUMB,
-        "edit:$versionId:$editTime:$PIPELINE_VERSION:$EDGE" + if (ai) ":ai" else "",
+        "edit:$versionId:$editTime:$PIPELINE_VERSION:$EDGE:$EDITED_VERSION" + if (ai) ":ai" else "",
+    )
+
+    /**
+     * True when [versionId]'s quick thumbnail may lack something the complete one has: AI mask parts, or Remove fills
+     * (docs/adr/0023 "FIX/H": made in the background, never while the grid waits).
+     */
+    private suspend fun needsUpgrade(versionId: Long, editTime: Long): Boolean =
+        (aiMasks != null && aiComponents(versionId, editTime).isNotEmpty()) || removes(versionId, editTime)
+
+    /** Whether [versionId]'s recipe has a Remove spot (memoised like [aiComponents]). */
+    private suspend fun removes(versionId: Long, editTime: Long): Boolean {
+        val memo = "$versionId:$editTime"
+        removeSpots[memo]?.let { return it }
+        val any = edits.recipe(versionId).heals.any { it.renders && it.type == HealKind.REMOVE }
+        removeSpots[memo] = any
+        return any
+    }
+
+    private val removeSpots = Collections.synchronizedMap(
+        object : LinkedHashMap<String, Boolean>(AI_MEMO, 0.75f, true) {
+            override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Boolean>?) = size > AI_MEMO
+        },
     )
 
     /** The AI components of [versionId]'s enabled masks. */
@@ -198,24 +221,26 @@ class ThumbnailRepository(
     private val aiLock = Mutex()
 
     /**
-     * The edited thumbnail of [photoId] with its AI masks, after [thumbnail] showed it without them (docs/adr/0022
-     * "M4/F"): the masks come from the disk cache (what the editor, an export or an earlier run made) or are computed
-     * here, one photo at a time, off the grid's thread; the thumbnail is then rendered once, kept under its own key
-     * and put where [inMemory] finds it. Suspends until then; null when the edit has no AI mask, the source is not
-     * readable or a mask could not be made (the thumbnail without it stays). Cancelling it (the cell left the screen)
-     * stops the work; what is cached stays.
+     * The edited thumbnail of [photoId] with its AI masks and Remove fills, after [thumbnail] showed it without them
+     * (docs/adr/0022 "M4/F", docs/adr/0023 "FIX/H"): the masks come from the disk cache (what the editor, an export or
+     * an earlier run made) or are computed here, one photo at a time, off the grid's thread; the fills from their store
+     * (the editor's) or made at the thumbnail's size; the thumbnail is then rendered once, kept under its own key and
+     * put where [inMemory] finds it. Suspends until then; null when the edit has neither, the source is not readable
+     * or a mask could not be made (the quick thumbnail stays). Cancelling it (the cell left the screen) stops the
+     * work; what is cached stays.
      */
-    @Suppress("ReturnCount")
+    @Suppress("ReturnCount", "CyclomaticComplexMethod")
     suspend fun withAiMasks(photoId: Long, versionId: Long, editTime: Long?): Bitmap? {
         val renderer = edited
+        if (renderer == null || editTime == null) return null
         val masks = aiMasks
-        if (renderer == null || masks == null || editTime == null) return null
         val memoryKey = memoryKey(photoId, editTime)
         if (memoryKey in aiDone && memory.get(memoryKey) != null) return null
         return withContext(io) {
             val target = target(photoId) ?: return@withContext null
-            val components = aiComponents(versionId, editTime)
-            if (components.isEmpty()) return@withContext null
+            val components = if (masks != null) aiComponents(versionId, editTime) else emptyList()
+            val fills = removes(versionId, editTime)
+            if (components.isEmpty() && !fills) return@withContext null
             val key = editedKey(target, versionId, editTime, ai = true)
             fromDisk(key)?.let {
                 memory.put(memoryKey, it)
@@ -227,7 +252,16 @@ class ThumbnailRepository(
             aiLock.withLock {
                 try {
                     tree.openInput(target.main.documentId, target.main.name).use { image ->
-                        renderWithAiMasks(image, target, renderer, masks, components, versionId, key, editTime)
+                        if (masks == null || components.isEmpty()) {
+                            // Remove fills only: the render waits for them.
+                            renderer.render(image, edits.recipe(versionId), EDGE).also { bitmap ->
+                                save(key, target.photoId, KIND_EDITED, bitmap)
+                                memory.put(memoryKey, bitmap)
+                                aiDone += memoryKey
+                            }
+                        } else {
+                            renderWithAiMasks(image, target, renderer, masks, components, versionId, key, editTime)
+                        }
                     }
                 } catch (e: CancellationException) {
                     throw e
@@ -315,7 +349,7 @@ class ThumbnailRepository(
         if (renderer == null || tree == null) return null
         return try {
             val recipe = edits.recipe(versionId)
-            tree.openInput(target.main.documentId, target.main.name).use { renderer.render(it, recipe, EDGE) }
+            tree.openInput(target.main.documentId, target.main.name).use { renderer.renderQuick(it, recipe, EDGE) }
         } catch (e: CancellationException) {
             throw e
         } catch (@Suppress("TooGenericExceptionCaught") e: Throwable) {
@@ -572,6 +606,12 @@ class ThumbnailRepository(
         private const val SQL_ARGS = 900
         private const val KIND_PREVIEW = "thumb"
         private const val KIND_EDITED = "thumb-edited"
+
+        /**
+         * Bumped when edited thumbnails change without the pipeline (2: the geometry's output size and healing,
+         * docs/adr/0023 "FIX/H"), so the ones cached before are made again.
+         */
+        private const val EDITED_VERSION = 2
         private const val MEMORY_SHARE = 8
         private const val MAX_MEMORY = 96 * 1024 * 1024
 

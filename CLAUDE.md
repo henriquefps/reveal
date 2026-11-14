@@ -824,13 +824,37 @@ unhealed input everywhere. Visualise spots: `setVisualiseSpots` (output pass `sp
 with a `photo` layer (`HealPhotoLayer`), `HealControls`, `HealEditor` (VM half), pure `HealEdits`; renderer
 `pickHealSource`, `readHealed`, `onHeals` (Remove progress). Synthetic test images: `synthetic/HealScenes`.
 
+Never on the GL thread (FIX/H, ADR 0023 "FIX/H"): `gl/HealWorker` (one thread per renderer) owns the preview's
+engine and brings it to the newest submitted spots (older ones skipped); results go back through the renderer's
+`healInbox` and are uploaded in order (`applyHealResult`). Offscreen renders (`renderOutput*`, `renderLinear`,
+`renderView`, `benchmark`) wait for it (`prepareHeals(wait = true)`, serving its GL reads meanwhile); on-screen frames
+never do. `GlSourceReader` reads the proxy in 64-row strips through `glCall` (any thread hops to the GL thread; fails
+with `CancellationException` once the renderer closes). Fills are jobs (`RemoveFills`: newest first; `release(onReady,
+keys)` drops interest, a job nobody waits for is dropped or cancelled through `RemoveInput.cancelled`, polled by
+`PatchFill` and `InpaintService`); `HealEngine` releases the keys of spots that changed and `close()`s all of them
+(renderer close, `HealedTileSource.close`, the zoom's `TiledRenderer`). Patch crops are scaled to the hole
+(`RemoveSpec.PATCH_REGION`); `HealWarmUp` JIT-compiles the code when a renderer gets its heal source. `TileSource`s
+are read-safe across threads and after `close` (`CancellationException`). The editor sends a spot's drag (target,
+source, size slider) on release only (`HealUiState.dragging` is the overlay's copy; `dragCancel`), shows the selected
+spot's area only, and hides outlines with `HealTags.OVERLAY_TOGGLE`. Thumbnails: `RemoveFillStore` (`:core:data`
+`storage/HealFillCacheArea`, `cache/heal-fills`, set on `RemoveFills.shared` by the app) keyed by
+`RemoveRequest.storeKey` (file fingerprint + crop on the original); `GpuEditedThumbnails` has its own read-only
+`RemoveFills` (a miss = a patch fill on the thumbnail, `RemoveContext.originalWidth/Height`), `renderQuick` (grid,
+no wait) vs `render` (waits; viewer, the grid's `withAiMasks` upgrade); output at the geometry's size
+(`renderOutputImage`).
+
 ```sh
 ./gradlew :core:pipeline:testDebugUnitTest --tests '*heal*' && ./gradlew :feature:editor:testDebugUnitTest --tests '*heal*'
+./gradlew :core:data:testDebugUnitTest --tests '*HealFillCacheAreaTest*'
 adb -s <serial> shell am instrument -w -e class dev.hfps.reveal.pipeline.HealRenderTest dev.hfps.reveal.pipeline.test/androidx.test.runner.AndroidJUnitRunner
-adb -s <serial> shell am instrument -w -e class dev.hfps.reveal.pipeline.PipelineBenchmark#healSpotAndSourceDrag dev.hfps.reveal.pipeline.test/androidx.test.runner.AndroidJUnitRunner   # -e only new|remove|drag
-adb -s <serial> shell am instrument -w -e class dev.hfps.reveal.editor.HealFlowTest dev.hfps.reveal.debug.test/androidx.test.runner.AndroidJUnitRunner
-adb -s <serial> logcat -d -s REVEAL_HEAL REVEAL_HEAL_TEST REVEAL_BENCH
+adb -s <serial> shell am instrument -w -e class dev.hfps.reveal.pipeline.PipelineBenchmark#healSpotAndSourceDrag dev.hfps.reveal.pipeline.test/androidx.test.runner.AndroidJUnitRunner   # -e only new|remove|drag|24mp
+# 24 MP (files/samples/sony-zv-e10.arw in the test app): -e only 24mp (Patch); AI: dev.hfps.reveal.ml.AiRemove24MpBenchmark (ml test app)
+adb -s <serial> shell am instrument -w -e class dev.hfps.reveal.editor.HealFlowTest,dev.hfps.reveal.editor.HealCancelTest,dev.hfps.reveal.library.EditedThumbnailTest dev.hfps.reveal.debug.test/androidx.test.runner.AndroidJUnitRunner
+adb -s <serial> logcat -d -s REVEAL_HEAL REVEAL_HEAL_TEST REVEAL_THUMB_TEST REVEAL_BENCH RevealHeal
 ```
+
+Tests that click inside the editor's panels use `scrollIntoView(tag)` (app androidTest): `performScrollTo` scrolls only
+the closest container, so on portrait devices (docked panel) a "+" in a row of a scrolled panel was never clicked.
 
 ## `:core:image` harness (ADR 0004)
 

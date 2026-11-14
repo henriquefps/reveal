@@ -92,8 +92,16 @@ class NativeRawTileSource(
     )
     private val samples: ShortBuffer = image.samples
     private var row = ShortArray(0)
+    private var closed = false
 
+    /**
+     * Thread-safe: the zoom tiles, the export and the Remove fills (docs/adr/0023 "FIX/H") may read one source from
+     * several threads; reads share the buffer's position, and a read after [close] (the native buffer freed) throws
+     * [java.util.concurrent.CancellationException] instead of touching freed memory.
+     */
+    @Synchronized
     override fun read(x: Int, y: Int, w: Int, h: Int, out: FloatArray) {
+        if (closed) throw java.util.concurrent.CancellationException("source closed")
         val c = PipelineInput.CHANNELS
         if (orientation !in 2..ORIENTATIONS) {
             if (row.size < w * c) row = ShortArray(w * c)
@@ -127,7 +135,13 @@ class NativeRawTileSource(
         }
     }
 
-    override fun close() = image.close()
+    /** Frees the decoded image once no read is in progress. */
+    @Synchronized
+    override fun close() {
+        if (closed) return
+        closed = true
+        image.close()
+    }
 }
 
 /**
@@ -155,9 +169,18 @@ class BitmapTileSource(private val bitmap: Bitmap, private val orientation: Int 
         require(bitmap.config == Bitmap.Config.ARGB_8888) { "Expected ARGB_8888" }
     }
 
+    @Volatile
+    private var closed = false
+
+    /** A read after [close] throws [java.util.concurrent.CancellationException] (docs/adr/0023 "FIX/H"). */
     override fun read(x: Int, y: Int, w: Int, h: Int, out: FloatArray) {
+        if (closed) throw java.util.concurrent.CancellationException("source closed")
         val stored = storedBounds(x, y, w, h, bitmap.width, bitmap.height, orientation)
-        val part = Bitmap.createBitmap(bitmap, stored.left, stored.top, stored.width, stored.height)
+        val part = try {
+            Bitmap.createBitmap(bitmap, stored.left, stored.top, stored.width, stored.height)
+        } catch (e: IllegalStateException) {
+            if (closed) throw java.util.concurrent.CancellationException("source closed") else throw e
+        }
         try {
             linearise(part, stored.left, stored.top, x, y, w, h, out, bitmap.width, bitmap.height, orientation, lut)
         } finally {
@@ -165,7 +188,10 @@ class BitmapTileSource(private val bitmap: Bitmap, private val orientation: Int 
         }
     }
 
-    override fun close() = bitmap.recycle()
+    override fun close() {
+        closed = true
+        bitmap.recycle()
+    }
 }
 
 /**

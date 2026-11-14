@@ -366,7 +366,8 @@ class HealFlowTest {
 
     private fun click(tag: String) {
         compose.waitUntilAtLeastOneExists(hasTestTag(tag), TIMEOUT_MS)
-        compose.onNodeWithTag(tag).apply { runCatching { performScrollTo() } }.performClick()
+        compose.scrollIntoView(tag)
+        compose.onNodeWithTag(tag).performClick()
         compose.waitForIdle()
     }
 

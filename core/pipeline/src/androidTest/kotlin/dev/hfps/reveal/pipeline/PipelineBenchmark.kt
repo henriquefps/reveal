@@ -313,6 +313,7 @@ class PipelineBenchmark {
                 renderer.close()
             }
         }
+        if (only == null || "24mp".contains(only)) heal24Mp(frame)
         if (only == null || "remove".contains(only)) {
             val reader = PixelReader.of(image)
             for (radius in listOf(60f, 180f)) {
@@ -568,6 +569,56 @@ class PipelineBenchmark {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val power = context.getSystemService(android.os.PowerManager::class.java)
         Log.i(TAG, "thermal status ${power.currentThermalStatus}, headroom %.2f".format(power.getThermalHeadroom(0)))
+    }
+
+    /**
+     * docs/adr/0023 "FIX/H": Remove and heal on the 24 MP CC0 RAW (see [HealBench24Mp]): a new 300 px Remove stroke
+     * (Patch), its drag-release (release only, and every drag frame sent as before FIX/H), a new heal spot and its
+     * drag-release; `REVEAL_BENCH heal 24 MP ...`. `-e perFrame false` skips the every-frame drag.
+     */
+    private suspend fun heal24Mp(frame: Pair<Int, Int>?) {
+        val bench = HealBench24Mp(TAG, frame)
+        val perFrame = InstrumentationRegistry.getArguments().getString("perFrame") != "false"
+        val fills = HealBench24Mp.fills()
+        bench.withSample(fills) { s ->
+            fun ms(v: Double) = "%.0f".format(v)
+            // Warm the GL programs and the proxy's stage once.
+            bench.untilShown(s, Recipe())
+            val first = bench.removeStroke(s, "r1", 0.35f, 0.45f, method = Heal.METHOD_PATCH)
+            val placed = bench.untilShown(s, Recipe(heals = listOf(first)))
+            Log.i(TAG, "heal 24 MP: new Remove stroke (Patch, 300 px): ${ms(placed)} ms to the frame showing it")
+            Log.i(TAG, "heal 24 MP: fill ${fills.stats}, last heal update ${ms(s.renderer.healUpdateMs)} ms")
+            val base = Recipe(heals = listOf(first))
+            val (release, worst) = bench.dragRelease(s, base, first, dx = 400f, frames = 30, perFrame = false)
+            Log.i(
+                TAG,
+                "heal 24 MP: drag-release of the Remove stroke, release only: ${ms(release)} ms after the release " +
+                    "(drag frames worst ${ms(
+                        worst,
+                    )} ms); fill ${fills.stats}, heal update ${ms(s.renderer.healUpdateMs)} ms",
+            )
+            if (perFrame) {
+                // From where the release left it, 400 px further, every drag frame sent (the editor before FIX/H).
+                val from = Recipe(heals = listOf(bench.moved(first, 400f / s.width)))
+                val (r2, w2) = bench.dragRelease(s, from, from.heals[0], dx = 400f, frames = 30, perFrame = true)
+                Log.i(
+                    TAG,
+                    "heal 24 MP: drag-release of the Remove stroke, every frame sent: ${ms(r2)} ms after the " +
+                        "release (drag frames worst ${ms(w2)} ms)",
+                )
+            }
+            val spot = bench.healSpot(s, "h1", 0.7f, 0.3f)
+            bench.untilShown(s, base)
+            val withSpot = Recipe(heals = listOf(first, spot))
+            Log.i(TAG, "heal 24 MP: new heal spot: ${ms(bench.untilShown(s, withSpot))} ms")
+            Log.i(TAG, "heal 24 MP: last heal update ${ms(s.renderer.healUpdateMs)} ms")
+            val (healRelease, healWorst) = bench.dragRelease(s, withSpot, spot, dx = 200f, frames = 30, perFrame = true)
+            Log.i(
+                TAG,
+                "heal 24 MP: drag-release of a heal spot (every frame sent): ${ms(healRelease)} ms after the " +
+                    "release (drag frames worst ${ms(healWorst)} ms)",
+            )
+        }
     }
 
     /** `-e frame WxH` (the photo frame on screen), else [FRAME]; `-e frame image` draws 1:1 at the proxy's size. */

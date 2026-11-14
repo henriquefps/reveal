@@ -8,6 +8,7 @@ import android.os.Handler
 import android.util.Log
 import dev.hfps.reveal.pipeline.cpu.DevelopParams
 import dev.hfps.reveal.pipeline.geometry.GeometryMapping
+import dev.hfps.reveal.pipeline.heal.RemoveSource
 import dev.hfps.reveal.pipeline.input.TileSource
 import dev.hfps.reveal.pipeline.mask.MaskContext
 import dev.hfps.reveal.pipeline.recipe.Geometry
@@ -125,6 +126,17 @@ internal class ZoomTiles(
     var maskEpoch: Int = 0
     private var genEpoch = 0
 
+    /** Where the tiles' Remove spots get their fills (docs/adr/0023); set by the renderer. */
+    var healSource: RemoveSource = RemoveSource.NONE
+        set(value) {
+            field = value
+            healEpoch++
+        }
+
+    /** Bumped when a Remove fill arrives (or the source changes): the tiles develop again. */
+    private var healEpoch = 0
+    private var genHealEpoch = 0
+
     /** Pane used for scheduling when there is no window (offscreen tests and benchmarks). */
     var testPane: TilePane? = null
 
@@ -211,9 +223,13 @@ internal class ZoomTiles(
         geometry = recipe.geometry
         optics = recipe.optics
         val params = DevelopParams.from(src.colour, recipe)
-        if (params != genParams || (params.masks.active && maskEpoch != genEpoch)) {
+        // The spots are not operator parameters: a change of them (or a fill that arrived) develops the tiles again.
+        val healsChanged = recipe.heals != genRecipe.heals || (recipe.heals.isNotEmpty() && healEpoch != genHealEpoch)
+        val masksChanged = params.masks.active && maskEpoch != genEpoch
+        if (params != genParams || masksChanged || healsChanged) {
             genParams = params
             genEpoch = maskEpoch
+            genHealEpoch = healEpoch
             genRecipe = recipe
             generation++
             genChangedAt = now
@@ -351,12 +367,15 @@ internal class ZoomTiles(
         val atlasTex = atlas
         val masks = maskContext
         val epoch = maskEpoch
+        val heals = healSource
         executor.execute {
             var tileMs = -1L
             var prepareMs = 0L
             w.maskContext = masks
             w.maskEpoch = epoch
             w.onAiReady = { handler.post { if (!released) aiReady() } }
+            w.healSource = heals
+            w.onHealReady = { handler.post { if (!released) healReady() } }
             try {
                 prepareMs = w.prepareZoom(src, recipe)
                 w.waitFence(fence)
@@ -379,9 +398,12 @@ internal class ZoomTiles(
         val recipe = genRecipe
         val masks = maskContext
         val epoch = maskEpoch
+        val heals = healSource
         executor.execute {
             w.maskContext = masks
             w.maskEpoch = epoch
+            w.healSource = heals
+            w.onHealReady = { handler.post { if (!released) healReady() } }
             val ms = runCatching { w.prepareZoom(src, recipe) }.onFailure { Log.w(TAG, "zoom grids failed", it) }
             handler.post {
                 if (released) return@post
@@ -394,6 +416,12 @@ internal class ZoomTiles(
     }
 
     private var preparedGeneration = -1
+
+    /** A Remove fill a tile asked for is ready: develop the tiles again. */
+    private fun healReady() {
+        healEpoch++
+        requestFrame()
+    }
 
     /** An AI mask a tile asked for is ready: develop the tiles again. */
     private fun aiReady() {

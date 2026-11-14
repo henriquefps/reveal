@@ -21,6 +21,12 @@ import dev.hfps.reveal.pipeline.cpu.VignetteOp
 import dev.hfps.reveal.pipeline.cpu.withoutLocal
 import dev.hfps.reveal.pipeline.geometry.GeometryMapping
 import dev.hfps.reveal.pipeline.geometry.Warp
+import dev.hfps.reveal.pipeline.heal.HealEngine
+import dev.hfps.reveal.pipeline.heal.HealOp
+import dev.hfps.reveal.pipeline.heal.PixelReader
+import dev.hfps.reveal.pipeline.heal.RemoveContext
+import dev.hfps.reveal.pipeline.heal.RemoveSource
+import dev.hfps.reveal.pipeline.heal.SourcePicker
 import dev.hfps.reveal.pipeline.input.TileSource
 import dev.hfps.reveal.pipeline.input.colourOnly
 import dev.hfps.reveal.pipeline.mask.AiMaskSource
@@ -31,6 +37,7 @@ import dev.hfps.reveal.pipeline.mask.MaskParams
 import dev.hfps.reveal.pipeline.mask.MaskPlan
 import dev.hfps.reveal.pipeline.recipe.BrushStroke
 import dev.hfps.reveal.pipeline.recipe.Geometry
+import dev.hfps.reveal.pipeline.recipe.Heal
 import dev.hfps.reveal.pipeline.recipe.Mask
 import dev.hfps.reveal.pipeline.recipe.Recipe
 import dev.hfps.reveal.pipeline.zoom.PixelAlignment
@@ -94,6 +101,7 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         val geometryEditing: Boolean = false,
         val detailMask: Boolean = false,
         val maskOverlay: MaskOverlay? = null,
+        val spots: SpotsView? = null,
     )
 
     @Volatile
@@ -133,7 +141,7 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
     private var effectsGridValid = false
     private val defringe = DefringePasses()
     private var fringeTarget: GlTarget? = null
-    private var developed: Triple<DevelopParams, Boolean, Int>? = null
+    private var developed: DevelopKey? = null
     private var stageMask = false
     private val zoom = ZoomTiles(handler, ::requestFrame) { egl.eglContext }
     private var sceneTex = 0
@@ -213,6 +221,30 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
     /** Bumped when an AI mask arrives (the zoom tiles re-develop). */
     @Volatile
     private var aiEpoch = 0
+
+    // Healing (docs/adr/0023): the input with the spots' patches, the engine that makes them, and what changed.
+    private var healedTex = 0
+    private var healedFbo = 0
+    private var healEngine: HealEngine? = null
+    private var healReader: GlSourceReader? = null
+    private var healsKey: List<Heal>? = null
+    private var healsVersion = 0
+
+    /** The heal state stage 1 is asked to render: [healsVersion] (the healed input) or -1 (the photo unhealed). */
+    private var wantHeals = -1
+
+    /** The heal state the working texture holds (as [wantHeals]). */
+    private var stageHeals = -1
+
+    /** The heal state the scene texture holds, and where the healed input changed since. */
+    private var sceneHeals = -1
+    private var sceneHealChange: IntArray = NO_CHANGE
+
+    /** Where the healed input changed since the last stage-1 render (as [maskChange]). */
+    private var healChange: IntArray = NO_CHANGE
+    private var removeSource: RemoveSource = RemoveSource.NONE
+    private var fullSource: TileSource? = null
+    private var healStatus = HealStatus()
     private var histogramDirty = false
     private var histogramPosted = false
     private var histogramPollPosted = false
@@ -248,7 +280,13 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
      * (docs/adr/0012). The renderer takes ownership and closes it when it is replaced or on [close]; `null` drops it.
      * Returns false (and does not take [source]) when the renderer is already closed.
      */
-    fun setFullResolution(source: TileSource?, k: Float): Boolean = handler.post { zoom.setSource(source, k) }
+    fun setFullResolution(source: TileSource?, k: Float): Boolean = handler.post {
+        zoom.setSource(source, k)
+        // Remove's crops are read from the original (docs/adr/0023): the fills are asked for again.
+        fullSource = source
+        resetHealing()
+        requestFrame()
+    }
 
     /** What the full-resolution zoom has done (tiles, timings); see [ZoomStats]. */
     val zoomStats: ZoomStats get() = zoom.stats
@@ -289,6 +327,7 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         overlayExtra = overlayId(req)?.let { id ->
             req.recipe.masks.firstOrNull { it.id == id }?.takeIf { m -> params.masks.masks.none { it.id == m.id } }
         }
+        prepareHeals(req.recipe.heals)
         prepareMasks(params)
         if (stageStale(params, false, halfStage) || stageHalf != halfStage) {
             runStage1(params, half = halfStage)
@@ -341,7 +380,8 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
             req.view,
         ).first()
         val params = image.params(req.recipe)
-        if (params.withoutPost() != stageParams || stageMask) {
+        prepareHeals(req.recipe.heals)
+        if (params.withoutPost() != stageParams || stageMask || wantHeals != stageHeals) {
             runStage1(params)
         }
         ensureReadTarget(width, height)
@@ -449,6 +489,57 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
             maskPlanKey = null
             masksChanged(null)
             requestFrame()
+        }
+    }
+
+    /**
+     * Where Remove spots get their fills (docs/adr/0023); [RemoveSource.NONE] renders them as nothing. The crops are
+     * read from the full-resolution source ([setFullResolution]) when there is one, else from the proxy.
+     */
+    fun setHealSource(source: RemoveSource) {
+        handler.post {
+            removeSource = source
+            zoom.healSource = source
+            resetHealing()
+            requestFrame()
+        }
+    }
+
+    /** Called on the GL thread when the Remove spots' state changes (still computing, failed). */
+    @Volatile
+    var onHeals: ((HealStatus) -> Unit)? = null
+
+    /**
+     * The "Visualise spots" view (docs/adr/0023): the photo as a contrast-stretched high-pass in grey, so sensor dust
+     * and small blemishes stand out; [strength] 0..100. `null` shows the photo. On-screen only. Coalesced.
+     */
+    fun setVisualiseSpots(strength: Float?) {
+        update { it.copy(spots = strength?.let { s -> SpotsView(s) }) }
+    }
+
+    /**
+     * The automatic source of [heal] (docs/adr/0023 "Source pick"): `(dx, dy)` as fractions of the image, searched on
+     * the proxy with every spot of the current recipe applied; null when nothing fits.
+     */
+    suspend fun pickHealSource(heal: Heal): Pair<Float, Float>? = onGl {
+        val image = checkNotNull(input) { "no input" }
+        val engine = healEngine
+        val reader = engine?.layerReader() ?: ensureHealReader()
+        SourcePicker.pick(heal, reader, image.colour)
+    }
+
+    /**
+     * The proxy-resolution pixels of the image with the current recipe's spots applied over x0, y0, x1, y1 (RGB, the
+     * input encoding); tests.
+     */
+    suspend fun readHealed(x0: Int, y0: Int, x1: Int, y1: Int): FloatArray = onGl {
+        val engine = healEngine
+        if (engine != null) {
+            engine.layer(x0, y0, x1, y1)
+        } else {
+            val out = FloatArray((x1 - x0) * (y1 - y0) * PipelineInput.CHANNELS)
+            ensureHealReader().read(x0, y0, x1 - x0, y1 - y0, out)
+            out
         }
     }
 
@@ -655,6 +746,7 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         // resolution when the fitted frame reads level 1 or coarser (axis-aligned, as halfViewOnly).
         val fit = frame?.let { (w, h) -> minOf(w.toFloat() / mapping.outputWidth, h.toFloat() / mapping.outputHeight) }
         val half = fit != null && fit <= HALF_VIEW_SCALE && mapping.axisAligned
+        prepareHeals(recipe.heals)
         if (stageStale(params, false, half)) runStage1(params, half = half)
         val post = PostParams.from(recipe.effects)
         if (frame == null || fit == null) {
@@ -731,6 +823,7 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         overlayExtra = overlayId(req)?.let { id ->
             shownRecipe.masks.firstOrNull { it.id == id }?.takeIf { m -> params.masks.masks.none { it.id == m.id } }
         }
+        prepareHeals(if (req.showOriginal) null else req.recipe.heals)
         prepareMasks(params)
         val tilesOn = tilesShown(req)
         val half = halfViewOnly(panes, mapping, tilesOn, req)
@@ -768,7 +861,7 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
      */
     @Suppress("ComplexCondition")
     private fun shownPost(req: Request): PostParams = if (req.showOriginal || req.geometryEditing ||
-        req.detailMask || req.maskOverlay?.mode == MaskOverlay.Mode.GREYSCALE
+        req.detailMask || req.maskOverlay?.mode == MaskOverlay.Mode.GREYSCALE || req.spots != null
     ) {
         PostParams.NONE
     } else {
@@ -818,7 +911,7 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         val fringeOn = params.defringe.active
         // The coverage the develop pass reads (cached in MaskPasses; the overlay's mask keeps its slot after them).
         prepareMasks(params)
-        val develop = Triple(params.withoutDetail(), localOn, masksVersion)
+        val develop = DevelopKey(params.withoutDetail(), localOn, masksVersion, wantHeals)
         val region = DetailPasses.Region(0, 0, image.width, image.height, image.width, image.height)
         val shapeFree = Pair(params.withoutDetail().withoutMaskShapes(), localOn)
         val halfNow = localOn && half && !showMask && stageHalfFbo != 0
@@ -827,8 +920,9 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         // Or only some masks' adjustments changed (a drag of a mask's slider): the box their coverage can reach.
         val canPartial = develop != developed && !fringeOn && !showMask && !stageMask && halfNow == developedHalf &&
             stageParams != null && developedShapeFree != null
-        val partial = if (canPartial) partialRect(params, shapeFree) else null
+        val partial = if (canPartial) partialRect(params, shapeFree, develop) else null
         maskChange = NO_CHANGE
+        healChange = NO_CHANGE
         var gridChanged = false
         if (partial != null) {
             partialUpdates++
@@ -856,6 +950,7 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         developedHalf = halfNow
         stageParams = params
         stageMasksVersion = masksVersion
+        stageHeals = wantHeals
         stageMask = showMask
         stageHalf = localOn && half && !showMask && stageHalfFbo != 0
         stageMipsValid = false
@@ -868,7 +963,7 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
     private fun stageStale(params: DevelopParams, mask: Boolean, half: Boolean): Boolean {
         val needsLevel0 = stageHalf && !half
         return params.withoutPost() != stageParams || mask != stageMask || needsLevel0 ||
-            masksVersion != stageMasksVersion
+            masksVersion != stageMasksVersion || wantHeals != stageHeals
     }
 
     /**
@@ -903,7 +998,8 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         mapping: GeometryMapping,
         tilesOn: Boolean,
         req: Request,
-    ): Boolean = !tilesOn && req.loupe == null && !req.detailMask && !req.geometryEditing && mapping.axisAligned &&
+    ): Boolean = !tilesOn && req.loupe == null && !req.detailMask && !req.geometryEditing && req.spots == null &&
+        mapping.axisAligned &&
         panes.all { it.original || it.view.scale <= HALF_VIEW_SCALE }
 
     /** Slots 11 and 12 into the working texture (level 1 only with [half]); see [runStage1]. */
@@ -974,6 +1070,7 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
      * The scene texture and the local-tone guide of [params] (each kept while what it depends on is unchanged) and the
      * develop stage's uniforms; returns whether the guide is in use.
      */
+    @Suppress("CyclomaticComplexMethod", "ComplexCondition")
     private fun prepareScene(params: DevelopParams): Boolean {
         val image = checkNotNull(input) { "no input" }
         val hp = params.highlights
@@ -999,27 +1096,61 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
             if (reconstruct) hp else null,
             params.vignette,
         )
-        if (scene != sceneKey) {
-            GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, sceneFbo)
-            GlSupport.discardColour()
-            GLES30.glViewport(0, 0, image.width, image.height)
-            GLES30.glUseProgram(sceneProgram)
-            bindVignette(sceneProgram, params, vignetteLut, image.width, image.height)
-            bindTextures(sourceTex, if (reconstruct) light.chromaTexture else sourceTex)
-            GLES30.glDrawArrays(GLES30.GL_TRIANGLES, 0, 3)
-            GlSupport.checkError("scene stage")
-            profiler.mark("scene pass")
+        // Healing (docs/adr/0023): the scene reads the healed input; highlight reconstruction's chroma (above) is
+        // always the photo's own. A change of the spots alone redraws the scene where the input changed.
+        val heals = wantHeals
+        val partialHeal = scene == sceneKey && heals >= 0 && sceneHeals >= 0 && heals != sceneHeals &&
+            sceneHealChange !== FULL_CHANGE
+        var guideRect: IntArray? = null
+        if (scene != sceneKey || (heals != sceneHeals && !partialHeal)) {
+            scenePass(params, reconstruct, if (heals >= 0) healedTex else sourceTex, null)
             sceneKey = scene
+            sceneHeals = heals
+            sceneHealChange = NO_CHANGE
             guideValid = false
+        } else if (partialHeal) {
+            val rect = sceneHealChange
+            if (rect !== NO_CHANGE) {
+                scenePass(params, reconstruct, healedTex, rect)
+                guideRect = rect
+            }
+            sceneHeals = heals
+            sceneHealChange = NO_CHANGE
         }
         // Local highlights/shadows need the guide too (docs/adr/0022).
-        val guided = params.tone.localActive || params.masks.needs(MaskParams.NEED_TONE_LOCAL)
+        val guided = guided(params)
         if (guided && !guideValid) {
             light.guide(sceneTex)
             guideValid = true
             profiler.mark("guided filter")
+        } else if (guided && guideRect != null) {
+            // Only the rows of the cells the healed rectangle touches, then the low-resolution steps.
+            light.guidePartial(sceneTex, guideRect)
+            profiler.mark("guided filter (partial)")
+        } else if (guideRect != null) {
+            guideValid = false
         }
         return guided
+    }
+
+    /** The scene pass from [input] into the scene texture, whole or scissored to [rect]. */
+    private fun scenePass(params: DevelopParams, reconstruct: Boolean, input: Int, rect: IntArray?) {
+        val image = checkNotNull(this.input) { "no input" }
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, sceneFbo)
+        if (rect == null) {
+            GlSupport.discardColour()
+        } else {
+            GLES30.glEnable(GLES30.GL_SCISSOR_TEST)
+            GLES30.glScissor(rect[0], rect[1], rect[2] - rect[0], rect[3] - rect[1])
+        }
+        GLES30.glViewport(0, 0, image.width, image.height)
+        GLES30.glUseProgram(sceneProgram)
+        bindVignette(sceneProgram, params, vignetteLut, image.width, image.height)
+        bindTextures(input, if (reconstruct) light.chromaTexture else input)
+        GLES30.glDrawArrays(GLES30.GL_TRIANGLES, 0, 3)
+        if (rect != null) GLES30.glDisable(GLES30.GL_SCISSOR_TEST)
+        GlSupport.checkError("scene stage")
+        profiler.mark(if (rect == null) "scene pass" else "scene pass (partial)")
     }
 
     /** The develop pass into [fbo] (the uniforms and the masks' block are uploaded). */
@@ -1091,15 +1222,249 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         }
     }
 
-    /** Where a partial stage-1 update redraws (see [runStage1]); null = everything. */
-    private fun partialRect(params: DevelopParams, shapeFree: Any): IntArray? {
-        val change = maskChange
-        return when {
-            change === NO_CHANGE -> adjustedBox(params)
-            change !== FULL_CHANGE && shapeFree == developedShapeFree -> change
-            else -> null
+    // ------------------------------------------------------------------ healing (docs/adr/0023)
+
+    /**
+     * Brings the healed input to [heals] (the edit's spots; null renders the photo unhealed and keeps the spots): the
+     * engine recomputes the spots that changed, their rectangles are restored from the source and the patches written
+     * again ([applyHealPatches]); sets [wantHeals].
+     */
+    @Suppress("ReturnCount")
+    private fun prepareHeals(heals: List<Heal>?) {
+        if (heals == null) {
+            wantHeals = -1
+            return
+        }
+        val image = input ?: return
+        if (!HealOp.active(heals)) {
+            val engine = healEngine
+            if (engine != null && !engine.isEmpty) {
+                engine.update(emptyList())?.let { applyHealPatches(it) }
+            }
+            healsKey = heals
+            publishHealStatus()
+            wantHeals = -1
+            return
+        }
+        if (heals != healsKey) {
+            val engine = healEngine ?: newHealEngine(image)
+            val epoch = healEpoch
+            val dirty = engine.update(heals) {
+                handler.post {
+                    if (healEpoch == epoch) {
+                        healsKey = null
+                        requestFrame()
+                    }
+                }
+            }
+            healsKey = heals
+            if (dirty != null) applyHealPatches(dirty)
+            publishHealStatus()
+            profiler.mark("healing (CPU)")
+        }
+        wantHeals = healsVersion
+    }
+
+    private var healEpoch = 0
+
+    /** A new engine on the proxy (Remove's crops from the full-resolution source when there is one). */
+    private fun newHealEngine(image: UploadedImage): HealEngine {
+        val reader = ensureHealReader()
+        val original = fullSource?.let { PixelReader.of(it) } ?: reader
+        val engine = HealEngine(
+            image.width,
+            image.height,
+            reader,
+            image.colour,
+            RemoveContext(removeSource, original, image.colour),
+        )
+        healEngine = engine
+        if (healedTex == 0) {
+            healedTex = newTexture(1, image.width, image.height, GLES30.GL_NEAREST, GLES30.GL_NEAREST)
+            healedFbo = newFramebuffer(healedTex)
+            copySource(0, 0, image.width, image.height)
+        }
+        return engine
+    }
+
+    /** The proxy's source pixels read back from the GPU (block cache). */
+    private fun ensureHealReader(): GlSourceReader {
+        val image = checkNotNull(input) { "no input" }
+        healReader?.let { return it }
+        if (sourceFbo == 0) sourceFbo = newFramebuffer(sourceTex)
+        return GlSourceReader(image.width, image.height) { sourceFbo }.also { healReader = it }
+    }
+
+    /**
+     * The spots are computed again from scratch (a new Remove source or original): the healed input is the source again
+     * and every stage that read it runs again.
+     */
+    private fun resetHealing() {
+        healEpoch++
+        healEngine = null
+        healsKey = null
+        val image = input ?: return
+        if (healedTex != 0) copySource(0, 0, image.width, image.height)
+        healsVersion++
+        healChanged(null)
+        publishHealStatus()
+    }
+
+    /**
+     * Restores [dirty] of the healed input from the source and writes the engine's patches again: every patch that
+     * meets the restored area is written whole, so the area grows to a closed set first (a later patch that overlaps
+     * a rewritten one is rewritten after it).
+     */
+    @Suppress("NestedBlockDepth", "CyclomaticComplexMethod", "ComplexCondition")
+    private fun applyHealPatches(dirty: IntArray) {
+        val image = checkNotNull(input)
+        val patches = healEngine?.current.orEmpty()
+        val area = intArrayOf(
+            dirty[0].coerceIn(0, image.width),
+            dirty[1].coerceIn(0, image.height),
+            dirty[2].coerceIn(0, image.width),
+            dirty[3].coerceIn(0, image.height),
+        )
+        var grew = true
+        while (grew) {
+            grew = false
+            for (p in patches) {
+                if (p == null || !(p.x0 < area[2] && area[0] < p.x1 && p.y0 < area[3] && area[1] < p.y1)) continue
+                if (p.x0 < area[0] || p.y0 < area[1] || p.x1 > area[2] || p.y1 > area[3]) {
+                    area[0] = minOf(area[0], p.x0)
+                    area[1] = minOf(area[1], p.y0)
+                    area[2] = maxOf(area[2], p.x1)
+                    area[3] = maxOf(area[3], p.y1)
+                    grew = true
+                }
+            }
+        }
+        if (area[2] <= area[0] || area[3] <= area[1]) return
+        copySource(area[0], area[1], area[2] - area[0], area[3] - area[1])
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, healedTex)
+        GLES30.glPixelStorei(GLES30.GL_UNPACK_ALIGNMENT, 1)
+        for (p in patches) {
+            if (p == null || !(p.x0 < area[2] && area[0] < p.x1 && p.y0 < area[3] && area[1] < p.y1)) continue
+            val n = p.width * p.height
+            val rgba = FloatArray(n * RGBA)
+            for (i in 0 until n) {
+                rgba[i * RGBA] = p.rgb[i * PipelineInput.CHANNELS]
+                rgba[i * RGBA + 1] = p.rgb[i * PipelineInput.CHANNELS + 1]
+                rgba[i * RGBA + 2] = p.rgb[i * PipelineInput.CHANNELS + 2]
+                rgba[i * RGBA + 3] = 1f
+            }
+            val floats = ByteBuffer.allocateDirect(n * RGBA * Float.SIZE_BYTES).order(ByteOrder.nativeOrder())
+                .asFloatBuffer()
+            floats.put(rgba)
+            floats.flip()
+            GLES30.glTexSubImage2D(
+                GLES30.GL_TEXTURE_2D, 0, p.x0, p.y0, p.width, p.height, GLES30.GL_RGBA, GLES30.GL_FLOAT, floats,
+            )
+        }
+        GlSupport.checkError("healed input")
+        healsVersion++
+        healChanged(area)
+    }
+
+    /** Copies the source into the healed input over the rectangle ([x], [y], [w] x [h]). */
+    private fun copySource(x: Int, y: Int, w: Int, h: Int) {
+        if (sourceFbo == 0) sourceFbo = newFramebuffer(sourceTex)
+        GLES30.glBindFramebuffer(GLES30.GL_READ_FRAMEBUFFER, sourceFbo)
+        GLES30.glBindFramebuffer(GLES30.GL_DRAW_FRAMEBUFFER, healedFbo)
+        GLES30.glBlitFramebuffer(x, y, x + w, y + h, x, y, x + w, y + h, GLES30.GL_COLOR_BUFFER_BIT, GLES30.GL_NEAREST)
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
+    }
+
+    /** The healed input changed over [rect] (null: anywhere): for the scene and the develop stages. */
+    private fun healChanged(rect: IntArray?) {
+        healChange = grow(healChange, rect)
+        sceneHealChange = grow(sceneHealChange, rect)
+    }
+
+    private fun grow(current: IntArray, rect: IntArray?): IntArray = when {
+        rect == null || current === FULL_CHANGE -> FULL_CHANGE
+
+        current === NO_CHANGE -> rect.copyOf()
+
+        else -> intArrayOf(
+            minOf(current[0], rect[0]),
+            minOf(current[1], rect[1]),
+            maxOf(current[2], rect[2]),
+            maxOf(current[3], rect[3]),
+        )
+    }
+
+    private fun publishHealStatus() {
+        val engine = healEngine
+        val status = HealStatus(engine?.pending.orEmpty(), engine?.failed.orEmpty())
+        if (status != healStatus) {
+            healStatus = status
+            onHeals?.invoke(status)
         }
     }
+
+    private fun releaseHealing() {
+        if (healedTex != 0) GLES30.glDeleteTextures(1, intArrayOf(healedTex), 0)
+        if (healedFbo != 0) GLES30.glDeleteFramebuffers(1, intArrayOf(healedFbo), 0)
+        healedTex = 0
+        healedFbo = 0
+        healEngine = null
+        healReader = null
+        healsKey = null
+        healEpoch++
+        wantHeals = -1
+        stageHeals = -1
+        sceneHeals = -1
+        healChange = NO_CHANGE
+        sceneHealChange = NO_CHANGE
+    }
+
+    /**
+     * Where a partial stage-1 update redraws (see [runStage1]); null = everything. The masks' part (a stroke's bins, a
+     * mask's box) and the healing's part (where the healed input changed, grown by the local-tone guide's reach when
+     * the guide is in use: docs/adr/0023 "Partial updates").
+     */
+    @Suppress("ReturnCount", "CyclomaticComplexMethod", "ComplexCondition")
+    private fun partialRect(params: DevelopParams, shapeFree: Any, develop: DevelopKey): IntArray? {
+        val old = developed ?: return null
+        val heal = healChange
+        // Heal states -1 <-> a version re-render the scene whole: no partial update then.
+        if (heal === FULL_CHANGE || (develop.heals != old.heals && (develop.heals < 0 || old.heals < 0))) return null
+        val masksSame = develop.params == old.params && develop.local == old.local && develop.masks == old.masks
+        val maskPart: IntArray? = if (masksSame) {
+            EMPTY_RECT
+        } else {
+            val change = maskChange
+            when {
+                change === NO_CHANGE -> adjustedBox(params)
+                change !== FULL_CHANGE && shapeFree == developedShapeFree -> change
+                else -> null
+            }
+        }
+        if (maskPart == null) return null
+        if (develop.heals == old.heals || heal === NO_CHANGE) return maskPart
+        // Range masks and auto-mask brushes read the pre-local image the heal changed: everything then.
+        if (maskPlan?.needsPre == true) return null
+        val image = checkNotNull(input)
+        val grow = if (guided(params)) LightPasses.guideReach(image.grid) else 0
+        val healRect = intArrayOf(
+            maxOf(heal[0] - grow, 0),
+            maxOf(heal[1] - grow, 0),
+            minOf(heal[2] + grow, image.width),
+            minOf(heal[3] + grow, image.height),
+        )
+        if (maskPart === EMPTY_RECT) return healRect
+        return intArrayOf(
+            minOf(maskPart[0], healRect[0]),
+            minOf(maskPart[1], healRect[1]),
+            maxOf(maskPart[2], healRect[2]),
+            maxOf(maskPart[3], healRect[3]),
+        )
+    }
+
+    /** Local highlights/shadows need the guide (docs/adr/0022). */
+    private fun guided(params: DevelopParams): Boolean =
+        params.tone.localActive || params.masks.needs(MaskParams.NEED_TONE_LOCAL)
 
     /** The plan of [list]; it depends on the shapes only: a drag of a mask's adjustments keeps it (and its dabs). */
     private fun updateMaskPlan(list: List<Mask>, width: Int, height: Int) {
@@ -1268,12 +1633,15 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         tiles: TileUniforms? = null,
         post: PostParams = PostParams.NONE,
         overlay: OverlayUniforms? = null,
+        spots: SpotsView? = null,
     ) {
         val view = alignedView(paneView, width, height, mapping, tiles)
         val aligned = mapping.axisAligned
-        val readsLevel0 = tiles != null || OutputSampling.readsLevel0(view.scale, aligned)
+        val readsLevel0 = tiles != null || spots != null || OutputSampling.readsLevel0(view.scale, aligned)
         if (texture == stageTex && stageHalf && readsLevel0) ensureStageLevel0()
-        if (texture == stageTex && !stageMipsValid && OutputSampling.needsMips(view.scale, aligned)) {
+        // Visualise spots reads a coarse level for its local mean: the mips must be current.
+        val wantsMips = OutputSampling.needsMips(view.scale, aligned) || spots != null
+        if (texture == stageTex && !stageMipsValid && wantsMips) {
             GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, stageTex)
             // From level 1 when only it is current (levels above 1 only: readsLevel0 was false).
             if (stageHalf) GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_BASE_LEVEL, 1)
@@ -1288,7 +1656,7 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
             outputUbo,
             outputBlock(
                 image.width, image.height, view, width, height, settings, surround, clipping.bits, mapping, tiles,
-                post, boxLevel, overlay,
+                post, boxLevel, overlay, spots,
             ),
         )
         if (tiles != null) zoom.bind(tiles.nearest)
@@ -1366,6 +1734,7 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
 
     private fun readLinear(recipe: Recipe): FloatArray {
         val image = checkNotNull(input) { "no input" }
+        prepareHeals(recipe.heals)
         runStage1(image.params(recipe))
         val pixels = FloatBuffer.allocate(image.width * image.height * RGBA)
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, stageFbo)
@@ -1386,6 +1755,7 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         clipping: ClippingWarnings = ClippingWarnings.NONE,
     ): ByteArray {
         val image = checkNotNull(input) { "no input" }
+        prepareHeals(recipe.heals)
         runStage1(image.params(recipe))
         val mapping = image.mapping(recipe)
         drawOutputOffscreen(settings, clipping, mapping, PostParams.from(recipe.effects))
@@ -1603,6 +1973,7 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
     }
 
     private fun deleteImageTextures() {
+        releaseHealing()
         releaseCompareAndReadbacks()
         deleteDetailTargets()
         masks.releaseImage()
@@ -1661,7 +2032,7 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
     // ------------------------------------------------------------------ compare, histogram, sampling (GL thread)
 
     /** Draws the output pass once per compare pane, scissored to the pane where it has a clip. */
-    @Suppress("LongParameterList")
+    @Suppress("LongParameterList", "CyclomaticComplexMethod")
     private fun drawPanes(
         image: UploadedImage,
         panes: List<ComparePane>,
@@ -1701,6 +2072,7 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
                 tiles = if (tilesOn && !pane.original) zoom.uniforms(pane.view, mapping) else null,
                 post = if (pane.original) PostParams.NONE else shownPost(req),
                 overlay = if (pane.original) null else overlayUniforms(req),
+                spots = if (pane.original || req.showOriginal || req.geometryEditing) null else req.spots,
             )
         }
         GLES30.glDisable(GLES30.GL_SCISSOR_TEST)
@@ -1725,7 +2097,10 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
             )
             originalFbo = newFramebuffer(originalTex)
         }
+        val heals = wantHeals
+        wantHeals = -1
         runStage1(image.params(Recipe.DEFAULT))
+        wantHeals = heals
         GLES30.glBindFramebuffer(GLES30.GL_READ_FRAMEBUFFER, stageFbo)
         GLES30.glBindFramebuffer(GLES30.GL_DRAW_FRAMEBUFFER, originalFbo)
         GLES30.glBlitFramebuffer(
@@ -1854,6 +2229,9 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         private val NO_CHANGE = IntArray(0)
         private val FULL_CHANGE = IntArray(0)
 
+        /** [partialRect]'s "the masks need nothing redrawn". */
+        private val EMPTY_RECT = IntArray(4)
+
         private const val DEVELOP_BINDING = 0
         private const val OUTPUT_BINDING = 1
         private const val LIGHT_BINDING = 2
@@ -1932,6 +2310,7 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
             post: PostParams = PostParams.NONE,
             boxLevel: Int = 0,
             overlay: OverlayUniforms? = null,
+            spots: SpotsView? = null,
         ): ByteBuffer {
             val b = ByteBuffer.allocateDirect(OUTPUT_BLOCK_FLOATS * Float.SIZE_BYTES).order(ByteOrder.nativeOrder())
             putMat4(b, OutputTransformOp.workingToOutput(settings.space).toFloatArray())
@@ -1958,6 +2337,14 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
             putPost(b, post, mapping, tiles)
             putWarp(b, mapping.warp, tiles?.full?.warp)
             putOverlay(b, overlay)
+            // Visualise spots (docs/adr/0023): on, gain, the level of the local mean (about 8 screen pixels).
+            if (spots == null) {
+                repeat(SPOTS_BLOCK_FLOATS) { b.putFloat(0f) }
+            } else {
+                val level = (maxOf(OutputSampling.lod(view.scale), 0f) + SPOTS_LEVELS)
+                    .coerceAtMost((32 - Integer.numberOfLeadingZeros(maxOf(imageWidth, imageHeight)) - 1).toFloat())
+                b.putFloat(1f).putFloat(SpotsView.gain(spots.strength)).putFloat(level).putFloat(0f)
+            }
             b.flip()
             return b
         }
@@ -2031,8 +2418,12 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         private const val POST_BLOCK_FLOATS = 16
         private const val WARP_BLOCK_FLOATS = 24
         private const val OVERLAY_BLOCK_FLOATS = 12
+        private const val SPOTS_BLOCK_FLOATS = 4
+
+        /** Levels above the displayed one for Visualise spots' local mean. */
+        private const val SPOTS_LEVELS = 3f
         private const val OUTPUT_BLOCK_FLOATS =
-            44 + TILE_BLOCK_FLOATS + POST_BLOCK_FLOATS + WARP_BLOCK_FLOATS + OVERLAY_BLOCK_FLOATS
+            44 + TILE_BLOCK_FLOATS + POST_BLOCK_FLOATS + WARP_BLOCK_FLOATS + OVERLAY_BLOCK_FLOATS + SPOTS_BLOCK_FLOATS
         private const val FADE_TICK_MS = 16L
         private const val FENCE_TIMEOUT_NS = 2_000_000_000L
         private const val GL_TIME_ELAPSED_EXT = 0x88BF
@@ -2186,3 +2577,67 @@ internal class OverlayUniforms(
 
 /** What the last mask coverage update did (`GpuDevelopRenderer.maskStats`). */
 data class MaskStats(val brushBins: Int, val brushFull: Int, val coverageLayers: Int, val ms: Float)
+
+/** What stage 1's develop output depends on, besides Detail and Effects (see `runStage1`). */
+private data class DevelopKey(val params: DevelopParams, val local: Boolean, val masks: Int, val heals: Int)
+
+/** The Remove spots of the shown recipe whose fill is still being computed ([pending]) or failed ([failed]), by id. */
+data class HealStatus(val pending: Set<String> = emptySet(), val failed: Set<String> = emptySet())
+
+/** The "Visualise spots" view (docs/adr/0023): high-pass [strength] 0..100. */
+data class SpotsView(val strength: Float) {
+    companion object {
+        /** The high-pass gain of [strength]: 4 at 0 up to 40 at 100 (geometric). */
+        fun gain(strength: Float): Float =
+            (4.0 * StrictMath.pow(10.0, (strength.coerceIn(0f, 100f) / 100f).toDouble())).toFloat()
+    }
+}
+
+/**
+ * The proxy's source texture read back to the CPU for the healing engine (docs/adr/0023): blocks of [BLOCK] x [BLOCK]
+ * pixels read once (`glReadPixels`, float) and kept. GL thread only.
+ */
+private class GlSourceReader(override val width: Int, override val height: Int, private val fbo: () -> Int) :
+    PixelReader {
+    private val blocks = HashMap<Int, FloatArray>()
+    override val threadSafe: Boolean get() = false
+
+    override fun read(x: Int, y: Int, w: Int, h: Int, out: FloatArray) {
+        val c = PipelineInput.CHANNELS
+        for (by in y / BLOCK..(y + h - 1) / BLOCK) {
+            for (bx in x / BLOCK..(x + w - 1) / BLOCK) {
+                val block = block(bx, by)
+                val bw = minOf(BLOCK, width - bx * BLOCK)
+                val x0 = maxOf(x, bx * BLOCK)
+                val x1 = minOf(x + w, bx * BLOCK + bw)
+                val y0 = maxOf(y, by * BLOCK)
+                val y1 = minOf(y + h, by * BLOCK + minOf(BLOCK, height - by * BLOCK))
+                for (row in y0 until y1) {
+                    System.arraycopy(
+                        block,
+                        ((row - by * BLOCK) * bw + (x0 - bx * BLOCK)) * c,
+                        out,
+                        ((row - y) * w + (x0 - x)) * c,
+                        (x1 - x0) * c,
+                    )
+                }
+            }
+        }
+    }
+
+    private fun block(bx: Int, by: Int): FloatArray = blocks.getOrPut(by * BLOCKS_PER_ROW + bx) {
+        val bw = minOf(BLOCK, width - bx * BLOCK)
+        val bh = minOf(BLOCK, height - by * BLOCK)
+        val pixels = FloatBuffer.allocate(bw * bh * 4)
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, fbo())
+        // Texture row 0 is the image's top row (uploadInput): framebuffer y addresses texture rows directly.
+        GLES30.glReadPixels(bx * BLOCK, by * BLOCK, bw, bh, GLES30.GL_RGBA, GLES30.GL_FLOAT, pixels)
+        GlSupport.checkError("healing readback")
+        FloatArray(bw * bh * PipelineInput.CHANNELS) { pixels.get((it / 3) * 4 + it % 3) }
+    }
+
+    private companion object {
+        const val BLOCK = 128
+        const val BLOCKS_PER_ROW = 1 shl 12
+    }
+}

@@ -521,4 +521,29 @@
     <string name="editor_snapshot_cancel">Cancelar</string>
     <string name="editor_snapshot_menu">Opções de %1$s</string>
     <string name="editor_history_steps">Etapas</string>
+    <!-- Heal mode (docs/adr/0023) -->
+    <string name="heal_kind_heal">Corrigir</string>
+    <string name="heal_kind_clone">Clonar</string>
+    <string name="heal_kind_remove">Remover</string>
+    <string name="heal_kind_red_eye">Olhos vermelhos</string>
+    <string name="heal_size">Tamanho</string>
+    <string name="heal_feather">Suavização</string>
+    <string name="heal_opacity">Opacidade</string>
+    <string name="heal_darken">Escurecer</string>
+    <string name="heal_visualise">Visualizar manchas</string>
+    <string name="heal_visualise_strength">Contraste da visualização</string>
+    <string name="heal_delete">Excluir ponto</string>
+    <string name="heal_new_source">Nova origem</string>
+    <string name="heal_removing">Removendo…</string>
+    <string name="heal_remove_failed">Não foi possível calcular esta remoção</string>
+    <string name="heal_hint">Toque numa mancha ou pinte por cima. Arraste a origem de um ponto para escolher de onde ele copia.</string>
+    <string name="heal_full">Esta foto já tem o máximo de pontos que pode ter</string>
+    <string name="heal_source">Origem do ponto</string>
+    <string name="heal_target">Ponto</string>
+    <string name="heal_photo_actions">Correção na foto</string>
+    <plurals name="heal_spot_count">
+        <item quantity="one">%d ponto</item>
+        <item quantity="many">%d pontos</item>
+        <item quantity="other">%d pontos</item>
+    </plurals>
 </resources>

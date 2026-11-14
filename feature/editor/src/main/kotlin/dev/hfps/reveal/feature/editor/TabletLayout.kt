@@ -522,7 +522,11 @@ internal fun Modifier.editorKeys(
                     }
                 }
 
-                else -> masksKey(command, s, a, chrome)
+                EditorKeyCommand.HEAL -> (chrome.activeMode == null).also { free ->
+                    if (free) chrome.activeMode = ToolId.HEAL
+                }
+
+                else -> masksKey(command, s, a, chrome) || healKey(command, s, a, chrome)
             }
         }
         .focusable()
@@ -544,6 +548,35 @@ private fun masksKey(
         EditorKeyCommand.BRUSH_LARGER -> m.setBrush(brush.resized(1))
         EditorKeyCommand.MASK_OVERLAY -> m.toggleOverlay()
         EditorKeyCommand.BRUSH_ERASE -> m.setBrush(brush.copy(erase = !brush.erase))
+        else -> return false
+    }
+    return true
+}
+
+/** The Heal mode's keys (only while it is open): spot size, Visualise spots. */
+@Suppress("ReturnCount")
+private fun healKey(
+    command: EditorKeyCommand,
+    state: EditorUiState,
+    actions: EditorActions,
+    chrome: EditorChrome,
+): Boolean {
+    if (chrome.activeMode != ToolId.HEAL) return false
+    val h = actions.heal
+    val settings = state.heal.settings
+    when (command) {
+        EditorKeyCommand.BRUSH_SMALLER -> {
+            h.setSettings(settings.resized(-1))
+            h.commit()
+        }
+
+        EditorKeyCommand.BRUSH_LARGER -> {
+            h.setSettings(settings.resized(1))
+            h.commit()
+        }
+
+        EditorKeyCommand.VISUALISE_SPOTS -> h.setVisualise(!state.heal.visualise)
+
         else -> return false
     }
     return true

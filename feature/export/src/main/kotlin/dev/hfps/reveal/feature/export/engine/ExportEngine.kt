@@ -40,6 +40,7 @@ import dev.hfps.reveal.pipeline.gl.GlesRequirementException
 import dev.hfps.reveal.pipeline.gl.RenderCancelledException
 import dev.hfps.reveal.pipeline.gl.TiledRenderStats
 import dev.hfps.reveal.pipeline.gl.TiledRenderer
+import dev.hfps.reveal.pipeline.heal.RemoveFills
 import dev.hfps.reveal.pipeline.input.BitmapTileSource
 import dev.hfps.reveal.pipeline.input.LensResolver
 import dev.hfps.reveal.pipeline.input.NativeRawTileSource
@@ -186,6 +187,8 @@ class ExportEngine(
                     OutputSettings(colour.space),
                     sink,
                     masks = context,
+                    // Remove fills (docs/adr/0023): the editor's when it made them for the same original.
+                    heals = RemoveFills.shared,
                     cancel = cancel,
                 ) {
                     progress(it * RENDER_SHARE)

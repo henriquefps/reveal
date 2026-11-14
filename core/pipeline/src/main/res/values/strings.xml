@@ -167,6 +167,14 @@
     <string name="history_mask_shape">Edit mask %1$s</string>
     <string name="history_mask_adjust">Adjust mask %1$s</string>
     <string name="history_mask_order">Reorder masks</string>
+    <string name="history_heal_add">Add %1$s</string>
+    <string name="history_heal_delete">Delete %1$s</string>
+    <string name="history_heal_source">Move the source of %1$s</string>
+    <string name="history_heal_edit">Edit %1$s</string>
+    <string name="history_value_heal_heal">spot heal</string>
+    <string name="history_value_heal_clone">clone</string>
+    <string name="history_value_heal_remove">removal</string>
+    <string name="history_value_heal_red_eye">red-eye fix</string>
     <string name="upright_off">Off</string>
     <string name="upright_auto">Auto</string>
     <string name="upright_level">Level</string>

@@ -531,10 +531,3 @@ data class Aspect(
         require(w > 0 && h > 0) { "aspect ratio must be positive" }
     }
 }
-
-/** A heal/clone spot (source, destination, radius, in image coordinates). */
-@Serializable
-data class Heal(
-    /** Stable identifier of the spot within the recipe. */
-    @SerialName("id") val id: String = "",
-)

@@ -168,6 +168,14 @@
     <string name="history_mask_shape">Editar máscara %1$s</string>
     <string name="history_mask_adjust">Ajustar máscara %1$s</string>
     <string name="history_mask_order">Reordenar máscaras</string>
+    <string name="history_heal_add">Adicionar %1$s</string>
+    <string name="history_heal_delete">Excluir %1$s</string>
+    <string name="history_heal_source">Mover a origem de %1$s</string>
+    <string name="history_heal_edit">Editar %1$s</string>
+    <string name="history_value_heal_heal">correção pontual</string>
+    <string name="history_value_heal_clone">clonagem</string>
+    <string name="history_value_heal_remove">remoção</string>
+    <string name="history_value_heal_red_eye">correção de olhos vermelhos</string>
     <string name="upright_off">Desligado</string>
     <string name="upright_auto">Auto</string>
     <string name="upright_level">Nivelar</string>

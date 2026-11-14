@@ -777,6 +777,31 @@ adb -s <serial> shell am instrument -w -e class dev.hfps.reveal.editor.MasksFlow
 adb -s <serial> logcat -d -s RevealAiMasks
 ```
 
+## Healing (`:core:pipeline/heal`, `:feature:editor/heal`, M5/H, ADR 0023)
+
+Slot 0: spots repair the **input** (camera RGB) before raw WB, computed once per edit on the CPU by `heal/HealEngine`
+(one patch per spot, in order, each reading the image the earlier spots left; `update` reuses unchanged spots and
+returns the changed rectangle). Recipe `recipe/Heals.kt` (`Heal`: kind `heal|clone|remove|redEye`, circle or `stroke`,
+offset `dx/dy`, feather, opacity, `method` for Remove, `darken`; unknown kinds render nothing). Operators: `Footprint`
+(shape alpha), `Membrane` (cascadic multigrid; heal = log-domain Poisson blend), `SourcePicker` (editor-only patch
+search), red eye in `HealEngine.redEye`. Remove: the contract `heal/Remove.kt` (`RemoveInput` crop in display encoding
++ hole -> `RemoveOutput` pixels + optional offsets; `RemoveMethod`, `RemoveFills.shared` cache + worker, methods by
+name: `patch` = `PatchFill`, M5/R registers `model:<id>@<version>`), crops defined on the original (`RemoveSpec`). Where
+it runs: preview = healed copy of the input texture (`GpuDevelopRenderer.prepareHeals`, readback `GlSourceReader`,
+partial scene/guide/develop updates); zoom + export = `HealedTileSource` (in `TiledRenderer`; export waits for fills);
+CPU = `CpuDevelop.renderLinear(…, heals = HealContext(fills, original))`. Highlight reconstruction's chroma reads the
+unhealed input everywhere. Visualise spots: `setVisualiseSpots` (output pass `spots`). Editor: `ToolBehaviour.Mode`
+with a `photo` layer (`HealPhotoLayer`), `HealControls`, `HealEditor` (VM half), pure `HealEdits`; renderer
+`pickHealSource`, `readHealed`, `onHeals` (Remove progress). Synthetic test images: `synthetic/HealScenes`.
+
+```sh
+./gradlew :core:pipeline:testDebugUnitTest --tests '*heal*' && ./gradlew :feature:editor:testDebugUnitTest --tests '*heal*'
+adb -s <serial> shell am instrument -w -e class dev.hfps.reveal.pipeline.HealRenderTest dev.hfps.reveal.pipeline.test/androidx.test.runner.AndroidJUnitRunner
+adb -s <serial> shell am instrument -w -e class dev.hfps.reveal.pipeline.PipelineBenchmark#healSpotAndSourceDrag dev.hfps.reveal.pipeline.test/androidx.test.runner.AndroidJUnitRunner   # -e only new|remove|drag
+adb -s <serial> shell am instrument -w -e class dev.hfps.reveal.editor.HealFlowTest dev.hfps.reveal.debug.test/androidx.test.runner.AndroidJUnitRunner
+adb -s <serial> logcat -d -s REVEAL_HEAL REVEAL_HEAL_TEST REVEAL_BENCH
+```
+
 ## `:core:image` harness (ADR 0004)
 
 ```sh

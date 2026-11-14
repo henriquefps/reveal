@@ -2,6 +2,8 @@ package dev.hfps.reveal.pipeline.cpu
 
 import dev.hfps.reveal.pipeline.PipelineInput
 import dev.hfps.reveal.pipeline.geometry.GeometryMapping
+import dev.hfps.reveal.pipeline.heal.HealContext
+import dev.hfps.reveal.pipeline.heal.HealOp
 import dev.hfps.reveal.pipeline.mask.MaskContext
 import dev.hfps.reveal.pipeline.mask.MaskParams
 import dev.hfps.reveal.pipeline.recipe.Recipe
@@ -19,22 +21,32 @@ object CpuDevelop {
      * Effects (texture, clarity, dehaze; docs/adr/0014), returning linear Rec.2020 RGB (`width*height*3`,
      * display-referred below 1.0) before the output transform. Defringe (docs/adr/0015) runs right before Detail.
      * [input] is not modified. [pixelScale]: full-resolution pixels per pixel of [input] (a proxy's downscale; the
-     * Detail operator's scale).
+     * Detail operator's scale). Healing (docs/adr/0023) runs first, on the input ([heals] resolves Remove spots);
+     * highlight reconstruction takes its chroma from the image before healing.
      */
     fun renderLinear(
         input: PipelineInput,
         recipe: Recipe,
         pixelScale: Float = 1f,
         masks: MaskContext = MaskContext.NONE,
+        heals: HealContext = HealContext.NONE,
     ): FloatArray {
         val params = DevelopParams.from(input, recipe, pixelScale)
         val grid = LowResGrid(input.width, input.height)
-        val rgb = input.linearRgb.copyOf()
+        val healed = HealOp.apply(input, recipe.heals, heals)
+        val rgb = healed.linearRgb.copyOf()
         RawWhiteBalanceOp.apply(rgb, params.wbMultipliers)
         val hp = params.highlights
         // Skipped when nothing reaches the clip ramp: the operator is then the identity (the GPU skips it too).
         if (hp != null && HighlightReconstructionOp.needed(input.linearRgb, checkNotNull(input.saturation))) {
-            HighlightReconstructionOp.apply(rgb, grid, hp, HighlightReconstructionOp.chroma(rgb, grid, hp))
+            val chroma = if (healed === input) {
+                HighlightReconstructionOp.chroma(rgb, grid, hp)
+            } else {
+                // The chroma grid of the photo before healing: a spot never changes how far-away clips are rebuilt.
+                val unhealed = input.linearRgb.copyOf().also { RawWhiteBalanceOp.apply(it, params.wbMultipliers) }
+                HighlightReconstructionOp.chroma(unhealed, grid, hp)
+            }
+            HighlightReconstructionOp.apply(rgb, grid, hp, chroma)
         }
         CameraMatrixOp.apply(rgb, params.cameraToWorking)
         params.vignette?.let { VignetteOp.apply(rgb, input.width, input.height, it) }
@@ -50,7 +62,7 @@ object CpuDevelop {
         val guided = params.tone.localActive || params.masks.needs(MaskParams.NEED_TONE_LOCAL)
         val moments = if (guided) LocalToneOp.moments(rgb, grid) else null
         val coef = moments?.let { LocalToneOp.guide(it, grid) }
-        val field = LocalDevelop.field(input, params, rgb, grid, moments, coef, masks)
+        val field = LocalDevelop.field(healed, params, rgb, grid, moments, coef, masks)
         LocalDevelop.develop(rgb, input.width, params, grid, moments, coef, field)
         DefringeOp.apply(rgb, input.width, input.height, params.defringe)
         DetailOp.apply(rgb, input.width, input.height, params.detail, params.effects, grid, field)
@@ -94,8 +106,9 @@ object CpuDevelop {
         mapping: GeometryMapping = mapping(input, recipe),
         pixelScale: Float = 1f,
         masks: MaskContext = MaskContext.NONE,
+        heals: HealContext = HealContext.NONE,
     ): FloatArray {
-        val linear = renderLinear(input, recipe, pixelScale, masks)
+        val linear = renderLinear(input, recipe, pixelScale, masks, heals)
         val out = if (mapping.isIdentity) linear else GeometryOp.apply(linear, mapping)
         PostCropOp.apply(out, mapping.outputWidth, mapping.outputHeight, PostParams.from(recipe.effects))
         return out
@@ -115,10 +128,11 @@ object CpuDevelop {
         output: OutputSettings = OutputSettings(),
         pixelScale: Float = 1f,
         masks: MaskContext = MaskContext.NONE,
+        heals: HealContext = HealContext.NONE,
     ): ByteArray {
         val mapping = mapping(input, recipe)
         return OutputTransformOp.apply(
-            renderGeometry(input, recipe, mapping, pixelScale, masks),
+            renderGeometry(input, recipe, mapping, pixelScale, masks, heals),
             mapping.outputWidth,
             mapping.outputHeight,
             output,

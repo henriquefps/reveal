@@ -127,10 +127,12 @@ data class EditHistory(
 /** Copy/paste of recipe groups (docs/plan/product.md, "History, versions, copy/paste"). */
 object RecipePaste {
     /**
-     * The chooser's default: everything but geometry (a crop rarely fits another frame) and masks (a mask's shape
-     * belongs to its photo: pasted only when chosen, docs/adr/0022).
+     * The chooser's default: everything but geometry (a crop rarely fits another frame), masks (a mask's shape
+     * belongs to its photo: pasted only when chosen, docs/adr/0022) and healing (spots belong to their photo too;
+     * pasting sensor-dust spots onto the other photos of a shoot is a deliberate choice, docs/adr/0023).
      */
-    val DEFAULT_GROUPS: Set<RecipeGroup> = RecipeGroup.entries.toSet() - RecipeGroup.GEOMETRY - RecipeGroup.MASKS
+    val DEFAULT_GROUPS: Set<RecipeGroup> =
+        RecipeGroup.entries.toSet() - RecipeGroup.GEOMETRY - RecipeGroup.MASKS - RecipeGroup.HEALS
 
     /** [target] with every group in [groups] taken from [source]; the other groups of [target] stay. */
     fun paste(source: Recipe, target: Recipe, groups: Set<RecipeGroup>): Recipe =

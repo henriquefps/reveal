@@ -29,6 +29,13 @@ All notable changes to Reveal are documented here. The format follows
   one "Imported from XMP" step you can undo; a sidecar older than the photo's edit is rewritten; edits changed on
   both sides become a conflict copy, chosen like a sync conflict. Lightroom's own defaults are never imported.
 - Settings → XMP sidecars: "Write edits to XMP sidecars" and "Apply edits from XMP sidecars" (both on).
+- Healing (M5/H, docs/adr/0023): the Heal mode next to Crop. Tap a dust spot or blemish to heal it (the source is
+  picked automatically and can be dragged), paint over longer marks, or switch to Clone, Remove (content-aware fill of
+  bigger objects, computed once with a progress indicator) and Red eye. Size, feather, opacity and darkness per spot;
+  S Pen pressure sets the stroke size and a hovering pen shows the brush; Visualise spots shows a high-contrast view
+  to find sensor dust. Every spot is one history step; Cancel returns to the spots the mode started with; the
+  Healing group pastes spots (not in the default paste choice). Repairs happen on the original pixels before every
+  other adjustment, the same in the preview, at 100 % and in exports. Keyboard: `H`, `[`, `]`, `V`.
 
 ### Changed
 - AI masks are made once per photo and shared (M4/F): the editor, an export and the library's thumbnails find each

@@ -114,8 +114,9 @@ class RecipeGroupsTest {
     @Test
     fun `every history field is produced by a diff of the fully edited recipe`() {
         val fields = RecipeDiff.between(Recipe(), edited).map { it.field }.toSet()
-        // A mask's other steps need a mask on both sides (RecipeDiffTest covers them).
+        // A mask's or a spot's other steps need it on both sides (RecipeDiffTest, HealDiffTest cover them).
         val maskEdits = HistoryField.entries.filter { it.group == RecipeGroup.MASKS && it != HistoryField.MASK_ADD }
-        assertThat(fields + maskEdits).containsExactlyElementsIn(HistoryField.entries)
+        val healEdits = HistoryField.entries.filter { it.group == RecipeGroup.HEALS && it != HistoryField.HEAL_ADD }
+        assertThat(fields + maskEdits + healEdits).containsExactlyElementsIn(HistoryField.entries)
     }
 }

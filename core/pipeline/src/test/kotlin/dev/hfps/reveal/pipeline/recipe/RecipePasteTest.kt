@@ -20,10 +20,11 @@ class RecipePasteTest {
     )
 
     @Test
-    fun `the default choice is everything but geometry and masks`() {
+    fun `the default choice is everything but geometry, masks and healing`() {
         assertThat(RecipePaste.DEFAULT_GROUPS).doesNotContain(RecipeGroup.GEOMETRY)
         assertThat(RecipePaste.DEFAULT_GROUPS).doesNotContain(RecipeGroup.MASKS)
-        assertThat(RecipePaste.DEFAULT_GROUPS + RecipeGroup.GEOMETRY + RecipeGroup.MASKS)
+        assertThat(RecipePaste.DEFAULT_GROUPS).doesNotContain(RecipeGroup.HEALS)
+        assertThat(RecipePaste.DEFAULT_GROUPS + RecipeGroup.GEOMETRY + RecipeGroup.MASKS + RecipeGroup.HEALS)
             .containsExactlyElementsIn(RecipeGroup.entries)
         val pasted = RecipePaste.paste(source, target, RecipePaste.DEFAULT_GROUPS)
         assertThat(pasted.geometry).isEqualTo(target.geometry)

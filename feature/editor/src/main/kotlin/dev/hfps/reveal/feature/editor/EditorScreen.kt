@@ -225,6 +225,7 @@ fun EditorScreen(
             presetPreview = viewModel::presetPreview,
             masks = viewModel.maskEditor,
             onMasksPanel = viewModel::setMasksPanel,
+            heal = viewModel.healEditor,
         )
     }
     LaunchedEffect(viewModel, context) {
@@ -342,9 +343,10 @@ fun EditorContent(
     LaunchedEffect(state.phase is EditorPhase.Ready) { chrome.focus.dragging = null }
 }
 
-/** The open panel's photo layer (the Masks panel's handles and brush); none while a mode is open. */
+/** The open panel's photo layer (the Masks panel's handles and brush), or the open mode's (the Heal mode's). */
 internal val EditorChrome.panelLayer: PhotoLayer?
-    get() = if (activeMode != null) null else (EditorTools[activeTool].behaviour as? ToolBehaviour.Panel)?.photo
+    get() = activeMode?.let { (EditorTools[it].behaviour as? ToolBehaviour.Mode)?.photo }
+        ?: if (activeMode != null) null else (EditorTools[activeTool].behaviour as? ToolBehaviour.Panel)?.photo
 
 /** The [ModeHost] of the active [mode]: Done and Cancel run the mode's exits and close it. */
 internal fun EditorChrome.modeHost(

@@ -138,6 +138,10 @@ object HistoryLabels {
         HistoryField.LENS_CORRECTIONS to ("toggle" to R.string.history_lens_corrections),
         HistoryField.REMOVE_CA to ("toggle" to R.string.history_remove_ca),
         HistoryField.UPRIGHT to ("upright" to R.string.history_upright),
+        HistoryField.HEAL_ADD to ("heal" to R.string.history_heal_add),
+        HistoryField.HEAL_DELETE to ("heal" to R.string.history_heal_delete),
+        HistoryField.HEAL_SOURCE to ("heal" to R.string.history_heal_source),
+        HistoryField.HEAL_EDIT to ("heal" to R.string.history_heal_edit),
     )
 
     /** The label of a tone curve, colour mixer, grey mixer or colour grading step (docs/adr/0013). */
@@ -312,5 +316,9 @@ object HistoryLabels {
         "upright_vertical" to R.string.upright_vertical,
         "upright_full" to R.string.upright_full,
         "upright_guided" to R.string.upright_guided,
+        "heal_heal" to R.string.history_value_heal_heal,
+        "heal_clone" to R.string.history_value_heal_clone,
+        "heal_remove" to R.string.history_value_heal_remove,
+        "heal_redEye" to R.string.history_value_heal_red_eye,
     )
 }

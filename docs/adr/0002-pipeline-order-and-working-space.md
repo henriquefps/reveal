@@ -5,13 +5,17 @@ M1/G (slot 13 geometry, version 5; section "Geometry (slot 13)"), by ADR 0012 (M
 editor's full-resolution tiles), by ADR 0013 (M2/B: tone curve in slot 8, colour mixer, black & white and colour
 grading in slot 9; version 7), by ADR 0014 (M2/C: slot 12 Effects and the post-crop finish, version 8), by ADR 0015
 (M2/D: slot 3 vignetting, slot 10b defringe, lens geometry and the Transform in slot 13; version 9) and by ADR 0012
-"M2/P" (Detail's luminance edge stop and float16 blurs; the editor's output sampling; version 10).
+"M2/P" (Detail's luminance edge stop and float16 blurs; the editor's output sampling; version 10) and by ADR 0023
+(M5/H: slot 0, healing on the input before slot 1; version unchanged).
 
 ## Fixed operator order
 
 Fixed in code (`CpuDevelop`, `GpuDevelopRenderer`); a user cannot reorder it. Each position has a reason.
 Implemented in M0 are marked **(M0)**; the rest are the reserved slots from `docs/plan/architecture.md`.
 
+0. **Healing (M5/H, ADR 0023)**: heal, clone, Remove and red-eye spots repair the input (camera RGB) before
+   everything else, so every operator sees the repaired pixels and no slider re-runs a repair; highlight
+   reconstruction's chroma grid still reads the unrepaired input.
 1. **Raw white balance (M0)**: per-channel multipliers on un-balanced camera RGB. Must precede anything that
    clips or mixes channels: sensor saturation happens per channel, and highlight reconstruction needs to know
    which channels clipped *before* mixing. **Highlight clip (M0/W6, version 2):** when the input knows where its

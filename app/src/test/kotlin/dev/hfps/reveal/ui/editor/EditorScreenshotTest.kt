@@ -59,6 +59,10 @@ import dev.hfps.reveal.feature.editor.UnreadableHandoff
 import dev.hfps.reveal.feature.editor.VersionsState
 import dev.hfps.reveal.feature.editor.ViewOptions
 import dev.hfps.reveal.feature.editor.edit.AsShot
+import dev.hfps.reveal.feature.editor.heal.HealEdits
+import dev.hfps.reveal.feature.editor.heal.HealSetting
+import dev.hfps.reveal.feature.editor.heal.HealSettings
+import dev.hfps.reveal.feature.editor.heal.HealUiState
 import dev.hfps.reveal.feature.editor.layout.FilmstripThumbs
 import dev.hfps.reveal.feature.editor.layout.FilmstripUi
 import dev.hfps.reveal.feature.editor.layout.PanelSnap
@@ -91,6 +95,7 @@ import dev.hfps.reveal.pipeline.gl.CompareMode
 import dev.hfps.reveal.pipeline.gl.Histogram
 import dev.hfps.reveal.pipeline.mask.MaskPlan
 import dev.hfps.reveal.pipeline.mask.MaskRaster
+import dev.hfps.reveal.pipeline.mask.StrokeCodec
 import dev.hfps.reveal.pipeline.optics.LensProfile
 import dev.hfps.reveal.pipeline.optics.SonyLensProfile
 import dev.hfps.reveal.pipeline.preset.Preset
@@ -113,6 +118,8 @@ import dev.hfps.reveal.pipeline.recipe.Effects
 import dev.hfps.reveal.pipeline.recipe.Geometry
 import dev.hfps.reveal.pipeline.recipe.GradeRegion
 import dev.hfps.reveal.pipeline.recipe.GradeWheel
+import dev.hfps.reveal.pipeline.recipe.Heal
+import dev.hfps.reveal.pipeline.recipe.HealKind
 import dev.hfps.reveal.pipeline.recipe.HistoryAction
 import dev.hfps.reveal.pipeline.recipe.Light
 import dev.hfps.reveal.pipeline.recipe.LocalAdjustments
@@ -214,6 +221,28 @@ class EditorPhoneScreenshotTest : EditorScreenshotBase("phone") {
     @Test fun presets() = shoot("presets") { PresetsEditor() }
 
     @Test fun masks() = shoot("masks") { MasksEditor() }
+
+    /** The Heal mode (docs/adr/0023): spots of every kind, a clone selected with its source. */
+    @Test fun heal() = shoot("heal") { HealEditor() }
+
+    /** A Remove spot selected while its fill is computed: the progress on the spot and in the controls. */
+    @Test fun healRemove() = shoot("heal_remove") {
+        HealEditor(
+            selected = "remove",
+            heal = HealUiState(settings = HealSettings(kind = HealKind.REMOVE), pending = setOf("remove")),
+        )
+    }
+
+    /** Red eye selected, its Darken slider shown. */
+    @Test fun healRedEye() = shoot("heal_red_eye") {
+        HealEditor(
+            selected = "eye",
+            heal = HealUiState(settings = HealSettings(kind = HealKind.RED_EYE), setting = HealSetting.DARKEN),
+        )
+    }
+
+    /** Visualise spots on: its contrast slider (the high-pass view itself is the renderer's). */
+    @Test fun healVisualise() = shoot("heal_visualise") { HealEditor(heal = HealUiState(visualise = true)) }
 
     @Test fun masksExpanded() = shoot("masks_expanded") { MasksEditor(snap = PanelSnap.EXPANDED) }
 
@@ -426,6 +455,8 @@ class EditorPhoneScreenshotTest : EditorScreenshotBase("phone") {
 class EditorLandscapeScreenshotTest : EditorScreenshotBase("landscape") {
     @Test fun light() = shoot("light") { Editor() }
 
+    @Test fun heal() = shoot("heal") { HealEditor() }
+
     @Test fun masks() = shoot("masks") { MasksEditor() }
 
     @Test fun presets() = shoot("presets") { PresetsEditor(applied = true) }
@@ -472,6 +503,8 @@ class EditorTabletScreenshotTest : EditorScreenshotBase("tablet") {
     @Test fun masks() = shoot("masks") { MasksEditor() }
 
     @Test fun masksRadial() = shoot("masks_radial") { MasksEditor(selected = "spot", component = 0) }
+
+    @Test fun heal() = shoot("heal") { HealEditor() }
 
     @Test fun split() = shoot("split") {
         Editor(view = ViewOptions(compare = CompareMode.Split(leftRight = true, position = 0.4f)))
@@ -544,6 +577,8 @@ class EditorTabletScreenshotTest : EditorScreenshotBase("tablet") {
 class EditorTabletPortraitScreenshotTest : EditorScreenshotBase("tablet_portrait") {
     @Test fun presets() = shoot("presets") { PresetsEditor(applied = true) }
 
+    @Test fun heal() = shoot("heal") { HealEditor() }
+
     @Test fun masks() = shoot("masks") { MasksEditor() }
 
     override val strip: FilmstripUi? get() = Strip.ui
@@ -584,6 +619,8 @@ class EditorFoldableScreenshotTest : EditorScreenshotBase("foldable") {
     override val strip: FilmstripUi? get() = Strip.ui
 
     @Test fun light() = shoot("light") { Editor() }
+
+    @Test fun heal() = shoot("heal") { HealEditor() }
 
     @Test fun colourMixer() = subPanel("colour_mixer", ToolId.COLOUR, EditorTags.MIXER_ROW)
 
@@ -659,6 +696,7 @@ abstract class EditorScreenshotBase(private val size: String) {
         phase: EditorPhase = EditorPhase.Ready(null, Photos.WIDTH, Photos.HEIGHT, 1f),
         masks: MasksUiState = MasksUiState(),
         versions: VersionsState = VersionsState(),
+        heal: HealUiState = HealUiState(),
     ) {
         val recipe = base.copy(geometry = geometry, detail = detail, effects = effects, optics = optics)
         EditorTheme {
@@ -684,6 +722,7 @@ abstract class EditorScreenshotBase(private val size: String) {
                     presets = presets,
                     masks = masks,
                     versions = versions,
+                    heal = heal,
                 ),
                 actions = EditorActions(onBack = {}, presetThumbnails = TestPresets.thumbnails),
                 initialTool = tool,
@@ -738,6 +777,21 @@ abstract class EditorScreenshotBase(private val size: String) {
             selected = if (none) null else selected,
             component = if (none) null else component,
             thumbnails = if (none) emptyMap() else Photos.maskThumbnails,
+        ),
+    )
+
+    /** The Heal mode (docs/adr/0023) open on spots of every kind developed by the CPU reference; [selected] spot. */
+    @Composable
+    protected fun HealEditor(selected: String? = "clone", heal: HealUiState = HealUiState()) = Editor(
+        mode = ToolId.HEAL,
+        base = Photos.healed,
+        preview = Photos.healedEdited,
+        // The controls show the selected spot's settings (the view model copies them on selection).
+        heal = heal.copy(
+            open = true,
+            selected = selected,
+            settings = Photos.heals.firstOrNull { it.id == selected }
+                ?.let { HealEdits.settingsOf(it, heal.settings) } ?: heal.settings,
         ),
     )
 
@@ -963,6 +1017,25 @@ private object Photos {
         }
         mask.id to Bitmap.createBitmap(px, w, h, Bitmap.Config.ARGB_8888).asImageBitmap()
     }
+
+    /** Healing spots of every kind (docs/adr/0023); Remove renders nothing without a fill, as in a screenshot. */
+    val heals: List<Heal> = listOf(
+        Heal("heal", Heal.KIND_HEAL, 0.32f, 0.36f, 0.018f, dx = 0.06f, dy = 0.02f),
+        Heal("clone", Heal.KIND_CLONE, 0.7f, 0.3f, 0.025f, dx = -0.08f, dy = 0.07f),
+        Heal(
+            "stroke",
+            Heal.KIND_HEAL,
+            radius = 0.012f,
+            stroke = StrokeCodec.encode(
+                List(12) { i -> StrokePoint(0.2f + i * 0.025f, 0.78f - 0.04f * kotlin.math.sin(i * 0.5f)) },
+            ),
+            dy = -0.1f,
+        ),
+        Heal("remove", Heal.KIND_REMOVE, 0.55f, 0.62f, 0.04f, feather = 30f),
+        Heal("eye", Heal.KIND_RED_EYE, 0.85f, 0.55f, 0.012f),
+    )
+    val healed: Recipe = recipe.copy(heals = heals)
+    val healedEdited: ImageBitmap = bitmap(CpuDevelop.render(input, healed))
 
     /** A recipe that "Evening walk" was made from. */
     val recipeForPresets = recipe.copy(light = recipe.light.copy(contrast = 30f, shadows = 50f))

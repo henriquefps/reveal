@@ -2,6 +2,7 @@ package dev.hfps.reveal.pipeline.gl
 
 import android.opengl.GLES30
 import dev.hfps.reveal.pipeline.cpu.HighlightParams
+import dev.hfps.reveal.pipeline.cpu.LocalToneOp
 import dev.hfps.reveal.pipeline.cpu.LowResGrid
 
 /**
@@ -142,12 +143,33 @@ internal class LightPasses {
         guideFinish()
     }
 
+    /**
+     * The guide after the scene changed only inside [rect] (x0, y0, x1, y1; healing, docs/adr/0023): the row segments
+     * of the cells it touches, then [guideFinish]. Equal to [guide] on the whole image.
+     */
+    fun guidePartial(scene: Int, rect: IntArray) {
+        val g = checkNotNull(grid)
+        val (left, top, right) = rect
+        val bottom = rect.last()
+        val x0 = (left.coerceIn(0, g.width) / g.cell) * g.cell
+        val x1 = minOf(((right.coerceIn(0, g.width) + g.cell - 1) / g.cell) * g.cell, g.width)
+        val y0 = top.coerceIn(0, g.height)
+        val y1 = bottom.coerceIn(0, g.height)
+        // The scene texture is the whole image: no tile origin.
+        if (x1 > x0 && y1 > y0) guideRows(scene, x0, y0, x1 - x0, y1 - y0, origin = false)
+        guideFinish()
+    }
+
     /** Tiled pre-pass, step 1 of the guide: row segments of a region (same contract as [reconstructRows]). */
-    fun guideRows(scene: Int, x: Int, y: Int, width: Int, height: Int) {
+    fun guideRows(scene: Int, x: Int, y: Int, width: Int, height: Int, origin: Boolean = true) {
         val g = checkNotNull(grid)
         GLES30.glUseProgram(guideRowsProgram)
         GLES30.glUniform4i(GLES30.glGetUniformLocation(guideRowsProgram, "uGrid"), g.cell, g.width, g.height, 0)
-        GLES30.glUniform2i(GLES30.glGetUniformLocation(guideRowsProgram, "uOrigin"), x, y)
+        GLES30.glUniform2i(
+            GLES30.glGetUniformLocation(guideRowsProgram, "uOrigin"),
+            if (origin) x else 0,
+            if (origin) y else 0,
+        )
         drawRows(g, scene, x, y, width, height)
     }
 
@@ -264,5 +286,15 @@ internal class LightPasses {
 
         private const val FULLSCREEN_VERTICES = 3
         private const val HEX = 16
+
+        /**
+         * How far (pixels) a change of the scene inside a rectangle reaches in the develop output through the guide:
+         * the cells it touches, two box means of [LocalToneOp.RADIUS] cells, and the
+         * bilinear upsampling's neighbour cell.
+         */
+        fun guideReach(grid: LowResGrid): Int = (2 * LocalToneOp.RADIUS + GUIDE_EXTRA_CELLS) * grid.cell
+
+        /** The cell the rectangle touches, the alignment of the partial rows to cells and the bilinear neighbour. */
+        private const val GUIDE_EXTRA_CELLS = 3
     }
 }

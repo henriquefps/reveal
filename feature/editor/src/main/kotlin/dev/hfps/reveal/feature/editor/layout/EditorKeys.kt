@@ -33,13 +33,19 @@ enum class EditorKeyCommand {
 
     /** Masks: the brush's erase mode on or off. */
     BRUSH_ERASE,
+
+    /** Opens the Heal mode (docs/adr/0023). */
+    HEAL,
+
+    /** Heal: Visualise spots on or off. */
+    VISUALISE_SPOTS,
 }
 
 /**
  * The editor's keyboard shortcuts on tablets with a keyboard (docs/plan/ux.md): Ctrl+Z undo, Ctrl+Shift+Z (or Ctrl+Y)
  * redo, backslash before/after, left/right arrows (and the D-pad) previous/next photo, Z zoom to 100 % and back; M
  * opens the Masks tool, and in it `[` / `]` resize the brush, O shows the overlay, E toggles erasing (docs/adr/0022
- * "M4/B").
+ * "M4/B"); H opens the Heal mode, and in it `[` / `]` resize the spot and V toggles Visualise spots (docs/adr/0023).
  */
 object EditorKeys {
     fun command(key: Key, ctrl: Boolean, shift: Boolean, alt: Boolean): EditorKeyCommand? = when {
@@ -65,5 +71,7 @@ object EditorKeys {
         Key.RightBracket to EditorKeyCommand.BRUSH_LARGER,
         Key.O to EditorKeyCommand.MASK_OVERLAY,
         Key.E to EditorKeyCommand.BRUSH_ERASE,
+        Key.H to EditorKeyCommand.HEAL,
+        Key.V to EditorKeyCommand.VISUALISE_SPOTS,
     )
 }

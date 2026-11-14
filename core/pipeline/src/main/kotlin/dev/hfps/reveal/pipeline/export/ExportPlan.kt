@@ -17,9 +17,16 @@ data class PixelBox(val x: Int, val y: Int, val width: Int, val height: Int) {
 /**
  * One tile of the main pass: the final [output] pixels it writes, the [geometry] output pixels they resample
  * (the same box without resizing), and the image [input] region developed for those (null when the box lies
- * entirely in an empty corner of an unconstrained straighten: the tile is black).
+ * entirely in an empty corner of an unconstrained straighten: the tile is black). [source] is the output box the
+ * resampling computes: [output] grown by the plan's output margin (output sharpening reads a neighbourhood at the
+ * output size), clamped to the output; [output] itself without a margin.
  */
-data class OutputTile(val output: PixelBox, val geometry: PixelBox, val input: PixelBox?)
+data class OutputTile(
+    val output: PixelBox,
+    val geometry: PixelBox,
+    val input: PixelBox?,
+    val source: PixelBox = output,
+)
 
 /**
  * How a full-resolution export is cut into tiles (docs/adr/0009, "Tiles"). Pure arithmetic, JVM-tested.
@@ -45,6 +52,8 @@ class ExportPlan(
     val output: PixelSize,
     val maxTile: Int = DEFAULT_MAX_TILE,
     val reach: Int = 0,
+    /** Output pixels every tile computes around its own (output sharpening's radius; docs/adr/0009). */
+    val outputMargin: Int = 0,
 ) {
     /** Size of the geometry operator's output (the crop's size, swapped for odd quarter turns). */
     val geometrySize: PixelSize = PixelSize(mapping.outputWidth, mapping.outputHeight)
@@ -57,6 +66,7 @@ class ExportPlan(
         }
         require(maxTile >= MIN_TILE) { "tiles below $MIN_TILE px" }
         require(reach >= 0 && maxTile - 2 * reach >= MIN_CORE) { "reach $reach too large for tiles of $maxTile" }
+        require(outputMargin in 0..MAX_OUTPUT_MARGIN) { "output margin $outputMargin out of range" }
     }
 
     /** True when the output is smaller than the geometry output (the Lanczos passes run). */
@@ -130,12 +140,14 @@ class ExportPlan(
         val out = ArrayList<OutputTile>()
         for (oy in 0 until output.height step ty) {
             val h = minOf(ty, output.height - oy)
-            val rows = span(oy until oy + h, scaleY, geometrySize.height)
             for (ox in 0 until output.width step tx) {
                 val w = minOf(tx, output.width - ox)
-                val cols = span(ox until ox + w, scaleX, geometrySize.width)
+                val core = PixelBox(ox, oy, w, h)
+                val source = grow(core, outputMargin, output.width, output.height)
+                val rows = span(source.y until source.bottom, scaleY, geometrySize.height)
+                val cols = span(source.x until source.right, scaleX, geometrySize.width)
                 val geometry = PixelBox(cols.first, rows.first, cols.last - cols.first + 1, rows.last - rows.first + 1)
-                out += OutputTile(PixelBox(ox, oy, w, h), geometry, inputOf(geometry))
+                out += OutputTile(core, geometry, inputOf(geometry), source)
             }
         }
         return out
@@ -154,10 +166,11 @@ class ExportPlan(
 
     private fun outputTile(scale: Float): Int {
         val budget = geometryBudget
-        if (!resamples) return budget
+        // The margin is computed by every tile on both sides (at the output size, so scaled to the geometry).
+        if (!resamples) return budget - 2 * outputMargin
         // Taps of n output pixels span about (n - 1) s + 2 * 3 s + 2 source pixels.
         val support = 2 * (LanczosResampleOp.LOBES * scale).toInt() + SLACK
-        return maxOf(1, floor((budget - support) / scale).toInt())
+        return maxOf(1, floor((budget - support) / scale).toInt() - 2 * outputMargin)
     }
 
     private fun span(range: IntRange, scale: Float, size: Int): IntRange =
@@ -171,6 +184,9 @@ class ExportPlan(
         const val MIN_TILE: Int = 256
 
         private const val SLACK = 6
+
+        /** Largest output margin (output sharpening's largest radius, `OutputSharpenOp.MAX_RADIUS`). */
+        const val MAX_OUTPUT_MARGIN: Int = 3
         private const val MIN_WARP_TILE = 32
         private const val SHRINK = 0.8
 
@@ -181,7 +197,8 @@ class ExportPlan(
         /**
          * The plan for an upright [width] x [height] image with the recipe's [geometry] (and the lens corrections of
          * [optics] with the photo's [lens] profile) at [size]; [reach] is the apron of defringe, Detail and Effects'
-         * texture at full resolution (`DevelopParams.reach`).
+         * texture at full resolution (`DevelopParams.reach`); [outputMargin] the output sharpening's radius
+         * (`OutputSharpenOp.radius`).
          */
         @Suppress("LongParameterList")
         fun of(
@@ -193,10 +210,11 @@ class ExportPlan(
             reach: Int = 0,
             lens: LensProfile? = null,
             optics: Optics = Optics(),
+            outputMargin: Int = 0,
         ): ExportPlan {
             val mapping = GeometryMapping.of(geometry, width, height, lens, optics)
             val output = size.outputSize(mapping.outputWidth, mapping.outputHeight)
-            return ExportPlan(width, height, mapping, output, maxTile, reach)
+            return ExportPlan(width, height, mapping, output, maxTile, reach, outputMargin)
         }
 
         /** [box] grown by [margin] on every side, clamped to the [width] x [height] image. */

@@ -7,10 +7,14 @@ import dev.hfps.reveal.pipeline.cpu.CpuDevelop
 import dev.hfps.reveal.pipeline.cpu.DevelopParams
 import dev.hfps.reveal.pipeline.cpu.LanczosResampleOp
 import dev.hfps.reveal.pipeline.cpu.OutputSettings
+import dev.hfps.reveal.pipeline.cpu.OutputSharpenOp
 import dev.hfps.reveal.pipeline.cpu.OutputSpace
 import dev.hfps.reveal.pipeline.cpu.OutputTransformOp
 import dev.hfps.reveal.pipeline.export.ExportPlan
 import dev.hfps.reveal.pipeline.export.ExportSize
+import dev.hfps.reveal.pipeline.export.OutputSharpening
+import dev.hfps.reveal.pipeline.export.SharpenAmount
+import dev.hfps.reveal.pipeline.export.SharpenMedium
 import dev.hfps.reveal.pipeline.geometry.CropEditing
 import dev.hfps.reveal.pipeline.gl.GpuDevelopRenderer
 import dev.hfps.reveal.pipeline.gl.RenderCancelledException
@@ -167,6 +171,58 @@ class TiledRendererTest {
         Log.i(TAG, "resampled GPU vs CPU: max ${diff.first} levels, mean $mean")
         assertThat(diff.first).isAtMost(3)
         assertThat(mean).isAtMost(0.1)
+    }
+
+    /**
+     * Output sharpening (docs/adr/0009 "Output sharpening") at the output size: tiles (with their output margin)
+     * stitch bit-identically to one tile, sharpening changes the picture, and the GPU matches the CPU reference
+     * (`CpuDevelop` + `LanczosResampleOp` + `OutputSharpenOp` + `OutputTransformOp`), resampled and at full size.
+     */
+    @Test
+    fun sharpenedTilesStitchAndMatchTheCpuReference() {
+        val crop = Geometry(crop = CropRect(37f / 1100, 21f / 740, 1037f / 1100, 721f / 740))
+        for (size in listOf<ExportSize>(ExportSize.LongEdge(333), ExportSize.Original)) {
+            for (setting in listOf(
+                OutputSharpening(SharpenMedium.SCREEN, SharpenAmount.STANDARD),
+                OutputSharpening(SharpenMedium.MATTE, SharpenAmount.HIGH),
+            )) {
+                val margin = OutputSharpenOp.radius(setting)
+                fun sharpPlan(tile: Int) = ExportPlan.of(
+                    image.width,
+                    image.height,
+                    crop,
+                    size,
+                    tile,
+                    outputMargin = margin,
+                )
+                fun sharp(plan: ExportPlan): ByteArray {
+                    val sink = ArraySink(plan.output.width, plan.output.height)
+                    tiled.render(PipelineInputTileSource(image), recipe.copy(geometry = crop), plan, OutputSettings(), sink, sharpen = setting)
+                    return sink.pixels
+                }
+                val small = sharpPlan(256)
+                val tiles = sharp(small)
+                assertThat(small.outputTiles().size).isGreaterThan(1)
+                assertThat(tiles.contentEquals(sharp(sharpPlan(1024)))).isTrue()
+                assertThat(tiles.contentEquals(render(plan(256, size, crop), with = recipe.copy(geometry = crop))))
+                    .isFalse()
+                val g = small.geometrySize
+                val out = small.output
+                val cropped = CpuDevelop.renderGeometry(image, Recipe(light = recipe.light, geometry = crop))
+                val resized = if (small.resamples) {
+                    LanczosResampleOp.resample(cropped, g.width, g.height, 0, 0, g.width, g.height, out.width, out.height)
+                } else {
+                    cropped
+                }
+                val sharpened = OutputSharpenOp.apply(resized, out.width, out.height, OutputSharpenOp.params(setting))
+                val cpu = OutputTransformOp.apply(sharpened, out.width, out.height)
+                val diff = maxDiff(cpu, tiles)
+                val mean = meanDiff(cpu, tiles)
+                Log.i(TAG, "sharpened $setting $size GPU vs CPU: max ${diff.first} levels, mean $mean")
+                assertThat(diff.first).isAtMost(3)
+                assertThat(mean).isAtMost(0.1)
+            }
+        }
     }
 
     /** Crop + straighten + quarter turn + flip, unconstrained (empty corners): tiles, preview and CPU agree. */

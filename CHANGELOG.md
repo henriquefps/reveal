@@ -6,6 +6,8 @@ All notable changes to Reveal are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-11-14
+
 ### Fixed
 - Healing (FIX/H, docs/adr/0023 "FIX/H"): dragging a spot, its source or its size moves only its outline; the repair
   is computed once on release, with the Remove progress while it runs. Healing never runs on the drawing thread any

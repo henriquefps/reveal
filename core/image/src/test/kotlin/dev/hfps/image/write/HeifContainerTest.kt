@@ -100,7 +100,11 @@ class HeifContainerTest {
             val mdat = top.first { it.first == "mdat" }
             val tileAt = indexOf(bytes, tile, mdat.second)
             assertThat(tileAt).isGreaterThan(mdat.second)
-            assertThat(indexOf(bytes, exif, mdat.second)).isGreaterThan(tileAt)
+            val exifAt = indexOf(bytes, exif, mdat.second)
+            assertThat(exifAt).isGreaterThan(tileAt)
+            // The offset field before the TIFF header: 6 with `Exif\0\0` (HEIC), 0 (AVIF, as libavif writes it).
+            val offset = ByteBuffer.wrap(bytes, exifAt - (if (codec == ImageCodec.HEVC) 10 else 4), 4).int
+            assertThat(offset).isEqualTo(if (codec == ImageCodec.HEVC) 6 else 0)
         }
     }
 

@@ -22,6 +22,7 @@ class ImageMetadata(val icc: ByteArray? = null, val exifTiff: ByteArray? = null,
 object PngWriter {
     private val SIGNATURE = byteArrayOf(-119, 'P'.code.toByte(), 'N'.code.toByte(), 'G'.code.toByte(), 13, 10, 26, 10)
     private const val IDAT_CHUNK = 64 * 1024
+    private const val FILTERS = 5
 
     /** Writes [rows] with [metadata] to [out] (not closed); [cancel] is polled every 64 rows. */
     fun write(
@@ -98,32 +99,60 @@ object PngWriter {
     internal fun bestFilter(cur: ByteArray, prev: ByteArray, bpp: Int, candidates: Array<ByteArray>): ByteArray {
         var best = 0
         var bestScore = Long.MAX_VALUE
-        for (type in 0 until 5) {
-            val f = candidates[type]
-            f[0] = type.toByte()
-            var score = 0L
-            for (i in cur.indices) {
-                val x = cur[i].toInt() and 0xFF
-                val a = if (i >= bpp) cur[i - bpp].toInt() and 0xFF else 0
-                val b = prev[i].toInt() and 0xFF
-                val c = if (i >= bpp) prev[i - bpp].toInt() and 0xFF else 0
-                val predicted = when (type) {
-                    0 -> 0
-                    1 -> a
-                    2 -> b
-                    3 -> (a + b) ushr 1
-                    else -> paeth(a, b, c)
-                }
-                val v = (x - predicted).toByte()
-                f[i + 1] = v
-                score += abs(v.toInt())
-            }
+        for (type in 0 until FILTERS) {
+            val score = filter(type, cur, prev, bpp, candidates[type])
             if (score < bestScore) {
                 bestScore = score
                 best = type
             }
         }
         return candidates[best]
+    }
+
+    /** Filters [cur] with [type] into [out] (type byte first); returns the sum of absolute signed bytes. */
+    @Suppress("CyclomaticComplexMethod", "LongMethod")
+    private fun filter(type: Int, cur: ByteArray, prev: ByteArray, bpp: Int, out: ByteArray): Long {
+        out[0] = type.toByte()
+        var score = 0L
+        val n = cur.size
+        // One loop per type: the predictor's branch out of the per-byte loop (a 24 MP 16-bit row set is 144 MB).
+        when (type) {
+            0 -> for (i in 0 until n) {
+                val v = cur[i]
+                out[i + 1] = v
+                score += abs(v.toInt())
+            }
+
+            1 -> for (i in 0 until n) {
+                val a = if (i >= bpp) cur[i - bpp].toInt() and 0xFF else 0
+                val v = ((cur[i].toInt() and 0xFF) - a).toByte()
+                out[i + 1] = v
+                score += abs(v.toInt())
+            }
+
+            2 -> for (i in 0 until n) {
+                val v = ((cur[i].toInt() and 0xFF) - (prev[i].toInt() and 0xFF)).toByte()
+                out[i + 1] = v
+                score += abs(v.toInt())
+            }
+
+            3 -> for (i in 0 until n) {
+                val a = if (i >= bpp) cur[i - bpp].toInt() and 0xFF else 0
+                val v = ((cur[i].toInt() and 0xFF) - ((a + (prev[i].toInt() and 0xFF)) ushr 1)).toByte()
+                out[i + 1] = v
+                score += abs(v.toInt())
+            }
+
+            else -> for (i in 0 until n) {
+                val a = if (i >= bpp) cur[i - bpp].toInt() and 0xFF else 0
+                val b = prev[i].toInt() and 0xFF
+                val c = if (i >= bpp) prev[i - bpp].toInt() and 0xFF else 0
+                val v = ((cur[i].toInt() and 0xFF) - paeth(a, b, c)).toByte()
+                out[i + 1] = v
+                score += abs(v.toInt())
+            }
+        }
+        return score
     }
 
     private fun paeth(a: Int, b: Int, c: Int): Int {

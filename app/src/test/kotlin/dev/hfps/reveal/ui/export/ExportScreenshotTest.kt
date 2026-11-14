@@ -52,6 +52,8 @@ class ExportScreenshotTest {
     val composeRule = createComposeRule()
 
     private val support = EncoderSupport(heif = true, heicCodec = false, hevcMain10 = false)
+
+    /** AV1 at both depths, HEVC tiles at 8 bits only (the 10-bit HEIF chip hidden, with the note). */
     private val ownerDevices = EncoderSupport(
         heif = true,
         heicCodec = true,
@@ -125,7 +127,7 @@ class ExportScreenshotTest {
         RevealTheme(darkTheme = false) { Sheet(ExportSamples.presetBuiltIn) }
     }
 
-    /** W2/E: the owner's devices (AV1 at 8 and 10 bits, HEVC 8-bit only): AVIF 10-bit P3 with matte sharpening. */
+    /** W2/E: a device with AV1 at 8 and 10 bits and an 8-bit-only HEVC: AVIF 10-bit P3 with matte sharpening. */
     @Test fun avifSharpened() = shoot("editor_avif_sharpened") {
         EditorTheme {
             Sheet(

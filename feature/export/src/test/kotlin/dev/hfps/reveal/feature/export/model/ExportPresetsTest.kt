@@ -62,7 +62,7 @@ class ExportPresetsTest {
 
     @Test
     fun `formats and depths fall back to what the encoders can write`() {
-        // The owner's devices: HEVC without P010 (no 10-bit HEIF), the software AV1 encoder with both depths.
+        // A device whose HEVC encoders take no P010 (no 10-bit HEIF) and with the software AV1 encoder.
         val support = EncoderSupport(true, true, true, heifTiles = true, heif10 = false, avif8 = true, avif10 = true)
         val heif10 = ExportOptions(format = ExportFormat.HEIF, colour = ExportColour.DISPLAY_P3, bitDepth = 10)
         assertThat(ExportPresets.usable(heif10, support)).isEqualTo(heif10.copy(bitDepth = 8))

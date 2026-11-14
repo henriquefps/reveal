@@ -141,6 +141,10 @@ class ImageWritersTest {
             0x010F,
         )
         assertThat(tags.keys).doesNotContain(0x0213)
+        // The EXIF IFD: FlashpixVersion added, the JPEG-only components configuration dropped.
+        val exifTags = readTags(target, tags.getValue(TiffWriter.TAG_EXIF_IFD).toInt())
+        assertThat(exifTags.keys).containsAtLeast(0x829A, 0xA000)
+        assertThat(exifTags.keys).doesNotContain(0x9101)
         assertThat(tags[TiffWriter.TAG_COMPRESSION]).isEqualTo(TiffWriter.COMPRESSION_DEFLATE.toLong())
         assertThat(tags[TiffWriter.TAG_PREDICTOR]).isEqualTo(TiffWriter.PREDICTOR_HORIZONTAL.toLong())
         // The deflated predicted data is smaller than the raw samples (gradients compress).
@@ -180,9 +184,9 @@ class ImageWritersTest {
     }
 
     /** IFD0's tags with their first value (SHORT/LONG inline), big-endian. */
-    private fun readTags(file: File): Map<Int, Long> {
+    private fun readTags(file: File, at: Int? = null): Map<Int, Long> {
         val b = ByteBuffer.wrap(file.readBytes())
-        val ifd = b.getInt(4)
+        val ifd = at ?: b.getInt(4)
         val n = b.getShort(ifd).toInt()
         val out = HashMap<Int, Long>()
         for (i in 0 until n) {

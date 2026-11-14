@@ -69,8 +69,14 @@ object TiffWriter {
         0x0213, 0x0201, 0x0202,
     )
 
-    /** EXIF sub-IFD fields that describe compressed (YCbCr) data only. */
-    private val JPEG_ONLY_EXIF = setOf(0x9101)
+    /**
+     * EXIF sub-IFD fields a TIFF must not carry (exiftool -validate): components configuration (compressed YCbCr
+     * data only) and the pixel dimensions (IFD0's ImageWidth/ImageLength say it).
+     */
+    private val JPEG_ONLY_EXIF = setOf(0x9101, 0xA002, 0xA003)
+
+    /** FlashpixVersion "0100", required in a TIFF's EXIF IFD. */
+    private const val TAG_FLASHPIX_VERSION = 0xA000
 
     /** Writes [rows] with [fields] and [metadata] (ICC, XMP; its EXIF stream is ignored here) to [target]. */
     @Suppress("NestedBlockDepth")
@@ -182,7 +188,14 @@ object TiffWriter {
             own += ExifField(TAG_XMP, TYPE_BYTE, b.size, b)
         }
         metadata.icc?.let { own += ExifField(TAG_ICC, TYPE_UNDEFINED, it.size, it) }
-        val exif = fields.exif.filter { it.tag !in JPEG_ONLY_EXIF }
+        val exif = fields.exif.filter { it.tag !in JPEG_ONLY_EXIF && it.tag != TAG_FLASHPIX_VERSION }.let { list ->
+            if (list.isEmpty()) {
+                list
+            } else {
+                list +
+                    ExifField(TAG_FLASHPIX_VERSION, TYPE_UNDEFINED, 4, "0100".toByteArray())
+            }
+        }
         if (exif.isNotEmpty()) own += long(TAG_EXIF_IFD, 0)
         if (fields.gps.isNotEmpty()) own += long(TAG_GPS_IFD, 0)
         val ifd0 = (fields.ifd0.filter { it.tag !in OWN_TAGS } + own).sortedBy { it.tag }

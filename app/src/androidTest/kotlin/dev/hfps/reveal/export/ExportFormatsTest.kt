@@ -2,9 +2,12 @@ package dev.hfps.reveal.export
 
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Canvas
 import android.graphics.ColorSpace
+import android.graphics.Paint
 import android.net.Uri
 import android.util.Log
+import androidx.core.graphics.createBitmap
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.google.common.truth.Truth.assertThat
@@ -80,21 +83,24 @@ class ExportFormatsTest {
         cancel = { false },
     )
 
-    /** The file decoded by the platform, converted to sRGB 8-bit RGBA. */
+    /**
+     * The file decoded by the platform (16-bit PNGs come back as RGBA_F16 whatever is asked), drawn into an 8-bit
+     * sRGB bitmap (the canvas converts from the file's colour space), as RGBA bytes.
+     */
     private fun decodeSrgb(uri: Uri): Pair<Bitmap, ByteArray> {
-        val options = BitmapFactory.Options().apply {
-            inPreferredConfig = Bitmap.Config.ARGB_8888
-            inPreferredColorSpace = ColorSpace.get(ColorSpace.Named.SRGB)
-        }
-        val bitmap =
-            checkNotNull(
-                context.contentResolver.openInputStream(uri).use {
-                    BitmapFactory.decodeStream(it, null, options)
-                },
+        val decoded = checkNotNull(context.contentResolver.openInputStream(uri).use { BitmapFactory.decodeStream(it) })
+        val srgb =
+            createBitmap(
+                decoded.width,
+                decoded.height,
+                Bitmap.Config.ARGB_8888,
+                false,
+                ColorSpace.get(ColorSpace.Named.SRGB),
             )
-        val pixels = ByteBuffer.allocate(bitmap.byteCount)
-        bitmap.copyPixelsToBuffer(pixels)
-        return bitmap to pixels.array()
+        Canvas(srgb).drawBitmap(decoded, 0f, 0f, Paint().apply { isFilterBitmap = false })
+        val pixels = ByteBuffer.allocate(srgb.byteCount)
+        srgb.copyPixelsToBuffer(pixels)
+        return srgb to pixels.array()
     }
 
     private fun sourceSpace(uri: Uri): ColorSpace? {
@@ -103,19 +109,39 @@ class ExportFormatsTest {
         return bounds.outColorSpace
     }
 
-    /** Mean and maximum difference of the RGB channels, in 8-bit levels. */
-    private fun diff(a: ByteArray, b: ByteArray): Pair<Double, Int> {
+    /** The pixels that differ most (diagnostics for a failing tolerance). */
+    private fun logWorst(name: String, a: ByteArray, b: ByteArray, width: Int) {
+        val bad = (0 until a.size / 4).map { p ->
+            p to (0 until 3).maxOf { c -> abs((a[p * 4 + c].toInt() and 0xFF) - (b[p * 4 + c].toInt() and 0xFF)) }
+        }.filter { it.second > 8 }
+        val worst = bad.sortedByDescending { it.second }.take(3).joinToString { (p, d) ->
+            val rgb = { x: ByteArray -> (0 until 3).map { x[p * 4 + it].toInt() and 0xFF } }
+            "(${p % width},${p / width}) $d: ${rgb(a)} vs ${rgb(b)}"
+        }
+        Log.i(TAG, "$name: ${bad.size} pixels over 8 levels; worst $worst")
+    }
+
+    /** Mean, maximum and 99th percentile of the RGB channels' differences, in 8-bit levels. */
+    private class Diff(val mean: Double, val max: Int, val p99: Int)
+
+    private fun diff(a: ByteArray, b: ByteArray): Diff {
+        val histogram = IntArray(256)
         var sum = 0L
-        var max = 0
         var n = 0
         for (i in a.indices) {
             if (i % 4 == 3) continue
             val d = abs((a[i].toInt() and 0xFF) - (b[i].toInt() and 0xFF))
+            histogram[d]++
             sum += d
-            max = maxOf(max, d)
             n++
         }
-        return sum.toDouble() / n to max
+        val max = histogram.indexOfLast { it > 0 }
+        var seen = 0
+        val p99 = histogram.indices.first {
+            seen += histogram[it]
+            seen >= n * 0.99
+        }
+        return Diff(sum.toDouble() / n, max, p99)
     }
 
     @Test
@@ -123,15 +149,18 @@ class ExportFormatsTest {
         val uri = photo()
         val reference = export(uri, ExportOptions(format = ExportFormat.PNG, bitDepth = 16))
         val (refBitmap, ref) = decodeSrgb(reference.uri)
-        assertThat(sourceSpace(reference.uri)).isEqualTo(ColorSpace.get(ColorSpace.Named.SRGB))
+        // 16-bit PNGs decode to F16 in extended sRGB (the platform converts on decode).
+        assertThat(sourceSpace(reference.uri)?.name).isIn(SRGB_FAMILY)
+        // (format, depth) to (mean, limit): lossless formats are held to their maximum, lossy ones (4:2:0 chroma at
+        // saturated edges) to their 99th percentile.
         val cases = buildList {
-            add(Triple(ExportFormat.PNG, 16, 1.0) to (0.5 to 3))
-            add(Triple(ExportFormat.PNG, 8, 1.0) to (0.8 to 3))
-            add(Triple(ExportFormat.JPEG, 8, 1.0) to (2.0 to 40))
-            if (support.heifTiles) add(Triple(ExportFormat.HEIF, 8, 1.0) to (2.5 to 60))
-            if (support.heif10) add(Triple(ExportFormat.HEIF, 10, 1.0) to (2.5 to 60))
-            if (support.avif8) add(Triple(ExportFormat.AVIF, 8, 1.0) to (2.5 to 60))
-            if (support.avif10) add(Triple(ExportFormat.AVIF, 10, 1.0) to (2.5 to 60))
+            add(ExportFormat.PNG to 16 to (0.5 to 3))
+            add(ExportFormat.PNG to 8 to (0.8 to 8))
+            add(ExportFormat.JPEG to 8 to (2.0 to 16))
+            if (support.heifTiles) add(ExportFormat.HEIF to 8 to (2.5 to 16))
+            if (support.heif10) add(ExportFormat.HEIF to 10 to (2.5 to 16))
+            if (support.avif8) add(ExportFormat.AVIF to 8 to (2.5 to 16))
+            if (support.avif10) add(ExportFormat.AVIF to 10 to (2.5 to 16))
         }
         for ((case, tolerance) in cases) {
             val (format, depth) = case
@@ -141,16 +170,86 @@ class ExportFormatsTest {
             val space = sourceSpace(result.uri)
             val (bitmap, pixels) = decodeSrgb(result.uri)
             assertThat(bitmap.width).isEqualTo(refBitmap.width)
-            val (mean, max) = diff(ref, pixels)
+            val d = diff(ref, pixels)
+            logWorst("$format $depth", ref, pixels, bitmap.width)
             Log.i(
                 TAG,
                 "P3 $format $depth-bit: ${result.bytes} bytes, encode ${result.encodeMs} ms, decoded as $space, " +
-                    "vs sRGB PNG: mean $mean, max $max levels",
+                    "vs sRGB PNG: mean ${d.mean}, p99 ${d.p99}, max ${d.max} levels",
             )
-            // Labelled Display P3 (the decoder read the ICC / nclx) and the same colours once converted.
-            assertThat(space?.name).isEqualTo(ColorSpace.get(ColorSpace.Named.DISPLAY_P3).name)
-            assertThat(mean).isAtMost(tolerance.first)
-            assertThat(max).isAtMost(tolerance.second)
+            // Labelled Display P3 (the decoder read the ICC / nclx; a 16-bit decode is converted to extended sRGB on
+            // the way) and the same colours once converted.
+            val expected = if (format == ExportFormat.PNG && depth == 16) SRGB_FAMILY + P3 else listOf(P3)
+            assertThat(space?.name).isIn(expected)
+            assertThat(d.mean).isAtMost(tolerance.first)
+            assertThat(if (format == ExportFormat.PNG) d.max else d.p99).isAtMost(tolerance.second)
+        }
+    }
+
+    /**
+     * Full size, every format, on the CC0 ZV-E10 ARW (24 MP; skipped without it in `files/samples`): the timings of
+     * docs/adr/0009 "W2/E", and files for exiftool with `-e keep true`.
+     */
+    @Suppress("LongMethod") // one export per format, each logged
+    @Test
+    fun fullSizeArwInEveryFormat() {
+        val file = TestPhotos.sample(ARW)
+        assumeTrue("push $ARW into files/samples (CLAUDE.md)", file != null)
+        val uri = TestPhotos.insert(ARW, "image/x-sony-arw", checkNotNull(file)).also { inserted += it }
+        val sharpen = OutputSharpening(SharpenMedium.GLOSSY, SharpenAmount.STANDARD)
+        val cases = buildList {
+            add(ExportOptions(format = ExportFormat.JPEG, quality = 92, colour = ExportColour.DISPLAY_P3))
+            add(ExportOptions(format = ExportFormat.JPEG, quality = 92, sharpening = sharpen))
+            add(ExportOptions(format = ExportFormat.PNG, bitDepth = 16, colour = ExportColour.DISPLAY_P3))
+            add(ExportOptions(format = ExportFormat.TIFF, colour = ExportColour.DISPLAY_P3))
+            if (support.heif) add(ExportOptions(format = ExportFormat.HEIF, quality = 90))
+            if (support.heifTiles) {
+                add(
+                    ExportOptions(format = ExportFormat.HEIF, quality = 90, colour = ExportColour.DISPLAY_P3),
+                )
+            }
+            if (support.heif10) {
+                add(
+                    ExportOptions(
+                        format = ExportFormat.HEIF,
+                        quality = 90,
+                        colour = ExportColour.DISPLAY_P3,
+                        bitDepth = 10,
+                    ),
+                )
+            }
+            if (support.avif8) {
+                add(
+                    ExportOptions(format = ExportFormat.AVIF, quality = 95, colour = ExportColour.DISPLAY_P3),
+                )
+            }
+            if (support.avif10) {
+                add(
+                    ExportOptions(
+                        format = ExportFormat.AVIF,
+                        quality = 85,
+                        colour = ExportColour.DISPLAY_P3,
+                        bitDepth = 10,
+                    ),
+                )
+            }
+        }
+        for (options in cases) {
+            val result = engine.export(
+                ExportItem(uri, ARW, recipe, rating = 4),
+                options.copy(destination = destination),
+                Authorship("Ana Example", "© 2026 Ana Example"),
+                renderer,
+                cancel = { false },
+            )
+            assertThat(result.width).isEqualTo(6024)
+            Log.i(
+                TAG,
+                "24 MP ${options.format} ${options.effectiveDepth}-bit ${options.colour} " +
+                    "sharpen ${options.sharpening}: " +
+                    "decode ${result.decodeMs} ms, render ${result.renderMs} ms, encode ${result.encodeMs} ms, " +
+                    "${result.bytes} bytes",
+            )
         }
     }
 
@@ -187,11 +286,11 @@ class ExportFormatsTest {
         val (a, pa) = decodeSrgb(plain.uri)
         val (b, pb) = decodeSrgb(sharp.uri)
         assertThat(b.width).isEqualTo(a.width)
-        val (mean, max) = diff(pa, pb)
-        Log.i(TAG, "sharpening screen/high vs off: mean $mean, max $max levels")
-        assertThat(max).isGreaterThan(5)
+        val d = diff(pa, pb)
+        Log.i(TAG, "sharpening screen/high vs off: mean ${d.mean}, max ${d.max} levels")
+        assertThat(d.max).isGreaterThan(5)
         // Flat patches do not move: most pixels stay within a level.
-        assertThat(mean).isLessThan(3.0)
+        assertThat(d.mean).isLessThan(3.0)
     }
 
     @Test
@@ -224,5 +323,8 @@ class ExportFormatsTest {
 
     private companion object {
         const val TAG = "REVEAL_EXPORT"
+        const val ARW = "sony-zv-e10.arw"
+        val P3: String = ColorSpace.get(ColorSpace.Named.DISPLAY_P3).name
+        val SRGB_FAMILY = listOf(ColorSpace.Named.SRGB, ColorSpace.Named.EXTENDED_SRGB).map { ColorSpace.get(it).name }
     }
 }

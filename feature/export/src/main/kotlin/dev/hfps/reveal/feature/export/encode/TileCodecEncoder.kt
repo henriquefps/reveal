@@ -46,7 +46,8 @@ class TileCodecEncoder(private val codec: ImageCodec, private val depth: Int) {
         val encoder = MediaCodec.createByCodecName(info.name)
         val started = System.nanoTime()
         try {
-            encoder.configure(format(info, quality), null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+            val format = format(info, quality)
+            encoder.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
             encoder.start()
             val tile = YuvTile(TILE, TILE, depth)
             val samples = ArrayList<ByteArray>(count)
@@ -97,7 +98,15 @@ class TileCodecEncoder(private val codec: ImageCodec, private val depth: Int) {
             val (record, tiles) = container(config, samples)
             val ms = (System.nanoTime() - started) / NANOS_PER_MS
             val bytes = tiles.sumOf { it.size }
-            Log.i(TAG, "${info.name}: $count tiles of $TILE at $depth bits, quality $quality, $bytes bytes in $ms ms")
+            val mode = if (format.containsKey(MediaFormat.KEY_QUALITY)) {
+                "CQ ${format.getInteger(MediaFormat.KEY_QUALITY)}"
+            } else {
+                "VBR ${format.getInteger(MediaFormat.KEY_BIT_RATE)}"
+            }
+            Log.i(
+                TAG,
+                "${info.name}: $count tiles of $TILE at $depth bits, quality $quality ($mode), $bytes bytes in $ms ms",
+            )
             return CodedImage(codec, record, rows.width, rows.height, TILE, TILE, columns, gridRows, depth, tiles)
         } finally {
             runCatching { encoder.stop() }

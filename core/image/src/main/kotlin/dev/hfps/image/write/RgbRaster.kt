@@ -63,18 +63,28 @@ class RgbRaster(override val width: Int, override val height: Int, override val 
      */
     fun putEncoded(x: Int, y: Int, w: Int, h: Int, rgba: FloatBuffer) {
         check(bits == BITS) { "putEncoded needs a 16-bit raster" }
+        // Bulk copies (one row in, one row out): per-sample buffer calls cost seconds at 24 MP.
+        val floats = rowFloats.takeIf { it.size >= w * RGBA } ?: FloatArray(w * RGBA).also { rowFloats = it }
+        val shorts = rowShorts.takeIf { it.size >= w * 3 } ?: ShortArray(w * 3).also { rowShorts = it }
+        val target = buffer.duplicate().order(buffer.order()).asShortBuffer()
         for (r in 0 until h) {
-            var at = ((y + r).toLong() * width + x).toInt() * pixelBytes
-            var i = r * w * RGBA
-            for (c in 0 until w) {
-                buffer.putShort(at, level(rgba.get(i)))
-                buffer.putShort(at + 2, level(rgba.get(i + 1)))
-                buffer.putShort(at + 4, level(rgba.get(i + 2)))
-                at += pixelBytes
+            rgba.position(r * w * RGBA)
+            rgba.get(floats, 0, w * RGBA)
+            var i = 0
+            for (c in 0 until w * 3 step 3) {
+                shorts[c] = level(floats[i])
+                shorts[c + 1] = level(floats[i + 1])
+                shorts[c + 2] = level(floats[i + 2])
                 i += RGBA
             }
+            target.position(((y + r) * width + x) * 3)
+            target.put(shorts, 0, w * 3)
         }
+        rgba.position(0)
     }
+
+    private var rowFloats = FloatArray(0)
+    private var rowShorts = ShortArray(0)
 
     /** Stores 8-bit RGBA bytes (`w * 4` per row, alpha ignored) at ([x], [y]) (8-bit rasters). */
     fun putRgba8(x: Int, y: Int, w: Int, h: Int, rgba: ByteBuffer) {
@@ -106,19 +116,24 @@ class RgbRaster(override val width: Int, override val height: Int, override val 
     override fun row(y: Int, out: IntArray) = row(y, 0, width, out)
 
     override fun row(y: Int, x: Int, w: Int, out: IntArray) {
-        var at = (y * width + x) * pixelBytes
+        val start = (y * width + x) * 3
         if (sampleBytes == 2) {
-            for (i in 0 until w * 3) {
-                out[i] = buffer.getShort(at).toInt() and MAX
-                at += 2
-            }
+            val shorts = readShorts.takeIf { it.size >= w * 3 } ?: ShortArray(w * 3).also { readShorts = it }
+            val source = buffer.duplicate().order(buffer.order()).asShortBuffer()
+            source.position(start)
+            source.get(shorts, 0, w * 3)
+            for (i in 0 until w * 3) out[i] = shorts[i].toInt() and MAX
         } else {
-            for (i in 0 until w * 3) {
-                out[i] = buffer.get(at).toInt() and MAX8
-                at++
-            }
+            val bytes = readBytes.takeIf { it.size >= w * 3 } ?: ByteArray(w * 3).also { readBytes = it }
+            val source = buffer.duplicate()
+            source.position(start)
+            source.get(bytes, 0, w * 3)
+            for (i in 0 until w * 3) out[i] = bytes[i].toInt() and MAX8
         }
     }
+
+    private var readShorts = ShortArray(0)
+    private var readBytes = ByteArray(0)
 
     /** Pixel ([x], [y]) channel [c] (tests). */
     fun sample(x: Int, y: Int, c: Int): Int {

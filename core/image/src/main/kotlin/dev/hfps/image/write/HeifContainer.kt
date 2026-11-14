@@ -93,10 +93,14 @@ object HeifContainer {
                 writeShort(image.height)
             }
         }.toByteArray()
+        // The Exif item: a 4-byte offset to the TIFF header, then the payload. HEIC follows Apple and Android
+        // (`Exif\0\0` + TIFF, offset 6), AVIF follows libavif (TIFF first, offset 0): libavif hands everything after
+        // the offset field to applications, which expect a TIFF header there.
         val exifData = exifTiff?.let {
+            val prefix = if (image.codec == ImageCodec.HEVC) EXIF_HEADER else ByteArray(0)
             ByteArrayOutputStream().apply {
-                writeInt(EXIF_HEADER.size)
-                write(EXIF_HEADER)
+                writeInt(prefix.size)
+                write(prefix)
                 write(it)
             }.toByteArray()
         }

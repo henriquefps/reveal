@@ -321,3 +321,11 @@ upright image coordinates (and the raw model output plus the setting, to refine 
 - Tuning the refinement constants and the face-part feather on the owner's review sheets.
 - The editor integration: the adapter to M4/A's `AiMaskSource`, the model-input render and its `inputVersion`.
 
+
+## Amendment M5/R: APK budget (ADR 0024)
+
+Date: 2026-11-14. The owner accepted AI Remove's model, big-LaMa with int8 weights (53.6 MB, `big-lama@1`), so the
+ML part of an arm64 install grows from 29.0 MB to ≈ 82.6 MB (models 73.2 MB + LiteRT 9.4 MB): the ≈ 34 MB budget of
+"Decisions in one place" becomes **≈ 85 MB**. `models.json` also pins a source file published by this repository
+(`big-lama-fp32@1`, a release asset made by `scripts/ml/convert_big_lama.py`, which needs PyTorch and so cannot be a
+`derive` rule) and a new stdlib derivation, `convert_int8_weights.py`.

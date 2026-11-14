@@ -92,8 +92,8 @@
     <string name="storage_handoff_previews">Photos from other apps</string>
     <string name="storage_handoff_previews_note">Previews of photos other apps shared with Reveal</string>
     <string name="storage_handoff_previews_kept">%1$s of them are a photo\'s only copy and stay</string>
-    <string name="storage_masks">AI masks</string>
-    <string name="storage_masks_note">Subject, sky, people and face masks, made again when needed</string>
+    <string name="storage_masks">AI masks and fills</string>
+    <string name="storage_masks_note">Masks and Remove fills, made again when needed</string>
     <string name="storage_other">Other</string>
     <string name="storage_other_note">Exports in progress, shared files, previews being sent to your server</string>
     <string name="storage_library">Library and edits</string>

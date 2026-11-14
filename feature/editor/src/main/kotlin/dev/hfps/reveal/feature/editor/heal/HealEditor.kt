@@ -4,6 +4,7 @@ import dev.hfps.reveal.feature.editor.EditorPhase
 import dev.hfps.reveal.feature.editor.EditorUiState
 import dev.hfps.reveal.pipeline.gl.GpuDevelopRenderer
 import dev.hfps.reveal.pipeline.gl.HealStatus
+import dev.hfps.reveal.pipeline.heal.RemoveFills
 import dev.hfps.reveal.pipeline.recipe.Heal
 import dev.hfps.reveal.pipeline.recipe.HealKind
 import dev.hfps.reveal.pipeline.recipe.Recipe
@@ -47,7 +48,14 @@ internal class HealEditor(private val scope: CoroutineScope, private val host: H
     override fun setOpen(open: Boolean) {
         if (heal.open == open) return
         entry = if (open) recipe.heals else null
-        host.updateHeal { it.copy(open = open, painting = null, selected = if (open) it.selected else null) }
+        host.updateHeal {
+            it.copy(
+                open = open,
+                painting = null,
+                selected = if (open) it.selected else null,
+                aiRemove = if (open) RemoveFills.shared.models().firstOrNull() else it.aiRemove,
+            )
+        }
         pushView()
     }
 
@@ -79,6 +87,14 @@ internal class HealEditor(private val scope: CoroutineScope, private val host: H
         if (changed.hasSource && changed.dx == 0f && changed.dy == 0f) newSource(selected.id)
     }
 
+    override fun setRemoveMethod(method: String) {
+        host.updateHeal { it.copy(settings = it.settings.copy(removeMethod = method)) }
+        val selected = HealEdits.find(recipe, heal.selected) ?: return
+        if (selected.type != HealKind.REMOVE || selected.method == method) return
+        host.edit { HealEdits.update(it, selected.id) { h -> h.copy(method = method) } }
+        host.commit()
+    }
+
     override fun setSetting(setting: HealSetting) {
         host.updateHeal { it.copy(setting = setting) }
     }
@@ -93,7 +109,7 @@ internal class HealEditor(private val scope: CoroutineScope, private val host: H
 
     override fun tap(x: Float, y: Float) {
         if (x !in 0f..1f || y !in 0f..1f) return
-        add(HealEdits.circle(x, y, heal.settings))
+        add(HealEdits.circle(x, y, newSpotSettings()))
     }
 
     override fun strokeStart(point: StrokePoint) {
@@ -107,7 +123,7 @@ internal class HealEditor(private val scope: CoroutineScope, private val host: H
     override fun strokeEnd() {
         val points = heal.painting ?: return
         host.updateHeal { it.copy(painting = null) }
-        val settings = heal.settings
+        val settings = newSpotSettings()
         // A short stroke is a tap: a circle where it started.
         if (points.size < 2 || HealEdits.length(points, aspect) < settings.size) {
             tap(points.first().x, points.first().y)
@@ -165,7 +181,7 @@ internal class HealEditor(private val scope: CoroutineScope, private val host: H
 
     /** The renderer's Remove status: the controls show the spots still being filled and those that failed. */
     fun onStatus(status: HealStatus) {
-        host.updateHeal { it.copy(pending = status.pending, failed = status.failed) }
+        host.updateHeal { it.copy(pending = status.pending, failed = status.failed, fellBack = status.fellBack) }
     }
 
     /** Pushes the view options to the renderer (Visualise spots only while the mode is open). */
@@ -179,6 +195,9 @@ internal class HealEditor(private val scope: CoroutineScope, private val host: H
         val selected = heal.selected ?: return
         if (HealEdits.find(recipe, selected) == null) host.updateHeal { it.copy(selected = null) }
     }
+
+    /** The settings a new spot gets: Remove's method resolved (the app's model unless Patch was chosen). */
+    private fun newSpotSettings(): HealSettings = heal.settings.let { it.copy(removeMethod = it.method(heal.aiRemove)) }
 
     /** Adds [spot] (with its automatic source when it needs one) as one step, and selects it. */
     private fun add(spot: Heal) {

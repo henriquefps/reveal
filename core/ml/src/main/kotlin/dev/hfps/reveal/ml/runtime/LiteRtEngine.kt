@@ -44,6 +44,12 @@ class LiteRtEngine private constructor(private val model: CompiledModel, overrid
         class File(val path: String) : Source
     }
 
+    /**
+     * Where the GPU keeps a model's compiled programs between loads ([dir], a directory the app owns; [key] = the
+     * model's `<id>@<version>`): later loads skip most of the compile (big-LaMa: docs/adr/0024).
+     */
+    class GpuCache(val dir: String, val key: String)
+
     companion object {
         private const val TAG = "RevealMl"
 
@@ -53,18 +59,27 @@ class LiteRtEngine private constructor(private val model: CompiledModel, overrid
         /**
          * Loads [source] on the first of [prefer] that compiles it (GPU then CPU by default). A GPU that refuses the
          * model (no OpenCL/GL) falls back to the CPU; the CPU never fails for a valid model. The CPU uses
-         * [cpuThreads] XNNPACK threads.
+         * [cpuThreads] XNNPACK threads; [gpuCache] keeps the GPU's compiled programs on disk.
          */
         fun load(
             source: Source,
             prefer: List<Backend> = listOf(Backend.GPU, Backend.CPU),
             cpuThreads: Int = CPU_THREADS,
+            gpuCache: GpuCache? = null,
         ): LiteRtEngine {
             var last: LiteRtException? = null
             for (backend in prefer) {
                 try {
                     val options = CompiledModel.Options(backend.accelerators())
                     options.cpuOptions = CompiledModel.CpuOptions(cpuThreads, null, null)
+                    if (gpuCache != null && backend == Backend.GPU) {
+                        java.io.File(gpuCache.dir).mkdirs()
+                        options.gpuOptions = CompiledModel.GpuOptions(
+                            serializationDir = gpuCache.dir,
+                            modelCacheKey = gpuCache.key,
+                            serializeProgramCache = true,
+                        )
+                    }
                     val model = when (source) {
                         is Source.Asset -> CompiledModel.create(source.assets, source.path, options, environment)
                         is Source.File -> CompiledModel.create(source.path, options, environment)

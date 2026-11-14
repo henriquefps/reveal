@@ -2,6 +2,7 @@
 
 package dev.hfps.reveal.ml
 
+import dev.hfps.reveal.ml.inpaint.InpaintModels
 import dev.hfps.reveal.ml.tensor.Activation
 import dev.hfps.reveal.ml.tensor.InputSpec
 import dev.hfps.reveal.ml.tensor.Layout
@@ -188,7 +189,7 @@ object MaskModels {
     val all: List<ModelSpec> = bundled + lab + DEEPLAB_ADE20K_XCEPTION + ISNET
 
     /** Every pinned file with a Kotlin spec, segmentation or not (kept in step with `models.json` by a test). */
-    val pinned: List<PinnedModel> = all + FACE_LANDMARKER
+    val pinned: List<PinnedModel> = all + FACE_LANDMARKER + InpaintModels.bundled
 
     /** The asset path of any pinned model. */
     fun assetPath(model: PinnedModel): String = "ml/${model.asset}"

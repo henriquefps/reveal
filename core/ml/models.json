@@ -1,5 +1,5 @@
 {
-  "comment": "On-device mask models (docs/adr/0021). Pinned files fetched (or derived from a pinned file, 'derive') at build time by scripts/ml/fetch_models.py; never committed, never downloaded at runtime. 'bundled' = carried by every build (release included); 'lab' = debug builds only (the mask lab's comparisons). Keep ids stable: a recipe refers to <id>@<version>, the manifest's key (a new file of the same model = a new version).",
+  "comment": "On-device mask models (docs/adr/0021) and the inpainting model (docs/adr/0024). Pinned files fetched (or derived from a pinned file, 'derive') at build time by scripts/ml/fetch_models.py; never committed, never downloaded at runtime. 'bundled' = carried by every build (release included); 'lab' = debug builds only (the mask lab's comparisons). Keep ids stable: a recipe refers to <id>@<version>, the manifest's key (a new file of the same model = a new version).",
   "models": [
     {
       "id": "selfie-multiclass", "version": 1, "asset": "selfie-multiclass-v1.tflite", "bundled": false, "lab": true,
@@ -90,6 +90,18 @@
       "derive": {"from": "selfie-multiclass@1", "convert": "convert_fp16_weights.py"},
       "sha256": "8d66dc0645fda3ba08106594da0677f8558d3a3955c3248c1511c4190dde0c1d", "bytes": 8308352,
       "licence": "Apache-2.0", "source": "selfie-multiclass@1 with float16 convolution weights (scripts/ml/convert_fp16_weights.py, ADR 0021 M4/C): half the size, the same masks"
+    },
+    {
+      "id": "big-lama-fp32", "version": 1, "asset": "big-lama-fp32-v1.tflite", "bundled": false,
+      "url": "https://github.com/henriquefps/reveal/releases/download/ml-big-lama-fp32-1/big-lama-fp32-v1.tflite",
+      "sha256": "58b1da47cdcf3ccaeb7101fe0cdea05c431a636a309e6faf2558bcac5caff648", "bytes": 205303748,
+      "licence": "Apache-2.0 (weights; trained on Places2)", "source": "big-LaMa (advimman/lama, Samsung Research) converted to LiteRT by scripts/ml/convert_big_lama.py (DFT matrix products for the Fourier units, every op on the GPU); published as this repository's release asset ml-big-lama-fp32-1 (ADR 0024)"
+    },
+    {
+      "id": "big-lama", "version": 1, "asset": "big-lama-v1.tflite", "bundled": true,
+      "derive": {"from": "big-lama-fp32@1", "convert": "convert_int8_weights.py"},
+      "sha256": "797cfbc5703550c7e40d3582d9b572e33f9147795f4489278158b15a71d40df3", "bytes": 53624832,
+      "licence": "Apache-2.0 (weights; trained on Places2)", "source": "big-lama-fp32@1 with int8 convolution weights, one scale per output channel (scripts/ml/convert_int8_weights.py, ADR 0024): Remove's inpainting model"
     }
   ]
 }

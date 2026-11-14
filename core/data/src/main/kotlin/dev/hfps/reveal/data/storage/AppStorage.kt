@@ -100,8 +100,8 @@ class AppStorage(
     }
 
     companion object {
-        /** The cache directories the budget's areas own (thumbnails, server file parts, server previews, masks). */
-        val AREA_DIRS = setOf("thumbs", "sync-originals", "sync-previews", MaskCacheArea.DIR)
+        /** The cache directories the budget's areas own (thumbnails, server parts and previews, masks, fills). */
+        val AREA_DIRS = setOf("thumbs", "sync-originals", "sync-previews", MaskCacheArea.DIR, FillCacheArea.DIR)
         const val RECENT_MS = 10 * 60 * 1000L
         private const val TEMP_SUFFIX = ".tmp"
     }

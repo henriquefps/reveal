@@ -65,8 +65,24 @@ class RemoveRequest(
     val build: () -> RemoveCrop,
 )
 
-/** A computed fill: the crop's [spec], its [input] encoding (for [RemoveColour.fromDisplay]) and the [output]. */
-class RemoveFill(val spec: RemoveSpec, val colour: RemoveColour, val output: RemoveOutput)
+/**
+ * A computed fill: the crop's [spec], its [input] encoding (for [RemoveColour.fromDisplay]) and the [output].
+ * [fellBack] is set when the spot's method could not run (a model without enough memory, docs/adr/0024) and the patch
+ * fill was used instead: the reason, for the editor to say so.
+ */
+class RemoveFill(
+    val spec: RemoveSpec,
+    val colour: RemoveColour,
+    val output: RemoveOutput,
+    val fellBack: String? = null,
+)
+
+/**
+ * Thrown by a [RemoveMethod] that cannot run now (docs/adr/0024: an inpainting model without enough free memory, or
+ * a model the device failed to load or run): [RemoveFills] then fills the spot with the patch method and marks the
+ * fill [RemoveFill.fellBack], instead of failing it.
+ */
+class RemoveUnavailableException(message: String, cause: Throwable? = null) : Exception(message, cause)
 
 /**
  * Where the renderers get Remove fills (docs/adr/0023): like the AI masks' source, it never blocks. [fill] returns the
@@ -88,12 +104,13 @@ interface RemoveSource {
 }
 
 /**
- * The fills of one process (docs/adr/0023): the methods by name ([Heal.METHOD_PATCH] = [PatchFill]; M5/R registers
- * `model:<id>@<version>`), a cache of the last [capacity] fills by key, one worker thread. A method this app does not
- * have falls back to [Heal.METHOD_PATCH] (the spot still renders; the editor says which method ran).
+ * The fills of one process (docs/adr/0023): the methods by name ([Heal.METHOD_PATCH] = [PatchFill]; the app
+ * [register]s `model:<id>@<version>` at start, docs/adr/0024), a cache of the last [capacity] fills by key, one worker
+ * thread. A method this app does not have falls back to [Heal.METHOD_PATCH] (the spot still renders; the editor says
+ * which method ran); a method that throws [RemoveUnavailableException] is replaced by the patch fill for that spot.
  */
 class RemoveFills(
-    private val methods: Map<String, RemoveMethod> = mapOf(Heal.METHOD_PATCH to PatchFill),
+    methods: Map<String, RemoveMethod> = mapOf(Heal.METHOD_PATCH to PatchFill),
     private val capacity: Int = DEFAULT_CAPACITY,
     private val executor: ExecutorService = Executors.newSingleThreadExecutor { r ->
         Thread(r, "reveal-remove").apply {
@@ -107,9 +124,29 @@ class RemoveFills(
     }
     private val running = ConcurrentHashMap<String, MutableList<() -> Unit>>()
     private val failures = ConcurrentHashMap.newKeySet<String>()
+    private val methods = ConcurrentHashMap(methods)
+
+    /** The method each computed (or failed) key asked for: [register] drops what an unknown method left. */
+    private val asked = ConcurrentHashMap<String, String>()
 
     /** The method that runs for [method] (the patch method when this app does not have it). */
-    fun methodFor(method: String): String = if (method in methods) method else Heal.METHOD_PATCH
+    fun methodFor(method: String): String = if (methods.containsKey(method)) method else Heal.METHOD_PATCH
+
+    /**
+     * Adds (or replaces) the method [name] (`model:<id>@<version>`, docs/adr/0024). The app registers its models when
+     * it starts, before anything renders; a fill computed before, under the patch method because [name] was unknown,
+     * is dropped so the next request runs [name].
+     */
+    fun register(name: String, method: RemoveMethod) {
+        methods[name] = method
+        val stale = asked.filterValues { it == name }.keys
+        synchronized(done) { stale.forEach(done::remove) }
+        failures.removeAll(stale)
+        stale.forEach(asked::remove)
+    }
+
+    /** The registered model methods (`model:<id>@<version>`), for the editor's AI / Patch choice. */
+    fun models(): List<String> = methods.keys.filter { it.startsWith(Heal.METHOD_MODEL_PREFIX) }.sorted()
 
     override fun failed(key: String): Boolean = key in failures
 
@@ -126,10 +163,17 @@ class RemoveFills(
         if (start) {
             executor.execute {
                 try {
+                    asked[request.key] = request.method
                     val crop = input ?: request.build()
                     val method = checkNotNull(methods[methodFor(request.method)])
-                    val output = method.fill(crop.input)
-                    synchronized(done) { done[request.key] = RemoveFill(request.spec, crop.colour, output) }
+                    val fill = try {
+                        RemoveFill(request.spec, crop.colour, method.fill(crop.input))
+                    } catch (e: RemoveUnavailableException) {
+                        val reason = e.message ?: "unavailable"
+                        System.err.println("reveal-remove: ${request.method} unavailable ($reason): patch fill instead")
+                        RemoveFill(request.spec, crop.colour, PatchFill.fill(crop.input), fellBack = reason)
+                    }
+                    synchronized(done) { done[request.key] = fill }
                 } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
                     failures += request.key
                     System.err.println("reveal-remove: fill failed: $e")

@@ -536,6 +536,9 @@
     <string name="heal_new_source">Nova origem</string>
     <string name="heal_removing">Removendo…</string>
     <string name="heal_remove_failed">Não foi possível calcular esta remoção</string>
+    <string name="heal_remove_ai">IA</string>
+    <string name="heal_remove_patch">Amostras</string>
+    <string name="heal_remove_fell_back">Sem memória para a IA: removido com Amostras</string>
     <string name="heal_hint">Toque numa mancha ou pinte por cima. Arraste a origem de um ponto para escolher de onde ele copia.</string>
     <string name="heal_full">Esta foto já tem o máximo de pontos que pode ter</string>
     <string name="heal_source">Origem do ponto</string>

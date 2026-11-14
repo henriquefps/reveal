@@ -36,6 +36,18 @@ All notable changes to Reveal are documented here. The format follows
   to find sensor dust. Every spot is one history step; Cancel returns to the spots the mode started with; the
   Healing group pastes spots (not in the default paste choice). Repairs happen on the original pixels before every
   other adjustment, the same in the preview, at 100 % and in exports. Keyboard: `H`, `[`, `]`, `V`.
+- AI Remove (M5/R, ADR 0024): the Heal mode's Remove offers "AI" (new spots use it) and "Patch". AI fills the
+  object with an on-device inpainting model, the same in the preview, at 100 % (with grain matched to the photo where
+  the fill is enlarged) and in exports; when the phone is short of memory the spot is removed with Patch and the
+  controls say so.
+- AI Remove's model (M5/R, ADR 0024): big-LaMa, an on-device inpainting network (Apache-2.0), bundled with int8
+  weights (53.6 MB) and run entirely on the GPU by LiteRT: 272 ms a fill on the Galaxy S24 Ultra (3.8 s to compile
+  the first time; the compiled programs are kept, so later sessions start faster), 7 s on a CPU. `:core:ml`
+  `InpaintService` fits a crop to the model's 512 x 512 input, paints the hole and keeps every other pixel; fills are
+  cached on disk (Settings -> Storage, "AI masks and fills").
+- `scripts/ml/convert_big_lama.py` (the authors' checkpoint to LiteRT, the Fourier units as DFT matrix products,
+  checked against the original) and `scripts/ml/convert_int8_weights.py` (int8 convolution weights, standard
+  library, pinned like a download).
 
 ### Changed
 - AI masks are made once per photo and shared (M4/F): the editor, an export and the library's thumbnails find each
@@ -47,6 +59,7 @@ All notable changes to Reveal are documented here. The format follows
   time in the background, or read from the cache); the presets' previews render again when a mask arrives.
 - The library's selection, "Edited" filter, edited badge and filter counts go by grid cell (version), so a virtual
   copy is selected, exported, pasted onto and counted on its own. Database v12 (`snapshots`, `export_presets`).
+- The About screen lists LiteRT and the bundled ML models (shipped since 0.6.0).
 
 ### Fixed
 - `HandoffFallbackTest` expected the editor's "share it again" error from the grid for a hand-off with no grant and no

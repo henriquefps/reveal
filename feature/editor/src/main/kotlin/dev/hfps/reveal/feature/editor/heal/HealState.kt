@@ -6,7 +6,9 @@ import dev.hfps.reveal.pipeline.recipe.StrokePoint
 
 /**
  * The settings new spots get, and the selected spot's controls show (docs/adr/0023 "Editor"): the [kind], the [size]
- * (radius as a fraction of the image's long edge), [feather], [opacity] and the red-eye [darken], all in percent.
+ * (radius as a fraction of the image's long edge), [feather], [opacity] and the red-eye [darken], all in percent;
+ * Remove's [removeMethod] (`patch` or `model:<id>@<version>`, docs/adr/0024; null = the default: AI when the app has
+ * a model, [method]).
  */
 @Immutable
 data class HealSettings(
@@ -15,7 +17,11 @@ data class HealSettings(
     val feather: Float = DEFAULT_FEATHER,
     val opacity: Float = FULL,
     val darken: Float = DEFAULT_DARKEN,
+    val removeMethod: String? = null,
 ) {
+    /** The Remove method new spots get: the chosen one, else the app's model ([ai]), else the patch fill. */
+    fun method(ai: String?): String = removeMethod ?: ai ?: dev.hfps.reveal.pipeline.recipe.Heal.METHOD_PATCH
+
     /** One step of the `[` / `]` keys: about 15 % bigger or smaller, within [MIN_SIZE]..[MAX_SIZE]. */
     fun resized(steps: Int): HealSettings {
         var s = size
@@ -53,6 +59,10 @@ data class HealUiState(
     /** Remove spots whose fill is being computed, and those that failed (by id). */
     val pending: Set<String> = emptySet(),
     val failed: Set<String> = emptySet(),
+    /** Remove spots filled with Patch because the AI model could not run (too little memory; docs/adr/0024). */
+    val fellBack: Set<String> = emptySet(),
+    /** The app's AI Remove method (`model:<id>@<version>`), null when it has none: the AI / Patch choice hides. */
+    val aiRemove: String? = null,
     /** The stroke being painted (image fractions), drawn over the photo until it ends. */
     val painting: List<StrokePoint>? = null,
     /** A new spot is waiting for its automatic source. */
@@ -79,6 +89,9 @@ interface HealActions {
 
     /** The kind of new spots, and of the selected one (one step). */
     fun setKind(kind: HealKind) {}
+
+    /** Remove's method (AI model or Patch) for new spots, and for the selected Remove spot (one step). */
+    fun setRemoveMethod(method: String) {}
 
     fun setSetting(setting: HealSetting) {}
 

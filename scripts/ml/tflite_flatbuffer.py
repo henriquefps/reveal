@@ -58,6 +58,10 @@ OPTIONS = {
         ("padding", "b"), ("stride_w", "i"), ("stride_h", "i"), ("depth_multiplier", "i"),
         ("fused_activation_function", "b"), ("dilation_w_factor", "i"), ("dilation_h_factor", "i"),
     ]),
+    8: ("FullyConnectedOptions", [
+        ("fused_activation_function", "b"), ("weights_format", "b"), ("keep_num_dims", "B"),
+        ("asymmetric_quantize_inputs", "B"), ("quantized_bias_type", "b"),
+    ]),
     9: ("SoftmaxOptions", [("beta", "f")]),
     5: ("Pool2DOptions", [
         ("padding", "b"), ("stride_w", "i"), ("stride_h", "i"), ("filter_width", "i"), ("filter_height", "i"),
@@ -78,17 +82,21 @@ OPTIONS = {
     33: ("ExpOptions", []),
     38: ("DequantizeOptions", []),
     39: ("MaximumMinimumOptions", []),
+    48: ("SliceOptions", []),
     49: ("TransposeConvOptions", [
         ("padding", "b"), ("stride_w", "i"), ("stride_h", "i"), ("fused_activation_function", "b"),
         ("quantized_bias_type", "b"),
     ]),
     74: ("ResizeNearestNeighborOptions", [("align_corners", "B"), ("half_pixel_centers", "B")]),
+    77: ("MirrorPadOptions", [("mode", "b")]),
+    101: ("BatchMatMulOptions", [("adj_x", "B"), ("adj_y", "B"), ("asymmetric_quantize_inputs", "B")]),
 }
 
 # BuiltinOperator codes used here (schema.fbs).
 ADD, AVERAGE_POOL_2D, CONCATENATION, CONV_2D, DEPTHWISE_CONV_2D, DEQUANTIZE = 0, 1, 2, 3, 4, 6
 LOGISTIC, MUL, RESHAPE, RESIZE_BILINEAR, SOFTMAX, TRANSPOSE, TRANSPOSE_CONV = 14, 18, 22, 23, 25, 39, 67
 RESIZE_NEAREST_NEIGHBOR = 97
+FULLY_CONNECTED, SLICE, MIRROR_PAD, BATCH_MATMUL = 9, 65, 100, 126
 BATCH_TO_SPACE_ND, SPACE_TO_BATCH_ND, MEAN, SUB, EXP, MINIMUM, LOG, SUM, REDUCE_MAX = 37, 38, 40, 41, 47, 57, 73, 74, 82
 OP_NAMES = {
     ADD: "ADD", AVERAGE_POOL_2D: "AVERAGE_POOL_2D", CONCATENATION: "CONCATENATION", CONV_2D: "CONV_2D",
@@ -97,17 +105,18 @@ OP_NAMES = {
     SPACE_TO_BATCH_ND: "SPACE_TO_BATCH_ND", MEAN: "MEAN", SUB: "SUB", EXP: "EXP", LOG: "LOG", SUM: "SUM",
     REDUCE_MAX: "REDUCE_MAX", MINIMUM: "MINIMUM", SOFTMAX: "SOFTMAX", TRANSPOSE: "TRANSPOSE",
     TRANSPOSE_CONV: "TRANSPOSE_CONV", RESIZE_NEAREST_NEIGHBOR: "RESIZE_NEAREST_NEIGHBOR",
+    FULLY_CONNECTED: "FULLY_CONNECTED", SLICE: "SLICE", MIRROR_PAD: "MIRROR_PAD", BATCH_MATMUL: "BATCH_MATMUL",
 }
 # The options type each operator carries (0 = none). A model whose operator says otherwise is refused.
 OP_OPTIONS = {
     ADD: 11, AVERAGE_POOL_2D: 5, CONCATENATION: 10, CONV_2D: 1, DEPTHWISE_CONV_2D: 2, DEQUANTIZE: 0, LOGISTIC: 0,
     MUL: 21, RESHAPE: 17, RESIZE_BILINEAR: 15, BATCH_TO_SPACE_ND: 24, SPACE_TO_BATCH_ND: 25, MEAN: 27, SUB: 28,
     EXP: 33, LOG: 0, SUM: 27, REDUCE_MAX: 27, MINIMUM: 39, SOFTMAX: 9, TRANSPOSE: 26, TRANSPOSE_CONV: 49,
-    RESIZE_NEAREST_NEIGHBOR: 74,
+    RESIZE_NEAREST_NEIGHBOR: 74, FULLY_CONNECTED: 8, SLICE: 48, MIRROR_PAD: 77, BATCH_MATMUL: 101,
 }
 
 # TensorType values.
-FLOAT32, FLOAT16, INT32 = 0, 1, 2
+FLOAT32, FLOAT16, INT32, INT8 = 0, 1, 2, 9
 
 _SCALAR = {c: struct.calcsize("<" + c) for c in "bBhHiIqQfd"}
 
@@ -234,8 +243,11 @@ def prune(model, sg):
     if "metadata_buffer" in model:
         model["metadata_buffer"] = [b_map[b] for b in model["metadata_buffer"]]
     model["operator_codes"] = [model["operator_codes"][c] for c in codes]
-    if model.get("signature_defs"):
-        raise FormatError("signature defs are not rewritten")
+    for sig in model.get("signature_defs", []):
+        if sig.get("subgraph_index", 0) != 0:
+            raise FormatError("signature defs of other subgraphs are not rewritten")
+        for entry in sig.get("inputs", []) + sig.get("outputs", []):
+            entry["tensor_index"] = t_map[entry.get("tensor_index", 0)]
 
 
 def histogram(model):

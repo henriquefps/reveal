@@ -20,7 +20,7 @@ enum class StorageKind {
     /** Parts of server originals read by range, and server smart previews, while you view them (`cache/sync-*`). */
     SERVER_FILES,
 
-    /** AI masks found on this device (`cache/masks`, docs/adr/0021 "M4/C"): made again from the photo when needed. */
+    /** AI masks and AI Remove fills (`cache/masks`, `cache/inpaint`, docs/adr/0021, 0024): made again when needed. */
     MASKS,
 
     /** Previews of photos other apps handed over (`no_backup/handoff-previews`): some are a photo's only copy. */

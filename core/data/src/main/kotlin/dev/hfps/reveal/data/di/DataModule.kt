@@ -1,5 +1,6 @@
 package dev.hfps.reveal.data.di
 
+import android.app.ActivityManager
 import android.content.Context
 import android.os.Build
 import androidx.core.net.toUri
@@ -35,6 +36,7 @@ import dev.hfps.reveal.data.preset.PresetDownloader
 import dev.hfps.reveal.data.preset.PresetRepository
 import dev.hfps.reveal.data.storage.AppStorage
 import dev.hfps.reveal.data.storage.CacheBudget
+import dev.hfps.reveal.data.storage.FillCacheArea
 import dev.hfps.reveal.data.storage.MaskCacheArea
 import dev.hfps.reveal.data.storage.SafDocumentTree
 import dev.hfps.reveal.data.storage.StorageVolumes
@@ -44,6 +46,9 @@ import dev.hfps.reveal.data.thumb.GpuEditedThumbnails
 import dev.hfps.reveal.data.thumb.PhotoImages
 import dev.hfps.reveal.data.thumb.ThumbnailRepository
 import dev.hfps.reveal.data.xmp.XmpPreferences
+import dev.hfps.reveal.ml.MaskModels
+import dev.hfps.reveal.ml.inpaint.FillDiskCache
+import dev.hfps.reveal.ml.inpaint.InpaintService
 import dev.hfps.reveal.ml.service.EngineLoader
 import dev.hfps.reveal.ml.service.MaskDiskCache
 import dev.hfps.reveal.ml.service.MaskService
@@ -288,6 +293,41 @@ object DataModule {
     fun provideMaskService(@ApplicationContext context: Context, masks: MaskCacheArea): MaskService =
         MaskService(EngineLoader.assets(context.assets), masks.cache)
 
+    /** AI Remove's fills on disk (docs/adr/0024), counted with the AI masks by the budget. */
+    @Provides
+    @Singleton
+    fun provideFillCacheArea(@ApplicationContext context: Context, budget: CacheBudget): FillCacheArea = FillCacheArea(
+        FillDiskCache(File(context.cacheDir, FillCacheArea.DIR), cap = budget::cap, onWrite = budget::requestTrim),
+        programs = File(context.codeCacheDir, FillCacheArea.GPU_PROGRAMS),
+    ).also(budget::register)
+
+    /**
+     * AI Remove's inpainting (docs/adr/0024): the bundled model from the APK's assets (GPU, its compiled programs kept
+     * in the code cache; else the CPU), released after each fill, loaded only when the system reports enough free
+     * memory (else Remove falls back to the patch fill), fills cached on disk.
+     */
+    @Provides
+    @Singleton
+    fun provideInpaintService(
+        @ApplicationContext context: Context,
+        fills: FillCacheArea,
+        budget: CacheBudget,
+    ): InpaintService = InpaintService(
+        loader = InpaintService.assets(
+            context.assets,
+            File(context.codeCacheDir, FillCacheArea.GPU_PROGRAMS).path,
+            onLoaded = budget::requestTrim,
+        ),
+        cache = fills.cache,
+        hasMemoryFor = { model ->
+            val activity = context.getSystemService(ActivityManager::class.java)
+            val info = ActivityManager.MemoryInfo().also { activity.getMemoryInfo(it) }
+            val need = runCatching { context.assets.openFd(MaskModels.assetPath(model)).use { it.length } }
+                .getOrDefault(0L) * InpaintService.MEMORY_PER_FILE_BYTE
+            !info.lowMemory && info.availMem - info.threshold > need
+        },
+    )
+
     @Provides
     @Singleton
     fun provideAppStorage(
@@ -295,9 +335,10 @@ object DataModule {
         database: RevealDatabase,
         budget: CacheBudget,
         previews: LocalPreviews,
-        // The areas register when they are made: make sure the thumbnails and the masks are.
+        // The areas register when they are made: make sure the thumbnails, the masks and the fills are.
         @Suppress("UNUSED_PARAMETER") thumbnails: ThumbnailRepository,
         @Suppress("UNUSED_PARAMETER") masks: MaskCacheArea,
+        @Suppress("UNUSED_PARAMETER") fills: FillCacheArea,
     ): AppStorage = AppStorage(
         db = database,
         budget = budget,

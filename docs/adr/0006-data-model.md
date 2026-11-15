@@ -358,5 +358,13 @@ before); everything new is derived from it off the main thread.
   Server photos within each sync's header budget). The columns are **not** synced: no sync trigger watches them and no
   record carries them, so the backfill never marks a photo for sync; every device reads its own headers.
 - **Cost.** Grouping adds one pass over the rows next to `buildGridEntries` (it replaced the day-header pass), no
-  per-frame work beyond a derived month and a draw-phase offset. Numbers: see the PR (`LibraryScrollBenchmark`,
-  `LibraryMeasurementsTest`).
+  per-frame work beyond a derived month and a draw-phase offset. Header items cost composition, so: keys are built once
+  per entry, month/day/count labels are cached per `DateLabels`, the scroller's fade is read in the draw phase.
+  Measured on the **same** 10,000-file library (dates over seven years, `SyntheticExif.spread`), main vs W3/D:
+  - Home query (emulator, `LibraryMeasurementsTest`): 10k 146 -> 138 ms, 25k 694 -> 706 ms (W3/D changed neither the
+    statement nor its plan; it is linear in the rows read, ~28 us/row); time to the first grid frame at 25k
+    1865 -> 1715 ms; main-thread frames past their deadline 7.2 -> 8.0 % (10k), 13.4 -> 13.7 % (25k).
+  - Fling, Tab S9 Ultra, bench build, jank % (medians of two runs of five): main 18.4 (no profile) / 16.7 (profile);
+    W3/D month + day headers 21.5 / 15.6; month headers only 14.1 / 10.6; no headers (file-name sort) 8.9 / 8.0.
+    A library with a day header every row (a photo every 9 hours) is the worst case for day headers; the default
+    stays month + day as before. The one-day library of the first W3/D measurement was not comparable.

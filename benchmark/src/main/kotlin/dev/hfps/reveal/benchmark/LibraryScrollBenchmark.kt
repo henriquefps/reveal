@@ -8,6 +8,7 @@ import androidx.benchmark.macro.junit4.MacrobenchmarkRule
 import androidx.test.uiautomator.By
 import androidx.test.uiautomator.Until
 import dev.hfps.reveal.benchmark.BenchApp.flingLibrary
+import java.util.regex.Pattern
 import org.junit.BeforeClass
 import org.junit.Rule
 import org.junit.Test
@@ -27,10 +28,10 @@ class LibraryScrollBenchmark(private val compilation: CompilationMode, private v
      * How the grid is grouped while it flings (W3/D, the date headers' cost): [DAY] = month and day headers (the
      * default), [MONTH] = month headers only, [OFF] = sorted by file name, which has no headers at all.
      */
-    enum class Grouping(val menuLabel: String) {
-        DAY("Group by day"),
-        MONTH("Group by month"),
-        OFF("File name"),
+    enum class Grouping(val menuLabel: Regex) {
+        DAY(Regex("Group by day|Agrupar por dia")),
+        MONTH(Regex("Group by month|Agrupar por mês")),
+        OFF(Regex("File name|Nome do arquivo")),
     }
 
     @get:Rule
@@ -59,8 +60,9 @@ class LibraryScrollBenchmark(private val compilation: CompilationMode, private v
     /** The sort menu's item for [grouping] (the grouping persists across processes, the sort does not). */
     private fun chooseGrouping() {
         val device = BenchApp.device
-        device.wait(Until.findObject(By.desc("Sort")), MENU_WAIT_MS)?.click() ?: error("no sort menu")
-        device.wait(Until.findObject(By.text(grouping.menuLabel)), MENU_WAIT_MS)?.click()
+        device.wait(Until.findObject(By.desc(Pattern.compile("Sort|Ordenar"))), MENU_WAIT_MS)?.click()
+            ?: error("no sort menu")
+        device.wait(Until.findObject(By.text(grouping.menuLabel.toPattern())), MENU_WAIT_MS)?.click()
             ?: error("no '${grouping.menuLabel}'")
         Thread.sleep(SETTLE_MS)
     }

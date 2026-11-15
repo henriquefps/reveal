@@ -11,6 +11,16 @@ import org.junit.Test
 
 /** The app-wide open throttle and the busy-provider retry (ADR 0018 "W3/C", Hoard ADR 0010). */
 class FileOpensTest {
+    @org.junit.Before
+    fun fresh() = FileOpens.resetForTests()
+
+    @org.junit.After
+    fun noLeaks() {
+        val leaked = FileOpens.open
+        FileOpens.resetForTests()
+        assertThat(leaked).isEqualTo(0)
+    }
+
     private fun busy() = FileNotFoundException("busy: 8 hand-off reads in progress, retry")
 
     @Test

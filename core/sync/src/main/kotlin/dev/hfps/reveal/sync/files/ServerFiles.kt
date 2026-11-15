@@ -118,8 +118,8 @@ class ServerFiles(
     /**
      * Downloads the rest of [remote] in the background and keeps it as one file (ADR 0018 "W3/C"): an original opened
      * in the editor or the export then opens from this device, whole, as a plain file. One at a time; nothing when it
-     * is kept already or being kept, or when [KEEP_QUEUE] others already wait (a 500-photo export reads by range instead
-     * of queueing 500 downloads). The blocks are dropped once the file is complete.
+     * is kept already or being kept, or when [KEEP_QUEUE] others already wait (a 500-photo export reads by range
+     * instead of queueing 500 downloads). The blocks are dropped once the file is complete.
      */
     fun keep(fingerprint: String, remote: RemoteFile) {
         val key = fingerprint.removePrefix("v1:")
@@ -128,30 +128,30 @@ class ServerFiles(
     }
 
     private fun keepNow(key: String, remote: RemoteFile) {
-        run {
-            try {
-                val buffer = ByteArray(RangeCache.BLOCK.toInt())
-                var offset = 0L
-                while (offset < remote.size) {
-                    val n = remote.read(offset, minOf(RangeCache.BLOCK, remote.size - offset).toInt(), buffer)
-                    if (n <= 0) break
-                    offset += n
-                }
-                kept.mkdirs()
-                val temp = File(kept, "$key.tmp")
-                if (ranges.complete(key, remote.size) && ranges.assemble(key, remote.size, temp) &&
-                    temp.renameTo(File(kept, key))
-                ) {
-                    ranges.evict(listOf(key))
-                    onTrimmed()
-                }
-                temp.delete()
-            } catch (e: IOException) {
-                android.util.Log.i("RevealSyncFiles", "An original could not be kept: ${e.javaClass.simpleName}")
-            } finally {
-                keeping.remove(key)
+        try {
+            val buffer = ByteArray(RangeCache.BLOCK.toInt())
+            var offset = 0L
+            while (offset < remote.size) {
+                val n = remote.read(offset, minOf(RangeCache.BLOCK, remote.size - offset).toInt(), buffer)
+                if (n <= 0) break
+                offset += n
             }
+            assembleKept(key, remote.size)
+        } catch (e: IOException) {
+            android.util.Log.i("RevealSyncFiles", "An original could not be kept: ${e.javaClass.simpleName}")
+        } finally {
+            keeping.remove(key)
         }
+    }
+
+    private fun assembleKept(key: String, size: Long) {
+        kept.mkdirs()
+        val temp = File(kept, "$key.tmp")
+        if (ranges.complete(key, size) && ranges.assemble(key, size, temp) && temp.renameTo(File(kept, key))) {
+            ranges.evict(listOf(key))
+            onTrimmed()
+        }
+        temp.delete()
     }
 
     /**

@@ -1052,10 +1052,10 @@ Large library (W3/C, 0.9.0, ADR 0018 "W3/C", DB v14): **nothing reads files befo
 `MainActivity` reports it; the walk, `LibraryRepository.scheduleAccessCheck`, `SyncController` and the prefetch wait
 for it). Other apps' documents open through `FileOpens` (≤ 4 at once for background work, counted, `REVEAL_IO`
 opens/s); a `FileNotFoundException` starting with `busy:` (`PROVIDER_BUSY_PREFIX`, Hoard ADR 0010) is retried
-(`FileOpens.retryBusy`, 250 ms doubling to 4 s, ~30 s) and is never `isAccessError`. The access check is one paced
+(`FileOpens.gated`: 250 ms doubling to 4 s, ~30 s, the slot is released while waiting; the editor and the export count too via `FileOpens.openDocument`; waiting for a slot never gives up) and is never `isAccessError`. The access check is one paced
 background pass (skips files the server holds, `photo_files.checked_at` < 6 h, documents with a read grant:
 `readGrants`); never per grid query. Hand-offs whose main file the server holds become Server photos in place
-(`SyncStore.adoptHandoffs` after every sync: uuid, versions, culling, `handoff_at` kept; sidecar link dropped).
+(`SyncStore.adoptNext` after every sync, one photo per transaction, failures marked and skipped: uuid, versions, culling, `handoff_at` kept; only files the server holds move; sidecar link dropped; never deletable by server records or the NAS feed).
 Server headers come from the item lookup (`engine/ServerHeaders`), not range reads. Grid thumbnails of Server photos
 and hand-offs on the server: `ThumbnailRepository` asks `ServerThumbs` (optional binding) = `thumbs/LibraryThumbs`
 (`server_thumbs`, `no_backup/library-thumbs`, 384 px WebP q70, `CacheTier.LIBRARY` evicted last; batched lookup +

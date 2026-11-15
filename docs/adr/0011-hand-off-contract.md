@@ -498,4 +498,5 @@ Item limit 500; the tiebreak is the ordinal `deviceId`; Hoard learns Reveal's pa
 - **A hand-off the server holds becomes a Server photo** (`SyncStore.adoptHandoffs`): it keeps its identity, edits,
   culling and `handoff_at` ("Opened from other apps" lists Server photos with a hand-off time), and a later share of
   the same file opens it (a Server photo is reusable like a folder photo). Its sidecar link goes (no sidecar for server
-  items, "Amendment W3/H").
+  items, "Amendment W3/H"). Only the files the server holds move, and the photo never becomes deletable by the
+  server's records or the NAS feed (docs/adr/0018 "Hand-offs the server holds become Server photos").

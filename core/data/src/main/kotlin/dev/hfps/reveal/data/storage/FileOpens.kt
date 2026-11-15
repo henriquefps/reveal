@@ -59,7 +59,8 @@ object FileOpens {
     @Volatile
     var busyBackoffMs: LongArray = BUSY_BACKOFF_MS
 
-    private val slots = Semaphore(BACKGROUND_SLOTS, true)
+    @Volatile
+    private var slots = Semaphore(BACKGROUND_SLOTS, true)
     private val total = AtomicInteger()
     private val window = AtomicInteger()
     private val windowStart = AtomicLong(0)
@@ -87,6 +88,7 @@ object FileOpens {
      * while waiting** (the pause is not an open), and after the last retry the failure is a [ProviderBusyException],
      * which is never an access error. Blocking: call it from an IO thread.
      */
+    @Suppress("InstanceOfCheckForException")
     fun <T> gated(
         backoff: LongArray = busyBackoffMs,
         sleep: (Long) -> Unit = Thread::sleep,
@@ -94,18 +96,19 @@ object FileOpens {
     ): T {
         var attempt = 0
         while (true) {
-            slots.acquire()
+            val gate = slots
+            gate.acquire()
             val now = inFlight.incrementAndGet()
             peakInFlight.accumulateAndGet(now, ::maxOf)
             val released = java.util.concurrent.atomic.AtomicBoolean()
             val release = {
                 if (released.compareAndSet(false, true)) {
                     inFlight.decrementAndGet()
-                    slots.release()
+                    gate.release()
                 }
             }
-            count()
             try {
+                count()
                 return open(release)
             } catch (@Suppress("TooGenericExceptionCaught") e: Throwable) {
                 release()
@@ -141,10 +144,17 @@ object FileOpens {
             val last = window.getAndSet(0)
             if (last > 0) {
                 peak.accumulateAndGet(last, ::maxOf)
-                Log.i(TAG, "opens/s=$last total=${total.get()} open=${inFlight.get()}")
+                runCatching { Log.i(TAG, "opens/s=$last total=${total.get()} open=${inFlight.get()}") }
             }
         }
         window.incrementAndGet()
+    }
+
+    /** A fresh gate with every slot free (tests: nothing a test leaves behind may block the next). */
+    internal fun resetForTests() {
+        slots = Semaphore(BACKGROUND_SLOTS, true)
+        inFlight.set(0)
+        resetCounters()
     }
 
     /** Forgets the counters (tests). */

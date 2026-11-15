@@ -444,9 +444,12 @@ over through the debug provider, on the phone (0.8.0 debug build, 60 s on the fi
   frame; the folders' walk, the access check, the sync jobs (`SyncController`) and the thumbnail prefetch wait for it
   plus a short settle (2 s; 15 s without an activity).
 - **One app-wide throttle for other apps' files.** `FileOpens` (`:core:data/storage`): at most 4 documents of other
-  apps' providers open at once for background work (`HandoffTree` holds a slot until the input is closed; a slot
-  waited for longer than 30 s goes ahead, logged), every open counted, `REVEAL_IO` logs opens per second while any
-  happen.
+  apps' providers open at once, **never more** (Hoard's own limit is 6, contract 11). Everything that opens a
+  sender's document takes a slot until the input is closed: `HandoffTree` (thumbnails, checks, previews, uploads), the
+  editor's opener and the export (`FileOpens.openDocument`). A caller waits for a slot as long as it takes
+  (interruptible: a cancelled caller frees nothing it never held; there is no bypass after a timeout). A busy
+  answer's backoff **releases the slot** while it waits. Every open counted, `REVEAL_IO` logs opens per second while
+  any happen.
 - **A busy sender is waited out, never marked unreadable** (Hoard ADR 0010): a `FileNotFoundException` whose message
   starts exactly with `busy:` (`PROVIDER_BUSY_PREFIX`) is retried with 250 ms doubling to 4 s, giving up after about
   30 s as a transient failure (`ProviderBusyException`); `isAccessError` is false for it, so `unreadable_at` is never
@@ -477,6 +480,18 @@ A later share of the same file opens that Server photo (`HandoffRepository`: a S
 photo). The sidecar link goes with the move: a Server photo's culling rides the server and no sidecar is written for
 it (docs/adr/0011 "Amendment W3/H"), so the sender's URI is never opened again. The same call serves photos handed
 over by server reference (W3/H).
+
+Review fixes (PR #58): adoption is **per photo** (one transaction each, outside the sync's critical path: a failure
+is logged and the photo marked in `meta` `sync.adoptFailed.<id>`, skipped for 6 h, never blocking the others or the
+sync); only the files **the server holds** move (a RAW+JPEG hand-off with only the RAW backed up keeps its JPEG, and
+every file without a fingerprint, as it was); the same fingerprint and name twice gets a unique path
+(`handoff/<fp>/<fileId>/<name>`). Adoption never makes a hand-off deletable: a photo record deleted on the server
+only forgets the server's copies of an adopted photo (it stays with its edits and culling, its files read as
+unavailable until the user forgets it), the NAS feed leaves an adopted file row alone (a later rename or removal
+cannot empty the photo), and the empty-photo sweep spares every photo with `handoff_at`. A hand-off of a file already
+held by several Server photos opens the adopted or edited one first. A Server photo the item lookup missed stays
+`PENDING` (`meta` `sync.headerMiss.<id>`, asked again after 30 min), never `FAILED`. Whole-original downloads
+(`ServerFiles.keep`) run one at a time with at most 4 waiting; a bigger export reads the rest by range.
 
 ### Library thumbnails
 

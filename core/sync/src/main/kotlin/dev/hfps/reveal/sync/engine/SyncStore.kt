@@ -6,6 +6,7 @@ import androidx.room.withTransaction
 import dev.hfps.image.format.ImageFormats
 import dev.hfps.image.format.ImageKind
 import dev.hfps.reveal.data.db.ADOPT_FAILED_PREFIX
+import dev.hfps.reveal.data.db.FingerprintMatch
 import dev.hfps.reveal.data.db.HistoryCursorEntity
 import dev.hfps.reveal.data.db.HistoryEntity
 import dev.hfps.reveal.data.db.MetaEntity
@@ -827,16 +828,7 @@ class SyncStore(
         if (!type.isDisplayable) return
         // The same file on this device (a folder or a hand-off): it is "in the cloud", nothing to add.
         val local = photos.filesByFingerprint(listOf(fingerprint))
-        // A hand-off the server adopted keeps its own file row (and its photo): the feed never replaces it, so a later
-        // rename or removal on the NAS cannot empty the photo (adoption must not make a hand-off deletable).
-        val adopted = local.firstOrNull {
-            it.file.sourceId == source.id && it.file.relativePath.startsWith(ADOPTED_PREFIX)
-        }
-        if (adopted != null) {
-            sync.setOnServer(fingerprint, true)
-            if (isMainFile(adopted.file)) markOriginal(adopted.file.photoId, SOURCE_NAS)
-            return
-        }
+        if (keepAdopted(source, fingerprint, local)) return
         val elsewhere = local.firstOrNull { it.file.sourceId != source.id }
         if (elsewhere != null) {
             sync.setOnServer(fingerprint, true)
@@ -876,6 +868,19 @@ class SyncStore(
             sync.setServerFolder(photoId, folder)
         }
         markOriginal(photoId, SOURCE_NAS)
+    }
+
+    /**
+     * A hand-off the server adopted keeps its own file row (and its photo): the feed never replaces it, so a later
+     * rename or removal on the NAS cannot empty the photo (adoption must not make a hand-off deletable).
+     */
+    private suspend fun keepAdopted(source: SourceEntity, fingerprint: String, local: List<FingerprintMatch>): Boolean {
+        val adopted = local.firstOrNull {
+            it.file.sourceId == source.id && it.file.relativePath.startsWith(ADOPTED_PREFIX)
+        } ?: return false
+        sync.setOnServer(fingerprint, true)
+        if (isMainFile(adopted.file)) markOriginal(adopted.file.photoId, SOURCE_NAS)
+        return true
     }
 
     private suspend fun newNasPhoto(

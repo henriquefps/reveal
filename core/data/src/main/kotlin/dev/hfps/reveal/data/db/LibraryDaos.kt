@@ -343,7 +343,8 @@ interface PhotoDao {
     // ---- content fingerprints (ADR 0006 "Identity")
 
     @Query(
-        "SELECT f.*, s.kind AS source_kind, s.state AS source_state, p.hidden AS photo_hidden, (p.handoff_at IS NOT NULL OR p.has_edit = 1) AS photo_kept FROM photo_files f " +
+        "SELECT f.*, s.kind AS source_kind, s.state AS source_state, p.hidden AS photo_hidden, " +
+            "(p.handoff_at IS NOT NULL OR p.has_edit = 1) AS photo_kept FROM photo_files f " +
             "JOIN photos p ON p.id = f.photo_id JOIN sources s ON s.id = f.source_id " +
             "WHERE f.fingerprint IN (:fingerprints) ORDER BY f.id",
     )

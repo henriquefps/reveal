@@ -55,8 +55,8 @@ class HandoffTree(private val resolver: ContentResolver) : DocumentTree {
         }.getOrNull()
 
     /**
-     * Opens the document in one of [FileOpens]' app-wide slots (held until the input is closed), retrying (slot released while it waits) while its
-     * provider is busy ([PROVIDER_BUSY_PREFIX], Hoard ADR 0010): a sender never sees a burst of opens from Reveal.
+     * Opens the document in one of [FileOpens]' app-wide slots (held until the input is closed), retrying (the slot
+     * is released while it waits) while its provider is busy ([PROVIDER_BUSY_PREFIX], Hoard ADR 0010): a sender never sees a burst of opens from Reveal.
      */
     override fun openInput(documentId: String, name: String): ImageInput = FileOpens.gated { release ->
         val input = ImageInput.fromUri(resolver, documentId.toUri(), name)

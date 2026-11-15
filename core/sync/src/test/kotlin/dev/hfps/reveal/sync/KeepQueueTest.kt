@@ -9,22 +9,26 @@ import dev.hfps.reveal.data.db.RevealDatabase
 import dev.hfps.reveal.sync.files.RangeCache
 import dev.hfps.reveal.sync.files.RemoteFile
 import dev.hfps.reveal.sync.files.ServerFiles
-import java.nio.file.Files
 import java.util.concurrent.CountDownLatch
+import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.TemporaryFolder
 import org.junit.runner.RunWith
 
 /** Keeping whole originals is bounded: a big export does not queue hundreds of downloads (ADR 0018 "W3/C"). */
 @RunWith(AndroidJUnit4::class)
 class KeepQueueTest {
+    @get:Rule
+    val temp = TemporaryFolder()
+
     @Test
     fun `at most one download runs and a few wait, the rest of a 500-photo export is not queued`() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val db = RevealDatabase.configure(Room.inMemoryDatabaseBuilder(context, RevealDatabase::class.java))
             .allowMainThreadQueries().build()
-        val dir = Files.createTempDirectory("keep").toFile()
+        val dir = temp.newFolder()
         val files = ServerFiles(db, { null }, dir)
-        val cache = RangeCache(Files.createTempDirectory("ranges").toFile())
+        val cache = RangeCache(temp.newFolder())
         val gate = CountDownLatch(1)
         val started = CountDownLatch(1)
         repeat(500) { n ->

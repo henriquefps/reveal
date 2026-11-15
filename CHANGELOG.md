@@ -44,6 +44,9 @@ All notable changes to Reveal are documented here. The format follows
   fetched on Wi-Fi while the phone charges or is idle (Settings -> Storage -> "Keep thumbnails of the whole library", on
   by default; about 16 KB per photo, evicted last).
 - Settings -> Storage lists library thumbnails and kept originals as their own rows.
+- Server-reference hand-offs (W3/H): a photo the paired server holds opens from the server through Reveal's own
+  pairing, never through the sending app; not paired / another server / server not answering / photos not found each
+  get a clear sheet, and a batch that waited for a pairing opens after it.
 
 ### Changed
 - Hand-off contract (W3/H, docs/adr/0011 "Amendment W3/H"): photos the sender's paired server holds are handed over as

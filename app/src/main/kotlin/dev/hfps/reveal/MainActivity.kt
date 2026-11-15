@@ -3,6 +3,7 @@ package dev.hfps.reveal
 import android.content.Intent
 import android.graphics.Color
 import android.os.Bundle
+import android.util.Log
 import android.view.MotionEvent
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -10,6 +11,7 @@ import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
+import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -21,9 +23,13 @@ import androidx.navigation.NavDestination.Companion.hasRoute
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import dagger.hilt.android.AndroidEntryPoint
+import dev.hfps.reveal.data.handoff.HandoffBatches
 import dev.hfps.reveal.data.handoff.HandoffIntents
+import dev.hfps.reveal.data.handoff.HandoffNotice
 import dev.hfps.reveal.data.handoff.HandoffOutcome
 import dev.hfps.reveal.data.handoff.HandoffRepository
+import dev.hfps.reveal.data.handoff.HandoffRequest
+import dev.hfps.reveal.data.handoff.ServerIssue
 import dev.hfps.reveal.data.model.PhotoListCodec
 import dev.hfps.reveal.data.model.PhotoQuery
 import dev.hfps.reveal.data.preset.PresetFilesIo
@@ -37,13 +43,20 @@ import dev.hfps.reveal.feature.editor.navigateToEditor
 import dev.hfps.reveal.feature.editor.presets.PresetLinkHost
 import dev.hfps.reveal.feature.editor.presets.PresetLinkViewModel
 import dev.hfps.reveal.feature.editor.presets.PresetMessages
+import dev.hfps.reveal.feature.library.HandoffServerSheet
 import dev.hfps.reveal.feature.library.LibraryRoute
 import dev.hfps.reveal.feature.library.ViewerRoute
+import dev.hfps.reveal.feature.settings.SyncSettingsRoute
 import dev.hfps.reveal.input.PalmRejection
 import dev.hfps.reveal.navigation.RevealNavHost
+import dev.hfps.reveal.sync.SyncRepository
 import dev.hfps.reveal.theme.ThemeModeStore
 import javax.inject.Inject
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 
 @AndroidEntryPoint
@@ -56,6 +69,20 @@ class MainActivity : ComponentActivity() {
 
     @Inject
     lateinit var presets: PresetRepository
+
+    @Inject
+    lateinit var sync: SyncRepository
+
+    @Inject
+    lateinit var batches: HandoffBatches
+
+    /** What a hand-off of server references could not do (docs/adr/0011 "Amendment W3/H"), until dismissed. */
+    private val serverNotice = MutableStateFlow<ServerNotice?>(null)
+
+    /** The outcome whose notices were already reported (merged with its batch's): [show] skips them. */
+    private var noticeShown: HandoffOutcome? = null
+
+    private data class ServerNotice(val issue: ServerIssue?, val notFound: Int)
 
     /** What the last hand-off from another app (ADR 0011) resolved to, until navigated to. */
     private val openRequest = MutableStateFlow<HandoffOutcome?>(null)
@@ -73,6 +100,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         // A recreated activity restores its back stack; only a fresh launch handles its intent.
         if (savedInstanceState == null) handleIntent(intent)
+        watchServer()
         openedFromIntent = savedInstanceState?.getBoolean(KEY_FROM_INTENT) ?: openedFromIntent
         // Bulk background work (indexing, access checks, sync, the thumbnail prefetch) waits for the first frame
         // (ADR 0018 "W3/C": nothing reads files before it).
@@ -114,13 +142,62 @@ class MainActivity : ComponentActivity() {
                     },
                 )
                 PresetLinkHost(presetLink)
+                ServerNoticeHost(navController)
             }
+        }
+    }
+
+    /** The notice of a hand-off of server references (docs/adr/0011 "Amendment W3/H"), until dismissed. */
+    @Composable
+    private fun ServerNoticeHost(navController: NavController) {
+        val notice by serverNotice.collectAsStateWithLifecycle()
+        notice?.let { shown ->
+            HandoffServerSheet(
+                issue = shown.issue,
+                notFound = shown.notFound,
+                onPair = {
+                    // The batch stays kept: pairing with that server opens it (watchServer).
+                    serverNotice.value = null
+                    navController.navigate(SyncSettingsRoute)
+                },
+                onDismiss = {
+                    serverNotice.value = null
+                    if (shown.issue is ServerIssue.NotPaired) lifecycleScope.launch { handoffs.dropPending() }
+                },
+            )
+        }
+    }
+
+    /**
+     * After pairing, the batch that waited for it opens; after a sync, photos opened while the server was not answering
+     * fill in (docs/adr/0011 "Amendment W3/H").
+     */
+    private fun watchServer() {
+        // A member that finished after the batch's notice was shown: its own notice, once.
+        lifecycleScope.launch { batches.lateNotices.collect { notify(it.issue, it.notFound) } }
+        lifecycleScope.launch {
+            sync.account.filterNotNull().collect { account ->
+                handoffs.resumePending(account.serverId)?.let { outcome ->
+                    openedFromIntent = outcome is HandoffOutcome.OpenEditor && outcome.closeOnBack
+                    openRequest.value = outcome
+                }
+            }
+        }
+        lifecycleScope.launch {
+            sync.status.map { it.lastSyncAt }.distinctUntilChanged().collect { handoffs.retryUnreachable() }
         }
     }
 
     /** Navigates to what a hand-off resolved to (ADR 0011). */
     private fun show(navController: NavController, outcome: HandoffOutcome) {
+        // A hand-off of an intent already reported its notices with the rest of its batch (noticeShown).
+        if (outcome !== noticeShown) {
+            val notice = noticeOf(outcome)
+            notify(notice.issue, notice.notFound)
+        }
         when (outcome) {
+            is HandoffOutcome.ServerRefs -> Unit
+
             is HandoffOutcome.OpenEditor -> {
                 if (outcome.libraryBehind) {
                     navController.navigate(LibraryRoute(fromApps = true)) {
@@ -144,6 +221,17 @@ class MainActivity : ComponentActivity() {
 
             HandoffOutcome.Nothing -> Toast.makeText(this, R.string.handoff_unreadable, Toast.LENGTH_LONG).show()
         }
+    }
+
+    private fun noticeOf(outcome: HandoffOutcome) = when (outcome) {
+        is HandoffOutcome.OpenEditor -> HandoffNotice(outcome.notFound, outcome.issue)
+        is HandoffOutcome.OpenLibrary -> HandoffNotice(outcome.notFound, outcome.issue)
+        is HandoffOutcome.ServerRefs -> HandoffNotice(outcome.notFound, outcome.issue)
+        else -> HandoffNotice()
+    }
+
+    private fun notify(issue: ServerIssue?, notFound: Int) {
+        if (issue != null || notFound > 0) serverNotice.value = ServerNotice(issue, notFound)
     }
 
     override fun dispatchTouchEvent(event: MotionEvent): Boolean {
@@ -183,13 +271,58 @@ class MainActivity : ComponentActivity() {
             presetLink.offer(link)
             return
         }
-        val request = HandoffIntents.parse(intent) ?: return
+        val parsed = HandoffIntents.parse(intent) ?: return
+        // Several intents of one sender and title are one batch (docs/adr/0011 "Batches over 500").
+        val key = HandoffBatches.key(referrer?.host, parsed.title, marked = parsed.batchIndex != null)
+        // The intents above the first of a split batch (`BATCH_INDEX` > 0) ingest and leave at once: never decided by
+        // the task (Hoard starts Reveal into its own task, so `isTaskRoot` is false for an ordinary hand-off too).
+        val silentMember = parsed.silentMember
         lifecycleScope.launch {
-            val outcome = handoffs.receive(request)
+            val join = key?.let { batches.join(it, parsed.batchCount) }
+            val request = parsed.copy(batchAt = join?.at)
+            val outcome = receive(request)
+            if (key != null) batches.touch(key)
+            if (silentMember) {
+                // Its notices wait for the intent that shows the batch: one sheet for all (ADR 0011).
+                if (key != null) batches.report(key, noticeOf(outcome))
+                finish()
+                @Suppress("DEPRECATION")
+                overridePendingTransition(0, 0)
+                return@launch
+            }
+            // The notices of the whole batch (every member's, summed), shown once with this intent's outcome.
+            val notice = batches.takeNotices(key, noticeOf(outcome))
+            // The batch's other members were ingested before this one: the library is behind the editor.
+            val shown = if (join?.follower == true && outcome is HandoffOutcome.OpenEditor && outcome.closeOnBack) {
+                outcome.copy(closeOnBack = false, libraryBehind = true)
+            } else {
+                outcome
+            }
+            noticeShown = shown
+            notify(notice.issue, notice.notFound)
             // A single photo opened in the editor: leaving it returns to the calling app.
-            openedFromIntent = outcome is HandoffOutcome.OpenUri ||
-                (outcome is HandoffOutcome.OpenEditor && outcome.closeOnBack)
-            openRequest.value = outcome
+            openedFromIntent = shown is HandoffOutcome.OpenUri ||
+                (shown is HandoffOutcome.OpenEditor && shown.closeOnBack)
+            openRequest.value = shown
+        }
+    }
+
+    /** A hand-off that fails (a malformed server answer, a provider error) never crashes the app: a notice instead. */
+    private suspend fun receive(request: HandoffRequest): HandoffOutcome = try {
+        handoffs.receive(request)
+    } catch (e: CancellationException) {
+        throw e
+    } catch (
+        @Suppress("TooGenericExceptionCaught") e: Exception,
+    ) {
+        Log.w("RevealHandoff", "hand-off failed", e)
+        val refs = request.server
+        if (refs !=
+            null
+        ) {
+            HandoffOutcome.ServerRefs(ServerIssue.Unreachable(refs.items.size))
+        } else {
+            HandoffOutcome.Nothing
         }
     }
 

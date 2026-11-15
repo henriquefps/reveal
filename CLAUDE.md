@@ -297,6 +297,41 @@ DB v5: `photos.uuid` / `versions.uuid` (stable sync ids, manual `MIGRATION_4_5`;
 `addMigrations(*RevealDatabase.MIGRATIONS)`). Instrumented: `dev.hfps.reveal.handoff.HandoffFlowTest` (same command
 shape as the library tests).
 
+Server references (W3/H, ADR 0011 "Amendment W3/H"): photos the sender's paired hoard-server holds come as
+`SERVER_REF_VERSION`/`SERVER_ID`/`SERVER_ITEMS`/`INITIAL_ITEM` (`HandoffIntents.parse` -> `HandoffRequest.server:
+ServerRefs`, at most 500 items, malformed items skipped one by one; `serverExtras` is the sender's builder). No URI is
+involved and **nothing is ever read through the sender**. `:core:data` `handoff/ServerItems` is what the repository
+asks of the server (`:core:sync` `handoff/SyncServerItems` binds it: `GET /v1/items/{id}`, `POST /v1/items/lookup`,
+`SyncRepository.pullCulling`); `handoff/ServerRefResolver` does the resolving: same server -> local photo by member
+fingerprint in any source (the item's mirrored members in `culling_files` win over a stale sender fingerprint), else
+a Server photo from the item (one `replacedBy` followed, unknown id -> lookup by fingerprint, 404/tombstone = counted
+in `notFound`), `handoff_at` + title so it lists in "Opened from other apps" (`FromApps` now includes Server photos),
+culling pulled on receipt. Not paired: batch kept in `meta` `handoff.pendingServerRefs`, `ServerIssue.NotPaired`, the
+sheet's Pair opens Sync settings, `MainActivity.watchServer` calls `HandoffRepository.resumePending(serverId)` once
+paired; another server: `ServerIssue.OtherServer(name)`, nothing kept; unreachable: placeholders from the intent's
+name + fingerprint, kept in `handoff.retryServerRefs`, refilled by `retryUnreachable` after a sync. Outcomes carry
+`notFound` and `issue` (`OpenEditor`/`OpenLibrary`/`ServerRefs`); the sheet is `feature/library/HandoffServerSheet.kt`.
+`CULLING_VERSION` 2: `*ModifiedAt` + `*Device` per field, judged by `CullingStamp` (time, then the ordinal device id:
+the one comparator) against what Reveal holds (`HandoffRepository.held`: own pending change, server record time,
+sidecar mtime); undated fields keep version 1's precedence. The record's author is not stored, so an equal-time tie
+with a pulled server value goes to the sender and the server's rule settles it at the push.
+
+Batches (ADR 0011 "Batches over 500"): `startActivities` intents carry `HandoffIntents.EXTRA_BATCH_INDEX`; only an index
+above 0 is a silent member (`HandoffRequest.silentMember`, never `isTaskRoot`: Hoard starts Reveal without
+`NEW_TASK`). `HandoffBatches` (`:core:data/handoff`) = shared stamp, `report`/`takeNotices` (the notices of every member
+shown once, `HandoffNotice`), `lateNotices`. The instrumented tests start Reveal from `HandoffHostActivity` (debug) like
+Hoard does.
+
+```sh
+./gradlew :core:data:testDebugUnitTest --tests '*ServerRefIntentsTest*' --tests '*HandoffServerRefsTest*' --tests '*CullingStampTest*' --tests '*HandoffBatchesTest*'
+./gradlew :core:sync:testDebugUnitTest --tests '*SyncServerItemsTest*'
+# against the real server: a NAS item, a backed-up item, a replacedBy item, culling pulled on receipt (needs docker; loopback)
+D=$(mktemp -d) && scripts/sync/local-server.sh start $D 3474 app/src/androidTest/assets/faces/studio-trio.jpg
+REVEAL_HANDOFF_DIR=$D REVEAL_HANDOFF_LINKS=$(for i in 1 2; do scripts/sync/local-server.sh pair $D; done | paste -sd,) \
+  ./gradlew --no-configuration-cache :core:sync:testDebugUnitTest --tests '*RealServerHandoffTest*'; scripts/sync/local-server.sh stop $D
+adb -s <serial> shell am instrument -w -e class dev.hfps.reveal.handoff.HandoffServerRefTest [-e syncLink "'$(scripts/sync/local-server.sh pair <work dir>)'"] dev.hfps.reveal.debug.test/androidx.test.runner.AndroidJUnitRunner
+```
+
 One photo across sources (ADR 0011, 0.5.1): a hand-off and a folder file of the same fingerprint are the folder's photo.
 Folder first: `HandoffRepository.store` opens it (`foreign`), sets `handoff_at`, applies the culling values
 (`applyFolderCulling`) and writes the folder sidecar (`SidecarSync`). Hand-off first: `LibraryRepository.mergeHandoffs`

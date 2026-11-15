@@ -213,6 +213,18 @@ class SyncApi(baseUrl: String, private val apiKey: String?, private val client: 
     private fun editUrl(itemId: String, versionId: String) = url("v1/items").newBuilder().addPathSegment(itemId)
         .addPathSegment("edits").addPathSegment(versionId).build()
 
+    /** `GET /v1/items/{itemId}` (Hoard ADR 0014): one item, a tombstone too; null when the server does not know it. */
+    fun item(itemId: String): ItemRecord? {
+        val request = authed(
+            Request.Builder().url(url("v1/items").newBuilder().addPathSegment(itemId).build())
+                .header("Accept", "application/json"),
+        )
+        return client.newCall(request.build()).execute().use { response ->
+            if (response.code == HTTP_NOT_FOUND) return null
+            parse(response, ItemRecord.serializer())
+        }
+    }
+
     // ------------------------------------------------------------------ culling (Hoard ADR 0016)
 
     /** The culling records changed since [cursor], from the items feed (`include=culling`: no items downloaded). */
@@ -853,6 +865,37 @@ data class ItemsLookupResponse(
     val items: List<ServerItem> = emptyList(),
     val matches: List<ItemMatch> = emptyList(),
     val missing: List<String> = emptyList(),
+)
+
+/** Where the server holds a file: `nas` (a folder path) or `backup` (an uploaded blob). */
+@Serializable
+data class ItemLocationRecord(val source: String = "", val folderName: String = "", val path: String = "")
+
+/** One member file of an item (Hoard ADR 0014). */
+@Serializable
+data class ItemFileRecord(
+    val fingerprint: String,
+    val role: String = "",
+    /** Absent for uploaded originals on hoard-server 0.9.0 (the field is optional in Hoard ADR 0014). */
+    val name: String = "",
+    /** Content format (`jpeg`, `heif`, `arw`, ...): the extension of a file that has no name. */
+    val format: String = "",
+    val size: Long = 0,
+    val locations: List<ItemLocationRecord> = emptyList(),
+)
+
+/** An item as `GET /v1/items/{itemId}` answers it, whole (tombstones carry only the ids and `replacedBy`). */
+@Serializable
+data class ItemRecord(
+    val id: String,
+    val deleted: Boolean = false,
+    val replacedBy: String? = null,
+    val mainFingerprint: String? = null,
+    val sortTime: Long = 0,
+    val width: Int? = null,
+    val height: Int? = null,
+    val orientation: Int = 1,
+    val files: List<ItemFileRecord> = emptyList(),
 )
 
 /** The headers of an edited preview's PUT. */

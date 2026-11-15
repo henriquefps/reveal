@@ -101,6 +101,9 @@ class FakeSyncServer : Dispatcher() {
     /** Culling records, items and device identity (hoard-server 0.7.0). */
     val culling = FakeCulling(serverId) { clock() }
 
+    /** `GET /v1/items/{id}` answers (Hoard ADR 0014), by item id; unknown ids are 404. */
+    val itemRecords = HashMap<String, kotlinx.serialization.json.JsonObject>()
+
     /** Edited previews (hoard-server 0.9.0). */
     val edits = FakeEdits(culling) { clock() }
 
@@ -132,6 +135,10 @@ class FakeSyncServer : Dispatcher() {
         deviceNames[id] = name
         return key
     }
+
+    /** How many culling pages were asked for (a hand-off's pull, a sync run's). */
+    @Volatile
+    var cullingPages = 0
 
     @Synchronized
     override fun dispatch(request: RecordedRequest): MockResponse {
@@ -223,6 +230,10 @@ class FakeSyncServer : Dispatcher() {
                 }
             }
 
+            method == "GET" && url.pathSegments.size == 3 && path.startsWith("/v1/items/") &&
+                path != "/v1/items/changes" && "items" in features ->
+                itemRecords[url.pathSegments[2]]?.let(::ok) ?: error(404, "not_found")
+
             path == "/v1/culling" && method == "POST" && "culling" in features ->
                 ok(culling.push(device, json.parseToJsonElement(request.body!!.utf8()).jsonObject))
 
@@ -237,6 +248,7 @@ class FakeSyncServer : Dispatcher() {
                         },
                     )
                 } else {
+                    cullingPages++
                     culling.page(url.queryParameter("cursor").orEmpty(), url.queryParameter("limit")?.toInt() ?: 500)
                         ?.let(::ok) ?: error(400, "invalid_cursor")
                 }

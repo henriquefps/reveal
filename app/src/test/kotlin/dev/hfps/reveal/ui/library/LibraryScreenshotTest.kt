@@ -35,6 +35,7 @@ import dev.hfps.reveal.data.db.FilterCounts
 import dev.hfps.reveal.data.db.LensCount
 import dev.hfps.reveal.data.db.PhotoRow
 import dev.hfps.reveal.data.edit.VersionInfo
+import dev.hfps.reveal.data.handoff.ServerIssue
 import dev.hfps.reveal.data.index.IndexPhase
 import dev.hfps.reveal.data.index.IndexProgress
 import dev.hfps.reveal.data.library.SourceItem
@@ -57,6 +58,7 @@ import dev.hfps.reveal.feature.library.DateGrouping
 import dev.hfps.reveal.feature.library.FilterSheetContent
 import dev.hfps.reveal.feature.library.GalleryAccessContent
 import dev.hfps.reveal.feature.library.GoToDateContent
+import dev.hfps.reveal.feature.library.HandoffServerContent
 import dev.hfps.reveal.feature.library.LibraryActions
 import dev.hfps.reveal.feature.library.LibraryContent
 import dev.hfps.reveal.feature.library.LibraryTags
@@ -455,6 +457,10 @@ abstract class LibraryScreenshotBase(private val device: String) {
         composeRule.onRoot().captureRoboImage("src/test/screenshots/library/${device}_$name.png")
     }
 
+    /** The server-reference hand-off notices (docs/adr/0011 "Amendment W3/H"): every state, phone and tablet. */
+    protected fun handoffServer(name: String, dark: Boolean, wide: Boolean, issue: ServerIssue?, notFound: Int = 0) =
+        sheet(name, dark, wide) { HandoffServerContent(issue, notFound, onPair = {}, onDismiss = {}) }
+
     protected fun filterSheet(name: String, dark: Boolean, wide: Boolean, paired: Boolean = true) =
         sheet(name, dark, wide) {
             FilterSheetContent(LibrarySamples.grid(LibrarySamples.combined, paired = paired), LibraryActions())
@@ -680,6 +686,22 @@ class PhoneLibraryScreenshotTest : LibraryScreenshotBase("phone") {
     /** Virtual copies as cells of their own, named; one copy selected (docs/adr/0025). */
     @Test fun copies() = shoot("home_copies_dark", dark = true, state = LibrarySamples.copies(selected = setOf(900L)))
 
+    @Test fun handoffServerNotPaired() =
+        handoffServer("handoff_server_not_paired_dark", true, false, ServerIssue.NotPaired(12))
+
+    @Test fun handoffServerOther() = handoffServer(
+        "handoff_server_other_light",
+        false,
+        false,
+        ServerIssue.OtherServer("Home NAS", 3),
+        notFound = 2,
+    )
+
+    @Test fun handoffServerUnreachable() =
+        handoffServer("handoff_server_unreachable_dark", true, false, ServerIssue.Unreachable(4))
+
+    @Test fun handoffServerMissing() = handoffServer("handoff_server_missing_light", false, false, null, notFound = 3)
+
     @Test fun versionsSheet() = versionsSheet("versions_sheet", wide = false)
 
     @Test fun datesDay() = shoot("library_dates_light", dark = false, state = LibrarySamples.dated())
@@ -722,6 +744,17 @@ class PhoneLibraryScreenshotTest : LibraryScreenshotBase("phone") {
 @Config(sdk = [35], qualifiers = "w1280dp-h800dp-hdpi")
 class TabletLibraryScreenshotTest : LibraryScreenshotBase("tablet") {
     @Test fun copies() = shoot("home_copies_light", dark = false, state = LibrarySamples.copies())
+
+    @Test fun handoffServerNotPaired() =
+        handoffServer("handoff_server_not_paired_dark", true, true, ServerIssue.NotPaired(12))
+
+    @Test fun handoffServerOther() = handoffServer(
+        "handoff_server_other_light",
+        false,
+        true,
+        ServerIssue.OtherServer("Home NAS", 3),
+        notFound = 2,
+    )
 
     @Test fun versionsSheet() = versionsSheet("versions_sheet", wide = true)
 

@@ -344,4 +344,18 @@
     <string name="library_filter_group_lens">Lens</string>
     <string name="library_date_range_title">Choose dates</string>
     <string name="library_date_range_apply">Apply</string>
+    <string name="handoff_server_title_not_paired">Open these photos from your server</string>
+    <string name="handoff_server_not_paired">These photos are on your Hoard server. Pair Reveal with it to open them.</string>
+    <string name="handoff_server_title_other">Another server</string>
+    <string name="handoff_server_other">Reveal is paired with another server, %1$s, and these photos are on a different one. Reveal does not switch servers by itself.</string>
+    <string name="handoff_server_title_unreachable">Server not answering</string>
+    <string name="handoff_server_unreachable">Reveal could not reach your server. The photos open from what Reveal has and fill in when the server answers.</string>
+    <string name="handoff_server_title_missing">Photos not found</string>
+    <string name="handoff_server_pair">Pair with the server</string>
+    <string name="handoff_server_cancel">Cancel</string>
+    <string name="handoff_server_ok">OK</string>
+    <plurals name="handoff_server_missing">
+        <item quantity="one">%1$d photo could not be found on the server.</item>
+        <item quantity="other">%1$d photos could not be found on the server.</item>
+    </plurals>
 </resources>

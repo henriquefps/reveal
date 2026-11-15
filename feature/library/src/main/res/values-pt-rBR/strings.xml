@@ -357,4 +357,19 @@
     <string name="library_filter_group_lens">Lente</string>
     <string name="library_date_range_title">Escolher datas</string>
     <string name="library_date_range_apply">Aplicar</string>
+    <string name="handoff_server_title_not_paired">Abrir estas fotos pelo seu servidor</string>
+    <string name="handoff_server_not_paired">Estas fotos estão no seu servidor Hoard. Pareie o Reveal com ele para abri-las.</string>
+    <string name="handoff_server_title_other">Outro servidor</string>
+    <string name="handoff_server_other">O Reveal está pareado com outro servidor, %1$s, e estas fotos estão em um diferente. O Reveal não troca de servidor sozinho.</string>
+    <string name="handoff_server_title_unreachable">Servidor sem resposta</string>
+    <string name="handoff_server_unreachable">O Reveal não conseguiu falar com o seu servidor. As fotos abrem com o que o Reveal já tem e se completam quando o servidor responder.</string>
+    <string name="handoff_server_title_missing">Fotos não encontradas</string>
+    <string name="handoff_server_pair">Parear com o servidor</string>
+    <string name="handoff_server_cancel">Cancelar</string>
+    <string name="handoff_server_ok">OK</string>
+    <plurals name="handoff_server_missing">
+        <item quantity="one">%1$d foto não foi encontrada no servidor.</item>
+        <item quantity="many">%1$d fotos não foram encontradas no servidor.</item>
+        <item quantity="other">%1$d fotos não foram encontradas no servidor.</item>
+    </plurals>
 </resources>

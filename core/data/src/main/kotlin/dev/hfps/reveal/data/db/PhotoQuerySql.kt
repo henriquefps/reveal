@@ -244,7 +244,7 @@ object PhotoQuerySql {
                 Clause("p.source_id IN (" + ids.joinToString(", ") { "?" } + ")", ids)
             },
             // Every photo another app handed over: hand-off photos, and folder photos a hand-off opened or merged
-            // into (ADR 0011 "One photo across sources"); the Server source never.
+            // into (ADR 0011 "One photo across sources").
             // A Server photo with a hand-off time is a hand-off the Server source adopted (ADR 0018 "W3/C").
             Clause("p.handoff_at IS NOT NULL").takeIf { SourceFilter.FromApps in sources },
             Clause(SERVER_SOURCE_SQL).takeIf { SourceFilter.ServerOnly in sources },

@@ -146,7 +146,9 @@ class ExportEngine(
         if (!options.format.rendered) return copyOriginal(item, options, cancel, progress, onPartial)
         val input = try {
             // A busy sender (Hoard ADR 0010) is waited out with the bounded backoff (ADR 0018 "W3/C").
-            FileOpens.retryBusy { ImageInput.fromUri(context.contentResolver, item.uri, item.name) }
+            FileOpens.openDocument(item.uri, context.packageName) {
+                ImageInput.fromUri(context.contentResolver, item.uri, item.name)
+            }
         } catch (e: IllegalArgumentException) {
             // The provider refused the URI while opening it (ADR 0011): it no longer serves it.
             throw ExportException(ExportFailure.SOURCE_MISSING, e)

@@ -138,7 +138,7 @@ class PhotoOpener(
     @Suppress("TooGenericExceptionCaught")
     private fun openInput(uri: Uri, name: String): ImageInput = try {
         // A busy sender (Hoard ADR 0010, `busy:`) is waited out with the bounded backoff, never "permission lost".
-        FileOpens.retryBusy { ImageInput.fromUri(resolver, uri, name) }
+        FileOpens.openDocument(uri, copies?.second.orEmpty()) { ImageInput.fromUri(resolver, uri, name) }
     } catch (e: IllegalArgumentException) {
         // Thrown by the provider while opening: it no longer serves the URI.
         throw OpenException(OpenError.PERMISSION_LOST, e)

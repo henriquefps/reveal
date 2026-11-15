@@ -3,8 +3,8 @@ package dev.hfps.reveal.data.storage
 import android.util.Log
 import java.io.FileNotFoundException
 import java.io.IOException
+import dev.hfps.image.ImageInput
 import java.util.concurrent.Semaphore
-import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 
@@ -40,15 +40,14 @@ private const val MAX_CAUSES = 8
  * at most [BACKGROUND_SLOTS] open at once app-wide (hand-off documents held by the thumbnail loader, the access checks,
  * the hand-off previewer, sync's uploads), so a large library never bursts a provider: each open of an SMB-backed
  * hand-off costs the sender an `openProxyFileDescriptor` (appfuse, through vold), and dozens per second stalled the
- * storage service and restarted system_server (2026-11-15). A slot is held until the input is closed; a caller that
- * waits longer than [SLOT_WAIT_MS] goes ahead anyway (logged) rather than dead-lock on a leaked input.
+ * storage service and restarted system_server (2026-11-15). A slot is held until the input is closed; a caller waits
+ * for one (interruptibly), never goes ahead.
  *
  * Every open through it is counted ([opens]); [log] writes `REVEAL_IO` lines with the opens of the last second while
  * any happen (measurements: opens per second at start).
  */
 object FileOpens {
     const val BACKGROUND_SLOTS = 4
-    const val SLOT_WAIT_MS = 30_000L
 
     /**
      * Backoff of [retryBusy] (Hoard ADR 0010's client rule): 250 ms doubling to 4 s, giving up after about 30 s in all
@@ -80,46 +79,58 @@ object FileOpens {
 
     /**
      * Opens through [open] in one of the app-wide slots; the slot is released by [release] (pass it to the input's
-     * `onClose`), or at once when [open] throws.
+     * `onClose`), or at once when [open] throws. Never more than [BACKGROUND_SLOTS] at once (Hoard's own limit is 6,
+     * contract 11): a caller waits for a slot as long as it takes, and the wait is interruptible (cancel the thread,
+     * for example with `runInterruptible`), so a cancelled caller never pins one.
+     *
+     * A busy provider ([isProviderBusy], Hoard ADR 0010) is retried after each of [backoff]; the slot is **released
+     * while waiting** (the pause is not an open), and after the last retry the failure is a [ProviderBusyException],
+     * which is never an access error. Blocking: call it from an IO thread.
      */
-    fun <T> gated(open: (release: () -> Unit) -> T): T {
-        val acquired = slots.tryAcquire(SLOT_WAIT_MS, TimeUnit.MILLISECONDS)
-        if (!acquired) Log.w(TAG, "an open waited ${SLOT_WAIT_MS / MILLIS} s for a slot; going ahead")
-        val now = inFlight.incrementAndGet()
-        peakInFlight.accumulateAndGet(now, ::maxOf)
-        val released = java.util.concurrent.atomic.AtomicBoolean()
-        val release = {
-            if (released.compareAndSet(false, true)) {
-                inFlight.decrementAndGet()
-                if (acquired) slots.release()
+    fun <T> gated(
+        backoff: LongArray = busyBackoffMs,
+        sleep: (Long) -> Unit = Thread::sleep,
+        open: (release: () -> Unit) -> T,
+    ): T {
+        var attempt = 0
+        while (true) {
+            slots.acquire()
+            val now = inFlight.incrementAndGet()
+            peakInFlight.accumulateAndGet(now, ::maxOf)
+            val released = java.util.concurrent.atomic.AtomicBoolean()
+            val release = {
+                if (released.compareAndSet(false, true)) {
+                    inFlight.decrementAndGet()
+                    slots.release()
+                }
             }
-        }
-        count()
-        return try {
-            open(release)
-        } catch (@Suppress("TooGenericExceptionCaught") e: Throwable) {
-            release()
-            throw e
+            count()
+            try {
+                return open(release)
+            } catch (@Suppress("TooGenericExceptionCaught") e: Throwable) {
+                release()
+                if (e !is Exception || !isProviderBusy(e)) throw e
+                if (attempt >= backoff.size) throw ProviderBusyException(e)
+            }
+            sleep(backoff[attempt++])
         }
     }
 
     /**
-     * Runs [open] again while it fails with a busy provider ([isProviderBusy]), after each of [backoff] (blocking: call
-     * it from an IO thread); when the provider is still busy, throws [ProviderBusyException], which is never an access
-     * error, so nothing is marked unreadable.
+     * Opens a document of [uri] for the editor, the export or any other reader: another app's provider (Hoard,
+     * [LocalCopies.isForeign]) goes through [gated] like the background work, so every open of a sender's files in
+     * the app shares the one cap; anything else (Reveal's own providers, MediaStore, files) is opened as it is.
+     * The returned input holds its slot until closed.
      */
-    fun <T> retryBusy(backoff: LongArray = busyBackoffMs, sleep: (Long) -> Unit = Thread::sleep, open: () -> T): T {
-        var attempt = 0
-        while (true) {
-            try {
-                return open()
-            } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
-                if (!isProviderBusy(e)) throw e
-                if (attempt >= backoff.size) throw ProviderBusyException(e)
-                sleep(backoff[attempt++])
+    fun openDocument(uri: android.net.Uri, ownPackage: String, open: () -> ImageInput): ImageInput =
+        if (!LocalCopies.isForeign(uri, ownPackage) || uri.authority == MEDIA_AUTHORITY) {
+            open()
+        } else {
+            gated { release ->
+                val input = open()
+                ImageInput(input.name, input.descriptor, release)
             }
         }
-    }
 
     /** Counts one open (also for opens that need no slot, such as a folder's thumbnail). */
     fun count() {
@@ -145,6 +156,7 @@ object FileOpens {
     }
 
     private const val TAG = "REVEAL_IO"
+    private const val MEDIA_AUTHORITY = "media"
     private const val MILLIS = 1_000L
     private const val NANOS_PER_MS = 1_000_000L
 }

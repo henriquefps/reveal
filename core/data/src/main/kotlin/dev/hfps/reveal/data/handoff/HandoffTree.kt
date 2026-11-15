@@ -55,11 +55,11 @@ class HandoffTree(private val resolver: ContentResolver) : DocumentTree {
         }.getOrNull()
 
     /**
-     * Opens the document in one of [FileOpens]' app-wide slots (held until the input is closed), retrying while its
+     * Opens the document in one of [FileOpens]' app-wide slots (held until the input is closed), retrying (slot released while it waits) while its
      * provider is busy ([PROVIDER_BUSY_PREFIX], Hoard ADR 0010): a sender never sees a burst of opens from Reveal.
      */
     override fun openInput(documentId: String, name: String): ImageInput = FileOpens.gated { release ->
-        val input = FileOpens.retryBusy { ImageInput.fromUri(resolver, documentId.toUri(), name) }
+        val input = ImageInput.fromUri(resolver, documentId.toUri(), name)
         ImageInput(input.name, input.descriptor, release)
     }
 
@@ -72,9 +72,7 @@ class HandoffTree(private val resolver: ContentResolver) : DocumentTree {
     }
 
     private fun readBytesNow(documentId: String, maxBytes: Int): ByteArray {
-        val stream = FileOpens.retryBusy {
-            resolver.openInputStream(documentId.toUri()) ?: throw FileNotFoundException(documentId)
-        }
+        val stream = resolver.openInputStream(documentId.toUri()) ?: throw FileNotFoundException(documentId)
         return stream.use { input ->
             val bytes = input.readNBytesCompat(maxBytes + 1)
             if (bytes.size > maxBytes) throw IOException("Document $documentId is larger than $maxBytes bytes")

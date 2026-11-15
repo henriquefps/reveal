@@ -410,7 +410,10 @@ class HandoffServerRefsTest {
         serve(item(1), item(2), item(3))
         assertThat(repo.retryUnreachable()).isTrue()
         assertThat(rows().map { it.name }).containsExactly(
-            "DSC00001.ARW", "DSC00002.ARW", "DSC00003.ARW", "DSC00004.ARW",
+            "DSC00001.ARW",
+            "DSC00002.ARW",
+            "DSC00003.ARW",
+            "DSC00004.ARW",
         )
         assertThat(db.photoDao().files(rows().first { it.name == "DSC00001.ARW" }.id).single().onServer).isTrue()
         assertThat(repo.retryUnreachable()).isFalse() // nothing waits any more

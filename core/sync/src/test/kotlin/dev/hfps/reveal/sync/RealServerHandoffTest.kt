@@ -59,7 +59,10 @@ class RealServerHandoffTest {
     private var device: TestDevice? = null
 
     @Before
-    fun setUp() = assumeTrue("needs REVEAL_HANDOFF_DIR and two REVEAL_HANDOFF_LINKS", !dir.isNullOrBlank() && links.size >= 2)
+    fun setUp() = assumeTrue(
+        "needs REVEAL_HANDOFF_DIR and two REVEAL_HANDOFF_LINKS",
+        !dir.isNullOrBlank() && links.size >= 2,
+    )
 
     @After
     fun tearDown() {
@@ -120,12 +123,25 @@ class RealServerHandoffTest {
     @Test
     fun aNasItemABackedUpItemAndAReplacedItemResolve_withTheCullingOfTheServer() {
         val reveal = checkNotNull(PairingLink.parse(links[0])).let {
-            val paired = SyncApi(it.url, null).pair(PairRequest(it.token, "Reveal (test)", "android", "test", "reveal", model.manufacturer, model.model))
-            TestDevice("Reveal", it.url, paired.apiKey, paired.serverId, now = System.currentTimeMillis(), device = model)
+            val paired = SyncApi(
+                it.url,
+                null,
+            ).pair(PairRequest(it.token, "Reveal (test)", "android", "test", "reveal", model.manufacturer, model.model))
+            TestDevice(
+                "Reveal",
+                it.url,
+                paired.apiKey,
+                paired.serverId,
+                now = System.currentTimeMillis(),
+                device = model,
+            )
                 .also { d -> device = d }
         }
         val hoard = checkNotNull(PairingLink.parse(links[1])).let {
-            SyncApi(it.url, null).pair(PairRequest(it.token, "Hoard (test)", "android", "test", "hoard", "samsung", "SM-X916B"))
+            SyncApi(
+                it.url,
+                null,
+            ).pair(PairRequest(it.token, "Hoard (test)", "android", "test", "hoard", "samsung", "SM-X916B"))
                 .let { paired -> SyncApi(it.url, paired.apiKey) }
         }
         val serverId = reveal.api.server().serverId
@@ -192,7 +208,10 @@ class RealServerHandoffTest {
         outcome as HandoffOutcome.OpenEditor
         assertThat(outcome.notFound).isEqualTo(0)
         assertThat(outcome.issue).isNull()
-        val rows = runBlocking { reveal.db.photoDao().rows(dev.hfps.reveal.data.db.PhotoQuerySql.toQuery(PhotoQuery.FROM_APPS)) }
+        val rows =
+            runBlocking {
+                reveal.db.photoDao().rows(dev.hfps.reveal.data.db.PhotoQuerySql.toQuery(PhotoQuery.FROM_APPS))
+            }
         assertThat(rows).hasSize(3)
         assertThat(rows.map { it.handoffTitle }.distinct()).containsExactly("Real server")
         // (c) the replaced JPEG item is the RAW's photo (named by the RAW), once.

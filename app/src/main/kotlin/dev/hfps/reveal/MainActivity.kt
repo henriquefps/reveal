@@ -24,11 +24,11 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import dagger.hilt.android.AndroidEntryPoint
 import dev.hfps.reveal.data.handoff.HandoffBatches
-import dev.hfps.reveal.data.handoff.HandoffNotice
-import dev.hfps.reveal.data.handoff.HandoffRequest
 import dev.hfps.reveal.data.handoff.HandoffIntents
+import dev.hfps.reveal.data.handoff.HandoffNotice
 import dev.hfps.reveal.data.handoff.HandoffOutcome
 import dev.hfps.reveal.data.handoff.HandoffRepository
+import dev.hfps.reveal.data.handoff.HandoffRequest
 import dev.hfps.reveal.data.handoff.ServerIssue
 import dev.hfps.reveal.data.model.PhotoListCodec
 import dev.hfps.reveal.data.model.PhotoQuery
@@ -317,7 +317,13 @@ class MainActivity : ComponentActivity() {
     ) {
         Log.w("RevealHandoff", "hand-off failed", e)
         val refs = request.server
-        if (refs != null) HandoffOutcome.ServerRefs(ServerIssue.Unreachable(refs.items.size)) else HandoffOutcome.Nothing
+        if (refs !=
+            null
+        ) {
+            HandoffOutcome.ServerRefs(ServerIssue.Unreachable(refs.items.size))
+        } else {
+            HandoffOutcome.Nothing
+        }
     }
 
     private companion object {

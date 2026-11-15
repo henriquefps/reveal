@@ -235,7 +235,9 @@ class HandoffServerRefTest {
     fun startActivitiesWithOneTitleIsOneBatchAndOneActivity() {
         val photos = (1..3).map { shared("$stem-$it.jpg", it) }
         fromAnotherApp(
-            sharedIntent(photos[0], 0, initial = true), sharedIntent(photos[1], 1), sharedIntent(photos[2], 2),
+            sharedIntent(photos[0], 0, initial = true),
+            sharedIntent(photos[1], 1),
+            sharedIntent(photos[2], 2),
         ) {
             compose.waitUntil(TIMEOUT_MS) { stemPhotos().size == 3 }
             val rows = stemPhotos()

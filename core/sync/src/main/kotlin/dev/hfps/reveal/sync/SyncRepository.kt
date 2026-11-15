@@ -339,40 +339,39 @@ class SyncRepository(
         }
     }
 
-    private suspend fun runLocked(account: SyncAccount, api: SyncApi): SyncReport? =
-        mutex.withLock {
-            // Unpaired (or paired again) while this run waited: its key and server are gone, do nothing.
-            if (accounts.account.value != account) return@withLock null
-            runtime.update { it.copy(running = true) }
-            try {
-                // Previews no longer needed stop being named before the push, so the blob run can drop them.
-                uploader.markDrops()
-                val report = engine.sync(api, account.serverId)
-                // After the push: the server keeps an original while a live record names it.
-                val deleted = uploader.deleteOriginals(api)
-                if (deleted > 0) Log.i(TAG, "deleted $deleted originals from the server")
-                // Neither of these may fail the sync (they are housekeeping after it): each guards itself.
-                val adopted = adoptHandoffs()
-                if (adopted > 0) Log.i(TAG, "$adopted hand-offs the server holds are Server photos now")
-                val headers = readServerHeaders(api)
-                Log.i(TAG, "sync: $report, $headers server headers")
-                runtime.update { it.copy(running = false, problem = null, lastSyncAt = engine.lastSync()) }
-                report
-            } catch (@Suppress("SwallowedException") e: ServerChangedException) {
-                Log.w(TAG, "The paired address answers as another server")
-                runtime.update { it.copy(running = false, problem = SyncProblem.SERVER_CHANGED) }
-                null
-            } catch (e: SyncHttpException) {
-                runtime.update { it.copy(running = false, problem = problemOf(e)) }
-                if (e.transient) throw e
-                null
-            } catch (e: IOException) {
-                runtime.update { it.copy(running = false, problem = SyncProblem.OFFLINE) }
-                throw e
-            } finally {
-                runtime.update { it.copy(running = false) }
-            }
+    private suspend fun runLocked(account: SyncAccount, api: SyncApi): SyncReport? = mutex.withLock {
+        // Unpaired (or paired again) while this run waited: its key and server are gone, do nothing.
+        if (accounts.account.value != account) return@withLock null
+        runtime.update { it.copy(running = true) }
+        try {
+            // Previews no longer needed stop being named before the push, so the blob run can drop them.
+            uploader.markDrops()
+            val report = engine.sync(api, account.serverId)
+            // After the push: the server keeps an original while a live record names it.
+            val deleted = uploader.deleteOriginals(api)
+            if (deleted > 0) Log.i(TAG, "deleted $deleted originals from the server")
+            // Neither of these may fail the sync (they are housekeeping after it): each guards itself.
+            val adopted = adoptHandoffs()
+            if (adopted > 0) Log.i(TAG, "$adopted hand-offs the server holds are Server photos now")
+            val headers = readServerHeaders(api)
+            Log.i(TAG, "sync: $report, $headers server headers")
+            runtime.update { it.copy(running = false, problem = null, lastSyncAt = engine.lastSync()) }
+            report
+        } catch (@Suppress("SwallowedException") e: ServerChangedException) {
+            Log.w(TAG, "The paired address answers as another server")
+            runtime.update { it.copy(running = false, problem = SyncProblem.SERVER_CHANGED) }
+            null
+        } catch (e: SyncHttpException) {
+            runtime.update { it.copy(running = false, problem = problemOf(e)) }
+            if (e.transient) throw e
+            null
+        } catch (e: IOException) {
+            runtime.update { it.copy(running = false, problem = SyncProblem.OFFLINE) }
+            throw e
+        } finally {
+            runtime.update { it.copy(running = false) }
         }
+    }
 
     /**
      * Blob work: smart previews (when on; on an [unmetered] network also a few made again in the current format),

@@ -21,10 +21,7 @@ import kotlinx.serialization.json.Json
  * The state is one record in `meta` (process death mid-cascade is fine): the batch's key, its stamp, when it was last
  * touched and the notices so far. A window of [WINDOW_MS] after the last touch keeps the batch open.
  */
-class HandoffBatches(
-    private val db: RevealDatabase,
-    private val clock: () -> Long = System::currentTimeMillis,
-) {
+class HandoffBatches(private val db: RevealDatabase, private val clock: () -> Long = System::currentTimeMillis) {
     /** [at]: the `handoff_at` of every photo of the batch; [follower]: an earlier intent of the batch came first. */
     class Join(val at: Long, val follower: Boolean)
 
@@ -106,7 +103,9 @@ class HandoffBatches(
             val state = load()?.takeIf { it.key == key }
             when {
                 state == null -> true
+
                 state.taken -> true
+
                 else -> {
                     save(state.plus(notice))
                     false
@@ -122,7 +121,16 @@ class HandoffBatches(
         return mutex.withLock {
             val state = load()?.takeIf { it.key == key } ?: return@withLock own
             val all = state.plus(own)
-            save(all.copy(taken = true, notFound = 0, notPaired = 0, otherServer = null, otherServerCount = 0, unreachable = 0))
+            save(
+                all.copy(
+                    taken = true,
+                    notFound = 0,
+                    notPaired = 0,
+                    otherServer = null,
+                    otherServerCount = 0,
+                    unreachable = 0,
+                ),
+            )
             all.notice()
         }
     }

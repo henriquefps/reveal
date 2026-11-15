@@ -203,8 +203,8 @@ class HandoffServerRefTest {
 
     /**
      * An ordinary multi-select hand-off (Hoard's browse "Edit in Reveal"): one intent with a title, several photos and
-     * no `INITIAL_URI`, started into the sender's task. It must not be taken for a silent member of a cascade: the batch
-     * shows (the activity stays), whatever the task says.
+     * no `INITIAL_URI`, started into the sender's task. It must not be taken for a silent member of a cascade: the
+     * batch shows (the activity stays), whatever the task says.
      */
     @Test
     fun anOrdinaryMultiSelectFromAnotherAppShowsTheBatch() {

@@ -406,7 +406,7 @@ object DataModule {
         previews,
         resolver = context.contentResolver,
         serverAuthority = ServerTree.authority(context.packageName),
-        copiesDir = File(context.cacheDir, LOCAL_COPIES_DIR).also(LocalCopies::sweep),
+        copiesDir = File(context.cacheDir, LOCAL_COPIES_DIR).also(LocalCopies::sweepAfterFirstFrame),
     )
 }
 

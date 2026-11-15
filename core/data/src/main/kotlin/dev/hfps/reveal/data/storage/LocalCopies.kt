@@ -6,6 +6,10 @@ import dev.hfps.image.ImageInput
 import java.io.File
 import java.io.FileInputStream
 import java.util.UUID
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 
 /**
  * Local copies of other apps' documents for readers that keep a file open for a long time (ADR 0018 "W3/C", Hoard's
@@ -51,9 +55,22 @@ object LocalCopies {
         }
     }
 
-    /** Leftovers of a process that died while a copy was open. */
-    fun sweep(dir: File) {
-        dir.listFiles()?.forEach { it.delete() }
+    /** Leftovers of a process that died while a copy was open: the files of [dir] last written before [before]. */
+    fun sweep(dir: File, before: Long = Long.MAX_VALUE) {
+        dir.listFiles()?.forEach { if (it.lastModified() < before) it.delete() }
+    }
+
+    /**
+     * [sweep] without touching the disk where it is called (a Hilt provider, possibly on the main thread before the
+     * first frame): it runs in the background once the app settled ([AppStart]), and spares the copies this process
+     * made meanwhile.
+     */
+    fun sweepAfterFirstFrame(dir: File) {
+        val started = System.currentTimeMillis()
+        CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
+            AppStart.awaitSettled()
+            sweep(dir, started)
+        }
     }
 
     private object Channels {

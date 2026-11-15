@@ -19,7 +19,49 @@ data class SyntheticExif(
     val orientation: Int = 1,
     val width: Int = 6000,
     val height: Int = 4000,
-)
+) {
+    companion object {
+        /** Three cameras the large synthetic libraries take turns with (W3/D: the Camera filter). */
+        val CAMERAS = listOf("SONY" to "ZV-E10", "NIKON CORPORATION" to "NIKON D5600", "Apple" to "iPhone 15 Pro")
+
+        /** Four lenses, in turn as well (the Lens filter). */
+        val LENSES = listOf(
+            "E PZ 16-50mm F3.5-5.6 OSS",
+            "FE 50mm F1.8",
+            "18.0-55.0 mm f/3.5-5.6",
+            "iPhone 15 Pro back camera",
+        )
+
+        /** Hours between two photos of [spread]: 7,000 photos cover about seven years (85 months). */
+        const val SPREAD_HOURS = 9L
+
+        /**
+         * Photo [index] of a large synthetic library (W3/D, `LibraryMeasurementsTest`, the bench library): one every
+         * [SPREAD_HOURS] hours back from 7 August 2026 18:00, the cameras and lenses in turn, so the grid has month
+         * and day headers and the Date, Camera and Lens filters select real subsets.
+         */
+        @Suppress("MagicNumber")
+        fun spread(index: Int): SyntheticExif {
+            val at = java.time.LocalDateTime.of(2026, 8, 7, 18, 0).minusHours(index * SPREAD_HOURS)
+            val (make, model) = CAMERAS[index % CAMERAS.size]
+            return SyntheticExif(
+                make = make,
+                model = model,
+                lens = LENSES[index % LENSES.size],
+                dateTime = String.format(
+                    java.util.Locale.ROOT,
+                    "%04d:%02d:%02d %02d:%02d:00",
+                    at.year,
+                    at.monthValue,
+                    at.dayOfMonth,
+                    at.hour,
+                    index % 60,
+                ),
+                subSecond = String.format(java.util.Locale.ROOT, "%03d", index * 37 % 1000),
+            )
+        }
+    }
+}
 
 /**
  * Synthetic camera files for tests and the debug document provider (no private photo, nothing downloaded): a

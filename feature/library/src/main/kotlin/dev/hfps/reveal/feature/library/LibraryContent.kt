@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.HorizontalDivider
@@ -26,9 +27,11 @@ import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -63,6 +66,7 @@ import dev.hfps.reveal.designsystem.icons.PhosphorFill
 import dev.hfps.reveal.designsystem.icons.PhosphorRegular
 import dev.hfps.reveal.designsystem.theme.RevealTheme
 import java.text.NumberFormat
+import kotlinx.coroutines.launch
 
 /**
  * Width from which the library's top bar shows search, sort and the sync status's text (`docs/plan/ux.md`); sheets
@@ -100,6 +104,15 @@ fun LibraryContent(
             PasteEditsSheet(copied, pasteGroups, state.selected.size, actions)
         }
         if (state.filtersOpen) FilterSheet(state, actions)
+        if (state.dateRangeOpen) {
+            DateRangeSheet(
+                onApply = { range ->
+                    actions.onDateRangeOpen(false)
+                    if (range !in state.filters.dates) actions.onFilters(state.filters.toggle(range))
+                },
+                onDismiss = { actions.onDateRangeOpen(false) },
+            )
+        }
         if (state.foldersOpen) ManageFoldersSheet(state, actions)
     }
 }
@@ -170,7 +183,7 @@ private fun LibraryTopBar(state: LibraryUiState, actions: LibraryActions, wide: 
                         contentDescription = stringResource(R.string.library_search),
                         onClick = { actions.onSearchOpen(true) },
                     )
-                    SortMenu(state.query, actions)
+                    SortMenu(state, actions)
                 }
                 RevealIconButton(
                     icon = PhosphorRegular.Gear,
@@ -223,7 +236,7 @@ private fun SyncStatus(badge: SyncBadge, wide: Boolean, onClick: () -> Unit) {
 }
 
 @Composable
-private fun SortMenu(query: PhotoQuery, actions: LibraryActions) {
+private fun SortMenu(state: LibraryUiState, actions: LibraryActions) {
     var open by remember { mutableStateOf(false) }
     Box {
         RevealIconButton(
@@ -234,14 +247,15 @@ private fun SortMenu(query: PhotoQuery, actions: LibraryActions) {
         DropdownMenu(open, {
             open = false
         }, containerColor = RevealTheme.colors.card, shape = RevealTheme.shapes.control) {
-            SortItems(query, actions) { open = false }
+            SortItems(state, actions) { open = false }
         }
     }
 }
 
-/** The three orders, the current one ticked. */
+/** The three orders, the current one ticked; in a date order, the grouping (W3/D) and "Go to date". */
 @Composable
-private fun SortItems(query: PhotoQuery, actions: LibraryActions, onDone: () -> Unit) {
+private fun SortItems(state: LibraryUiState, actions: LibraryActions, onDone: () -> Unit) {
+    val query = state.query
     listOf(
         PhotoSort.CAPTURE_NEWEST to R.string.library_sort_newest,
         PhotoSort.CAPTURE_OLDEST to R.string.library_sort_oldest,
@@ -250,6 +264,22 @@ private fun SortItems(query: PhotoQuery, actions: LibraryActions, onDone: () -> 
         MenuItem(if (query.sort == sort) PhosphorRegular.Check else null, stringResource(label)) {
             onDone()
             actions.onQuery(query.copy(sort = sort))
+        }
+    }
+    if (query.sort != PhotoSort.NAME) {
+        HorizontalDivider(color = RevealTheme.colors.hairline)
+        listOf(
+            Triple(DateGrouping.MONTH, R.string.library_group_by_month, LibraryTags.GROUP_BY_MONTH),
+            Triple(DateGrouping.DAY, R.string.library_group_by_day, LibraryTags.GROUP_BY_DAY),
+        ).forEach { (grouping, label, tag) ->
+            TaggedMenuItem(
+                if (state.grouping == grouping) PhosphorRegular.Check else PhosphorRegular.CalendarBlank,
+                stringResource(label),
+                tag,
+            ) {
+                onDone()
+                actions.onGrouping(grouping)
+            }
         }
     }
 }
@@ -276,8 +306,18 @@ private fun OverflowMenu(state: LibraryUiState, actions: LibraryActions, wide: B
                     open = false
                     actions.onSearchOpen(true)
                 }
-                SortItems(state.query, actions) { open = false }
+                SortItems(state, actions) { open = false }
                 HorizontalDivider(color = RevealTheme.colors.hairline)
+            }
+            if (home && state.dateIndex != null) {
+                TaggedMenuItem(
+                    PhosphorRegular.CalendarBlank,
+                    stringResource(R.string.library_go_to_date),
+                    LibraryTags.GO_TO_DATE,
+                ) {
+                    open = false
+                    actions.onDateJumpOpen(true)
+                }
             }
             MenuItem(PhosphorRegular.FolderPlus, stringResource(R.string.library_add_folder)) {
                 open = false
@@ -632,6 +672,8 @@ private fun GridPane(
     val banner = state.currentSource ?: state.sources.firstOrNull { it.indexing != null }.takeIf { !state.recent }
     // The start is drawn once the grid's first rows (or the empty state) show: Macrobenchmark's time to full display.
     ReportDrawnWhen { state.photosLoaded }
+    // Hoisted: "Go to date" scrolls it (W3/D).
+    val grid = rememberLazyGridState()
     Column(Modifier.fillMaxSize()) {
         banner?.let { SourceBanner(it) }
         if (!state.recent) FilterBar(state, actions)
@@ -647,10 +689,27 @@ private fun GridPane(
                     thumbnails = thumbnails,
                     onOpen = { row -> open(row, actions) },
                     onSelectionChange = actions.onSelectionChange,
+                    state = grid,
                     onDraw = onGridDraw,
+                    dateIndex = state.dateIndex,
+                    onMonthClick = { actions.onDateJumpOpen(true) },
                 )
             }
         }
+    }
+    val index = state.dateIndex
+    if (state.dateJumpOpen && index != null) {
+        val scope = rememberCoroutineScope()
+        GoToDateSheet(
+            index = index,
+            current = remember { derivedStateOf { index.monthAt(grid.firstVisibleItemIndex) } }.value,
+            labels = rememberDateLabels(),
+            onPick = { month ->
+                actions.onDateJumpOpen(false)
+                index.startOf(month)?.let { start -> scope.launch { grid.scrollToItem(start) } }
+            },
+            onDismiss = { actions.onDateJumpOpen(false) },
+        )
     }
 }
 

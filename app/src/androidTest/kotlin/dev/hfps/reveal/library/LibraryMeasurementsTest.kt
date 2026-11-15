@@ -11,14 +11,19 @@ import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import dev.hfps.reveal.MainActivity
+import dev.hfps.reveal.data.model.CameraFilter
 import dev.hfps.reveal.data.model.CullingFilter
+import dev.hfps.reveal.data.model.DateFilter
 import dev.hfps.reveal.data.model.EditFilter
+import dev.hfps.reveal.data.model.LensFilter
 import dev.hfps.reveal.data.model.PhotoFilters
 import dev.hfps.reveal.data.model.PhotoQuery
 import dev.hfps.reveal.data.model.SourceFilter
 import dev.hfps.reveal.data.model.SyncFilter
 import dev.hfps.reveal.data.model.TypeFilter
+import dev.hfps.reveal.data.synthetic.SyntheticExif
 import dev.hfps.reveal.feature.library.LibraryMetrics
+import java.time.LocalDate
 import java.util.Collections
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
@@ -48,11 +53,22 @@ class LibraryMeasurementsTest {
             folder.gradientJpeg(it, PREVIEW_WIDTH, PREVIEW_HEIGHT, PREVIEW_QUALITY)
         }
         val generated = System.nanoTime()
-        for (i in 0 until PAIRS) {
-            folder.pair("DSC%05d".format(i), i, previews[i % previews.size])
+        // `-e photos 25000` (W3/D): a bigger library of the same mix (3 pairs to 4 JPEGs).
+        val photos = InstrumentationRegistry.getArguments().getString("photos")?.toIntOrNull() ?: (PAIRS + JPEGS)
+        val pairs = photos * PAIRS / (PAIRS + JPEGS)
+        val jpegs = photos - pairs
+        for (i in 0 until pairs) {
+            folder.pair("DSC%05d".format(i), i, previews[i % previews.size], exif = SyntheticExif.spread(i))
             if (i % SIDECAR_EVERY == 0) folder.sidecar("DSC%05d".format(i), rating = i % 6, creatorTool = "Hoard 1.7.2")
         }
-        for (i in 0 until JPEGS) folder.jpeg("IMG_%05d.JPG".format(i), PAIRS + i, previews[i % previews.size])
+        for (i in 0 until jpegs) {
+            folder.jpeg(
+                "IMG_%05d.JPG".format(i),
+                pairs + i,
+                previews[i % previews.size],
+                exif = SyntheticExif.spread(pairs + i),
+            )
+        }
         val files = folder.dir.listFiles()!!.count { !it.name.endsWith(".xmp") }
         log("generated $files files (${folder.dir.walk().sumOf { it.length() } / 1_000_000} MB) in ${ms(generated)} ms")
 
@@ -139,7 +155,43 @@ class LibraryMeasurementsTest {
             thread.quitSafely()
             report(frames.map { it / 1_000_000.0 }.sorted(), refreshHz)
             reportPhases(phases.toList(), missed.get())
+            measureScrollerDrag(automation, width, height)
         }
+    }
+
+    /**
+     * The fast scroller over the 10,000-photo grid (W3/D): a short swipe shows it, then one `input swipe` drags its
+     * thumb from the top of the track to the bottom; every jump logs its time from the drag to the frame that shows it
+     * (`LibraryMetrics.jumpsMicros`), the frames during the drag go to the frame report.
+     */
+    private fun measureScrollerDrag(automation: UiAutomation, width: Int, height: Int) {
+        val x = width / 2
+        shell(automation, "input touchscreen swipe $x ${height / 2} $x ${height / 2 - SHOW_SWIPE_PX} $SWIPE_MS")
+        Thread.sleep(SHOW_WAIT_MS)
+        val track = LibraryMetrics.scrollerTrack ?: run {
+            log("scroller: never shown")
+            return
+        }
+        val thumbX = track[2] - THUMB_INSET_PX
+        val top = track[1] + THUMB_INSET_PX
+        val bottom = track[3] - THUMB_INSET_PX
+        LibraryMetrics.reset()
+        shell(automation, "input touchscreen swipe $thumbX $top $thumbX $bottom $SCROLLER_DRAG_MS")
+        Thread.sleep(SETTLE_MS)
+        val jumps = LibraryMetrics.jumpsMicros.sorted()
+        if (jumps.isEmpty()) {
+            log("scroller: no jump measured")
+            return
+        }
+        fun pct(p: Double) = "%.1f".format(jumps[((jumps.size - 1) * p).toInt()] / 1000.0)
+        log(
+            "scroller drag: ${jumps.size} jumps, to the frame showing it p50 ${pct(0.5)} ms, p90 ${pct(0.9)} ms, " +
+                "max ${pct(1.0)} ms",
+        )
+    }
+
+    private fun shell(automation: UiAutomation, command: String) {
+        ParcelFileDescriptor.AutoCloseInputStream(automation.executeShellCommand(command)).use { it.readBytes() }
     }
 
     /**
@@ -158,6 +210,20 @@ class LibraryMeasurementsTest {
             "apps|server" to PhotoFilters(sources = setOf(SourceFilter.FromApps, SourceFilter.ServerOnly)),
             "folder+jpeg+not edited" to PhotoFilters.folder(sourceId).toggle(TypeFilter.JPEG)
                 .toggle(EditFilter.NOT_EDITED),
+            // W3/D: Date presets and a range, on this day, Camera, Lens, combined.
+            "date: this year" to PhotoFilters(dates = setOf(DateFilter.ThisYear)),
+            "date: 2023" to PhotoFilters(
+                dates = setOf(DateFilter.Range(LocalDate.of(2023, 1, 1), LocalDate.of(2023, 12, 31))),
+            ),
+            "date: on this day" to PhotoFilters(dates = setOf(DateFilter.OnThisDay)),
+            "camera" to PhotoFilters(cameras = setOf(CameraFilter(CAMERAS[1].first, CAMERAS[1].second))),
+            "lens" to PhotoFilters(lenses = setOf(LensFilter(LENSES[2]))),
+            "camera+lens+2023+raw" to PhotoFilters(
+                cameras = setOf(CameraFilter(CAMERAS[0].first, CAMERAS[0].second)),
+                lenses = setOf(LensFilter(LENSES[0])),
+                dates = setOf(DateFilter.Range(LocalDate.of(2023, 1, 1), LocalDate.of(2023, 12, 31))),
+                types = setOf(TypeFilter.RAW),
+            ),
         )
         for ((name, filters) in combos) {
             var rows = 0
@@ -240,6 +306,12 @@ class LibraryMeasurementsTest {
         const val THUMBS_SETTLE_MS = 2_000L
         const val POLL_MS = 20L
         const val BETWEEN_FLINGS_MS = 700L
+        const val SHOW_SWIPE_PX = 200
+        const val SHOW_WAIT_MS = 300L
+        const val THUMB_INSET_PX = 40
+        const val SCROLLER_DRAG_MS = 2_000
+        val CAMERAS = SyntheticExif.CAMERAS
+        val LENSES = SyntheticExif.LENSES
         val PHASES = intArrayOf(
             FrameMetrics.UNKNOWN_DELAY_DURATION,
             FrameMetrics.INPUT_HANDLING_DURATION,

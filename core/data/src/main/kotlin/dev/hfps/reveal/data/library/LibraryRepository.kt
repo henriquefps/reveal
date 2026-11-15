@@ -8,7 +8,10 @@ import android.util.Log
 import androidx.core.net.toUri
 import dev.hfps.image.ImageInput
 import dev.hfps.image.format.PhotoMetadata
+import dev.hfps.reveal.data.db.CameraCount
+import dev.hfps.reveal.data.db.DateCounts
 import dev.hfps.reveal.data.db.FilterCounts
+import dev.hfps.reveal.data.db.LensCount
 import dev.hfps.reveal.data.db.MetaEntity
 import dev.hfps.reveal.data.db.PhotoEntity
 import dev.hfps.reveal.data.db.PhotoFileEntity
@@ -265,6 +268,16 @@ class LibraryRepository(
     /** Per-choice counts for the filter sheet (FIX/L). */
     fun filterCounts(): Flow<FilterCounts> =
         photoDao.observeFilterCounts().distinctUntilChanged().flowOn(Dispatchers.IO)
+
+    /** The cameras of the library with their counts (the Camera filter, W3/D). */
+    fun cameras(): Flow<List<CameraCount>> = photoDao.observeCameras().distinctUntilChanged().flowOn(Dispatchers.IO)
+
+    /** The lenses of the library with their counts (the Lens filter, W3/D). */
+    fun lenses(): Flow<List<LensCount>> = photoDao.observeLenses().distinctUntilChanged().flowOn(Dispatchers.IO)
+
+    /** How many cells each Date preset holds, relative to today (the Date filter, W3/D). */
+    fun dateCounts(): Flow<DateCounts> =
+        photoDao.observeDateCounts(PhotoQuerySql.dateCounts()).distinctUntilChanged().flowOn(Dispatchers.IO)
 
     fun photos(query: PhotoQuery): Flow<List<PhotoRow>> =
         photoDao.observeRows(PhotoQuerySql.toQuery(query)).map { withLocalPreviews(it, query) }.flowOn(Dispatchers.IO)
@@ -544,6 +557,25 @@ class LibraryRepository(
             }
             if (reindex && state == SourceState.AVAILABLE) index(source.id)
         }
+        backfillHandoffCameras()
+    }
+
+    /**
+     * The camera fields of hand-off photos read before W3/D (ADR 0006 "W3/D"), in the background: the hand-off source
+     * has no walk to hang it on. Folders do it after their fingerprints, Server photos within the sync's header budget.
+     */
+    private fun backfillHandoffCameras() {
+        scope.launch(Dispatchers.IO) {
+            try {
+                val source = sourceDao.handoff() ?: return@launch
+                val done = indexer.backfillCameras(source.id, trees.open(source))
+                if (done > 0) Log.i(TAG, "Read the camera of $done hand-off photos")
+            } catch (e: CancellationException) {
+                throw e
+            } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
+                Log.w(TAG, "Hand-off cameras stopped", e)
+            }
+        }
     }
 
     /**
@@ -623,9 +655,13 @@ class LibraryRepository(
         fingerprintJobs.remove(source.id)?.cancel()
         val job = scope.launch(Dispatchers.IO) {
             try {
-                val stored = indexer.fillFingerprints(source.id, trees.open(source))
+                val tree = trees.open(source)
+                val stored = indexer.fillFingerprints(source.id, tree)
                 if (stored > 0) Log.i(TAG, "Fingerprinted $stored files of source ${source.id}")
                 mergeHandoffs(source.id)
+                // Photos read before W3/D get their camera and lens (batched, cancelled by a new walk).
+                val cameras = indexer.backfillCameras(source.id, tree)
+                if (cameras > 0) Log.i(TAG, "Read the camera of $cameras photos of source ${source.id}")
             } catch (e: CancellationException) {
                 throw e
             } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
@@ -669,6 +705,13 @@ class LibraryRepository(
 
     suspend fun setLastFilters(filters: PhotoFilters) = withContext(Dispatchers.IO) {
         db.metaDao().put(MetaEntity(KEY_LAST_FILTERS, PhotoListCodec.encodeFilters(filters)))
+    }
+
+    /** The grid's date grouping (W3/D, `meta` `library.grouping`): `day` (the default) or `month`. */
+    suspend fun dateGrouping(): String? = withContext(Dispatchers.IO) { db.metaDao().get(KEY_GROUPING) }
+
+    suspend fun setDateGrouping(grouping: String) = withContext(Dispatchers.IO) {
+        db.metaDao().put(MetaEntity(KEY_GROUPING, grouping))
     }
 
     // ------------------------------------------------------------------ photos
@@ -937,6 +980,7 @@ class LibraryRepository(
         private const val TAG = "RevealLibrary"
         private const val KEY_LAST_SELECTION = "library.lastSelection"
         private const val KEY_LAST_FILTERS = "library.filters"
+        private const val KEY_GROUPING = "library.grouping"
         private const val SQL_ARGS = 900
         private const val RECHECK_MIN_MS = 30_000L
 

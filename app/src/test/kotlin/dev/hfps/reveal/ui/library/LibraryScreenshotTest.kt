@@ -15,24 +15,34 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.test.junit4.v2.createComposeRule
+import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onRoot
+import androidx.compose.ui.test.performScrollToIndex
+import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.github.takahirom.roborazzi.captureRoboImage
 import dev.hfps.image.format.ExifTime
+import dev.hfps.reveal.data.db.CameraCount
+import dev.hfps.reveal.data.db.DateCounts
 import dev.hfps.reveal.data.db.FilterCounts
+import dev.hfps.reveal.data.db.LensCount
 import dev.hfps.reveal.data.db.PhotoRow
 import dev.hfps.reveal.data.edit.VersionInfo
 import dev.hfps.reveal.data.handoff.ServerIssue
 import dev.hfps.reveal.data.index.IndexPhase
 import dev.hfps.reveal.data.index.IndexProgress
 import dev.hfps.reveal.data.library.SourceItem
+import dev.hfps.reveal.data.model.CameraFilter
 import dev.hfps.reveal.data.model.CullingFilter
+import dev.hfps.reveal.data.model.DateFilter
+import dev.hfps.reveal.data.model.LensFilter
 import dev.hfps.reveal.data.model.PhotoFilters
 import dev.hfps.reveal.data.model.PhotoFormat
 import dev.hfps.reveal.data.model.PhotoQuery
@@ -44,11 +54,14 @@ import dev.hfps.reveal.data.model.TypeFilter
 import dev.hfps.reveal.designsystem.theme.EditorTheme
 import dev.hfps.reveal.designsystem.theme.RevealTheme
 import dev.hfps.reveal.feature.library.AddFolderBackupContent
+import dev.hfps.reveal.feature.library.DateGrouping
 import dev.hfps.reveal.feature.library.FilterSheetContent
 import dev.hfps.reveal.feature.library.GalleryAccessContent
+import dev.hfps.reveal.feature.library.GoToDateContent
 import dev.hfps.reveal.feature.library.HandoffServerContent
 import dev.hfps.reveal.feature.library.LibraryActions
 import dev.hfps.reveal.feature.library.LibraryContent
+import dev.hfps.reveal.feature.library.LibraryTags
 import dev.hfps.reveal.feature.library.LibraryUiState
 import dev.hfps.reveal.feature.library.ManageFoldersContent
 import dev.hfps.reveal.feature.library.PasteEditsContent
@@ -57,7 +70,9 @@ import dev.hfps.reveal.feature.library.ThumbnailSource
 import dev.hfps.reveal.feature.library.UnavailableContent
 import dev.hfps.reveal.feature.library.UnavailableInfo
 import dev.hfps.reveal.feature.library.UnavailableReason
+import dev.hfps.reveal.feature.library.buildGrid
 import dev.hfps.reveal.feature.library.buildGridEntries
+import dev.hfps.reveal.feature.library.rememberDateLabels
 import dev.hfps.reveal.feature.library.viewer.VersionsActions
 import dev.hfps.reveal.feature.library.viewer.VersionsContent
 import dev.hfps.reveal.feature.library.viewer.VersionsUi
@@ -66,6 +81,7 @@ import dev.hfps.reveal.pipeline.recipe.Geometry
 import dev.hfps.reveal.pipeline.recipe.Light
 import dev.hfps.reveal.pipeline.recipe.Recipe
 import dev.hfps.reveal.pipeline.recipe.RecipePaste
+import java.time.LocalDate
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -184,6 +200,7 @@ internal object LibrarySamples {
             counts = counts,
             query = query,
             entries = buildGridEntries(shown, query),
+            dateIndex = buildGrid(shown, query).dateIndex,
             photoCount = shown.size,
             photosLoaded = true,
             selected = versionsOf(selected),
@@ -223,6 +240,7 @@ internal object LibrarySamples {
             counts = counts,
             query = query,
             entries = buildGridEntries(shown, query),
+            dateIndex = buildGrid(shown, query).dateIndex,
             photoCount = shown.size,
             photosLoaded = true,
             selected = selected,
@@ -275,10 +293,80 @@ internal object LibrarySamples {
             syncBadge = if (paired) SyncBadge.Synced else SyncBadge.NotPaired,
             query = query,
             entries = buildGridEntries(rows, query),
+            dateIndex = buildGrid(rows, query).dateIndex,
             photoCount = rows.size,
             photosLoaded = true,
             selected = versionsOf(selected),
         )
+
+    private val datesMonths = listOf(
+        "2026:11" to 3, "2026:10" to 2, "2026:09" to 4, "2026:07" to 1, "2026:06" to 2, "2026:03" to 3,
+        "2026:01" to 1, "2025:12" to 4, "2025:08" to 2, "2025:05" to 1, "2025:02" to 2, "2024:11" to 1,
+    )
+
+    /**
+     * A library spanning three years (W3/D): months of one to four shooting days with a few photos each, gaps (greyed
+     * in "Go to date"), and two photos without a date at the end.
+     */
+    val datedRows: List<PhotoRow> = buildList {
+        var id = 1000L
+        for ((month, days) in datesMonths) {
+            for (d in days downTo 1) {
+                val photos = 2 + ((id + d) % 4).toInt()
+                for (p in 0 until photos) {
+                    val text = "$month:%02d %02d:%02d:00".format(d * 6, 18 - p, 30)
+                    add(
+                        rows[(id % rows.size).toInt()].copy(
+                            id = id,
+                            versionId = id + 10_000,
+                            sortTime = time(text),
+                            captureTime = time(text),
+                            name = "DSC%05d.ARW".format(id),
+                        ),
+                    )
+                    id++
+                }
+            }
+        }
+        add(rows[0].copy(id = id, versionId = id + 10_000, sortTime = 0, captureTime = null, name = "scan-01.jpg"))
+        add(rows[1].copy(id = id + 1, versionId = id + 10_001, sortTime = 0, captureTime = null, name = "scan-02.jpg"))
+    }
+
+    /** The home over [datedRows] grouped by [grouping], with [query]'s filters. */
+    fun dated(grouping: DateGrouping = DateGrouping.DAY, query: PhotoQuery = PhotoQuery()): LibraryUiState {
+        val grid = buildGrid(datedRows, query, grouping)
+        return LibraryUiState(
+            sources = sources,
+            sourcesLoaded = true,
+            counts = counts,
+            query = query,
+            entries = grid.entries,
+            dateIndex = grid.dateIndex,
+            grouping = grouping,
+            photoCount = datedRows.size,
+            photosLoaded = true,
+            cameras = listOf(
+                CameraCount("SONY", "ZV-E10", 1203),
+                CameraCount("NIKON CORPORATION", "NIKON D5600", 412),
+                CameraCount("Apple", "iPhone 15 Pro", 221),
+            ),
+            lenses = listOf(
+                LensCount("E PZ 16-50mm F3.5-5.6 OSS", 980),
+                LensCount("FE 50mm F1.8", 223),
+                LensCount("18.0-55.0 mm f/3.5-5.6", 412),
+            ),
+            dateCounts = DateCounts(thisMonth = 14, last30Days = 22, thisYear = 640, onThisDay = 9),
+        )
+    }
+
+    /** Date, camera and lens filters on (W3/D): their chips above the grid and ticked in the sheet. */
+    val datedQuery = PhotoQuery(
+        filters = PhotoFilters(
+            dates = setOf(DateFilter.ThisYear, DateFilter.Range(LocalDate.of(2025, 12, 1), LocalDate.of(2025, 12, 31))),
+            cameras = setOf(CameraFilter("SONY", "ZV-E10")),
+            lenses = setOf(LensFilter("E PZ 16-50mm F3.5-5.6 OSS")),
+        ),
+    )
 
     /** Several active filters across groups: chips above the grid. */
     val combined = PhotoQuery(
@@ -299,6 +387,7 @@ internal object LibrarySamples {
         return grid(paired = true).copy(
             syncBadge = SyncBadge.Uploading(12),
             entries = buildGridEntries(shown, PhotoQuery()),
+            dateIndex = buildGrid(shown, PhotoQuery()).dateIndex,
         )
     }
 }
@@ -377,6 +466,38 @@ abstract class LibraryScreenshotBase(private val device: String) {
             FilterSheetContent(LibrarySamples.grid(LibrarySamples.combined, paired = paired), LibraryActions())
         }
 
+    /** "Go to date" over the dated home, opened at November 2026 (W3/D). */
+    protected fun goToDate(name: String, dark: Boolean, wide: Boolean) = sheet(name, dark, wide) {
+        val index = checkNotNull(LibrarySamples.dated().dateIndex)
+        GoToDateContent(index, current = index.months[2], labels = rememberDateLabels(), onPick = {})
+    }
+
+    /** The filter sheet with the W3/D groups: Date presets and a custom range, cameras and lenses with counts. */
+    protected fun datedFilters(name: String, dark: Boolean, wide: Boolean) = sheet(name, dark, wide) {
+        FilterSheetContent(LibrarySamples.dated(query = LibrarySamples.datedQuery), LibraryActions())
+    }
+
+    /** The fast scroller while a finger drags it (W3/D): the thumb highlighted and the month bubble beside it. */
+    protected fun scrollerDrag(name: String, dark: Boolean) {
+        composeRule.setContent {
+            RevealTheme(darkTheme = dark) {
+                LibraryContent(LibrarySamples.dated(), LibraryActions(), LibrarySamples.thumbnails)
+            }
+        }
+        // The clock is driven by hand: an idle wait would run through the scroller's hide delay.
+        composeRule.mainClock.autoAdvance = false
+        composeRule.onNodeWithTag(LibraryTags.GRID).performScrollToIndex(40)
+        composeRule.mainClock.advanceTimeBy(FRAMES_MS)
+        composeRule.onNodeWithTag(LibraryTags.SCROLLER).performTouchInput {
+            down(center)
+            moveBy(Offset(0f, height * 3f))
+        }
+        composeRule.mainClock.advanceTimeBy(FRAMES_MS)
+        composeRule.onRoot().captureRoboImage("src/test/screenshots/library/${device}_$name.png")
+        composeRule.onNodeWithTag(LibraryTags.SCROLLER).performTouchInput { up() }
+        composeRule.mainClock.autoAdvance = true
+    }
+
     protected fun manageFolders(name: String, dark: Boolean, wide: Boolean) = sheet(name, dark, wide) {
         ManageFoldersContent(LibrarySamples.sources, paired = true, actions = LibraryActions())
     }
@@ -389,6 +510,7 @@ abstract class LibraryScreenshotBase(private val device: String) {
 
     private companion object {
         const val SCRIM = 0.6f
+        const val FRAMES_MS = 300L
     }
 }
 
@@ -582,6 +704,33 @@ class PhoneLibraryScreenshotTest : LibraryScreenshotBase("phone") {
 
     @Test fun versionsSheet() = versionsSheet("versions_sheet", wide = false)
 
+    @Test fun datesDay() = shoot("library_dates_light", dark = false, state = LibrarySamples.dated())
+
+    @Test fun datesMonth() = shoot(
+        "library_dates_month_dark",
+        dark = true,
+        state = LibrarySamples.dated(DateGrouping.MONTH),
+    )
+
+    @Test fun datesFiltered() = shoot(
+        "library_dates_filtered_dark",
+        dark = true,
+        state = LibrarySamples.dated(query = LibrarySamples.datedQuery),
+    )
+
+    @Test fun datesGoTo() = goToDate("library_dates_goto_light", dark = false, wide = false)
+
+    @Test fun datesFilterSheet() = datedFilters("library_dates_filters_dark", dark = true, wide = false)
+
+    @Test fun datesScroller() = scrollerDrag("library_dates_scroller_light", dark = false)
+
+    @Test fun datesFontScale200() = shoot(
+        "library_dates_light_font200",
+        dark = false,
+        state = LibrarySamples.dated(),
+        fontScale = 2f,
+    )
+
     @Test fun indexing() = shoot(
         "indexing_light",
         dark = false,
@@ -622,6 +771,20 @@ class TabletLibraryScreenshotTest : LibraryScreenshotBase("tablet") {
     @Test fun filterSheet() = filterSheet("filter_sheet_dark", dark = true, wide = true)
 
     @Test fun manageFolders() = manageFolders("manage_folders_light", dark = false, wide = true)
+
+    @Test fun datesDay() = shoot("library_dates_light", dark = false, state = LibrarySamples.dated())
+
+    @Test fun datesMonth() = shoot(
+        "library_dates_month_dark",
+        dark = true,
+        state = LibrarySamples.dated(DateGrouping.MONTH),
+    )
+
+    @Test fun datesGoTo() = goToDate("library_dates_goto_dark", dark = true, wide = true)
+
+    @Test fun datesFilterSheet() = datedFilters("library_dates_filters_light", dark = false, wide = true)
+
+    @Test fun datesScroller() = scrollerDrag("library_dates_scroller_dark", dark = true)
 
     @Test fun unavailable() = shoot("unavailable_light", dark = false, state = LibrarySamples.unavailable())
 

@@ -3,6 +3,7 @@ package dev.hfps.reveal.data.db
 import androidx.sqlite.db.SimpleSQLiteQuery
 import androidx.sqlite.db.SupportSQLiteQuery
 import dev.hfps.reveal.data.model.CullingFilter
+import dev.hfps.reveal.data.model.DateFilter
 import dev.hfps.reveal.data.model.EditFilter
 import dev.hfps.reveal.data.model.LibraryScope
 import dev.hfps.reveal.data.model.PhotoFilters
@@ -11,6 +12,9 @@ import dev.hfps.reveal.data.model.PhotoSort
 import dev.hfps.reveal.data.model.SourceFilter
 import dev.hfps.reveal.data.model.SyncFilter
 import dev.hfps.reveal.data.model.TypeFilter
+import java.time.LocalDate
+import java.time.ZoneOffset
+import java.util.Locale
 
 /**
  * Turns a [PhotoQuery] into the grid's SQL (one statement, bound arguments, never string-concatenated input). The
@@ -55,6 +59,18 @@ object PhotoQuerySql {
             "AND COALESCE(c.original_on_server, 0) = 0 AND c.preview_sha IS NULL " +
             "AND NOT $SERVER_SOURCE_SQL"
 
+    /**
+     * Every listed photo of the home: not hidden, and a Server photo only when it opens (FIX/V). The filter counts and
+     * the camera and lens lists count over it.
+     */
+    const val LISTED_SQL = "p.hidden = 0 AND (NOT $SERVER_SOURCE_SQL OR $SERVER_OPENABLE_SQL)"
+
+    /**
+     * The grid's date (W3/D): `sort_time`, the capture time on the camera's clock stored as UTC millis, else the file's
+     * time. At or below this a photo has no date (a Server photo whose header has none): the "No date" group.
+     */
+    const val NO_DATE_AT_OR_BELOW = 0L
+
     /** The row's version has an edit (a non-default recipe); `r` is the left-joined non-default recipe. */
     const val EDITED_SQL = "r.version_id IS NOT NULL"
 
@@ -82,13 +98,16 @@ object PhotoQuerySql {
             "uf.photo_id = p.id AND uf.unreadable_at IS NOT NULL LIMIT 1) AS unreadable_fingerprint " +
             CELLS_FROM
 
-    /** The statement text and its arguments, in order (exposed for tests). */
-    fun build(query: PhotoQuery): Pair<String, List<Any>> {
+    /**
+     * The statement text and its arguments, in order (exposed for tests). [today] is the device's date: the Date
+     * presets are relative to it.
+     */
+    fun build(query: PhotoQuery, today: LocalDate = LocalDate.now()): Pair<String, List<Any>> {
         val clauses = buildList {
             add(Clause("p.hidden = 0"))
             if (!query.withUnopenable) add(Clause("(NOT $SERVER_SOURCE_SQL OR $SERVER_OPENABLE_SQL)"))
             scopeClause(query.scope)?.let(::add)
-            addAll(filterClauses(query.filters))
+            addAll(filterClauses(query.filters, today))
             if (query.unavailableOnly) add(Clause("($UNAVAILABLE_SQL)"))
             query.search.trim().takeIf { it.isNotEmpty() }?.let {
                 add(Clause("p.name LIKE ? ESCAPE '\\'", listOf("%" + escapeLike(it) + "%")))
@@ -115,7 +134,7 @@ object PhotoQuerySql {
     }
 
     /** One clause per group that has choices: its choices joined by OR. */
-    private fun filterClauses(filters: PhotoFilters): List<Clause> = listOfNotNull(
+    private fun filterClauses(filters: PhotoFilters, today: LocalDate): List<Clause> = listOfNotNull(
         group(sourceChoices(filters.sources)),
         group(
             filters.culling.sorted().map {
@@ -152,7 +171,71 @@ object PhotoQuerySql {
                 }
             },
         ),
+        group(filters.dates.sortedBy { dateOrder(it) }.map { dateClause(it, today) }),
+        group(
+            filters.cameras.sortedWith(compareBy({ it.make }, { it.model })).map {
+                Clause("(p.camera_make = ? AND p.camera_model = ?)", listOf(it.make, it.model))
+            },
+        ),
+        group(filters.lenses.sortedBy { it.name }.map { Clause("p.lens = ?", listOf(it.name)) }),
     )
+
+    /** A stable order of the Date group's choices (the statement text does not depend on set order). */
+    private fun dateOrder(filter: DateFilter): String = when (filter) {
+        DateFilter.ThisMonth -> "0"
+        DateFilter.Last30Days -> "1"
+        DateFilter.ThisYear -> "2"
+        DateFilter.OnThisDay -> "3"
+        is DateFilter.Range -> "4${filter.from}${filter.to}"
+    }
+
+    /** UTC millis of [day]'s start: the grid's dates are wall-clock times stored as UTC (`photos.sort_time`). */
+    fun dayStart(day: LocalDate): Long = day.atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli()
+
+    /** The half-open `sort_time` range of a preset or a range, or null for "On this day" (not a range). */
+    fun dateRange(filter: DateFilter, today: LocalDate): LongRange? = when (filter) {
+        DateFilter.ThisMonth -> today.withDayOfMonth(1).let { dayStart(it) until dayStart(it.plusMonths(1)) }
+        DateFilter.Last30Days -> dayStart(today.minusDays(LAST_DAYS - 1)) until dayStart(today.plusDays(1))
+        DateFilter.ThisYear -> today.withDayOfYear(1).let { dayStart(it) until dayStart(it.plusYears(1)) }
+        DateFilter.OnThisDay -> null
+        is DateFilter.Range -> dayStart(filter.from) until dayStart(filter.to.plusDays(1))
+    }
+
+    /**
+     * A range is `sort_time >= ? AND sort_time < ?` (the `sort_time` index); "On this day" compares the month and day
+     * of every dated photo before this year (no index can serve it; measured in `LibraryMeasurementsTest`).
+     */
+    private fun dateClause(filter: DateFilter, today: LocalDate): Clause {
+        val range = dateRange(filter, today)
+        return if (range != null) {
+            Clause("(p.sort_time >= ? AND p.sort_time < ?)", listOf(range.first, range.last + 1))
+        } else {
+            Clause(
+                "(p.sort_time > $NO_DATE_AT_OR_BELOW AND p.sort_time < ? AND " +
+                    "strftime('%m-%d', p.sort_time / 1000, 'unixepoch') = ?)",
+                listOf(
+                    dayStart(today.withDayOfYear(1)),
+                    String.format(Locale.ROOT, "%02d-%02d", today.monthValue, today.dayOfMonth),
+                ),
+            )
+        }
+    }
+
+    /**
+     * How many listed cells each Date preset holds today (the filter sheet's counts): one statement, bound arguments,
+     * read by `PhotoDao.observeDateCounts`.
+     */
+    fun dateCounts(today: LocalDate = LocalDate.now()): SupportSQLiteQuery {
+        val presets = listOf(DateFilter.ThisMonth, DateFilter.Last30Days, DateFilter.ThisYear, DateFilter.OnThisDay)
+        val names = listOf("this_month", "last_30_days", "this_year", "on_this_day")
+        val clauses = presets.map { dateClause(it, today) }
+        val sql = "SELECT " + clauses.zip(names).joinToString(", ") { (clause, name) ->
+            "COALESCE(SUM(${clause.sql}), 0) AS $name"
+        } + " $CELLS_FROM WHERE $LISTED_SQL"
+        return SimpleSQLiteQuery(sql, clauses.flatMap { it.args }.toTypedArray())
+    }
+
+    private const val LAST_DAYS = 30L
 
     private fun sourceChoices(sources: Set<SourceFilter>): List<Clause> {
         val folders = sources.filterIsInstance<SourceFilter.Folder>().map { it.sourceId }.sorted()

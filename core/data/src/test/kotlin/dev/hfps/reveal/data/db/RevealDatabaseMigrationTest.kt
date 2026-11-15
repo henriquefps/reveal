@@ -459,6 +459,81 @@ class RevealDatabaseMigrationTest {
     }
 
     @Test
+    @Suppress("NestedBlockDepth")
+    fun `14 to 15 adds unread camera fields and dates Server photos by their file or not at all`() {
+        val name = "migration-14-15.db"
+        helper.createDatabase(name, 14).use { db ->
+            db.execSQL(
+                "INSERT INTO sources (id, tree_uri, root_document_id, display_name, state, writable, added_at, kind, " +
+                    "backup) VALUES (1, 'content://t', 'r', 'DCIM', 'AVAILABLE', 1, 0, 'FOLDER', 1), " +
+                    "(2, 'reveal://server', '', 'Server', 'AVAILABLE', 0, 0, 'SERVER', 0)",
+            )
+            val photo = { id: Int, source: Int, sort: Long, capture: Long? ->
+                db.execSQL(
+                    "INSERT INTO photos (id, uuid, source_id, folder, folder_document_id, stem_key, name, format, " +
+                        "has_raw, sort_time, capture_time, orientation, rating, flag, has_edit, metadata_state, " +
+                        "added_at, hidden) VALUES (?, ?, ?, '', '', ?, ?, 'JPEG', 0, ?, ?, 1, 0, 'NONE', 0, 'READ', " +
+                        "0, 0)",
+                    arrayOf<Any?>(id, "u$id", source, "a$id", "A$id.JPG", sort, capture),
+                )
+            }
+            val file = { photoId: Int, source: Int, modified: Long ->
+                db.execSQL(
+                    "INSERT INTO photo_files (photo_id, source_id, relative_path, document_id, name, size, modified, " +
+                        "role, on_server) VALUES (?, ?, ?, 'd', 'n', 1, ?, 'RENDERED', 0)",
+                    arrayOf<Any?>(photoId, source, "p$photoId", modified),
+                )
+            }
+            // 1: a folder photo dated by its file; 2: a Server photo with a capture time; 3: a NAS photo without one
+            // (its file has a time); 4: another device's photo without one (sorted by when its record arrived).
+            photo(1, 1, 111, null).also { file(1, 1, 111) }
+            photo(2, 2, 222, 222).also { file(2, 2, 0) }
+            photo(3, 2, 999_999, null).also { file(3, 2, 333) }
+            photo(4, 2, 999_999, null).also { file(4, 2, 0) }
+        }
+        helper.runMigrationsAndValidate(name, 15, true, *RevealDatabase.MIGRATIONS).use { db ->
+            db.query(
+                "SELECT id, sort_time, camera_make, camera_model, lens, metadata_version FROM photos ORDER BY id",
+            ).use { c ->
+                val sorts = ArrayList<Long>()
+                while (c.moveToNext()) {
+                    sorts += c.getLong(1)
+                    for (column in 2..4) assertThat(c.isNull(column)).isTrue()
+                    assertThat(c.getInt(5)).isEqualTo(0)
+                }
+                assertThat(sorts).containsExactly(111L, 222L, 333L, 0L).inOrder()
+            }
+        }
+    }
+
+    @Test
+    fun `13 to 15 runs both steps and keeps the photos`() {
+        val name = "migration-13-15.db"
+        helper.createDatabase(name, 13).use { db ->
+            db.execSQL(
+                "INSERT INTO sources (id, tree_uri, root_document_id, display_name, state, writable, added_at, kind, " +
+                    "backup) VALUES (1, 'content://t', 'r', 'DCIM', 'AVAILABLE', 1, 0, 'FOLDER', 1)",
+            )
+            db.execSQL(
+                "INSERT INTO photos (id, uuid, source_id, folder, folder_document_id, stem_key, name, format, " +
+                    "has_raw, sort_time, orientation, rating, flag, has_edit, metadata_state, added_at, hidden) " +
+                    "VALUES (1, 'u1', 1, '', '', 'a', 'A.ARW', 'RAW', 1, 5, 1, 0, 'NONE', 0, 'READ', 0, 0)",
+            )
+        }
+        helper.runMigrationsAndValidate(name, 15, true, *RevealDatabase.MIGRATIONS).use { db ->
+            db.query("SELECT sort_time, camera_make, lens FROM photos WHERE id = 1").use { c ->
+                assertThat(c.moveToFirst()).isTrue()
+                assertThat(c.getLong(0)).isEqualTo(5L)
+                assertThat(c.isNull(1)).isTrue()
+                assertThat(c.isNull(2)).isTrue()
+            }
+            db.query("SELECT COUNT(*) FROM server_thumbs").use { c ->
+                assertThat(c.moveToFirst()).isTrue()
+            }
+        }
+    }
+
+    @Test
     fun `every exported schema up to the current version exists`() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val folder = "dev.hfps.reveal.data.db.RevealDatabase"

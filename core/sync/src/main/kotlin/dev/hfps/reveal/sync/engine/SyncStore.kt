@@ -537,7 +537,8 @@ class SyncStore(
             name = data.name.ifBlank { data.files.firstOrNull()?.name.orEmpty() },
             format = format,
             hasRaw = data.files.any { it.role == FileRole.RAW.name },
-            sortTime = data.captureTime ?: now,
+            // No capture time: 0 = the grid's "No date" group until the header is read (W3/D), never "now".
+            sortTime = data.captureTime ?: 0,
             captureTime = data.captureTime,
             width = data.width,
             height = data.height,

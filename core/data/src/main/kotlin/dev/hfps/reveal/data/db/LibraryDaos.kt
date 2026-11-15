@@ -166,6 +166,20 @@ data class FilterCounts(
     val notSynced: Int get() = total - synced
 }
 
+/** A camera of the library (W3/D): make and model as the header wrote them (trimmed), and how many cells. */
+data class CameraCount(val make: String?, val model: String, val count: Int)
+
+/** A lens of the library and how many cells (W3/D). */
+data class LensCount(val lens: String, val count: Int)
+
+/** How many cells each date preset of the Date filter holds (W3/D), relative to the day it was asked. */
+data class DateCounts(
+    @ColumnInfo(name = "this_month") val thisMonth: Int = 0,
+    @ColumnInfo(name = "last_30_days") val last30Days: Int = 0,
+    @ColumnInfo(name = "this_year") val thisYear: Int = 0,
+    @ColumnInfo(name = "on_this_day") val onThisDay: Int = 0,
+)
+
 @Dao
 @Suppress("TooManyFunctions", "LongParameterList")
 interface PhotoDao {
@@ -188,8 +202,7 @@ interface PhotoDao {
             "COALESCE(SUM(p.has_raw = 1), 0) AS raw, " +
             "COALESCE(SUM(p.has_raw = 0), 0) AS jpeg, COALESCE(SUM(" + PhotoQuerySql.SYNCED_SQL + "), 0) AS synced, " +
             "COUNT(*) AS total " + PhotoQuerySql.CELLS_FROM + " " +
-            "WHERE p.hidden = 0 AND (NOT " + PhotoQuerySql.SERVER_SOURCE_SQL + " OR " +
-            PhotoQuerySql.SERVER_OPENABLE_SQL + ")",
+            "WHERE " + PhotoQuerySql.LISTED_SQL,
     )
     fun observeFilterCounts(): Flow<FilterCounts>
 
@@ -267,7 +280,8 @@ interface PhotoDao {
     @Query(
         "UPDATE photos SET capture_time = :captureTime, capture_offset = :offset, " +
             "sort_time = COALESCE(:captureTime, sort_time), width = :width, height = :height, " +
-            "orientation = :orientation, metadata_state = :state WHERE id = :id",
+            "orientation = :orientation, metadata_state = :state, camera_make = :make, camera_model = :model, " +
+            "lens = :lens, metadata_version = :version WHERE id = :id",
     )
     suspend fun setMetadata(
         id: Long,
@@ -277,7 +291,58 @@ interface PhotoDao {
         height: Int?,
         orientation: Int,
         state: MetadataState,
+        make: String? = null,
+        model: String? = null,
+        lens: String? = null,
+        version: Int = CURRENT_METADATA_VERSION,
     )
+
+    /**
+     * The camera fields of a photo read before W3/D (`LibraryIndexer.backfillCameras`): only columns no sync trigger
+     * watches, so the backfill marks no record.
+     */
+    @Query(
+        "UPDATE photos SET camera_make = :make, camera_model = :model, lens = :lens, metadata_version = :version " +
+            "WHERE id = :id",
+    )
+    suspend fun setCamera(id: Long, make: String?, model: String?, lens: String?, version: Int)
+
+    /** Files of photos of [sourceId] whose header was read before the camera fields existed, newest first. */
+    @Query(
+        "SELECT f.* FROM photo_files f JOIN photos p ON p.id = f.photo_id WHERE p.id IN (SELECT id FROM photos " +
+            "WHERE source_id = :sourceId AND metadata_state = 'READ' AND metadata_version < :version " +
+            "ORDER BY sort_time DESC LIMIT :limit)",
+    )
+    suspend fun cameraBackfillFiles(sourceId: Long, version: Int, limit: Int): List<PhotoFileEntity>
+
+    /** [cameraBackfillFiles] of the Server source: only photos whose original the server serves (read by range). */
+    @Query(
+        "SELECT f.* FROM photo_files f JOIN photos p ON p.id = f.photo_id WHERE p.id IN (SELECT p2.id FROM photos " +
+            "p2 JOIN photo_cloud c ON c.photo_id = p2.id WHERE p2.source_id = :sourceId AND p2.metadata_state = " +
+            "'READ' AND p2.metadata_version < :version AND c.original_on_server = 1 ORDER BY p2.sort_time DESC " +
+            "LIMIT :limit)",
+    )
+    suspend fun serverCameraBackfillFiles(sourceId: Long, version: Int, limit: Int): List<PhotoFileEntity>
+
+    /** The cameras of the library (make + model) with their cell counts, most photos first (the Camera filter). */
+    @Query(
+        "SELECT p.camera_make AS make, p.camera_model AS model, COUNT(*) AS count " + PhotoQuerySql.CELLS_FROM +
+            " WHERE " + PhotoQuerySql.LISTED_SQL + " AND p.camera_model IS NOT NULL AND p.camera_model != '' " +
+            "GROUP BY p.camera_make, p.camera_model ORDER BY count DESC, model",
+    )
+    fun observeCameras(): Flow<List<CameraCount>>
+
+    /** The lenses of the library with their cell counts, most photos first (the Lens filter). */
+    @Query(
+        "SELECT p.lens AS lens, COUNT(*) AS count " + PhotoQuerySql.CELLS_FROM + " WHERE " +
+            PhotoQuerySql.LISTED_SQL + " AND p.lens IS NOT NULL AND p.lens != '' GROUP BY p.lens " +
+            "ORDER BY count DESC, lens",
+    )
+    fun observeLenses(): Flow<List<LensCount>>
+
+    /** [PhotoQuerySql.dateCounts]: how many cells each date preset holds. */
+    @RawQuery(observedEntities = [PhotoEntity::class, VersionEntity::class, PhotoCloudEntity::class])
+    fun observeDateCounts(query: SupportSQLiteQuery): Flow<DateCounts>
 
     @Query(
         "UPDATE photos SET rating = :rating, label = :label, flag = :flag, xmp_document_id = :xmpDocumentId, " +

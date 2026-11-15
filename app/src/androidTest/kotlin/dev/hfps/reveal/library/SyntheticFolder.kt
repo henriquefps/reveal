@@ -61,15 +61,33 @@ class SyntheticFolder(val name: String) {
         subSecond = "%03d".format(index * 37 % 1000),
     )
 
-    fun pair(stem: String, index: Int, preview: ByteArray = gradientJpeg(index), sub: String = "") {
+    fun pair(
+        stem: String,
+        index: Int,
+        preview: ByteArray = gradientJpeg(index),
+        sub: String = "",
+        exif: SyntheticExif = exif(index),
+    ) {
         val folder = if (sub.isEmpty()) dir else File(dir, sub).apply { mkdirs() }
-        File(folder, "$stem.ARW").writeBytes(SyntheticShoot.raw(preview, exif(index)))
-        File(folder, "$stem.JPG").writeBytes(SyntheticShoot.jpeg(preview, exif(index)))
+        File(folder, "$stem.ARW").writeBytes(SyntheticShoot.raw(preview, exif))
+        File(folder, "$stem.JPG").writeBytes(SyntheticShoot.jpeg(preview, exif))
     }
 
-    fun jpeg(name: String, index: Int, base: ByteArray = gradientJpeg(index), sub: String = "") {
+    fun jpeg(
+        name: String,
+        index: Int,
+        base: ByteArray = gradientJpeg(index),
+        sub: String = "",
+        exif: SyntheticExif = exif(index),
+    ) {
         val folder = if (sub.isEmpty()) dir else File(dir, sub).apply { mkdirs() }
-        File(folder, name).writeBytes(SyntheticShoot.jpeg(base, exif(index)))
+        File(folder, name).writeBytes(SyntheticShoot.jpeg(base, exif))
+    }
+
+    /** A JPEG taken at [dateTime] ("YYYY:MM:DD HH:MM:SS") with [camera] (make to model) and [lens] (W3/D). */
+    fun jpegAt(name: String, seed: Int, dateTime: String, camera: Pair<String, String>, lens: String) {
+        val exif = SyntheticExif(make = camera.first, model = camera.second, lens = lens, dateTime = dateTime)
+        File(dir, name).writeBytes(SyntheticShoot.jpeg(gradientJpeg(seed, 96, 64), exif))
     }
 
     fun sidecar(stem: String, rating: Int, creatorTool: String = "Hoard 1.7.2") {

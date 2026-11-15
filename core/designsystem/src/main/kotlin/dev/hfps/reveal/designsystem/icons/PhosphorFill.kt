@@ -935,6 +935,14 @@ object PhosphorFill {
             )
         }.build()
     }
+    val CalendarBlank: ImageVector by lazy {
+        ImageVector.Builder("FillCalendarBlank", 24.dp, 24.dp, 256f, 256f).apply {
+            addPath(
+                PathParser().parsePathString("M208,32H184V24a8,8,0,0,0-16,0v8H88V24a8,8,0,0,0-16,0v8H48A16,16,0,0,0,32,48V208a16,16,0,0,0,16,16H208a16,16,0,0,0,16-16V48A16,16,0,0,0,208,32Zm0,48H48V48H72v8a8,8,0,0,0,16,0V48h80v8a8,8,0,0,0,16,0V48h24Z").toNodes(),
+                fill = SolidColor(Color.Black),
+            )
+        }.build()
+    }
     val PushPin: ImageVector by lazy {
         ImageVector.Builder("FillPushPin", 24.dp, 24.dp, 256f, 256f).apply {
             addPath(

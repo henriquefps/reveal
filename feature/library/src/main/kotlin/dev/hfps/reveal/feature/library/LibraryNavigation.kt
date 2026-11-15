@@ -132,6 +132,9 @@ fun LibraryScreen(
         LibraryActions(
             onFilters = viewModel::setFilters,
             onFiltersOpen = viewModel::setFiltersOpen,
+            onGrouping = viewModel::setGrouping,
+            onDateJumpOpen = viewModel::setDateJumpOpen,
+            onDateRangeOpen = viewModel::setDateRangeOpen,
             onFoldersOpen = viewModel::setFoldersOpen,
             onRecent = viewModel::setRecent,
             onShowFolder = viewModel::showFolder,

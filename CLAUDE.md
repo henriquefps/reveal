@@ -158,7 +158,7 @@ REVEAL_COLOUR_SHEET_DIR=$PWD/build/calibration REVEAL_RENDER_OUT=$PWD/docs/scree
 
 ## Library (`:core:data`, `:feature:library`, M1, ADR 0006)
 
-Room `RevealDatabase` v14 (sources, photos, photo_files, versions, recipes, history, history_cursor, cache_entries; sync tables v6; preset tables v7, ADR 0019; `photo_files.unreadable_at` v8, ADR 0011; `photo_cloud.preview_format` v9; `photo_files.on_server` + `sync_deletes` v10, ADR 0018 FIX/V; `versions.edit_device/edited_at` + data fixes v11, FIX/W; `snapshots` + `export_presets` v12, ADR 0025; culling sync tables v13, ADR 0027; `server_thumbs` + `photo_files.checked_at` v14, ADR 0018 W3/C);
+Room `RevealDatabase` v15 (sources, photos, photo_files, versions, recipes, history, history_cursor, cache_entries; sync tables v6; preset tables v7, ADR 0019; `photo_files.unreadable_at` v8, ADR 0011; `photo_cloud.preview_format` v9; `photo_files.on_server` + `sync_deletes` v10, ADR 0018 FIX/V; `versions.edit_device/edited_at` + data fixes v11, FIX/W; `snapshots` + `export_presets` v12, ADR 0025; culling sync tables v13, ADR 0027; `server_thumbs` + `photo_files.checked_at` v14, ADR 0018 W3/C; camera/lens columns v15, W3/D);
 schema change = new version + migration (or `AutoMigration`) + exported `core/data/schemas/*.json`, tested by
 `RevealDatabaseMigrationTest`. `LibraryRepository` (sources, SAF grants, volumes, indexing, ratings/flags with XMP
 write-back), `LibraryIndexer` (walk → diff → sidecars → headers → sidecar edits), `XmpReader`/`XmpWriter` (merge, never
@@ -186,6 +186,29 @@ Settings, ⋯), `FilterBar` + `FilterSheet` (`LibraryFilters.kt`), `ManageFolder
 folder = `LibraryViewModel.showFolder`, backup mode, remove). The viewer and the filmstrip get the grid's query
 (`PhotoListCodec.encode(state.gridQuery)`). Pending uploads: `CloudState.UPLOADING`. Instrumented steps that work in
 any language: `library/LibraryFilterSteps` (`showOnly`, `openFolder`, `activeTokens`).
+
+Dates, scroller, cameras (W3/D, ADR 0006 "W3/D", DB v15): the grid's date is `photos.sort_time` (camera wall clock
+as UTC millis, else the file's time; `<= 0` = "No date"). `buildGrid(rows, query, DateGrouping)` (one pass on
+`Dispatchers.Default`, never the main thread) makes `GridEntry.Month` headers (+ `Header` day sub-headers in
+`DateGrouping.DAY`, meta `library.grouping`) and the `DateIndex` (month keys `year * 12 + month - 1`, header entry
+indexes, counts; binary search `positionAt`). `DateNavigation.kt`: `DateLabels` (locale formats in UTC, cached per
+month), `MonthHeader`/`StickyMonthHeader` (derived month, push-up read in the draw phase), `DateScroller` (thumb drag ->
+`scrollToItem`, bubble, TalkBack `setProgress` + previous/next month, pen hover via `Modifier.dateScrollerHover` on the
+grid's container, `LibraryMetrics.jumpsMicros`), `GoToDateSheet`, `DateRangeSheet` (Material date range picker in
+Reveal colours). Filters: `DateFilter` (`ThisMonth`, `Last30Days`, `ThisYear`, `OnThisDay`, `Range`; SQL relative to
+`PhotoQuerySql.build(query, today)`, ranges on the `sort_time` index), `CameraFilter(make, model)` (index
+`camera_make, camera_model`), `LensFilter` (index `lens`); tokens `d:month|30d|year|onthisday|<from>_<to>`,
+`cam:<make>~<model>`, `lens:<name>` (percent-encoded); lists/counts `PhotoDao.observeCameras/observeLenses/
+observeDateCounts` (read only while the filter sheet is open). Columns `camera_make/camera_model/lens`
+(`""` = none, null = not read) and `metadata_version` (`CURRENT_METADATA_VERSION`): headers read before v15 are read
+again by `LibraryIndexer.backfillCameras` (`setCamera` touches no synced column). Tags `LibraryTags.STICKY_MONTH`,
+`SCROLLER`, `SCROLLER_BUBBLE`, `GO_TO_DATE*`, `month(key)`, `monthHeader(key)`, `GROUP_BY_*`, `DATE_RANGE_*`.
+
+```sh
+./gradlew :core:data:testDebugUnitTest --tests '*DateCameraFiltersTest*' --tests '*LibraryIndexerTest*' && ./gradlew :feature:library:testDebugUnitTest --tests '*DateGridTest*'
+adb -s emulator-<port> shell am instrument -w -e class dev.hfps.reveal.library.LibraryDatesFlowTest dev.hfps.reveal.debug.test/androidx.test.runner.AndroidJUnitRunner
+adb -s <serial> shell am instrument -w -e class dev.hfps.reveal.library.LibraryMeasurementsTest [-e photos 25000] dev.hfps.reveal.debug.test/androidx.test.runner.AndroidJUnitRunner   # filters + scroller jumps
+```
 
 Instrumented library tests use the debug-only `SyntheticDocumentsProvider` (`app/src/debug`, authority
 `dev.hfps.reveal.debug.synthetic`, files under `files/saf-test`, own process) and `DebugAccess` (Hilt entry point):

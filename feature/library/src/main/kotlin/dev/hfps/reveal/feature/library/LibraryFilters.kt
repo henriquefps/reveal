@@ -19,10 +19,16 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import dev.hfps.reveal.data.db.CameraCount
+import dev.hfps.reveal.data.db.DateCounts
 import dev.hfps.reveal.data.db.FilterCounts
+import dev.hfps.reveal.data.db.LensCount
 import dev.hfps.reveal.data.library.SourceItem
+import dev.hfps.reveal.data.model.CameraFilter
 import dev.hfps.reveal.data.model.CullingFilter
+import dev.hfps.reveal.data.model.DateFilter
 import dev.hfps.reveal.data.model.EditFilter
+import dev.hfps.reveal.data.model.LensFilter
 import dev.hfps.reveal.data.model.PhotoFilters
 import dev.hfps.reveal.data.model.PhotoListCodec
 import dev.hfps.reveal.data.model.SourceFilter
@@ -49,7 +55,12 @@ internal data class FilterOption(
     val count: Int?,
     val isOn: (PhotoFilters) -> Boolean,
     val toggle: (PhotoFilters) -> PhotoFilters,
+    /** A custom date range (W3/D): its label is formatted in the device's language. */
+    val range: DateFilter.Range? = null,
 )
+
+/** The Date group's "Custom range…" choice: opens the range picker instead of toggling (W3/D). */
+internal const val CUSTOM_RANGE_TOKEN = "d:custom"
 
 /** A group of the sheet: its heading and its choices (OR within, AND across). */
 @Immutable
@@ -102,6 +113,80 @@ private fun option(choice: SyncFilter, label: Int, count: Int?) = FilterOption(
     { it.toggle(choice) },
 )
 
+private fun option(choice: DateFilter, label: Int?, count: Int?) = FilterOption(
+    token = token(PhotoFilters(dates = setOf(choice))),
+    label = label,
+    name = null,
+    count = count,
+    isOn = { choice in it.dates },
+    toggle = { it.toggle(choice) },
+    range = choice as? DateFilter.Range,
+)
+
+private fun option(choice: CameraFilter, count: Int?) = FilterOption(
+    token(PhotoFilters(cameras = setOf(choice))),
+    null,
+    choice.label,
+    count,
+    { choice in it.cameras },
+    { it.toggle(choice) },
+)
+
+private fun option(choice: LensFilter, count: Int?) = FilterOption(
+    token(PhotoFilters(lenses = setOf(choice))),
+    null,
+    choice.name,
+    count,
+    { choice in it.lenses },
+    { it.toggle(choice) },
+)
+
+/** What the W3/D groups list: the library's cameras and lenses and the Date presets' counts (null = unknown). */
+@Immutable
+internal data class DateCameraChoices(
+    val cameras: List<CameraCount> = emptyList(),
+    val lenses: List<LensCount> = emptyList(),
+    val dateCounts: DateCounts? = null,
+)
+
+/** The Date group: the presets with their counts, the ranges that are on, and "Custom range…" (W3/D). */
+private fun dateGroup(filters: PhotoFilters, counts: DateCounts?, custom: Boolean): FilterGroup {
+    val ranges = filters.dates.filterIsInstance<DateFilter.Range>().sortedBy { it.from }
+    return FilterGroup(
+        R.string.library_filter_group_date,
+        buildList {
+            add(option(DateFilter.ThisMonth, R.string.library_filter_this_month, counts?.thisMonth))
+            add(option(DateFilter.Last30Days, R.string.library_filter_last_30_days, counts?.last30Days))
+            add(option(DateFilter.ThisYear, R.string.library_filter_this_year, counts?.thisYear))
+            add(option(DateFilter.OnThisDay, R.string.library_filter_on_this_day, counts?.onThisDay))
+            ranges.forEach { add(option(it, null, null)) }
+            if (custom) {
+                add(
+                    FilterOption(CUSTOM_RANGE_TOKEN, R.string.library_filter_custom_range, null, null, {
+                        false
+                    }, { it }),
+                )
+            }
+        },
+    )
+}
+
+/** Cameras (W3/D): the library's, most photos first, and any that is on but no longer listed. */
+private fun cameraGroup(filters: PhotoFilters, cameras: List<CameraCount>): FilterGroup? {
+    val listed = cameras.map { CameraFilter(it.make.orEmpty(), it.model) to it.count }
+    val missing = filters.cameras.filter { on -> listed.none { it.first == on } }.map { it to null }
+    val options = (listed + missing).map { (camera, count) -> option(camera, count) }
+    return FilterGroup(R.string.library_filter_group_camera, options).takeIf { options.isNotEmpty() }
+}
+
+/** Lenses (W3/D), as [cameraGroup]. */
+private fun lensGroup(filters: PhotoFilters, lenses: List<LensCount>): FilterGroup? {
+    val listed = lenses.map { LensFilter(it.lens) to it.count }
+    val missing = filters.lenses.filter { on -> listed.none { it.first == on } }.map { it to null }
+    val options = (listed + missing).map { (lens, count) -> option(lens, count) }
+    return FilterGroup(R.string.library_filter_group_lens, options).takeIf { options.isNotEmpty() }
+}
+
 /**
  * The sheet's groups. "Opened from other apps" and "Only on the server" show when they hold photos (or are on); the
  * Sync group only while paired. [counts] null = unknown (no counts shown).
@@ -111,6 +196,8 @@ internal fun filterGroups(
     sources: List<SourceItem>,
     counts: FilterCounts?,
     paired: Boolean,
+    choices: DateCameraChoices = DateCameraChoices(),
+    custom: Boolean = true,
 ): List<FilterGroup> {
     val sourceOptions = buildList {
         sources.forEach { add(option(SourceFilter.Folder(it.id), null, it.name, it.photoCount)) }
@@ -123,6 +210,9 @@ internal fun filterGroups(
     }
     return listOfNotNull(
         FilterGroup(R.string.library_filter_group_source, sourceOptions).takeIf { sourceOptions.isNotEmpty() },
+        dateGroup(filters, choices.dateCounts, custom),
+        cameraGroup(filters, choices.cameras),
+        lensGroup(filters, choices.lenses),
         FilterGroup(
             R.string.library_filter_group_culling,
             listOf(
@@ -161,11 +251,12 @@ internal fun activeOptions(filters: PhotoFilters, sources: List<SourceItem>, pai
     val known = sources.map { it.id }.toSet()
     val missing = filters.sources.filterIsInstance<SourceFilter.Folder>().filter { it.sourceId !in known }
         .map { option(it, R.string.library_filter_folder, null, null) }
-    return missing + filterGroups(filters, sources, null, paired).flatMap { it.options }.filter { it.isOn(filters) }
+    return missing + filterGroups(filters, sources, null, paired, custom = false).flatMap { it.options }
+        .filter { it.isOn(filters) }
 }
 
 @Composable
-private fun FilterOption.text(): String = name ?: stringResource(checkNotNull(label))
+private fun FilterOption.text(): String = range?.let { rangeLabel(it) } ?: name ?: stringResource(checkNotNull(label))
 
 @Composable
 private fun FilterOption.textWithCount(): String {
@@ -231,6 +322,7 @@ internal fun FilterSheet(state: LibraryUiState, actions: LibraryActions) {
 }
 
 /** The filter sheet's content without the sheet (screenshots): every group, its choices with their counts. */
+@Suppress("LongMethod")
 @Composable
 fun FilterSheetContent(state: LibraryUiState, actions: LibraryActions, modifier: Modifier = Modifier) {
     val filters = state.filters
@@ -242,7 +334,8 @@ fun FilterSheetContent(state: LibraryUiState, actions: LibraryActions, modifier:
             modifier = Modifier.padding(horizontal = 20.dp),
         )
         Column(Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState())) {
-            filterGroups(filters, state.sources, state.counts, state.paired).forEach { group ->
+            val choices = DateCameraChoices(state.cameras, state.lenses, state.dateCounts)
+            filterGroups(filters, state.sources, state.counts, state.paired, choices).forEach { group ->
                 Eyebrow(
                     stringResource(group.title),
                     Modifier.padding(start = 20.dp, end = 20.dp, top = 20.dp, bottom = 8.dp),
@@ -256,8 +349,18 @@ fun FilterSheetContent(state: LibraryUiState, actions: LibraryActions, modifier:
                         RevealChip(
                             label = choice.textWithCount(),
                             selected = on,
-                            onClick = { actions.onFilters(choice.toggle(filters)) },
-                            icon = if (on) PhosphorRegular.Check else null,
+                            onClick = {
+                                if (choice.token == CUSTOM_RANGE_TOKEN) {
+                                    actions.onDateRangeOpen(true)
+                                } else {
+                                    actions.onFilters(choice.toggle(filters))
+                                }
+                            },
+                            icon = when {
+                                on -> PhosphorRegular.Check
+                                choice.token == CUSTOM_RANGE_TOKEN -> PhosphorRegular.CalendarBlank
+                                else -> null
+                            },
                             modifier = Modifier.testTag(LibraryTags.filterChoice(choice.token)),
                         )
                     }

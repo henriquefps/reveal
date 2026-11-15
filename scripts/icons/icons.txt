@@ -114,4 +114,5 @@ pen-nib
 copy-simple
 stack
 camera
+calendar-blank
 push-pin

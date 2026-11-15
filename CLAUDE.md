@@ -264,8 +264,11 @@ and hand-offs get READ grants only; an older rw grant is kept): the only writer 
 (`library/XmpExport` + `SidecarSync.write` next to the photos / `writeInto` a chosen folder; `XmpDestination`,
 `XmpExportScope` for the sheet; `feature/library/xmpexport/` = `XmpExportSheet`, `XmpExportWorker` with its job file;
 entry points: selection menu, Manage folders ⋯, top bar ⋯; "next to" only for folder photos under a write grant, one
-folder without one can be picked for a one-off write; server-only photos and hand-offs only into a chosen folder). Reading:
-`LibraryIndexer` parses each changed sidecar once, then after the headers `SidecarEdits.reconcile` (import step
+folder without one can be picked for a one-off write (`XmpGrants.covers` the folder); server-only photos and hand-offs
+only into a chosen folder; picked trees get a persisted READ|WRITE grant released by the job's end, `XmpGrants`; the job
+logs each photo in `files/xmp-jobs/<id>.log` and only the user's Cancel ends it, a system stop resumes). Reading:
+`LibraryIndexer` parses each changed sidecar once (culling: `SidecarImport`, a **first read** fills only fields
+without a value, ADR 0026 "First read"; a vanished sidecar forgets its `sidecar_culling` row), then after the headers `SidecarEdits.reconcile` (import step
 `HistoryAction.XMP_IMPORT`, sidecar behind -> `IndexReport.sidecarsBehind` (informational), diverged ->
 conflict copy; Lightroom's defaults never imported; `XmpPreferences.readEdits`). Never write darktable history, never
 create a sidecar for an unedited photo, never overwrite a newer app's `reveal:` block or a malformed sidecar.

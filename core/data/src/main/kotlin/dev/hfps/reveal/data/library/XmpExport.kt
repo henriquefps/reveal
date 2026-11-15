@@ -31,8 +31,8 @@ data class XmpExportScope(
 
 /**
  * Export XMP (ADR 0026 "Export XMP"): the only thing that writes XMP sidecars since 0.9.0. [analyse] says what the
- * sheet may offer for a selection; [run] writes, in chunks, through [SidecarSync] (culling fields + the master
- * version's edit, the merge rules of ADR 0026).
+ * sheet may offer for a selection; [exportOne] writes one photo (the job records each), [run] a list, through
+ * [SidecarSync] (culling fields + the master version's edit, the merge rules of ADR 0026).
  */
 class XmpExport(
     private val db: RevealDatabase,
@@ -63,32 +63,74 @@ class XmpExport(
         )
     }
 
-    /** Writes the sidecars of [photoIds]; [onProgress] gets the number of photos done after every chunk. */
+    /** The trees of one run of [destination], opened once. */
+    class Session internal constructor(
+        val destination: XmpDestination,
+        internal val target: DocumentTree?,
+        internal val oneOff: Map<Long, DocumentTree>,
+    )
+
+    /** What one photo's export did, and the document written into a chosen folder (null otherwise). */
+    data class PhotoResult(val outcome: SidecarOutcome, val documentId: String? = null)
+
+    fun open(destination: XmpDestination): Session = Session(
+        destination,
+        (destination as? XmpDestination.Folder)?.let { openTree(it.treeUri) },
+        (destination as? XmpDestination.NextToPhotos)?.oneOff.orEmpty().mapValues { openTree(it.value) },
+    )
+
+    /**
+     * Exports one photo. Idempotent, so a job run again after a kill writes no `(1)` copies: next to the photos it
+     * merges into the sidecar it wrote (the photo records it before writing); in a chosen folder [ownDocument] (what
+     * [onCreated] reported the last time) is overwritten instead of creating another file.
+     */
+    suspend fun exportOne(
+        session: Session,
+        photoId: Long,
+        ownDocument: String? = null,
+        onCreated: suspend (String) -> Unit = {},
+    ): PhotoResult {
+        val target = session.target
+        return if (target != null) {
+            val write = sidecars.writeOneInto(photoId, target, target.rootDocumentId, ownDocument, onCreated)
+            PhotoResult(write.outcome, write.documentId)
+        } else {
+            PhotoResult(sidecars.write(listOf(photoId), oneOff = session.oneOff))
+        }
+    }
+
+    /**
+     * Whether the tree the user picked for "next to the photos" ([pickedTree]) is or contains the folder of source
+     * [sourceId] ([XmpGrants.covers]); false: the export is not started and the user is told.
+     */
+    suspend fun covers(
+        sourceId: Long,
+        pickedTree: String,
+        isChild: (android.net.Uri, String) -> Boolean = { _, _ -> false },
+    ): Boolean {
+        val source = db.sourceDao().get(sourceId) ?: return false
+        return XmpGrants.covers(pickedTree, source, isChild)
+    }
+
+    /** Writes the sidecars of [photoIds] (tests, small runs); [onProgress] gets the photos done so far. */
     suspend fun run(
         photoIds: List<Long>,
         destination: XmpDestination,
         startAt: Int = 0,
         onProgress: suspend (done: Int, outcome: SidecarOutcome) -> Unit = { _, _ -> },
     ): SidecarOutcome {
+        val session = open(destination)
         var outcome = SidecarOutcome.NONE
-        val target = (destination as? XmpDestination.Folder)?.let { openTree(it.treeUri) }
-        val oneOff = (destination as? XmpDestination.NextToPhotos)?.oneOff.orEmpty()
-            .mapValues { openTree(it.value) }
         var done = startAt
-        for (chunk in photoIds.drop(startAt).chunked(CHUNK)) {
-            outcome += if (target != null) {
-                sidecars.writeInto(chunk, target, target.rootDocumentId)
-            } else {
-                sidecars.write(chunk, oneOff = oneOff)
-            }
-            done += chunk.size
+        for (photoId in photoIds.drop(startAt)) {
+            outcome += exportOne(session, photoId).outcome
+            done++
             onProgress(done, outcome)
         }
         return outcome
     }
 
     companion object {
-        const val CHUNK = 25
         private const val SQL_CHUNK = 500
     }
 }

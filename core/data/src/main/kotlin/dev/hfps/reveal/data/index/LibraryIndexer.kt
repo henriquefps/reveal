@@ -441,7 +441,9 @@ class LibraryIndexer(
                         ) {
                             queue += SidecarJob(known.id, sidecar)
                         } else if (sidecar == null && known.xmpDocumentId != null) {
+                            // A sidecar missing on a scan forgets its record: a file there later is a first read again.
                             photos.setSidecar(known.id, null, null)
+                            db.cullingDao().forgetSidecar(known.id)
                         }
                     }
                 }

@@ -1,6 +1,7 @@
 package dev.hfps.reveal.data.library
 
 import android.content.Context
+import android.net.Uri
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -10,11 +11,17 @@ import dev.hfps.reveal.data.db.PhotoQuerySql
 import dev.hfps.reveal.data.db.RevealDatabase
 import dev.hfps.reveal.data.db.SourceEntity
 import dev.hfps.reveal.data.edit.EditRepository
+import dev.hfps.reveal.data.handoff.FileUriTree
+import dev.hfps.reveal.data.handoff.HandoffCulling
+import dev.hfps.reveal.data.handoff.HandoffRepository
+import dev.hfps.reveal.data.handoff.HandoffRequest
 import dev.hfps.reveal.data.index.LibraryIndexer
 import dev.hfps.reveal.data.model.PhotoQuery
 import dev.hfps.reveal.data.model.PickFlag
 import dev.hfps.reveal.data.model.SourceKind
 import dev.hfps.reveal.data.model.SourceState
+import dev.hfps.reveal.data.storage.DocumentEntry
+import dev.hfps.reveal.data.storage.DocumentTree
 import dev.hfps.reveal.data.synthetic.SyntheticExif
 import dev.hfps.reveal.data.synthetic.SyntheticShoot
 import dev.hfps.reveal.data.xmp.XmpDevelop
@@ -26,6 +33,8 @@ import dev.hfps.reveal.pipeline.recipe.Recipe
 import dev.hfps.reveal.pipeline.recipe.RecipeDiff
 import java.io.File
 import java.time.OffsetDateTime
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Before
@@ -81,15 +90,93 @@ class XmpExportTest {
 
     private fun sidecars(dir: File) = dir.list().orEmpty().filter { it.endsWith(".xmp") }.sorted()
 
+    /** Every create and write that reaches a tree. */
+    private class RecordingTree(private val inner: DocumentTree) : DocumentTree by inner {
+        val writes = mutableListOf<String>()
+
+        override fun writeBytes(documentId: String, bytes: ByteArray) {
+            writes += "write $documentId"
+            inner.writeBytes(documentId, bytes)
+        }
+
+        override fun create(parentDocumentId: String, name: String, mimeType: String): DocumentEntry {
+            writes += "create $name"
+            return inner.create(parentDocumentId, name, mimeType)
+        }
+    }
+
+    /** A provider's de-duplication: a taken name gets ` (1)`, ` (2)`, ... as SAF providers do. */
+    private class DedupingTree(private val root: File) : DocumentTree by FileDocumentTree(root) {
+        override fun create(parentDocumentId: String, name: String, mimeType: String): DocumentEntry {
+            val dir = if (parentDocumentId.isEmpty()) root else File(root, parentDocumentId)
+            val stem = name.substringBeforeLast('.')
+            val ext = name.substringAfterLast('.')
+            val free = generateSequence(0) { it + 1 }
+                .map { n -> if (n == 0) name else "$stem ($n).$ext" }
+                .first { !File(dir, it).exists() }
+            return FileDocumentTree(root).create(parentDocumentId, free, mimeType)
+        }
+    }
+
     @Test
-    fun `rating, flagging and editing write no sidecar on their own`() = runTest {
+    fun `rating, flagging, labels, edits, hand-offs and merges write no sidecar on their own`() = runTest {
         raw("DSC00001")
-        val ids = indexed()
-        db.photoDao().setRating(ids, 4)
-        db.photoDao().setFlag(ids, PickFlag.PICK)
-        val v = db.photoDao().firstVersion(ids.single())!!
+        val card = File(shoot, "DSC00002.JPG").apply {
+            writeBytes(SyntheticShoot.jpeg(SyntheticShoot.markerOnlyJpeg(60, 40), SyntheticExif()) + "2".toByteArray())
+        }
+        val folderTree = RecordingTree(FileDocumentTree(shoot))
+        val handoffFiles = FileUriTree()
+        val handoffTree = RecordingTree(handoffFiles)
+        val trees = DocumentTreeFactory { source -> if (source.kind == SourceKind.FOLDER) folderTree else handoffTree }
+        val library = LibraryRepository(
+            context.contentResolver,
+            db,
+            null,
+            trees,
+            SidecarSync(db, trees, "Reveal 0.9.0", writeEdits = { true }),
+            CoroutineScope(Dispatchers.Unconfined),
+        )
+        val sourceId = source(writable = true)
+        LibraryIndexer(db).index(sourceId, folderTree)
+        LibraryIndexer(db).fillFingerprints(sourceId, folderTree)
+        val ids = db.photoDao().rows(PhotoQuerySql.toQuery(PhotoQuery())).map { it.id }.distinct()
+
+        // The library's actions.
+        library.setRating(ids, 4)
+        library.setFlag(ids, PickFlag.PICK)
+        val v = db.photoDao().firstVersion(ids.first())!!
         val edit = Recipe(light = Light(exposureEv = 1f))
         EditRepository(db) { 1_778_000_000_000L }.commit(v, edit, RecipeDiff.between(Recipe(), edit))
+
+        // A hand-off of a folder file with a label (folder first: the folder's photo takes the values).
+        val handoffs = HandoffRepository(context.contentResolver, db, LibraryIndexer(db), handoffTree) { 2_000L }
+        val sameAsFolder = Uri.parse("content://media/external/images/media/2")
+        handoffFiles.aliases[sameAsFolder.toString()] = card
+        handoffs.receive(
+            HandoffRequest(
+                listOf(sameAsFolder),
+                culling = mapOf(sameAsFolder to HandoffCulling(rating = 2, label = "Red")),
+            ),
+        )
+        // A hand-off first, then the same file appears in the folder: merged.
+        val staged = File(temp.newFolder("staging"), "DSC00003.JPG").apply {
+            writeBytes(SyntheticShoot.jpeg(SyntheticShoot.markerOnlyJpeg(60, 40), SyntheticExif()) + "3".toByteArray())
+        }
+        val first = Uri.parse("content://media/external/images/media/3")
+        handoffFiles.aliases[first.toString()] = staged
+        handoffs.receive(
+            HandoffRequest(listOf(first), culling = mapOf(first to HandoffCulling(rating = 5, label = "Blue"))),
+        )
+        staged.copyTo(File(shoot, "DSC00003.JPG"))
+        LibraryIndexer(db).index(sourceId, folderTree)
+        LibraryIndexer(db).fillFingerprints(sourceId, folderTree)
+        assertThat(library.mergeHandoffs(sourceId).merged).isEqualTo(1)
+
+        val photos = db.photoDao().rows(PhotoQuerySql.toQuery(PhotoQuery())).associateBy { it.name }
+        assertThat(photos.getValue("DSC00002.JPG").label).isEqualTo("Red")
+        assertThat(photos.getValue("DSC00003.JPG").label).isEqualTo("Blue")
+        assertThat(folderTree.writes).isEmpty()
+        assertThat(handoffTree.writes).isEmpty()
         assertThat(sidecars(shoot)).isEmpty()
     }
 
@@ -146,10 +233,71 @@ class XmpExportTest {
         assertThat(File(out, "DSC00002.xmp").readText()).contains("darktable")
         assertThat(ratingOf(File(out, "DSC00002.xmp"))).isEqualTo(2)
         assertThat(own.readText()).isEqualTo(before)
-        // The same names again: nothing is overwritten (the provider de-duplicates; the file tree refuses, so counted).
-        val again = export().run(ids, XmpDestination.Folder(out.path))
-        assertThat(again.written + again.databaseOnly).isEqualTo(2)
-        assertThat(File(out, "DSC00001.xmp").length()).isGreaterThan(0)
+    }
+
+    @Test
+    fun `a name taken in the chosen folder gets the provider's copy name, the file already there stays intact`() =
+        runTest {
+            raw("DSC00001")
+            val ids = indexed(writable = false)
+            db.photoDao().setRating(ids, 4)
+            val theirs = File(out, "DSC00001.xmp").apply {
+                writeText(SyntheticShoot.sidecar(rating = 1, label = "Purple", creatorTool = "darktable"))
+            }
+            val before = theirs.readText()
+            val deduping = XmpExport(db, sync()) { DedupingTree(File(it)) }
+
+            val outcome = deduping.run(ids, XmpDestination.Folder(out.path))
+
+            assertThat(outcome.written).isEqualTo(1)
+            assertThat(sidecars(out)).containsExactly("DSC00001 (1).xmp", "DSC00001.xmp")
+            val ours = File(out, "DSC00001 (1).xmp").readText()
+            assertThat(ours).isNotEqualTo(before)
+            assertThat(theirs.readText()).isEqualTo(before)
+            assertThat(ratingOf(File(out, "DSC00001 (1).xmp"))).isEqualTo(4)
+            assertThat(ratingOf(theirs)).isEqualTo(1)
+        }
+
+    @Test
+    fun `a photo's malformed sidecar is left alone and the chosen folder gets a fresh one`() = runTest {
+        raw("A")
+        val broken = "<x:xmpmeta broken"
+        File(shoot, "A.xmp").writeText(broken)
+        val ids = indexed(writable = false)
+        db.photoDao().setRating(ids, 5)
+        val outcome = export().run(ids, XmpDestination.Folder(out.path))
+        assertThat(outcome).isEqualTo(SidecarOutcome(1, 0))
+        assertThat(File(shoot, "A.xmp").readText()).isEqualTo(broken)
+        assertThat(ratingOf(File(out, "A.xmp"))).isEqualTo(5)
+    }
+
+    @Test
+    fun `a job run again overwrites the documents it wrote, no copies`() = runTest {
+        raw("DSC00001")
+        raw("DSC00002")
+        val ids = indexed(writable = true)
+        db.photoDao().setRating(ids, 3)
+        val deduping = XmpExport(db, sync()) { DedupingTree(File(it)) }
+        // Into a chosen folder: the first run recorded what it created (as the job's log does).
+        val folder = deduping.open(XmpDestination.Folder(out.path))
+        val created = HashMap<Long, String>()
+        for (id in ids) deduping.exportOne(folder, id) { created[id] = it }
+        db.photoDao().setRating(ids, 5)
+        for (id in ids) deduping.exportOne(folder, id, ownDocument = created[id])
+        assertThat(sidecars(out)).containsExactly("DSC00001.xmp", "DSC00002.xmp")
+        assertThat(ratingOf(File(out, "DSC00001.xmp"))).isEqualTo(5)
+
+        // Next to the photos: the photo records the sidecar it created before writing it, so a rerun merges into it.
+        val next = deduping.open(XmpDestination.NextToPhotos())
+        for (id in ids) deduping.exportOne(next, id)
+        for (id in ids) deduping.exportOne(next, id)
+        assertThat(sidecars(shoot)).containsExactly("DSC00001.xmp", "DSC00002.xmp")
+        // Even when the first write was interrupted between creating the document and filling it.
+        val interrupted = ids.first()
+        File(shoot, db.photoDao().get(interrupted)!!.xmpDocumentId!!).writeBytes(ByteArray(0))
+        assertThat(deduping.exportOne(next, interrupted).outcome.written).isEqualTo(1)
+        assertThat(sidecars(shoot)).containsExactly("DSC00001.xmp", "DSC00002.xmp")
+        assertThat(ratingOf(File(shoot, "DSC00001.xmp"))).isEqualTo(5)
     }
 
     private fun ratingOf(file: File) = dev.hfps.reveal.data.xmp.XmpReader.read(file.readBytes()).rating

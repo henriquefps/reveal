@@ -11,6 +11,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.ImageBitmap
@@ -266,11 +267,12 @@ fun LibraryScreen(
     )
 }
 
-/** Export XMP's destination sheet and the folder pickers it launches (ADR 0026 "Amendment W4"). */
+/** Export XMP's destination sheet and the folder pickers it launches (ADR 0026 "Amendment W4"); public for its test. */
 @Composable
-private fun XmpExportHost(sheet: XmpExportSheetState?, onRun: (XmpDestination) -> Unit, onDismiss: () -> Unit) {
+fun XmpExportHost(sheet: XmpExportSheetState?, onRun: (XmpDestination) -> Unit, onDismiss: () -> Unit) {
     // The picker in flight: a folder to write the sidecars into (null), or the one folder to write next to (its id).
-    var pickSource by remember { mutableStateOf<Long?>(null) }
+    // Saveable: the activity may be recreated (rotation) while the system picker is open.
+    var pickSource by rememberSaveable { mutableStateOf<Long?>(null) }
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         val source = pickSource
         pickSource = null
@@ -302,7 +304,7 @@ private fun XmpExportHost(sheet: XmpExportSheetState?, onRun: (XmpDestination) -
 }
 
 /** Shows the ViewModel's one-off messages in the snackbar. */
-@Suppress("LongMethod")
+@Suppress("LongMethod", "CyclomaticComplexMethod")
 @Composable
 private fun LibraryMessages(events: Flow<LibraryMessage>, snackbar: SnackbarHostState) {
     val resources = LocalResources.current
@@ -332,6 +334,8 @@ private fun LibraryMessages(events: Flow<LibraryMessage>, snackbar: SnackbarHost
                     message.count,
                     message.count,
                 )
+
+                LibraryMessage.XmpWrongFolder -> resources.getString(R.string.xmp_export_wrong_folder)
 
                 is LibraryMessage.PresetQueued -> resources.getQuantityString(
                     R.plurals.presets_batch_queued,

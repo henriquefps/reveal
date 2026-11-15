@@ -388,11 +388,12 @@
     <string name="xmp_export_next">Ao lado das fotos</string>
     <string name="xmp_export_next_note">Um .xmp junto de cada arquivo, na pasta em que ele está.</string>
     <string name="xmp_export_next_pick">Ao lado das fotos: escolha “%1$s”</string>
-    <string name="xmp_export_next_pick_note">O Reveal ainda não pode gravar nesta pasta. Escolha-a uma vez para gravar nela; o Reveal não guarda esse acesso.</string>
+    <string name="xmp_export_next_pick_note">O Reveal ainda não pode gravar nesta pasta. Escolha-a uma vez para gravar nela; o Reveal guarda esse acesso só até a exportação terminar.</string>
     <string name="xmp_export_choose">Escolher uma pasta…</string>
     <string name="xmp_export_choose_note">Arquivos .xmp soltos, com o nome de cada foto, numa pasta que você escolher.</string>
     <string name="xmp_export_choose_only_note">Arquivos .xmp soltos, com o nome de cada foto, numa pasta que você escolher. As fotos que só o servidor tem, ou que outros apps enviaram, vão por aqui.</string>
     <string name="xmp_export_what">Notas, rótulos, marcações e a edição. Um arquivo que não é um XMP válido nunca é sobrescrito.</string>
+    <string name="xmp_export_wrong_folder">Essa pasta não contém estas fotos. Nada foi gravado: escolha a pasta das fotos (ou uma acima dela).</string>
     <string name="xmp_export_cancel">Cancelar</string>
     <string name="xmp_export_channel">Exportação de XMP</string>
     <plurals name="xmp_export_progress">

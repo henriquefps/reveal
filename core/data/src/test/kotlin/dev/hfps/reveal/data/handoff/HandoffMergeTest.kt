@@ -206,7 +206,14 @@ class HandoffMergeTest {
         val card = cardFile("DSC00300.JPG")
         addFolder()
         handOff(media(300, card), HandoffCulling(rating = 4))
-        // Someone rates it on the folder afterwards (Reveal or another app writing the sidecar).
+        // Another app creates the folder's sidecar: a first read keeps the 4 stars Reveal holds (ADR 0026).
+        File(folderDir, "DSC00300.xmp").apply {
+            writeBytes(XmpWriter.update(null, XmpFields(rating = 2), "x", "d"))
+            setLastModified(3_000L)
+        }
+        LibraryIndexer(db) { now }.index(folderId, folderTree)
+        assertThat(allPhotos().single().rating).isEqualTo(4)
+        // Someone rates it there afterwards: a change in a file already read.
         now = 5_000L
         File(folderDir, "DSC00300.xmp").apply {
             writeBytes(XmpWriter.update(null, XmpFields(rating = 1), "x", "d"))

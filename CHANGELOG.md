@@ -24,18 +24,26 @@ All notable changes to Reveal are documented here. The format follows
 - **Export XMP** (W4, docs/adr/0026 "Amendment W4"): write `.xmp` sidecars (ratings, labels, flags and the edit) on
   demand, for the selected photos, a whole folder (Manage folders ⋯) or everything the current filter shows (⋯ menu),
   next to the photos or into a folder you choose. It runs in the background with a notification and tells you how many
-  were written and how many were skipped.
+  were written and how many were skipped. A folder you pick keeps its access until the export ends (so an export the
+  system interrupts resumes, without writing duplicates); a folder picked for "next to the photos" must be the photos'
+  folder or one above it.
 
 ### Changed
 - Reveal no longer writes `.xmp` sidecars on its own, anywhere (edits, ratings, flags, labels, hand-offs): they travel
   through the server, and Export XMP writes sidecars when you ask. The "Write edits to XMP sidecars" setting is gone.
   New folders and hand-offs are granted read access only; reading existing sidecars is unchanged.
+- A sidecar another app creates later (darktable writes one star by default) no longer overrides a rating, flag or
+  label you already have: the first read of a sidecar only fills what is empty; later changes in that file still win
+  (the same rule as Hoard and its server).
 - The database is at version 15: photos keep their camera make, model and lens. Photos indexed before read them again
   in the background (folders after their walk, hand-offs on start, Server photos within each sync's header budget),
   without marking anything for sync.
 - Server photos without a capture time sort by their NAS file's time, or go to "No date", instead of the time their
   record arrived.
 ### Fixed
+- A preset batch or XMP export that Android stops in the background (not your Cancel) is resumed instead of dropped.
+- Export XMP to a chosen folder: a photo whose own sidecar is malformed now gets a fresh sidecar there (its own file
+  is still left alone).
 - A large library no longer stalls the phone at start (W3/C, docs/adr/0018 "W3/C"): with about 21,000 photos on the
   server, every grid thumbnail of a server photo and every server header opened the original through a content
   provider proxy (an appfuse mount through the storage service per photo), and the photos other apps handed over were

@@ -105,28 +105,52 @@ class SidecarSync(
 
     /**
      * Writes one flat `<stem>.xmp` per photo of [photoIds] into [folderId] of [destination] (a folder the user picked):
-     * the photo's own sidecar, when it can be read, is the base that is merged (it stays as it was); the provider
-     * de-duplicates a name that is taken, as the image export's. Works for every kind of photo.
+     * the photo's own sidecar, when it can be read, is the base that is merged (it stays as it was; a malformed one is
+     * never touched and the chosen folder gets a fresh sidecar instead); the provider de-duplicates a name that is
+     * taken, as the image export's. Works for every kind of photo.
      */
     suspend fun writeInto(photoIds: List<Long>, destination: DocumentTree, folderId: String): SidecarOutcome {
         var outcome = SidecarOutcome.NONE
-        for (photo in photos.getAll(photoIds)) {
-            outcome += try {
-                val bytes = merged(photo, readOwn(photo), CullingField.ALL)
-                val created = destination.create(folderId, "${stemOf(photo)}${SidecarNames.SUFFIX}", SIDECAR_MIME)
-                destination.writeBytes(created.documentId, bytes)
-                SidecarOutcome(1, 0)
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: XmpException) {
-                Log.w(TAG, "Sidecar of photo ${photo.id} is malformed, nothing exported", e)
-                SidecarOutcome(0, 0, 1)
-            } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
-                Log.w(TAG, "No sidecar exported for photo ${photo.id}", e)
-                SidecarOutcome(0, 1)
-            }
-        }
+        for (photo in photos.getAll(photoIds)) outcome += writeOneInto(photo.id, destination, folderId).outcome
         return outcome
+    }
+
+    /** What one photo's write into a chosen folder did, and the document it wrote (null when nothing was written). */
+    data class FolderWrite(val outcome: SidecarOutcome, val documentId: String? = null)
+
+    /**
+     * [writeInto] for one photo. [ownDocument]: the document this same export already created for the photo (a job
+     * resumed after a kill): it is overwritten instead of creating a `(1)` copy. [onCreated] gets a new document's id
+     * before any byte is written, so the caller can record it first.
+     */
+    suspend fun writeOneInto(
+        photoId: Long,
+        destination: DocumentTree,
+        folderId: String,
+        ownDocument: String? = null,
+        onCreated: suspend (String) -> Unit = {},
+    ): FolderWrite {
+        val photo = photos.getAll(listOf(photoId)).firstOrNull() ?: return FolderWrite(SidecarOutcome(0, 1))
+        return try {
+            val own = readOwn(photo)
+            val bytes = try {
+                merged(photo, own, CullingField.ALL)
+            } catch (e: XmpException) {
+                // The photo's own sidecar is malformed: left exactly as it is, the chosen folder gets a fresh one.
+                Log.w(TAG, "Sidecar of photo ${photo.id} is malformed, a fresh one is exported", e)
+                merged(photo, null, CullingField.ALL)
+            }
+            val documentId = ownDocument?.takeIf { runCatching { destination.stat(it) }.getOrNull() != null }
+                ?: destination.create(folderId, "${stemOf(photo)}${SidecarNames.SUFFIX}", SIDECAR_MIME).documentId
+                    .also { onCreated(it) }
+            destination.writeBytes(documentId, bytes)
+            FolderWrite(SidecarOutcome(1, 0), documentId)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
+            Log.w(TAG, "No sidecar exported for photo ${photo.id}", e)
+            FolderWrite(SidecarOutcome(0, 1))
+        }
     }
 
     /** The photo's own sidecar's bytes (read only), or null when it has none or cannot be reached. */
@@ -196,7 +220,9 @@ class SidecarSync(
         // because an edit was reset.
         val nothing = develop == null || (current == null && develop.onlyIfPresent)
         if (editsOnly && nothing) return null
+        // An empty document is one this write created and was interrupted before filling: no base to merge.
         val existing = current?.let { tree.readBytes(it.documentId, LibraryIndexer.MAX_SIDECAR_BYTES) }
+            ?.takeIf { it.isNotEmpty() }
         val bytes = XmpWriter.update(
             existing,
             fields,
@@ -236,6 +262,9 @@ class SidecarSync(
             val stem = ImageFormats.stem(main?.name ?: photo.name)
             val created = try {
                 tree.create(photo.folderDocumentId, "$stem${SidecarNames.SUFFIX}", SIDECAR_MIME)
+                    // Recorded before any byte is written: a write interrupted here and run again overwrites this
+                    // document instead of creating a `(1)` copy next to it.
+                    .also { photos.setSidecar(photo.id, it.documentId, null) }
             } catch (e: IOException) {
                 hidden ?: throw e
             }

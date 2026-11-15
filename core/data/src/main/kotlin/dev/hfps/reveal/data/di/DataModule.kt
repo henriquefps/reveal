@@ -30,6 +30,7 @@ import dev.hfps.reveal.data.library.DocumentTreeFactory
 import dev.hfps.reveal.data.library.LibraryRepository
 import dev.hfps.reveal.data.library.SidecarSync
 import dev.hfps.reveal.data.library.XmpExport
+import dev.hfps.reveal.data.library.XmpGrants
 import dev.hfps.reveal.data.mask.AiMasks
 import dev.hfps.reveal.data.model.SourceKind
 import dev.hfps.reveal.data.preset.AppBuiltInPresets
@@ -173,6 +174,15 @@ object DataModule {
         sidecars: SidecarSync,
     ): XmpExport = XmpExport(database, sidecars) { SafDocumentTree(context.contentResolver, it.toUri()) }
 
+    /** Export XMP's folder grants (ADR 0026 "Export XMP"). */
+    @Provides
+    @Singleton
+    fun provideXmpGrants(
+        @ApplicationContext context: Context,
+        database: RevealDatabase,
+        exportPreferences: ExportPreferences,
+    ): XmpGrants = XmpGrants(context.contentResolver, database) { exportPreferences.folderUri }
+
     /** The XMP switch of Settings (ADR 0026). */
     @Provides
     @Singleton
@@ -201,6 +211,8 @@ object DataModule {
         previews = previews,
         readEdits = { xmp.readEdits.value },
         grants = readGrants(context),
+        // The debug build's synthetic documents provider (app/src/debug) needs no grant; absent in release.
+        grantFreeAuthorities = setOf("${context.packageName}.synthetic"),
     )
 
     @Provides

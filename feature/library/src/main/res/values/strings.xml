@@ -372,11 +372,12 @@
     <string name="xmp_export_next">Next to the photos</string>
     <string name="xmp_export_next_note">A .xmp beside each file, in the folder it is in.</string>
     <string name="xmp_export_next_pick">Next to the photos: pick “%1$s”</string>
-    <string name="xmp_export_next_pick_note">Reveal cannot write to this folder yet. Pick it once to write there; Reveal does not keep the access.</string>
+    <string name="xmp_export_next_pick_note">Reveal cannot write to this folder yet. Pick it once to write there; Reveal keeps the access only until the export ends.</string>
     <string name="xmp_export_choose">Choose a folder…</string>
     <string name="xmp_export_choose_note">Flat .xmp files, named after each photo, in a folder you pick.</string>
     <string name="xmp_export_choose_only_note">Flat .xmp files, named after each photo, in a folder you pick. Photos that only the server holds, or that other apps handed over, go here.</string>
     <string name="xmp_export_what">Ratings, labels, flags and the edit. A sidecar that is not valid XMP is never overwritten.</string>
+    <string name="xmp_export_wrong_folder">That folder does not hold these photos. Nothing was written: pick the photos’ folder (or one above it).</string>
     <string name="xmp_export_cancel">Cancel</string>
     <string name="xmp_export_channel">XMP export</string>
     <plurals name="xmp_export_progress">

@@ -19,6 +19,7 @@ import dev.hfps.reveal.data.library.AddSourceResult
 import dev.hfps.reveal.data.library.LibraryRepository
 import dev.hfps.reveal.data.library.XmpDestination
 import dev.hfps.reveal.data.library.XmpExport
+import dev.hfps.reveal.data.library.XmpGrants
 import dev.hfps.reveal.data.model.LibraryScope
 import dev.hfps.reveal.data.model.PhotoFilters
 import dev.hfps.reveal.data.model.PhotoListCodec
@@ -58,6 +59,7 @@ import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /** One-off messages for the snackbar. */
 sealed interface LibraryMessage {
@@ -87,6 +89,9 @@ sealed interface LibraryMessage {
 
     /** Export XMP was queued for [count] photos (ADR 0026). */
     data class XmpQueued(val count: Int) : LibraryMessage
+
+    /** The folder picked for "next to the photos" is not (and does not contain) the photos' folder: nothing written. */
+    data object XmpWrongFolder : LibraryMessage
 
     /** [count] photos deleted from the sync server ("Delete from server"). */
     data class DeletedFromServer(val count: Int) : LibraryMessage
@@ -119,6 +124,7 @@ class LibraryViewModel @Inject constructor(
     private val unavailable: UnavailableHelper,
     private val versions: VersionRepository,
     private val xmpExport: XmpExport,
+    private val xmpGrants: XmpGrants,
 ) : ViewModel() {
     /**
      * Offer the "Photos and videos" permission now (ADR 0011 "Gallery access"): a photo the gallery shared can no
@@ -177,12 +183,34 @@ class LibraryViewModel @Inject constructor(
 
     fun dismissXmpExport() = _state.update { it.copy(xmpExport = null) }
 
-    /** Queues the export of the open sheet's photos to [destination]; the notification reports the result. */
+    /**
+     * Queues the export of the open sheet's photos to [destination]; the notification reports the result. A picked
+     * folder gets a persisted READ|WRITE grant for the job's lifetime (the job releases it when it ends); a tree picked
+     * for "next to the photos" must be, or contain, that folder, else nothing starts and the user is told.
+     */
     fun runXmpExport(context: android.content.Context, destination: XmpDestination) {
         val sheet = _state.value.xmpExport ?: return
-        XmpExportWorker.enqueue(context.applicationContext, sheet.photoIds, destination)
-        _state.update { it.copy(xmpExport = null, selected = emptySet()) }
-        viewModelScope.launch { messages.send(LibraryMessage.XmpQueued(sheet.photoIds.size)) }
+        val app = context.applicationContext
+        viewModelScope.launch {
+            if (destination is XmpDestination.NextToPhotos) {
+                val isChild = XmpGrants.providerChild(app.contentResolver)
+                val wrong = withContext(Dispatchers.IO) {
+                    destination.oneOff.any { (sourceId, tree) -> !xmpExport.covers(sourceId, tree, isChild) }
+                }
+                if (wrong) {
+                    messages.send(LibraryMessage.XmpWrongFolder)
+                    return@launch
+                }
+            }
+            val trees = when (destination) {
+                is XmpDestination.Folder -> listOf(destination.treeUri)
+                is XmpDestination.NextToPhotos -> destination.oneOff.values.toList()
+            }
+            trees.forEach(xmpGrants::take)
+            XmpExportWorker.enqueue(app, sheet.photoIds, destination)
+            _state.update { it.copy(xmpExport = null, selected = emptySet()) }
+            messages.send(LibraryMessage.XmpQueued(sheet.photoIds.size))
+        }
     }
 
     /** True when the route asked to open on "Opened from other apps" (a hand-off of several photos, ADR 0011). */

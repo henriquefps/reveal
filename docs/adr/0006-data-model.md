@@ -376,3 +376,8 @@ to hoard-server, ADR 0027). Reveal writes no sidecar by itself any more; the "Sa
 Sidecars are written only by "Export XMP" (ADR 0026 "Amendment W4"), an explicit action. Reading sidecars (the walk,
 imports, hidden names) is unchanged, and folders are added with a READ grant only.
 
+A sidecar another app creates later no longer overrides what Reveal holds: on the **first read** of a sidecar (never
+read at that path, or its record dropped because the file disappeared) only the fields that hold no value are filled
+(non-default: rating != 0, flag != none, label non-empty; an explicit 0 stars is no value); later reads of the same file
+import the fields that changed since the last read (LWW by mtime). The rule is shared with Hoard and hoard-server; the
+full wording is ADR 0026 "First read of a sidecar".

@@ -5,6 +5,7 @@ import android.content.Intent
 import android.net.Uri
 import android.provider.DocumentsContract
 import android.util.Log
+import androidx.annotation.VisibleForTesting
 import androidx.core.net.toUri
 import dev.hfps.image.ImageInput
 import dev.hfps.image.format.PhotoMetadata
@@ -222,6 +223,11 @@ class LibraryRepository(
      * it; null = unknown (tests, Reveal's own providers). Lets the access check skip opens (ADR 0018 "W3/C").
      */
     private val grants: ((Uri) -> Boolean)? = null,
+    /**
+     * Providers of this app that need no grant and may be written (the debug build's `SyntheticDocumentsProvider`):
+     * named explicitly, never inferred from a missing grant row.
+     */
+    private val grantFreeAuthorities: Set<String> = emptySet(),
 ) {
     private val sourceDao = db.sourceDao()
     private val photoDao = db.photoDao()
@@ -519,15 +525,15 @@ class LibraryRepository(
 
     /**
      * Takes the persistable grant, READ only (W4: Reveal never asks for write; sidecars are written only by Export XMP,
-     * through a grant the user gives then or one an earlier version took). True when the grant includes write, which
-     * only happens for a provider that needs no grant (our own debug provider) or one already held. A provider
-     * without persistable grants is fine.
+     * through a grant the user gives then or one an earlier version took). True only when a WRITE grant really is
+     * persisted for the tree (one an earlier version took), or the tree is one of [grantFreeAuthorities]' (the debug
+     * test provider). A provider without persistable grants is read only.
      */
-    private fun persist(treeUri: Uri): Boolean {
+    @VisibleForTesting
+    internal fun persist(treeUri: Uri): Boolean {
         runCatching { resolver.takePersistableUriPermission(treeUri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
-        val persisted = resolver.persistedUriPermissions.firstOrNull { it.uri == treeUri }
-        // No persisted row at all: a provider of our own process (debug test provider) that needs no grant.
-        return persisted?.isWritePermission ?: true
+        if (treeUri.authority in grantFreeAuthorities) return true
+        return resolver.persistedUriPermissions.any { it.uri == treeUri && it.isWritePermission }
     }
 
     /** Forgets a folder: its index, edits and the grant. The files are never touched. */

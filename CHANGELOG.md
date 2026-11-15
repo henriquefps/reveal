@@ -6,6 +6,8 @@ All notable changes to Reveal are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-11-15
+
 ### Added
 - Export formats (W2/E, docs/adr/0009 "W2/E"): **PNG** (8 or 16 bits), **16-bit TIFF** (Deflate, for further editing),
   **AVIF** (8 or 10 bits) and **HEIF in Display P3** (8 bits, 10 where the device's HEVC encoder takes 10-bit input),

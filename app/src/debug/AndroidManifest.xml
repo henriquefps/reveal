@@ -13,7 +13,7 @@
              tests and measurements. Its own process, so reads cross a binder like a real provider. -->
         <provider
             android:name=".debug.SyntheticDocumentsProvider"
-            android:authorities="dev.hfps.reveal.debug.synthetic"
+            android:authorities="${applicationId}.synthetic"
             android:exported="true"
             android:grantUriPermissions="true"
             android:permission="android.permission.MANAGE_DOCUMENTS"

@@ -64,6 +64,32 @@ android {
             signingConfig = signingConfigs.getByName("debug")
             matchingFallbacks += "release"
         }
+        // The bench build without R8, for collecting the Baseline Profile only (`:benchmark`, docs/adr/0001 "Baseline
+        // Profile"): the profile must name the real classes and methods (R8 rewrites them for the minified builds).
+        // Same app id as bench (never installed alongside it), never the release app.
+        create("benchProfile") {
+            initWith(getByName("bench"))
+            isMinifyEnabled = false
+            isShrinkResources = false
+            matchingFallbacks += listOf("bench", "release")
+        }
+    }
+
+    buildFeatures {
+        // SyntheticDocumentsProvider's authority (`<application id>.synthetic`).
+        buildConfig = true
+    }
+
+    sourceSets {
+        // The generated-files SAF provider: debug (instrumented tests) and the bench builds (release measurements).
+        for (type in listOf("debug", "bench", "benchProfile")) {
+            named(type) { kotlin.directories += "src/synthetic/kotlin" }
+        }
+        // benchProfile is the bench app, unminified: the same BenchActivity and manifest.
+        named("benchProfile") {
+            kotlin.directories += "src/bench/kotlin"
+            manifest.srcFile("src/bench/AndroidManifest.xml")
+        }
     }
 
     testOptions {
@@ -91,6 +117,8 @@ dependencies {
     implementation(libs.androidx.navigation.compose)
     implementation(libs.androidx.hilt.navigation.compose)
     implementation(libs.kotlinx.serialization.json)
+    // Installs the Baseline Profile (src/main/baselineProfiles) on sideloaded installs too (docs/adr/0001).
+    implementation(libs.androidx.profileinstaller)
 
     androidTestImplementation(libs.androidx.test.ext.junit)
     androidTestImplementation(libs.androidx.test.runner)

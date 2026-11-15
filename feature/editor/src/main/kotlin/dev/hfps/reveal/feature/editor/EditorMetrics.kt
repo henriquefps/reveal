@@ -2,6 +2,7 @@ package dev.hfps.reveal.feature.editor
 
 import android.os.Debug
 import android.os.SystemClock
+import android.os.Trace
 import android.util.Log
 import dev.hfps.reveal.pipeline.gl.FrameStats
 import dev.hfps.reveal.pipeline.gl.GpuDevelopRenderer
@@ -107,7 +108,13 @@ object EditorMetrics {
     val isDeveloped: Boolean get() = developedMs >= 0
 
     internal fun start() {
+        endSections()
         startedAt = SystemClock.elapsedRealtime()
+        // Async trace sections of the open (Macrobenchmark's TraceSectionMetric, docs/adr/0001 "Baseline Profile"):
+        // to the preview on screen and to the first developed GPU frame.
+        Trace.beginAsyncSection(SECTION_PREVIEW, SECTION_COOKIE)
+        Trace.beginAsyncSection(SECTION_DEVELOPED, SECTION_COOKIE)
+        openSections = 2
         previewMs = -1
         proxyMs = -1
         gpuReadyMs = -1
@@ -123,6 +130,10 @@ object EditorMetrics {
     }
 
     internal fun preview() {
+        if (previewMs < 0 && openSections == 2) {
+            Trace.endAsyncSection(SECTION_PREVIEW, SECTION_COOKIE)
+            openSections = 1
+        }
         previewMs = since()
         sampleMemory()
     }
@@ -149,6 +160,7 @@ object EditorMetrics {
 
     internal fun frame(stats: FrameStats) {
         if (developedMs < 0) {
+            endSections()
             developedMs = since()
             sampleMemory()
             Log.i(TAG, summary())
@@ -160,9 +172,23 @@ object EditorMetrics {
     }
 
     internal fun failed(reason: String) {
+        endSections()
         error = reason
         Log.w(TAG, "open failed: $reason")
     }
+
+    @Volatile private var openSections = 0
+
+    private fun endSections() {
+        if (openSections == 2) Trace.endAsyncSection(SECTION_PREVIEW, SECTION_COOKIE)
+        if (openSections >= 1) Trace.endAsyncSection(SECTION_DEVELOPED, SECTION_COOKIE)
+        openSections = 0
+    }
+
+    /** Trace section names of an open (benchmarks read them). */
+    const val SECTION_PREVIEW = "RevealEditor.openToPreview"
+    const val SECTION_DEVELOPED = "RevealEditor.openToDeveloped"
+    private const val SECTION_COOKIE = 0x5245
 
     /** One Auto run (analysis + rules), logged for ADR 0010's cost figure. */
     fun auto(scope: String, millis: Long) {

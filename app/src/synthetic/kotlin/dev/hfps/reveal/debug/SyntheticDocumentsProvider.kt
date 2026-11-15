@@ -9,16 +9,19 @@ import android.provider.DocumentsContract.Document
 import android.provider.DocumentsContract.Root
 import android.provider.DocumentsProvider
 import android.webkit.MimeTypeMap
+import dev.hfps.reveal.BuildConfig
 import java.io.File
 import java.io.FileNotFoundException
 
 /**
- * Debug builds only: a Storage Access Framework provider over `files/saf-test/` of the app, so instrumented tests
- * (and a person on an emulator) can add a library folder full of generated files without touching shared storage.
+ * Debug and bench builds only (`src/synthetic`, never release): a Storage Access Framework provider over
+ * `files/saf-test/` of the app, so instrumented tests (and a person on an emulator) can add a library folder full of
+ * generated files without touching shared storage.
  * It runs in its own process (`:documents`), so every listing and read crosses a binder like a real provider.
  * Document ids are paths relative to that directory (`""` = the root). A document listed in `files/saf-test/.refused`
  * (one id per line) refuses every query and open with a `SecurityException`, as a gallery URI does once the temporary
- * grant of a share ended (ADR 0011 "Unreadable hand-offs"): tests end a "grant" with [refuse].
+ * grant of a share ended (ADR 0011 "Unreadable hand-offs"): tests end a "grant" with [refuse]. The bench build's
+ * `BenchActivity` serves the 10,000-file library of the release-build measurements from it (docs/adr/0006).
  */
 class SyntheticDocumentsProvider : DocumentsProvider() {
     private val base: File get() = File(checkNotNull(context).filesDir, DIRECTORY)
@@ -73,7 +76,7 @@ class SyntheticDocumentsProvider : DocumentsProvider() {
         val refused = File(base, REFUSED).takeIf { it.isFile }?.readLines().orEmpty()
         if (documentId in refused) throw SecurityException("Permission Denial: the grant of $documentId ended")
         // A provider that no longer serves the URI: Android rethrows its IllegalArgumentException in the caller.
-        if ("$UNKNOWN$documentId" in refused) throw IllegalArgumentException("Unknown document $documentId")
+        require("$UNKNOWN$documentId" !in refused) { "Unknown document $documentId" }
     }
 
     override fun createDocument(parentDocumentId: String, mimeType: String, displayName: String): String {
@@ -119,7 +122,8 @@ class SyntheticDocumentsProvider : DocumentsProvider() {
     }
 
     companion object {
-        const val AUTHORITY = "dev.hfps.reveal.debug.synthetic"
+        /** `<application id>.synthetic` (the manifests use the same placeholder). */
+        const val AUTHORITY = BuildConfig.APPLICATION_ID + ".synthetic"
         const val DIRECTORY = "saf-test"
         const val ROOT_ID = "synthetic"
         const val ROOT_DOCUMENT = ""
@@ -169,7 +173,7 @@ class SyntheticDocumentsProvider : DocumentsProvider() {
             Document.COLUMN_FLAGS,
         )
 
-        /** The tree URI of a sub-folder of `files/saf-test` ("" = all of it), as `ACTION_OPEN_DOCUMENT_TREE` returns. */
+        /** The tree URI of a sub-folder of `files/saf-test` ("" = all of it), as the folder picker returns it. */
         fun treeUri(folder: String) = DocumentsContract.buildTreeDocumentUri(AUTHORITY, folder)
     }
 }

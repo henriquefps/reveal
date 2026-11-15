@@ -36,15 +36,37 @@ internal data class GlTarget(val texture: Int, val fbo: Int)
  *
  * [invalidate] drops everything (a new develop output). The tiled renderer runs every pass, the levels fused.
  */
-internal class DetailPasses {
-    private var lumHProgram = 0
-    private var lumVProgram = 0
-    private var lumChainProgram = 0
-    private var shrinkProgram = 0
-    private var downProgram = 0
-    private var chromaProgram = 0
-    private var blurProgram = 0
-    private val finalPrograms = HashMap<Int, Int>()
+internal class DetailPasses private constructor(private val shared: Programs, private val owner: Boolean) {
+    constructor() : this(Programs(), owner = true)
+
+    /** The compiled programs and their uniform locations, shared by [sibling]s (one compile per GL context). */
+    private class Programs {
+        var lumH = 0
+        var lumV = 0
+        var lumChain = 0
+        var shrink = 0
+        var down = 0
+        var chroma = 0
+        var blur = 0
+        val finals = HashMap<Int, Int>()
+        val locations = HashMap<Int, HashMap<String, Int>>()
+    }
+
+    private val lumHProgram get() = shared.lumH
+    private val lumVProgram get() = shared.lumV
+    private val lumChainProgram get() = shared.lumChain
+    private val shrinkProgram get() = shared.shrink
+    private val downProgram get() = shared.down
+    private val chromaProgram get() = shared.chroma
+    private val blurProgram get() = shared.blur
+    private val finalPrograms get() = shared.finals
+
+    /**
+     * Another set of caches over the same programs (the preview's half-resolution Detail, docs/adr/0012 "W2/P": its
+     * intermediates live at another size, so it keeps its own). Only this instance's [init] and [release] compile and
+     * delete the programs.
+     */
+    fun sibling(): DetailPasses = DetailPasses(shared, owner = false)
 
     private var lumKey: Any? = null
     private var lumResult: GlTarget? = null
@@ -58,7 +80,7 @@ internal class DetailPasses {
     /** The rectangle (region pixels x0, y0, x1, y1, exclusive) a partial [run] redraws; null = everything. */
     private var scissor: IntArray? = null
 
-    private val locations = HashMap<Int, HashMap<String, Int>>()
+    private val locations get() = shared.locations
 
     /** A uniform's location, looked up once per program (a lookup per frame costs a driver round trip). */
     private fun uniform(program: Int, name: String): Int =
@@ -91,13 +113,14 @@ internal class DetailPasses {
     )
 
     fun init() {
-        lumHProgram = GlSupport.compile(Shaders.FULLSCREEN_VERT, DetailShaders.LUM_H_FRAG)
-        lumVProgram = GlSupport.compile(Shaders.FULLSCREEN_VERT, DetailShaders.LUM_V_FRAG)
-        lumChainProgram = GlSupport.compile(Shaders.FULLSCREEN_VERT, DetailShaders.LUM_V_CHAIN_FRAG)
-        shrinkProgram = GlSupport.compile(Shaders.FULLSCREEN_VERT, DetailShaders.SHRINK_FRAG)
-        downProgram = GlSupport.compile(Shaders.FULLSCREEN_VERT, DetailShaders.DOWN_FRAG)
-        chromaProgram = GlSupport.compile(Shaders.FULLSCREEN_VERT, DetailShaders.CHROMA_FRAG)
-        blurProgram = GlSupport.compile(Shaders.FULLSCREEN_VERT, DetailShaders.BLUR_FRAG)
+        check(owner) { "a sibling shares its owner's programs" }
+        shared.lumH = GlSupport.compile(Shaders.FULLSCREEN_VERT, DetailShaders.LUM_H_FRAG)
+        shared.lumV = GlSupport.compile(Shaders.FULLSCREEN_VERT, DetailShaders.LUM_V_FRAG)
+        shared.lumChain = GlSupport.compile(Shaders.FULLSCREEN_VERT, DetailShaders.LUM_V_CHAIN_FRAG)
+        shared.shrink = GlSupport.compile(Shaders.FULLSCREEN_VERT, DetailShaders.SHRINK_FRAG)
+        shared.down = GlSupport.compile(Shaders.FULLSCREEN_VERT, DetailShaders.DOWN_FRAG)
+        shared.chroma = GlSupport.compile(Shaders.FULLSCREEN_VERT, DetailShaders.CHROMA_FRAG)
+        shared.blur = GlSupport.compile(Shaders.FULLSCREEN_VERT, DetailShaders.BLUR_FRAG)
         for (p in programs()) {
             GLES30.glUseProgram(p)
             GLES30.glUniform1i(uniform(p, "uSrc"), 0)
@@ -469,6 +492,27 @@ internal class DetailPasses {
         GLES30.glUniform2i(uniform(program, "uOrigin"), region.x, region.y)
         GLES30.glUniform2i(uniform(program, "uImage"), region.imageWidth, region.imageHeight)
         GLES30.glUniform2i(uniform(program, "uSize"), region.width, region.height)
+        GLES30.glUniform1i(uniform(program, "uCoarse"), region.coarse)
+    }
+
+    /**
+     * The 2 x 2 means of [lab] (a whole-image region, origin 0) into [out] (`(W + 1) / 2 x (H + 1) / 2`, the last
+     * row / column repeated at an odd edge): the input of a coarse run. [dirty] (region pixels) redraws only the
+     * texels that cover it.
+     */
+    fun downsample(lab: Int, out: GlTarget, region: Region, dirty: IntArray? = null) {
+        val half = HalfRegion.of(region)
+        GLES30.glUseProgram(downProgram)
+        bindRegion(downProgram, region)
+        GLES30.glUniform2i(uniform(downProgram, "uHalfOrigin"), half.x, half.y)
+        val keep = discard
+        discard = dirty == null
+        scissor = dirty
+        draw(out.fbo, lab, half.width, half.height, half = true)
+        scissor = null
+        discard = keep
+        GLES30.glDisable(GLES30.GL_SCISSOR_TEST)
+        GlSupport.checkError("detail downsample")
     }
 
     private fun bindUnit(unit: Int, texture: Int) {
@@ -499,13 +543,18 @@ internal class DetailPasses {
     }
 
     fun release() {
+        if (!owner) return
         locations.clear()
         for (p in programs()) GLES30.glDeleteProgram(p)
         for (p in finalPrograms.values) GLES30.glDeleteProgram(p)
         finalPrograms.clear()
     }
 
-    /** The region the passes cover: image position ([x], [y]), size, and the whole image's size (tap clamping). */
+    /**
+     * The region the passes cover: image position ([x], [y]), size, and the whole image's size (tap clamping). With
+     * [coarse] 1 the image is the preview's half-resolution copy ([coarseOf]): the masks' coverage and the Effects
+     * grid, which stay at the proxy's size, are read at pixel `2p` (the block's first).
+     */
     data class Region(
         val x: Int,
         val y: Int,
@@ -513,7 +562,17 @@ internal class DetailPasses {
         val height: Int,
         val imageWidth: Int,
         val imageHeight: Int,
-    )
+        val coarse: Int = 0,
+    ) {
+        companion object {
+            /** The half-resolution image of a whole-image [full] region: `(W + 1) / 2 x (H + 1) / 2`. */
+            fun coarseOf(full: Region): Region {
+                val w = (full.imageWidth + 1) / 2
+                val h = (full.imageHeight + 1) / 2
+                return Region(0, 0, w, h, w, h, coarse = 1)
+            }
+        }
+    }
 
     /** The half-resolution region of a [Region]: texel `J` covers image pixels `2J` and `2J + 1`. */
     data class HalfRegion(

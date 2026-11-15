@@ -276,6 +276,43 @@ The query is off the main thread and the filter bar does not recompose the grid;
 the hand-off cells whose thumbnails are rendered from smart previews (one at a time since FIX/L: three at once ran
 the 512 MB heap out during a fling). Release-build numbers at 120 Hz on the owner's phone are for the orchestrator.
 
+### W2/P: the grid at 120 Hz, measured on the minified build
+
+The debug-build numbers above overstate the grid's cost (an unminified, debuggable Compose). W2/P measures the
+`bench` build (R8 like release) with Macrobenchmark (`:benchmark` `LibraryScrollBenchmark`, the same 10,000-file
+library made by `BenchActivity --es mode library`, frame times from `dumpsys gfxinfo`; Galaxy Tab S9 Ultra, 120 Hz,
+13 columns of ~215 px cells; 5 cold-process iterations of 15 flings; ms per frame, median of iterations):
+
+| Grid | p50 | p90 | p95 | p99 | janky (gfxinfo) |
+| --- | --- | --- | --- | --- | --- |
+| main, no AOT | 10 | 20 | 23 | 32 | 13.9 % |
+| main, library profiles only | 9 | 18 | 21 | 26 | 13.2 % |
+| W2/P, no AOT | 9 | 13 | 15 | 23 | 13.3 % |
+| W2/P, with its Baseline Profile | 8 | 11 | 12 | 15 | 13.7 % |
+
+The debug build on main (`LibraryMeasurementsTest`, same tablet): 21.6 % of frames past their deadline, main thread
+p90 21 ms.
+
+What the traces showed and what changed:
+- **Cell-sized thumbnails.** About 100 cells on screen each sampled a 512 px texture into a 215 px cell: 2.8 ms of
+  RenderThread drawing and ~3 ms of GPU wait per frame, 0.33 ms per texture upload, and native-allocation GCs up to
+  31 ms. The grid passes its cell width (`ThumbnailSource.cached/load(row, edge)`); `ThumbnailRepository` keeps
+  power-of-two reductions of the 512 px thumbnail (`sampleFor`: 256 px for the tablet, 512 for the phone's 480 px
+  cells) under their own memory key, decoded from the cached JPEG with `inSampleSize` (a quarter of the pixels to
+  decode, upload, keep and sample). An upgraded thumbnail (AI masks, fills) drops its reductions. The disk cache is
+  unchanged. `Bitmap.prepareToDraw()` starts each upload when the thumbnail arrives.
+- **A lighter cell.** The thumbnail is drawn by the cell itself (`cropImage`, what `Image(contentScale = Crop)` drew)
+  instead of an `Image` node; the badge layer (a `CompositionLocalProvider`, boxes, rows) is composed only for cells
+  that show a badge (`hasBadges`); TalkBack's description is built when the semantics are read, not for every cell
+  composed. Goldens changed by at most 2 levels (resampling).
+- **Tried:** a lazy-layout cache window (half a screen ahead) composes rows in idle time; it did not help (p99 18 ms).
+
+Still above the 8.3 ms interval at p90-p99 on the tablet: the frames that compose and measure a new 13-cell row
+(3-5 ms of main thread) plus 2-3 ms of RenderThread. The S24 Ultra's grid has 3 columns of 480 px cells: a new row
+is 3 cells (a quarter of the tablet's composition), on a faster CPU (Snapdragon 8 Gen 3 against the tablet's 8 Gen 2);
+its p90 should sit under 8.3 ms, to be confirmed on the phone with the same command (ADR 0001 "Baseline Profile").
+The UI layer cannot remove the accessibility cost noted above on a phone with an accessibility service on.
+
 ## Consequences
 
 - One shared database owns the working copy of ratings and edits; sidecars are the portable copy.

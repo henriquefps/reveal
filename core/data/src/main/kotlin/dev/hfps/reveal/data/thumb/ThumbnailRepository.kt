@@ -98,18 +98,41 @@ class ThumbnailRepository(
     private val puts = AtomicInteger()
 
     /** The thumbnail if it is in memory already (lets a recycled grid cell draw in the same frame). */
-    fun inMemory(photoId: Long, editTime: Long?): Bitmap? = memory.get(memoryKey(photoId, editTime))
+    fun inMemory(photoId: Long, editTime: Long?, edge: Int = EDGE): Bitmap? =
+        memory.get(memoryKey(photoId, editTime, sampleFor(edge)))
 
     /**
      * The thumbnail of [photoId]; [editTime] is the time its recipe last changed (null = not edited), so a new edit
      * gets a new thumbnail. Null when nothing can be shown (unplugged and not cached, unreadable file).
      */
-    suspend fun thumbnail(photoId: Long, versionId: Long, editTime: Long?): Bitmap? {
-        val memoryKey = memoryKey(photoId, editTime)
+    suspend fun thumbnail(photoId: Long, versionId: Long, editTime: Long?, edge: Int = EDGE): Bitmap? {
+        val sample = sampleFor(edge)
+        val memoryKey = memoryKey(photoId, editTime, sample)
         memory.get(memoryKey)?.let { return it }
         return withContext(io) {
-            memory.get(memoryKey) ?: load(photoId, versionId, editTime)?.also { memory.put(memoryKey, it) }
+            memory.get(memoryKey)
+                ?: memory.get(memoryKey(photoId, editTime))?.takeIf { sample > 1 }?.let { shrink(it, sample) }
+                    ?.also { memory.put(memoryKey, it) }
+                ?: load(photoId, versionId, editTime, sample)?.also { memory.put(memoryKey, it) }
         }
+    }
+
+    /**
+     * The power-of-two reduction of the [EDGE] px thumbnail whose long edge still covers [edge] px (W2/P): the
+     * tablet's 13-column grid draws cells of about 215 px, so it decodes the cached JPEG at 1/2 (a quarter of the
+     * pixels to decode, upload, keep in memory and sample on every frame); the phone's 3 columns keep [EDGE].
+     */
+    private fun sampleFor(edge: Int): Int {
+        var sample = 1
+        while (sample < MAX_SAMPLE && EDGE / (sample * 2) >= edge) sample *= 2
+        return sample
+    }
+
+    /** [bitmap] reduced by [sample] (filtered; a fresh thumbnail that is also saved full size). */
+    private fun shrink(bitmap: Bitmap, sample: Int): Bitmap = if (sample == 1) {
+        bitmap
+    } else {
+        bitmap.scale((bitmap.width / sample).coerceAtLeast(1), (bitmap.height / sample).coerceAtLeast(1))
     }
 
     /** What a thumbnail is made from: the photo's main file (the RAW of a pair) and its camera rendering. */
@@ -146,23 +169,24 @@ class ThumbnailRepository(
         )
     }
 
-    private suspend fun load(photoId: Long, versionId: Long, editTime: Long?): Bitmap? {
+    private suspend fun load(photoId: Long, versionId: Long, editTime: Long?, sample: Int = 1): Bitmap? {
         val target = target(photoId) ?: return null
-        return editTime?.let { loadEdited(target, versionId, it) } ?: loadPreview(target)
+        return editTime?.let { loadEdited(target, versionId, it, sample) } ?: loadPreview(target, sample)
     }
 
-    private suspend fun loadEdited(target: Target, versionId: Long, editTime: Long): Bitmap? {
+    private suspend fun loadEdited(target: Target, versionId: Long, editTime: Long, sample: Int = 1): Bitmap? {
         if (edited == null) return null
         // An edit with AI masks or Remove spots has two thumbnails: the complete one (its masks and fills ready; its
         // own key: it is made once, never rendered twice) and, until then, this quick one ([withAiMasks] replaces it).
         val withMasks = if (needsUpgrade(versionId, editTime)) {
-            fromDisk(editedKey(target, versionId, editTime, ai = true))
+            fromDisk(editedKey(target, versionId, editTime, ai = true), sample)
         } else {
             null
         }
         val key = editedKey(target, versionId, editTime, ai = false)
-        return withMasks ?: fromDisk(key)
+        return withMasks ?: fromDisk(key, sample)
             ?: renderEdited(target, versionId, editTime)?.also { save(key, target.photoId, KIND_EDITED, it) }
+                ?.let { shrink(it, sample) }
     }
 
     private fun editedKey(target: Target, versionId: Long, editTime: Long, ai: Boolean) = CacheKeys.key(
@@ -244,6 +268,7 @@ class ThumbnailRepository(
             val key = editedKey(target, versionId, editTime, ai = true)
             fromDisk(key)?.let {
                 memory.put(memoryKey, it)
+                forgetReduced(photoId, editTime)
                 aiDone += memoryKey
                 return@withContext it
             }
@@ -257,6 +282,7 @@ class ThumbnailRepository(
                             renderer.render(image, edits.recipe(versionId), EDGE).also { bitmap ->
                                 save(key, target.photoId, KIND_EDITED, bitmap)
                                 memory.put(memoryKey, bitmap)
+                                forgetReduced(photoId, editTime)
                                 aiDone += memoryKey
                             }
                         } else {
@@ -330,6 +356,7 @@ class ThumbnailRepository(
             val bitmap = renderer.renderWithMasks(image, edits.recipe(versionId), EDGE, session, photoKey)
             save(key, target.photoId, KIND_EDITED, bitmap)
             memory.put(memoryKey(target.photoId, editTime), bitmap)
+            forgetReduced(target.photoId, editTime)
             aiDone += memoryKey(target.photoId, editTime)
             return bitmap
         } finally {
@@ -337,9 +364,10 @@ class ThumbnailRepository(
         }
     }
 
-    private suspend fun loadPreview(target: Target): Bitmap? {
+    private suspend fun loadPreview(target: Target, sample: Int = 1): Bitmap? {
         val key = CacheKeys.key(target.identity, Variant.THUMB, EDGE)
-        return fromDisk(key) ?: decodePreview(target)?.also { save(key, target.photoId, KIND_PREVIEW, it) }
+        return fromDisk(key, sample)
+            ?: decodePreview(target)?.also { save(key, target.photoId, KIND_PREVIEW, it) }?.let { shrink(it, sample) }
     }
 
     /** An available source's tree, or null (unplugged, access lost, removed). */
@@ -549,10 +577,12 @@ class ThumbnailRepository(
 
     // ------------------------------------------------------------------ disk cache
 
-    private suspend fun fromDisk(key: String): Bitmap? {
+    /** A cached thumbnail, decoded at 1/[sample] (the JPEG decoder's own scaling: never the full size first). */
+    private suspend fun fromDisk(key: String, sample: Int = 1): Bitmap? {
         val entry = cache.get(key) ?: return null
         val file = File(dir, entry.fileName)
-        val bitmap = if (file.exists()) BitmapFactory.decodeFile(file.path) else null
+        val options = BitmapFactory.Options().apply { inSampleSize = sample }
+        val bitmap = if (file.exists()) BitmapFactory.decodeFile(file.path, options) else null
         if (bitmap == null) {
             cache.delete(listOf(key))
         } else {
@@ -620,7 +650,17 @@ class ThumbnailRepository(
         dir.listFiles()?.forEach { it.delete() }
     }
 
-    private fun memoryKey(photoId: Long, editTime: Long?) = "$photoId:${editTime ?: 0}"
+    private fun memoryKey(photoId: Long, editTime: Long?, sample: Int = 1) =
+        "$photoId:${editTime ?: 0}" + if (sample > 1) "/$sample" else ""
+
+    /** The reduced copies of a thumbnail that was just upgraded (its AI masks or fills arrived): made again from it. */
+    private fun forgetReduced(photoId: Long, editTime: Long) {
+        var sample = 2
+        while (sample <= MAX_SAMPLE) {
+            memory.remove(memoryKey(photoId, editTime, sample))
+            sample *= 2
+        }
+    }
 
     companion object {
         private const val TAG = "RevealThumbs"
@@ -633,6 +673,9 @@ class ThumbnailRepository(
         /** Long edge of the analysis input (the features need 576 px; lines are better with more). */
         const val ANALYSIS_EDGE = 1200
         private const val PARALLELISM = 3
+
+        /** The smallest grid thumbnail is [EDGE] / 4 (128 px). */
+        private const val MAX_SAMPLE = 4
         private const val JPEG_QUALITY = 85
         private const val TRIM_EVERY = 50
         private const val TRIM_BATCH = 200

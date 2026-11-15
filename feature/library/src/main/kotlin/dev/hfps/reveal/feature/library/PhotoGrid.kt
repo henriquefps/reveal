@@ -1,6 +1,6 @@
 package dev.hfps.reveal.feature.library
 
-import androidx.compose.foundation.Image
+import android.content.res.Resources
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -39,18 +39,18 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.onLongClick
@@ -59,6 +59,8 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import dev.hfps.reveal.data.db.PhotoRow
 import dev.hfps.reveal.data.model.PhotoFormat
@@ -72,6 +74,7 @@ import java.text.DateFormat
 import java.util.Date
 import java.util.TimeZone
 import kotlin.math.max
+import kotlin.math.roundToInt
 
 /** Loads grid thumbnails; the app uses the thumbnail cache, screenshots use generated images. */
 interface ThumbnailSource {
@@ -79,6 +82,12 @@ interface ThumbnailSource {
     fun cached(row: PhotoRow): ImageBitmap?
 
     suspend fun load(row: PhotoRow): ImageBitmap?
+
+    /** [cached] for a cell [edge] px wide: a source may keep a smaller thumbnail for small cells (W2/P). */
+    fun cached(row: PhotoRow, edge: Int): ImageBitmap? = cached(row)
+
+    /** [load] for a cell [edge] px wide. */
+    suspend fun load(row: PhotoRow, edge: Int): ImageBitmap? = load(row)
 
     /**
      * The edited thumbnail once its AI masks are ready (docs/adr/0022 "M4/F"), after [load] showed it without them;
@@ -187,6 +196,8 @@ fun PhotoGrid(
     val autoScroll = rememberAutoScroll(state)
     BoxWithConstraints(modifier) {
         val columns = gridColumns(maxWidth, portraitPhone)
+        // The cells' width in pixels: the thumbnails are decoded no larger than they are drawn.
+        val cellPx = with(LocalDensity.current) { ((maxWidth - GAP * (columns - 1)) / columns).roundToPx() }
         LazyVerticalGrid(
             columns = GridCells.Fixed(columns),
             state = state,
@@ -213,6 +224,7 @@ fun PhotoGrid(
                 entries = entries,
                 selected = selected,
                 thumbnails = thumbnails,
+                cellPx = cellPx,
                 onLongClick = { row -> onSelectionChange(currentSelected + row.versionId) },
             ) { row ->
                 if (currentSelected.isEmpty()) onOpen(row) else onSelectionChange(currentSelected.toggle(row.versionId))
@@ -235,6 +247,7 @@ private fun LazyGridScope.photoItems(
     entries: List<GridEntry>,
     selected: Set<Long>,
     thumbnails: ThumbnailSource,
+    cellPx: Int,
     onLongClick: (PhotoRow) -> Unit,
     onClick: (PhotoRow) -> Unit,
 ) {
@@ -254,6 +267,7 @@ private fun LazyGridScope.photoItems(
                 selected = entry.row.versionId in selected,
                 selecting = selected.isNotEmpty(),
                 thumbnails = thumbnails,
+                cellPx = cellPx,
                 onClick = { onClick(entry.row) },
                 onLongClick = { onLongClick(entry.row) },
             )
@@ -391,17 +405,19 @@ private fun PhotoCell(
     selected: Boolean,
     selecting: Boolean,
     thumbnails: ThumbnailSource,
+    cellPx: Int,
     onClick: () -> Unit,
     onLongClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val colors = RevealTheme.colors
-    var image by remember(row.versionId, row.editTime) { mutableStateOf(thumbnails.cached(row)) }
-    LaunchedEffect(row.versionId, row.editTime, row.unavailable) {
-        if (image == null && !row.unavailable) image = thumbnails.load(row)
+    var image by remember(row.versionId, row.editTime, cellPx) { mutableStateOf(thumbnails.cached(row, cellPx)) }
+    LaunchedEffect(row.versionId, row.editTime, row.unavailable, cellPx) {
+        if (image == null && !row.unavailable) image = thumbnails.load(row, cellPx)
         if (image != null && row.editTime != null) thumbnails.upgrade(row)?.let { image = it }
     }
-    val description = cellDescription(row)
+    // The description is built only when the semantics are read (TalkBack, tests), not for every cell composed.
+    val resources = LocalResources.current
     val selectLabel = stringResource(R.string.library_cell_select)
     Box(
         modifier = modifier
@@ -410,7 +426,7 @@ private fun PhotoCell(
             .testTag(if (row.versionPosition == 0) LibraryTags.cell(row.id) else LibraryTags.copy(row.versionId))
             .clickable(onClick = onClick)
             .semantics(mergeDescendants = true) {
-                contentDescription = description
+                contentDescription = cellDescription(resources, row)
                 this.selected = selected
                 onLongClick(label = selectLabel) {
                     onLongClick()
@@ -427,22 +443,19 @@ private fun PhotoCell(
                 modifier = Modifier.testTag(UnavailableTags.cell(row.id)),
             )
         } else if (bitmap != null) {
-            Image(
-                bitmap = bitmap,
-                contentDescription = null,
-                contentScale = ContentScale.Crop,
-                modifier = Modifier
-                    .fillMaxSize()
-                    .alpha(if (row.flag == PickFlag.REJECT) REJECT_ALPHA else 1f),
-            )
+            // Drawn by the cell itself, not an Image node: a tablet row composes and measures 13 cells at once while
+            // the grid flings (W2/P).
+            Box(Modifier.fillMaxSize().cropImage(bitmap, if (row.flag == PickFlag.REJECT) REJECT_ALPHA else 1f))
         }
-        // Badges are small labels on the photo; their text grows with the font scale only up to 130 % (TalkBack reads
-        // the full description of the cell instead), so a 200 % scale does not cover the photo or clip them.
-        val density = LocalDensity.current
-        CompositionLocalProvider(
-            LocalDensity provides Density(density.density, density.fontScale.coerceAtMost(MAX_BADGE_SCALE)),
-        ) {
-            Badges(row, showEdited = !selecting, modifier = Modifier.fillMaxSize())
+        if (hasBadges(row, showEdited = !selecting)) {
+            // Badges are small labels on the photo; their text grows with the font scale only up to 130 % (TalkBack
+            // reads the full description of the cell instead), so a 200 % scale does not cover the photo or clip them.
+            val density = LocalDensity.current
+            CompositionLocalProvider(
+                LocalDensity provides Density(density.density, density.fontScale.coerceAtMost(MAX_BADGE_SCALE)),
+            ) {
+                Badges(row, showEdited = !selecting, modifier = Modifier.fillMaxSize())
+            }
         }
         if (selecting) SelectionMark(selected, Modifier.align(Alignment.TopEnd).padding(6.dp))
         if (selected) {
@@ -457,6 +470,21 @@ private fun PhotoCell(
 
 private const val REJECT_ALPHA = 0.4f
 private const val MAX_BADGE_SCALE = 1.3f
+
+/** [bitmap] scaled to cover the node, centred and clipped (what `Image(contentScale = Crop)` draws). */
+private fun Modifier.cropImage(bitmap: ImageBitmap, alpha: Float): Modifier = drawWithCache {
+    val scale = max(size.width / bitmap.width, size.height / bitmap.height)
+    val width = (bitmap.width * scale).roundToInt()
+    val height = (bitmap.height * scale).roundToInt()
+    val offset = IntOffset(((size.width - width) / 2f).roundToInt(), ((size.height - height) / 2f).roundToInt())
+    val dstSize = IntSize(width, height)
+    onDrawBehind { clipRect { drawImage(bitmap, dstOffset = offset, dstSize = dstSize, alpha = alpha) } }
+}
+
+/** Whether [Badges] would draw anything for [row] (most cells have none: they skip the badge layer entirely). */
+internal fun hasBadges(row: PhotoRow, showEdited: Boolean): Boolean =
+    formatBadge(row.format) != null || row.versionPosition > 0 || cloudState(row) != CloudState.LOCAL ||
+        (row.edited && showEdited) || row.rating > 0 || row.flag != PickFlag.NONE
 
 @Composable
 private fun SelectionMark(selected: Boolean, modifier: Modifier = Modifier) {
@@ -675,22 +703,21 @@ internal fun formatBadge(format: PhotoFormat): Int? = when (format) {
 }
 
 /** What TalkBack reads for a cell: name, format, stars, flag, edited. */
-@Composable
-internal fun cellDescription(row: PhotoRow): String {
-    val parts = mutableListOf(row.name, stringResource(formatName(row.format)))
-    if (row.unavailable) parts += stringResource(R.string.library_unavailable_cell)
-    if (row.rating > 0) parts += pluralStringResource(R.plurals.library_stars, row.rating, row.rating)
+internal fun cellDescription(resources: Resources, row: PhotoRow): String {
+    val parts = mutableListOf(row.name, resources.getString(formatName(row.format)))
+    if (row.unavailable) parts += resources.getString(R.string.library_unavailable_cell)
+    if (row.rating > 0) parts += resources.getQuantityString(R.plurals.library_stars, row.rating, row.rating)
     when (row.flag) {
-        PickFlag.PICK -> parts += stringResource(R.string.library_flag_picked)
-        PickFlag.REJECT -> parts += stringResource(R.string.library_flag_rejected)
+        PickFlag.PICK -> parts += resources.getString(R.string.library_flag_picked)
+        PickFlag.REJECT -> parts += resources.getString(R.string.library_flag_rejected)
         PickFlag.NONE -> Unit
     }
-    if (row.edited) parts += stringResource(R.string.library_edited)
+    if (row.edited) parts += resources.getString(R.string.library_edited)
     if (row.versionPosition > 0) {
         parts += if (row.conflict) {
-            stringResource(R.string.library_conflict_copy_from, row.copyDevice.orEmpty())
+            resources.getString(R.string.library_conflict_copy_from, row.copyDevice.orEmpty())
         } else {
-            row.versionName ?: stringResource(R.string.library_badge_copy)
+            row.versionName ?: resources.getString(R.string.library_badge_copy)
         }
     }
     // The cloud state is read from the badge's own description (merged into the cell).

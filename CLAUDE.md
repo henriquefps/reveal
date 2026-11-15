@@ -167,6 +167,12 @@ via `GpuEditedThumbnails`), `PhotoImages` (viewer display + region decoder), `Ed
 history for the editor). The editor route is `EditorRoute(versionId = …)` from the library or `EditorRoute(uri = …)`
 from other apps.
 
+Grid speed (W2/P, ADR 0006 "W2/P"): the grid asks for thumbnails at its cell width (`ThumbnailSource.cached/load(row,
+edge)` -> `ThumbnailRepository.thumbnail(..., edge)`: power-of-two reductions of the 512 px thumbnail with their own
+memory key, decoded with `inSampleSize`); a cell draws its bitmap itself (`cropImage`) and composes its badges only
+when it has one (`hasBadges`). Measure the grid on the bench build (`LibraryScrollBenchmark`, below), not the debug
+build.
+
 One home with combinable filters (FIX/L, ADR 0006 "Filters"): the start destination is one grid of every photo
 (`LibraryScope.All` = this device's photos + the Server photos that open; `Recent` is its own view). Everything else is
 `PhotoFilters` (sealed groups: `SourceFilter.Folder/FromApps/ServerOnly`, `CullingFilter`, `EditFilter`, `TypeFilter`,
@@ -494,6 +500,12 @@ are kept too. Views at 50 % or less (`halfViewOnly`) make the final pass write t
 (`FLAG_HALF`, 2 x 2 means; level 0 is rendered on demand by `ensureStageLevel0`), the output reads it with
 `OutputSampling.MODE_BOX` (no per-frame mips). The tiled renderer (zoom, export) is unchanged. `DevelopParams` other
 than Detail/Effects are memoised across a drag (`UploadedImage.params`, `DevelopParams.withLocal`).
+W2/P (ADR 0012 "W2/P"): at those views Detail and Effects run **at half resolution** (`coarseDetail`, default on): the
+develop output's 2 x 2 means (`DetailPasses.downsample`) through `detailCoarse` (a sibling `DetailPasses`: same
+programs, own caches and `coarseTargets`) with the recipe resolved at twice the pixel scale (`UploadedImage.
+coarseParams`), the final pass writing level 1; masks' coverage and the Effects grid are read at `fine(p) = p <<
+uCoarse`. Zoom tiles, export, 100 % and the CPU reference are untouched. `PipelineBenchmark -e coarse false` measures
+M2/P's path; `PreviewPassesTest` and `MaskRenderTest#halfResolutionPartialUpdatesEqualAFreshRender` cover it.
 
 ```sh
 # REVEAL_BENCH: every tool on, each Detail/Effects slider; pipelined ms per frame (the display rate), GPU per frame, and
@@ -610,6 +622,28 @@ tests, so the script drives it (results `REVEAL_BENCH`, frame times from `dumpsy
 scripts/bench/release-bench.sh <serial> app/build/outputs/apk/bench/app-bench.apk core/image/build/samples/sony-zv-e10.arw \
   core/image/build/samples/nikon-d5600.nef app/src/androidTest/assets/faces/studio-trio.jpg   # ADB=<adb path>, KEEP=1, RUNS=5
 ```
+
+Macrobenchmarks and the Baseline Profile (W2/P, ADR 0001 "Baseline Profile"): the `:benchmark` module (`com.android.test`,
+self-instrumenting) drives the bench app from outside. `StartupBenchmark` (cold start to the 10,000-photo library:
+time to first frame and to `ReportDrawnWhen` = the grid's rows), `LibraryScrollBenchmark` (flings, `dumpsys gfxinfo`
+via `FrameTimingGfxInfoMetric`: Samsung's traces have no `DrawFrame` slices, so `FrameTimingMetric` finds nothing),
+`EditorOpenBenchmark` (a 24 MP RAW opened cold, `EditorMetrics`' async trace sections `RevealEditor.openToPreview` /
+`openToDeveloped`), each without compilation and with the profile; `BaselineProfileGenerator` collects the profiles
+from `benchProfile` (the bench app unminified, same id: names must be real, R8 rewrites them for minified builds).
+`BenchActivity` modes `library` (the 10,000 generated files through the generated-files provider, `src/synthetic`,
+shared by debug and bench builds; also hides the gallery-access offer), `journey`, `open`. The profiles live in
+`app/src/main/baselineProfiles/` (`baseline-prof.txt` = start + editor journey, `startup-prof.txt` = start only, for
+the dex layout); `profileinstaller` installs them on sideloaded APKs. Regenerate after big UI or pipeline changes:
+
+```sh
+./gradlew :app:assembleBench :benchmark:assembleBench :app:assembleBenchProfile :benchmark:assembleBenchProfile
+scripts/bench/macrobench.sh <serial> profile app/build/outputs/apk/benchProfile/app-benchProfile.apk \
+  benchmark/build/outputs/apk/benchProfile/benchmark-benchProfile.apk core/image/build/samples/sony-zv-e10.arw app/src/main/baselineProfiles
+scripts/bench/macrobench.sh <serial> measure app/build/outputs/apk/bench/app-bench.apk \
+  benchmark/build/outputs/apk/bench/benchmark-bench.apk core/image/build/samples/sony-zv-e10.arw [class]   # ADB=, KEEP=1
+```
+
+The device must be awake and unlocked; the bench app is uninstalled at the end (KEEP=1 keeps it and its library).
 
 Frame measurements: use `getUiAutomation(UiAutomation.FLAG_DONT_USE_ACCESSIBILITY)` for `input` commands (a
 connected UiAutomation makes Compose diff its semantics tree every frame). With an accessibility service on (the

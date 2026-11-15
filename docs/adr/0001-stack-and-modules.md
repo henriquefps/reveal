@@ -92,3 +92,35 @@ Release signing reads the environment, never the repo: `REVEAL_KEYSTORE` (path o
 `skv run` materialises), `REVEAL_KEYSTORE_PASSWORD`, `REVEAL_KEY_ALIAS`, `REVEAL_KEY_PASSWORD` (skv group
 `reveal`). Without them the release is built unsigned with a warning (CI, contributors). Release builds
 use R8 and resource shrinking.
+
+## Baseline Profile and release-build measurements (W2/P)
+
+- **Module `:benchmark`** (`com.android.test`, self-instrumenting, `targetProjectPath = ":app"`): Macrobenchmark
+  1.5 and UiAutomator drive the bench app from outside. Build types `bench` (measures the minified app) and
+  `benchProfile` (collects profiles); no debug variant (Macrobenchmark refuses a debuggable target).
+- **`benchProfile`** is the bench app without R8 (same id `dev.hfps.reveal.bench`): a profile must name the real
+  classes, and R8 rewrites `src/main/baselineProfiles/*.txt` for the minified builds. The Baseline Profile Gradle
+  plugin was not used: it adds `nonMinifiedRelease` / `benchmarkRelease` build types with the release app's id
+  (`dev.hfps.reveal`), which must never be installed on the owner's devices.
+- **Profiles** (`app/src/main/baselineProfiles/`): `baseline-prof.txt` = cold start to the 10,000-photo library and
+  flings, plus the editor journey (a 24 MP RAW opened, Presets, Detail, Masks and Heal, a mask, a heal spot, a Remove
+  stroke); `startup-prof.txt` = the start alone, which AGP uses for the dex layout of release builds.
+  `androidx.profileinstaller` compiles them on sideloaded installs. `scripts/bench/macrobench.sh <serial> profile`
+  regenerates both (sorted, so a regeneration diffs cleanly).
+- **Measured** (Galaxy Tab S9 Ultra, bench build, medians of 10 cold starts / 8 opens; "no AOT" =
+  `CompilationMode.None`, "profile" = `Partial(BaselineProfileMode.Require)`):
+
+| | before W2/P: no AOT | before: libraries' profiles | W2/P: no AOT | W2/P: with its profile |
+| --- | --- | --- | --- | --- |
+| cold start, first frame | 422 ms | 388 ms | 365 ms | 326 ms |
+| cold start, grid drawn (`ReportDrawnWhen`) | 651 ms | 547 ms | 593 ms | 456 ms |
+| editor open, 24 MP RAW, preview on screen | 334 ms | 339 ms | 373 ms | 376 ms |
+| editor open, first developed frame | 1,923 ms | 2,069 ms | 1,337 ms | 1,345 ms |
+
+  The editor open is bound by the decode and the GPU, not by interpretation: its gain comes from W2/P's open order
+  (the proxy is uploaded as soon as it exists; Auto's analysis, the presets' input, the optics and the masks' input
+  are prepared beside it instead of before it). The fling: ADR 0006 "W2/P".
+- Samsung's traces carry no RenderThread `DrawFrame` slices, so `FrameTimingMetric` finds no frames there: the
+  library fling uses `FrameTimingGfxInfoMetric`. A cold-start benchmark must kill the process in its setup when its
+  measure block expects the app (StartupMode.COLD kills it after the setup).
+

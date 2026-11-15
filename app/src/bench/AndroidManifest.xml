@@ -14,5 +14,19 @@
             android:exported="true"
             android:theme="@android:style/Theme.DeviceDefault.NoActionBar"
             tools:ignore="ExportedActivity" />
+
+        <!-- The SAF provider over generated files (src/synthetic, as in debug builds): the 10,000-file library of the
+             release-build measurements (docs/adr/0006 "Measurements"). Its own process, like a real provider. -->
+        <provider
+            android:name="dev.hfps.reveal.debug.SyntheticDocumentsProvider"
+            android:authorities="${applicationId}.synthetic"
+            android:exported="true"
+            android:grantUriPermissions="true"
+            android:permission="android.permission.MANAGE_DOCUMENTS"
+            android:process=":documents">
+            <intent-filter>
+                <action android:name="android.provider.action.DOCUMENTS_PROVIDER" />
+            </intent-filter>
+        </provider>
     </application>
 </manifest>

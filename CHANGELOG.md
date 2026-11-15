@@ -43,8 +43,15 @@ All notable changes to Reveal are documented here. The format follows
 
 ### Changed
 - Database v13 (culling and edited-preview tables). `scripts/sync/local-server.sh` pins `hoard-server:0.9.0`.
-
-### Changed
+- Faster everywhere it is felt (W2/P, measured on the Galaxy Tab S9 Ultra): Detail and the local Effects run at half
+  resolution while the photo is fitted (zoom, export and 100 % unchanged), so a drag of any Detail or Effects slider
+  with every tool on costs 1.4-2.5 ms per frame instead of 3-6; the library grid decodes thumbnails at the size it
+  draws them and builds lighter cells (flinging 10,000 photos: p90 11 ms per frame, was 18; p99 15, was 26); a RAW
+  opens to its first developed frame in about 1.3 s instead of 2 (the analyses run beside the upload, not before it);
+  and the app ships a Baseline Profile (cold start to the library grid 456 ms, was 547).
+- Measurements: the `:benchmark` module (Macrobenchmark: cold start, library fling, editor open; Baseline Profile
+  generator) drives the minified bench app, which now also serves the 10,000-photo test library
+  (`scripts/bench/macrobench.sh`).
 - The sync server moved to Hoard (SRV/M): it is now `hoard-server` (github.com/henriquefps/hoard, `server/`, image
   `ghcr.io/henriquefps/hoard-server`), and `sync-server/` and its workflows are gone from this repository. The protocol
   did not change (`/v1`, `rvk1_` keys, `revealsync://` pairing); the protocol of record is Hoard's ADR 0013 (ADR 0017

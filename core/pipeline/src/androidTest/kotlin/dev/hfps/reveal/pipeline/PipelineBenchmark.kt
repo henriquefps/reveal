@@ -638,6 +638,8 @@ class PipelineBenchmark {
         recipeAt: (Float) -> Recipe,
     ) {
         val renderer = GpuDevelopRenderer.create()
+        // `-e coarse false`: M2/P's fit view (full-resolution Detail, half-resolution final pass), for comparisons.
+        renderer.coarseDetail = InstrumentationRegistry.getArguments().getString("coarse") != "false"
         try {
             renderer.setInput(image, PROXY_SCALE)
             masks?.let { renderer.setMaskSource(it.source, it.photoKey) }
@@ -673,6 +675,8 @@ class PipelineBenchmark {
         recipeAt: (Float) -> Recipe,
     ) {
         val renderer = GpuDevelopRenderer.create()
+        // `-e coarse false`: M2/P's fit view (full-resolution Detail, half-resolution final pass), for comparisons.
+        renderer.coarseDetail = InstrumentationRegistry.getArguments().getString("coarse") != "false"
         try {
             val uploadStart = System.nanoTime()
             renderer.setInput(image, pixelScale)

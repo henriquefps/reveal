@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Macrobenchmarks drive the bench app from outside; they need to see it (package visibility). -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <queries>
+        <package android:name="dev.hfps.reveal.bench" />
+    </queries>
+</manifest>

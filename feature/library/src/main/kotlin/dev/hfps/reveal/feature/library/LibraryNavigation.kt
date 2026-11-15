@@ -333,11 +333,17 @@ private fun LibraryMessages(events: Flow<LibraryMessage>, snackbar: SnackbarHost
 
 /** [ThumbnailSource] over the thumbnail cache. */
 private class RepositoryThumbnails(private val repository: ThumbnailRepository) : ThumbnailSource {
-    override fun cached(row: PhotoRow): ImageBitmap? = repository.inMemory(row.id, row.editTime)?.asImageBitmap()
+    override fun cached(row: PhotoRow): ImageBitmap? = cached(row, ThumbnailRepository.EDGE)
 
-    override suspend fun load(row: PhotoRow): ImageBitmap? =
-        repository.thumbnail(row.id, row.versionId, row.editTime)?.asImageBitmap()
+    override suspend fun load(row: PhotoRow): ImageBitmap? = load(row, ThumbnailRepository.EDGE)
+
+    override fun cached(row: PhotoRow, edge: Int): ImageBitmap? =
+        repository.inMemory(row.id, row.editTime, edge)?.asImageBitmap()
+
+    // prepareToDraw: the texture upload starts on the render thread now, not in the frame that first draws the cell.
+    override suspend fun load(row: PhotoRow, edge: Int): ImageBitmap? =
+        repository.thumbnail(row.id, row.versionId, row.editTime, edge)?.also { it.prepareToDraw() }?.asImageBitmap()
 
     override suspend fun upgrade(row: PhotoRow): ImageBitmap? =
-        repository.withAiMasks(row.id, row.versionId, row.editTime)?.asImageBitmap()
+        repository.withAiMasks(row.id, row.versionId, row.editTime)?.also { it.prepareToDraw() }?.asImageBitmap()
 }

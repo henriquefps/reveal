@@ -139,6 +139,25 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
     private var lightUbo = 0
     private val light = LightPasses()
     private val detail = DetailPasses().also { it.profile = { section -> profiler.mark(section) } }
+
+    /**
+     * Detail and the local Effects at half resolution for the views at 50 % or less (docs/adr/0012 "W2/P"): the same
+     * programs, its own caches and targets ([coarseTargets]), on the 2 x 2 means of the develop output ([coarseLab]).
+     */
+    private val detailCoarse = detail.sibling().also { it.profile = { section -> profiler.mark(section) } }
+    private var coarseLab: GlTarget? = null
+    private var coarseTargets: DetailPasses.Targets? = null
+    private val coarseChain = ArrayList<GlTarget>()
+
+    /** [coarseLab] holds the 2 x 2 means of the current develop output. */
+    private var coarseLabValid = false
+
+    /**
+     * Views at 50 % or less run Detail and Effects at half resolution (true, docs/adr/0012 "W2/P") instead of at the
+     * proxy's size with a half-resolution final pass (false, "M2/P"). For benchmarks and tests; GL thread.
+     */
+    @Volatile
+    var coarseDetail: Boolean = true
     private val effects = EffectsPasses()
     private var labTarget: GlTarget? = null
     private var detailTargets: DetailPasses.Targets? = null
@@ -207,7 +226,7 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
     private var developedShapeFree: Any? = null
 
     /** Whether the working texture's last render wrote level 1 only (a partial update must do the same). */
-    private var developedHalf = false
+    private var developedMode = MODE_FULL
 
     /** Partial stage-1 updates so far (tests). */
     @Volatile
@@ -352,7 +371,7 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         prepareHeals(req.recipe.heals)
         prepareMasks(params)
         if (stageStale(params, false, halfStage) || stageHalf != halfStage) {
-            runStage1(params, half = halfStage)
+            runStage1(params, half = halfStage, coarse = image.coarseParams(req.recipe, params).takeIf { halfStage })
         }
         val mapping = image.mapping(req.recipe)
         ensureReadTarget(width, height)
@@ -810,7 +829,9 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         val fit = frame?.let { (w, h) -> minOf(w.toFloat() / mapping.outputWidth, h.toFloat() / mapping.outputHeight) }
         val half = fit != null && fit <= HALF_VIEW_SCALE && mapping.axisAligned
         prepareHeals(recipe.heals)
-        if (stageStale(params, false, half)) runStage1(params, half = half)
+        if (stageStale(params, false, half)) {
+            runStage1(params, half = half, coarse = image.coarseParams(recipe, params).takeIf { half })
+        }
         val post = PostParams.from(recipe.effects)
         if (frame == null || fit == null) {
             drawOutputOffscreen(OutputSettings(dither = true), mapping = mapping, post = post)
@@ -895,7 +916,7 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         val tilesOn = tilesShown(req)
         val half = halfViewOnly(panes, mapping, tilesOn, req)
         if (stageStale(params, mask, half)) {
-            runStage1(params, mask, half)
+            runStage1(params, mask, half, image.coarseParams(shownRecipe, params).takeIf { half && !mask })
             histogramDirty = true
         }
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
@@ -971,7 +992,12 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
      * that depend on the dragged slider.
      */
     @Suppress("CyclomaticComplexMethod", "LongMethod")
-    private fun runStage1(all: DevelopParams, showMask: Boolean = false, half: Boolean = false) {
+    private fun runStage1(
+        all: DevelopParams,
+        showMask: Boolean = false,
+        half: Boolean = false,
+        coarse: DevelopParams? = null,
+    ) {
         val image = checkNotNull(input) { "no input" }
         val params = all.withoutPost()
         val localOn = params.localActive || showMask
@@ -982,10 +1008,19 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         val region = DetailPasses.Region(0, 0, image.width, image.height, image.width, image.height)
         val shapeFree = Pair(params.withoutDetail().withoutMaskShapes(), localOn)
         val halfNow = localOn && half && !showMask && stageHalfFbo != 0
+        // Slots 11-12 on the half-resolution copy, at twice the pixel scale ([coarse]: the same recipe resolved so).
+        val coarseNow = halfNow && coarse != null && coarseDetail
+        val mode = if (coarseNow) {
+            MODE_COARSE
+        } else if (halfNow) {
+            MODE_HALF
+        } else {
+            MODE_FULL
+        }
         // Only the coverage changed, inside a rectangle (a stroke in progress): the develop pass and slots 11-12 run
         // there only (docs/adr/0022 "Speed (M4/P)"); the working texture outside it is still exact.
         // Or only some masks' adjustments changed (a drag of a mask's slider): the box their coverage can reach.
-        val canPartial = develop != developed && !fringeOn && !showMask && !stageMask && halfNow == developedHalf &&
+        val canPartial = develop != developed && !fringeOn && !showMask && !stageMask && mode == developedMode &&
             stageParams != null && developedShapeFree != null
         val partial = if (canPartial) partialRect(params, shapeFree, develop) else null
         maskChange = NO_CHANGE
@@ -995,6 +1030,8 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
             partialUpdates++
             runDevelop(params, localOn, partial)
             developed = develop
+            // The other resolution's intermediates no longer match the develop output.
+            if (coarseNow) detail.invalidate() else invalidateCoarse()
             if (localOn && params.effects.gridActive && effectsGridValid) {
                 effects.update(checkNotNull(labTarget).texture, partial)
                 gridChanged = true
@@ -1010,11 +1047,16 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
             }
             developed = develop
             detail.invalidate()
+            invalidateCoarse()
             effectsGridValid = false
         }
-        if (localOn) runLocal(params, showMask, half, region, fringeOn, partial, gridChanged)
+        if (coarseNow) {
+            runCoarse(params, checkNotNull(coarse), fringeOn, partial, gridChanged)
+        } else if (localOn) {
+            runLocal(params, showMask, half, region, fringeOn, partial, gridChanged)
+        }
         developedShapeFree = shapeFree
-        developedHalf = halfNow
+        developedMode = mode
         stageParams = params
         stageMasksVersion = masksVersion
         stageHeals = wantHeals
@@ -1116,6 +1158,108 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
             finalFull = finalFull,
         )
         lastLocalPasses = detail.lastPasses
+    }
+
+    /**
+     * Slots 11 and 12 at half resolution into the working texture's level 1 (views at 50 % or less, docs/adr/0012
+     * "W2/P"): the 2 x 2 means of the develop output, then every Detail and Effects pass on them with [coarse]'s Detail
+     * and Effects (the recipe resolved at twice the proxy's pixel scale, as the proxy itself approximates 100 %). The
+     * Effects grid and the masks' coverage stay at the proxy's size (shared with the full-resolution path). [dirty]
+     * (proxy pixels) is a partial update's rectangle.
+     */
+    private fun runCoarse(
+        params: DevelopParams,
+        coarse: DevelopParams,
+        fringeOn: Boolean,
+        dirty: IntArray?,
+        gridChanged: Boolean,
+    ) {
+        val image = checkNotNull(input) { "no input" }
+        val lab = checkNotNull(if (fringeOn) fringeTarget else labTarget).texture
+        val full = DetailPasses.Region(0, 0, image.width, image.height, image.width, image.height)
+        val region = DetailPasses.Region.coarseOf(full)
+        val target = ensureCoarseTargets(region)
+        if (!coarseLabValid || dirty != null) {
+            detailCoarse.downsample(lab, target, full, dirty?.takeIf { coarseLabValid })
+            coarseLabValid = true
+            profiler.mark("detail half-resolution copy")
+        }
+        masks.bind(coarse)
+        val e = coarse.effects
+        var finalFull = gridChanged
+        if (e.gridActive && !effectsGridValid) {
+            effects.allocate(image.width, image.height)
+            effects.build(lab)
+            effectsGridValid = true
+            finalFull = true
+            profiler.mark("effects grid")
+        }
+        detailCoarse.run(
+            coarse.detail,
+            e,
+            grid = if (e.gridActive) effects else null,
+            lab = target.texture,
+            t = checkNotNull(coarseTargets),
+            output = GlTarget(stageTex, stageHalfFbo),
+            region = region,
+            cache = true,
+            masks = if (params.masks.active) {
+                Triple(params.masks.masks.map { it.id }, params.masks.noiseColumn(), masksVersion)
+            } else {
+                null
+            },
+            dirty = dirty?.let { intArrayOf(it[0] / 2, it[1] / 2, (it[2] + 1) / 2, (it[3] + 1) / 2) },
+            reach = coarse.reach,
+            finalFull = finalFull,
+        )
+        lastLocalPasses = detailCoarse.lastPasses
+    }
+
+    /** The coarse run's textures, half the proxy's size, allocated the first time it runs on this image. */
+    private fun ensureCoarseTargets(region: DetailPasses.Region): GlTarget {
+        coarseLab?.let { return it }
+        fun target(format: Int, w: Int = region.width, h: Int = region.height): GlTarget {
+            val tex = newTexture(1, w, h, GLES30.GL_NEAREST, GLES30.GL_NEAREST, format)
+            return GlTarget(tex, newFramebuffer(tex))
+        }
+        val half = DetailPasses.HalfRegion.of(region)
+        coarseTargets = DetailPasses.Targets(
+            lumA = target(GLES30.GL_RG16F),
+            lumB = target(GLES30.GL_RG16F),
+            lumH = target(GLES30.GL_R16F),
+            halfD = target(GLES30.GL_RGBA16F, half.width, half.height),
+            halfA = target(GLES30.GL_RGBA16F, half.width, half.height),
+            halfB = target(GLES30.GL_RGBA16F, half.width, half.height),
+            blurA = target(GLES30.GL_RG16F),
+            blurB = target(GLES30.GL_RG16F),
+            chain = { k -> coarseChain.getOrNull(k) ?: target(GLES30.GL_RGBA16F).also { coarseChain += it } },
+        )
+        detailCoarse.invalidate()
+        coarseLabValid = false
+        return target(GLES30.GL_RGBA16F).also { coarseLab = it }
+    }
+
+    /** The coarse run's copy and intermediates no longer match the develop output. */
+    private fun invalidateCoarse() {
+        coarseLabValid = false
+        detailCoarse.invalidate()
+    }
+
+    private fun deleteCoarseTargets() {
+        val t = coarseTargets
+        val targets = listOfNotNull(coarseLab) + coarseChain +
+            (
+                t?.let { listOf(it.lumA, it.lumB, it.lumH, it.halfD, it.halfA, it.halfB, it.blurA, it.blurB) }
+                    ?: emptyList()
+                )
+        if (targets.isNotEmpty()) {
+            GLES30.glDeleteTextures(targets.size, targets.map { it.texture }.toIntArray(), 0)
+            GLES30.glDeleteFramebuffers(targets.size, targets.map { it.fbo }.toIntArray(), 0)
+        }
+        coarseLab = null
+        coarseTargets = null
+        coarseChain.clear()
+        invalidateCoarse()
     }
 
     /** Passes slots 11 and 12 ran in the last stage-1 render (0 when they were cached or off); for the benchmark. */
@@ -1732,6 +1876,7 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         detailTargets = null
         fringeTarget = null
         chainTargets.clear()
+        deleteCoarseTargets()
         developed = null
         developedShapeFree = null
         effectsGridValid = false
@@ -2566,6 +2711,11 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
 
         /** Views at this scale or below read the working texture's level 1 or coarser (the half-resolution write). */
         private const val HALF_VIEW_SCALE = 0.5f
+
+        // Which resolution slots 11-12 last wrote (a partial update must run the same way).
+        private const val MODE_FULL = 0
+        private const val MODE_HALF = 1
+        private const val MODE_COARSE = 2
     }
 }
 
@@ -2606,6 +2756,27 @@ private class UploadedImage(
             base = it
         }
         return kept.withLocal(colour, recipe, pixelScale)
+    }
+
+    private var coarseKey: Recipe? = null
+    private var coarse: DevelopParams? = null
+
+    /**
+     * [params] (`params(recipe)`) with Detail, Effects and masks resolved at twice the pixel scale: the parameters of
+     * the half-resolution Detail run (docs/adr/0012 "W2/P"). Null when slots 11-12 do not run. GL thread only.
+     */
+    fun coarseParams(recipe: Recipe, params: DevelopParams): DevelopParams? {
+        val kept = coarse?.takeIf { coarseKey == recipe }
+        return when {
+            !params.localActive -> null
+
+            kept != null -> kept
+
+            else -> params.withLocal(colour, recipe, pixelScale * 2f).also {
+                coarseKey = recipe
+                coarse = it
+            }
+        }
     }
 
     /** The geometry operator's mapping of [recipe] (lens corrections included), or the crop mode's plane. */

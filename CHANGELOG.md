@@ -25,6 +25,9 @@ All notable changes to Reveal are documented here. The format follows
 - Settings -> Storage lists library thumbnails and kept originals as their own rows.
 
 ### Changed
+- Hand-off contract (W3/H, docs/adr/0011 "Amendment W3/H"): photos the sender's paired server holds are handed over as
+  server references (`SERVER_ITEMS`) instead of content URIs, and `CULLING_VERSION` 2 adds per-field dates and authors
+  for URI items (last writer wins, equal times broken by the ordinal device id).
 - Photos handed over from other apps whose file your server holds become server photos (same edits, ratings, versions;
   they stay in "Opened from other apps"), so Reveal reads your server's copy rather than the other app's file.
 

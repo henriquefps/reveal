@@ -58,6 +58,10 @@ class HandoffAdoptionTest {
         // Nothing to adopt while the server does not hold the file.
         assertThat(runBlocking { phone.store.adoptHandoffs() }).isEqualTo(0)
 
+        // The sender granted a sidecar.
+        phone.db.openHelper.writableDatabase.execSQL(
+            "UPDATE photos SET xmp_document_id = 'content://dev.hfps.hoard.stream/h/1/IMG1.xmp' WHERE id = $photo",
+        )
         server.addNasFile("nas", "NAS", "2026/IMG1.JPG", jpeg, print)
         phone.sync()
         assertThat(runBlocking { phone.store.adoptHandoffs() }).isEqualTo(1)
@@ -69,6 +73,8 @@ class HandoffAdoptionTest {
         assertThat(after.handoffAt).isEqualTo(before.handoffAt)
         assertThat(after.rating).isEqualTo(4)
         assertThat(after.flag).isEqualTo(PickFlag.PICK)
+        // No sidecar for a Server photo (ADR 0011 W3/H): the sender's URI is never opened again.
+        assertThat(after.xmpDocumentId).isNull()
         assertThat(phone.version(photo)).isEqualTo(version)
         assertThat(phone.recipe(version).light.exposureEv).isEqualTo(0.3f)
         val file = runBlocking { phone.db.photoDao().files(photo).single() }

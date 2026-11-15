@@ -23,7 +23,8 @@ sidecars.
 | `dev.hfps.reveal.extra.TITLE` | `String`, optional | Names the batch; shown as the group header in "Opened from other apps" (else the arrival date and time). Trimmed, at most 120 chars. |
 | `dev.hfps.reveal.extra.INITIAL_URI` | `Uri`, optional | One of the URIs sent: open it in the editor at once, with the batch in the library behind it. Ignored if it is not among the URIs. |
 | `dev.hfps.reveal.extra.CULLING` | `Bundle`, optional | The sender's rating / flag / colour label per item, see "Culling". |
-| `dev.hfps.reveal.extra.CULLING_VERSION` | `Int`, optional | Layout version of `CULLING`; absent = 1. Current: **1**. |
+| `dev.hfps.reveal.extra.CULLING_VERSION` | `Int`, optional | Layout version of `CULLING`; absent = 1. Current: **2** (W3/H, adds per-field dates and authors; see "Culling" and "Amendment W3/H"). |
+| `dev.hfps.reveal.extra.SERVER_REF_VERSION`, `SERVER_ID`, `SERVER_ITEMS`, `INITIAL_ITEM` | optional | Server references: photos the sender's paired hoard-server holds, see "Amendment W3/H: server references". |
 
 Intent flags: `FLAG_GRANT_READ_URI_PERMISSION` (required), `FLAG_GRANT_WRITE_URI_PERMISSION` (only for URIs the sender
 lets Reveal write: sidecars), `FLAG_GRANT_PERSISTABLE_URI_PERMISSION` (optional, see "Grants"). The ClipData's grants
@@ -69,12 +70,16 @@ Hoard keeps culling decisions in its own database for folders it cannot write (r
 travel in a sidecar. It sends them with the hand-off, **per item**, in one `Bundle` extra:
 
 ```
-dev.hfps.reveal.extra.CULLING_VERSION : Int    = 1                   (optional; absent = 1)
+dev.hfps.reveal.extra.CULLING_VERSION : Int    = 2                   (optional; absent = 1)
 dev.hfps.reveal.extra.CULLING         : Bundle {
     "<item uri, exactly uri.toString() as put in the ClipData>" : Bundle {
         "rating" : Int     0..5                                  (optional)
         "flag"   : String  "pick" | "reject" | "none"            (optional, case-insensitive)
         "label"  : String  colour label, xmp:Label ("Red", ...)  (optional; "" or blank clears it; max 64 chars)
+        // version 2, per field, optional:
+        "ratingModifiedAt" / "flagModifiedAt" / "labelModifiedAt" : Long    Unix ms of the change (R0.8)
+        "ratingDevice" / "flagDevice" / "labelDevice"            : String  server deviceId of the author; only when
+                                                                           the sender is paired
     }
     ...
 }
@@ -389,6 +394,95 @@ comes back, clearing the marks (full thumbnail, full-size export, original backu
 Culling values a sender passes that the paired server already holds for the shot are not pushed back to it; each
 `EXTRA_CULLING` item may carry `ratingModifiedAt`, `flagModifiedAt`, `labelModifiedAt` (Unix ms) dating the change.
 
+## Amendment W3/H: server references (2026-11-15)
+
+### Context
+
+URI hand-offs of photos the paired hoard-server already holds made Reveal read through Hoard's provider (SMB via
+appfuse) for thumbnails, access checks and edits; a burst of such opens at Reveal's start hung vold and restarted
+system_server (2026-11-15). Rule: **content URIs only for photos the server does not have**; a photo the server holds
+is handed over as a **server reference** and Reveal reads it through its own pairing.
+
+### Extras (same action `dev.hfps.reveal.action.DEVELOP`)
+
+| Name | Kind | Meaning |
+| --- | --- | --- |
+| `dev.hfps.reveal.extra.SERVER_REF_VERSION` | `Int` | Layout version of the extras below. Current: **1**. Absent = the intent has no server references. |
+| `dev.hfps.reveal.extra.SERVER_ID` | `String` | The `serverId` (UUID, Hoard ADR 0013 pairing / `GET /v1/server`) of the server the sender is paired with. Required with `SERVER_ITEMS`. |
+| `dev.hfps.reveal.extra.SERVER_ITEMS` | `ArrayList<Bundle>` | One bundle per shot (an item, Hoard ADR 0014), order kept. At most **500** per intent (~300-450 B per bundle; the Binder limit is ~1 MB); a bigger batch is several intents with the same `TITLE`. |
+| `dev.hfps.reveal.extra.INITIAL_ITEM` | `String`, optional | An `itemId` among `SERVER_ITEMS` to open in the editor at once. `INITIAL_URI` keeps its meaning for URI items; if both are set, `INITIAL_ITEM` wins. |
+| `dev.hfps.reveal.extra.TITLE` | unchanged | Names the batch (URI items and server items of one intent form one batch). |
+
+Item bundle:
+
+```
+"itemId"        : String   server item id (Hoard ADR 0014)                       required
+"fingerprint"   : String   v1: fingerprint of the main file (the RAW)             optional (cross-check / fallback)
+"fingerprints"  : String[] v1: fingerprints of every member file (RAW, JPEG, ...) optional
+"name"          : String   main file name, for display before the record arrives  optional (<= 255)
+```
+
+**No culling in server items**: both apps read it from the server (ADR 0027 / Hoard ADR 0016); `CULLING` is only for
+URI items. No `ClipData` item, URI or grant is sent for a server item. One intent may mix URI items (photos the server
+does not have, unchanged contract) and server items.
+
+### Culling for URI items: `CULLING_VERSION` 2
+
+Per item (same URI-keyed `Bundle` as version 1), each field may carry its own date and author: `ratingModifiedAt`,
+`flagModifiedAt`, `labelModifiedAt` (Long, Unix ms) and `ratingDevice`, `flagDevice`, `labelDevice` (String, the
+server `deviceId` of the device that made the change; sent only when the sender is paired, else absent). Reveal applies
+each field by **per-field last-writer-wins** as in Hoard ADR 0016 / ADR 0027: the newer `modifiedAt` wins; at equal
+times the greater `deviceId` by byte-wise (ordinal) string comparison wins (Go string order, never a locale collator;
+Hoard ADR 0016 step 5 / ADR 0013). The same tiebreak is used wherever Reveal compares culling changes. The comparison
+is against what Reveal holds for that field (its own change time, or the sidecar's mtime for a sidecar-read value). A
+field without a date falls back to version 1's precedence ("values win unless the sidecar is newer than the previous
+hand-off"). Version 2 only adds keys, so an old Reveal reads it as version 1.
+
+### Sender rule (Hoard)
+
+A shot the sender's paired server holds (and can serve the original of) goes as a server item whenever Reveal >= 0.9.0
+(`versionCode >= 90000`) is installed: Gallery items, and SMB files Hoard maps to server items. Hoard may read
+`GET /v1/device` `physicalDevice.devices[]` only to decide how it presents things; if that is false or unknown (not
+claimed, another server, server unreachable) it still sends server items and Reveal shows its pair or "paired with
+another server" sheet. **Hoard never falls back to URIs for photos the server holds.** URIs only for photos the server
+does not hold, or for Reveal < 0.9.0. Hoard sends `fingerprint` when it has it and `fingerprints` for pairs, and
+flushes its culling pushes for those items before sending (best effort); Reveal pulls culling on receipt.
+
+**Reveal never calls back into Hoard for server items** (no provider, no grants, no URI).
+
+### Reveal behaviour
+
+- **Same server** (Reveal paired, its `serverId` == `SERVER_ID`): each item resolves to a photo by fingerprint (any
+  member) across every source (ADR 0006 "Identity"); else Reveal creates it as a Server photo (`sources.kind =
+  SERVER`) from `GET /v1/items/{itemId}` (a tombstone with `replacedBy` is followed once). The photo gets `handoff_at`
+  and joins the batch in "Opened from other apps"; `INITIAL_ITEM` opens in the editor, reading the original by range
+  (`ServerFiles`), the smart preview first if the server has one. Nothing is read through the sender.
+- **Culling of server items** comes from the server only (Reveal pulls the item's culling record before the batch
+  shows). If `itemId` and `fingerprint` disagree (the item's members do not include it), Reveal trusts `itemId` and
+  logs the mismatch; if `itemId` is unknown and a fingerprint is given, Reveal falls back to a fingerprint lookup
+  (`POST /v1/items/lookup`).
+- **Not paired**: a sheet "These photos are on your Hoard server. Pair Reveal with it to open them" with Pair (the
+  scanner or a `revealsync://` link) and Cancel; after pairing with that server the batch is resolved as above.
+- **Paired with another server**: the same sheet saying Reveal is paired with another server (its name); no automatic
+  re-pairing.
+- **Unknown or deleted item** (404, tombstone without replacement): skipped and listed in the outcome ("N photos could
+  not be found on the server"); the rest of the batch opens.
+- **Server unreachable**: the photos are created or located and open from what Reveal has (local cache, smart
+  preview); otherwise the usual "unavailable" placeholder and a retry once the server answers.
+- **Sidecars**: none are sent or written for server items (culling rides the server, edits sync as records and edited
+  previews, Hoard ADR 0020).
+
+### Existing libraries (W3/C)
+
+Hand-off files received earlier as URIs whose fingerprint the server holds are read from the server copy (and moved to
+the Server source, keeping uuid, edits and culling); Reveal stops opening their Hoard URIs. URI hand-offs of photos the
+server does not have keep working, with Hoard's `busy:` retry (Hoard ADR 0010) and throttled checks.
+
+### Review
+
+Item limit 500; the tiebreak is the ordinal `deviceId`; Hoard learns Reveal's pairing from the server's device grouping
+(Hoard ADR 0017), with no provider (different signing keys); no fingerprint-only references for now; `CULLING_VERSION` 2.
+
 ## Amendment W3/C (0.9.0, docs/adr/0018 "W3/C")
 
 - **Access checks are a paced background pass**, never a burst: `checkHandoffs`/`recheckAccess` no longer run at start
@@ -403,4 +497,5 @@ Culling values a sender passes that the paired server already holds for the shot
   `unreadable_at`. Any other `FileNotFoundException` keeps its meaning.
 - **A hand-off the server holds becomes a Server photo** (`SyncStore.adoptHandoffs`): it keeps its identity, edits,
   culling and `handoff_at` ("Opened from other apps" lists Server photos with a hand-off time), and a later share of
-  the same file opens it (a Server photo is reusable like a folder photo). Its granted sidecar is still written.
+  the same file opens it (a Server photo is reusable like a folder photo). Its sidecar link goes (no sidecar for server
+  items, "Amendment W3/H").

@@ -257,6 +257,8 @@ adb -s emulator-<port> logcat -d -s REVEAL_XMP RevealSidecars
 
 ## Hand-off from other apps (`:core:data/handoff`, ADR 0011)
 
+Hoard<->Reveal contracts (owners, versions, compatibility): github.com/henriquefps/hoard `docs/integration/README.md` (maintained by the coordinator; don't edit it).
+
 `HandoffIntents.parse` (action `dev.hfps.reveal.action.DEVELOP`, `VIEW`, `EDIT`, `SEND`, `SEND_MULTIPLE`; URIs from data +
 ClipData + `EXTRA_STREAM`) -> `HandoffRepository.receive` (pairs by stem and parent, files the photos under the single
 `sources.kind = HANDOFF` source, `HandoffTree` keys documents by URI) -> `HandoffOutcome` (`MainActivity.show`). DB v3.
@@ -932,6 +934,8 @@ device: push the copies to `files/private` with `run-as`, run with `-e dir /data
 
 ## Sync server (lives in Hoard, ADR 0017)
 
+Hoard<->Reveal contracts (owners, versions, compatibility): github.com/henriquefps/hoard `docs/integration/README.md` (maintained by the coordinator; don't edit it).
+
 The server is **`hoard-server`** in the Hoard repository (github.com/henriquefps/hoard, `server/`; image
 `ghcr.io/henriquefps/hoard-server`, release tags `server-v*`); it replaced `reveal-sync`, which used to live here
 (`sync-server/` is gone; the `sync-server-v*` tags and releases stay as history). The protocol did not change (`/v1`,
@@ -1051,7 +1055,7 @@ opens/s); a `FileNotFoundException` starting with `busy:` (`PROVIDER_BUSY_PREFIX
 (`FileOpens.retryBusy`, 250 ms doubling to 4 s, ~30 s) and is never `isAccessError`. The access check is one paced
 background pass (skips files the server holds, `photo_files.checked_at` < 6 h, documents with a read grant:
 `readGrants`); never per grid query. Hand-offs whose main file the server holds become Server photos in place
-(`SyncStore.adoptHandoffs` after every sync: uuid, versions, culling, `handoff_at` kept; their sidecar still written).
+(`SyncStore.adoptHandoffs` after every sync: uuid, versions, culling, `handoff_at` kept; sidecar link dropped).
 Server headers come from the item lookup (`engine/ServerHeaders`), not range reads. Grid thumbnails of Server photos
 and hand-offs on the server: `ThumbnailRepository` asks `ServerThumbs` (optional binding) = `thumbs/LibraryThumbs`
 (`server_thumbs`, `no_backup/library-thumbs`, 384 px WebP q70, `CacheTier.LIBRARY` evicted last; batched lookup +

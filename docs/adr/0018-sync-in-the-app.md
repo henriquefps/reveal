@@ -474,9 +474,9 @@ is `handoff_at IS NOT NULL` again, Server photos included); its files take the s
 (`ServerTree.documentId`, relative path `handoff/<fingerprint>/<name>`), so the grid, the viewer, the editor and the
 export read the server's copy and never open the sender's URI to show it. Quiet: nothing changes for other devices.
 A later share of the same file opens that Server photo (`HandoffRepository`: a Server photo is reusable like a folder
-photo). The sidecar the sender granted stays the photo's: a culling change or an edit is still written there (one open
-in a `FileOpens` slot per change; ADR 0026, Hoard's integration contract 12). The same call serves photos handed over
-by server reference later (W3/H).
+photo). The sidecar link goes with the move: a Server photo's culling rides the server and no sidecar is written for
+it (docs/adr/0011 "Amendment W3/H"), so the sender's URI is never opened again. The same call serves photos handed
+over by server reference (W3/H).
 
 ### Library thumbnails
 

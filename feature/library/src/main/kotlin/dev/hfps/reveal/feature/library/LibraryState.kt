@@ -170,7 +170,7 @@ data class LibraryUiState(
     val dateJumpOpen: Boolean = false,
     /** The Date filter's custom range picker is open (W3/D). */
     val dateRangeOpen: Boolean = false,
-    /** The Camera and Lens filters' choices with their counts, and the Date presets' counts (while the sheet is open). */
+    /** The Camera and Lens filters' choices with their counts (while the sheet is open). */
     val cameras: List<CameraCount> = emptyList(),
     val lenses: List<LensCount> = emptyList(),
     val dateCounts: DateCounts? = null,

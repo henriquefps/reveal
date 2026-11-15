@@ -27,6 +27,7 @@ import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -701,7 +702,7 @@ private fun GridPane(
         val scope = rememberCoroutineScope()
         GoToDateSheet(
             index = index,
-            current = index.monthAt(grid.firstVisibleItemIndex),
+            current = remember { derivedStateOf { index.monthAt(grid.firstVisibleItemIndex) } }.value,
             labels = rememberDateLabels(),
             onPick = { month ->
                 actions.onDateJumpOpen(false)

@@ -197,6 +197,7 @@ private val PhoneMaxWidth = 600.dp
  * (or toggles while selecting), long-press starts a selection and dragging extends it across rows (with auto-scroll
  * near the edges).
  */
+@Suppress("LongMethod")
 @Composable
 fun PhotoGrid(
     entries: List<GridEntry>,
@@ -278,6 +279,7 @@ fun PhotoGrid(
 }
 
 /** The scroller's bubble at entry [at]: its month in a date order, else the photo name's first letter. */
+@Suppress("ReturnCount")
 private fun scrollerLabel(entries: List<GridEntry>, index: DateIndex?, labels: DateLabels, at: Int): String? {
     if (index != null) return index.monthAt(at)?.let(labels::monthShort)
     val row = (entries.getOrNull(at) as? GridEntry.Photo)?.row ?: return null

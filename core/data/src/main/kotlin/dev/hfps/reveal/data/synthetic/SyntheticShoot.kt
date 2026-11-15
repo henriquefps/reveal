@@ -40,6 +40,7 @@ data class SyntheticExif(
          * [SPREAD_HOURS] hours back from 7 August 2026 18:00, the cameras and lenses in turn, so the grid has month
          * and day headers and the Date, Camera and Lens filters select real subsets.
          */
+        @Suppress("MagicNumber")
         fun spread(index: Int): SyntheticExif {
             val at = java.time.LocalDateTime.of(2026, 8, 7, 18, 0).minusHours(index * SPREAD_HOURS)
             val (make, model) = CAMERAS[index % CAMERAS.size]

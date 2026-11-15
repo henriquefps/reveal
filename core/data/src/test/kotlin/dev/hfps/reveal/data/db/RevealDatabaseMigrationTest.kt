@@ -458,8 +458,8 @@ class RevealDatabaseMigrationTest {
         }
     }
 
-
     @Test
+    @Suppress("NestedBlockDepth")
     fun `14 to 15 adds unread camera fields and dates Server photos by their file or not at all`() {
         val name = "migration-14-15.db"
         helper.createDatabase(name, 14).use { db ->

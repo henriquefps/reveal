@@ -322,6 +322,7 @@ internal fun FilterSheet(state: LibraryUiState, actions: LibraryActions) {
 }
 
 /** The filter sheet's content without the sheet (screenshots): every group, its choices with their counts. */
+@Suppress("LongMethod")
 @Composable
 fun FilterSheetContent(state: LibraryUiState, actions: LibraryActions, modifier: Modifier = Modifier) {
     val filters = state.filters

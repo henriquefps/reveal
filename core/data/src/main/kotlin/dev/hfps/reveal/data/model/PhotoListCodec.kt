@@ -102,6 +102,7 @@ object PhotoListCodec {
     private fun unescape(text: String): String = URLDecoder.decode(text, Charsets.UTF_8.name())
 
     /** [encodeFilters]' text back; unknown tokens are skipped (a newer build's choice), garbage gives null. */
+    @Suppress("CyclomaticComplexMethod")
     fun decodeFilters(text: String): PhotoFilters? = runCatching {
         var filters = PhotoFilters.NONE
         for (token in text.split(',').filter { it.isNotEmpty() }) {

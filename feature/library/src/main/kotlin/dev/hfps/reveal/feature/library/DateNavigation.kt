@@ -242,6 +242,7 @@ internal fun StickyMonthHeader(
 }
 
 /** How far the next month's header pushes the sticky one up: 0 until it reaches the sticky header's bottom. */
+@Suppress("ReturnCount")
 private fun pushUp(state: LazyGridState, index: DateIndex, position: Int, height: Int): Float {
     val next = position + 1
     if (next >= index.size) return 0f
@@ -305,7 +306,7 @@ private val THUMB_HEIGHT = 44.dp
  * TalkBack reads it as an adjustable control ("Scroll by date", the current month) with previous/next month actions.
  * Shown only when the grid is at least [MIN_SCREENS] screens long.
  */
-@Suppress("LongMethod", "CyclomaticComplexMethod")
+@Suppress("LongMethod", "CyclomaticComplexMethod", "LoopWithTooManyJumpStatements")
 @Composable
 internal fun DateScroller(
     state: LazyGridState,

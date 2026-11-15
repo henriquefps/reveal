@@ -21,9 +21,14 @@
         <item quantity="other">%1$d fotos do Hoard não puderam ser copiadas: o Reveal vai usar as prévias delas.</item>
     </plurals>
     <plurals name="handoff_copying">
-        <item quantity="one">Copiando %1$d foto do Hoard</item>
-        <item quantity="many">Copiando %1$d fotos do Hoard</item>
-        <item quantity="other">Copiando %1$d fotos do Hoard</item>
+        <item quantity="one">Copiando %1$d foto…</item>
+        <item quantity="many">Copiando %1$d fotos…</item>
+        <item quantity="other">Copiando %1$d fotos…</item>
+    </plurals>
+    <plurals name="handoff_copying_from">
+        <item quantity="one">Copiando %1$d foto do app %2$s</item>
+        <item quantity="many">Copiando %1$d fotos do app %2$s</item>
+        <item quantity="other">Copiando %1$d fotos do app %2$s</item>
     </plurals>
     <string name="handoff_channel">Fotos de outros apps</string>
 </resources>

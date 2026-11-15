@@ -263,7 +263,9 @@ class HandoffRepository(
             }
             photos.deleteEmptyPhotos(source.id)
         }
-        stored.mapNotNull { it.second.stalePreview }.takeIf { it.isNotEmpty() }?.let { previewer?.previews?.delete(it) }
+        // A RAW joined its JPEG of an earlier chunk: the JPEG's queued previews do nothing from now on, and the ones
+        // made are deleted once the RAW's display preview exists (`HandoffPreviewer.Shot.replaces`).
+        stored.mapNotNull { it.second.stalePreview }.forEach { previewer?.retire(it) }
         // Headers first: what is embedded in a file (JPEG XMP) only fills an unrated photo, and the sender's culling
         // values or the sidecar applied next win over it.
         indexer.readMetadata(source.id, tree)
@@ -974,6 +976,7 @@ class HandoffRepository(
                 rendered = document(FileRole.RENDERED),
                 smart = shot.main.uri !in persisted,
                 readable = { lasting || holderAlive() },
+                replaces = ids.stalePreview,
             ) to lasting
         }
         // The shots only the grant covers first, in their own call: the holder waits for exactly these.

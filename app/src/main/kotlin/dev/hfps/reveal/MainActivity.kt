@@ -29,6 +29,7 @@ import dev.hfps.reveal.data.handoff.GalleryAccess
 import dev.hfps.reveal.data.handoff.GalleryAccessState
 import dev.hfps.reveal.data.handoff.HandoffApps
 import dev.hfps.reveal.data.handoff.HandoffBatches
+import dev.hfps.reveal.data.handoff.HandoffGrants
 import dev.hfps.reveal.data.handoff.HandoffIngests
 import dev.hfps.reveal.data.handoff.HandoffIntents
 import dev.hfps.reveal.data.handoff.HandoffNotice
@@ -394,7 +395,17 @@ class MainActivity : ComponentActivity() {
         held += ingest
         // The grant service holds the intent's grant until the copies and previews that need it are done, so back
         // returns to the sender at once and a silent member leaves at once (ADR 0011 "Amendment W4", "Grant service").
-        val handedOver = HandoffGrantService.start(this, ingest, parsed.uris)
+        // Only when some documents need it: an ordinary gallery share under full photo access needs nothing.
+        gallery.refresh()
+        val needed = HandoffGrants.needing(parsed.uris, parsed.persistable, gallery.state.value)
+        val handedOver = needed.isNotEmpty() && HandoffGrantService.start(
+            this,
+            ingest,
+            request = checkNotNull(intent),
+            uris = parsed.uris,
+            needed = needed.size,
+            sender = HandoffApps.senderLabel(packageManager, parsed.uris, sender, packageName),
+        )
         follow(ingest, handedOver)
         if (ingest.silent && handedOver) leaveQuietly()
     }

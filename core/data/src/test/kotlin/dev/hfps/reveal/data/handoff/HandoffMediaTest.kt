@@ -406,6 +406,35 @@ class HandoffMediaTest {
     }
 
     @Test
+    fun `a request received again after the process died reuses its photos and copies`() = runTest {
+        val scope = CoroutineScope(Dispatchers.IO)
+
+        // A new HandoffIngests per process: the redelivered start finds no ingest and receives its intent again.
+        fun process() = HandoffIngests(
+            scope,
+            HandoffRepository(resolver, db, LibraryIndexer(db) { now }, tree, null, originals, background = scope) {
+                now
+            },
+            HandoffBatches(db) { now },
+        )
+        val uris = (1..2).map { download(80 + it, "IMG_%04d.CR3".format(80 + it)) }
+        val request = HandoffRequest(uris, title = "Trip")
+        process().receive("k", request, batchKey = null, hoardMedia = false).awaitSettled()
+        val before = db.photoDao().handoffFiles().sortedBy { it.relativePath }
+        val copies = before.map { java.io.File(Uri.parse(it.documentId).path!!) }
+        assertThat(copies.all { it.isFile }).isTrue()
+        copies.forEach { it.setLastModified(1_000L) }
+
+        val again = process().receive("k", request, batchKey = null, hoardMedia = false)
+        assertThat(again.awaitSettled().notCopied).isEqualTo(0)
+        val after = db.photoDao().handoffFiles().sortedBy { it.relativePath }
+        assertThat(after.map { it.photoId to it.documentId }).isEqualTo(before.map { it.photoId to it.documentId })
+        assertThat(rows()).hasSize(uris.size)
+        // The copies were reused, not written again.
+        assertThat(copies.map { it.lastModified() }).containsExactly(1_000L, 1_000L)
+    }
+
+    @Test
     fun `the grant service keeps the grant after the activity finishes, so every copy is made`() = runTest {
         val (settled, uris) = receiveThenLeave(serviceHolds = true)
         assertThat(settled.notCopied).isEqualTo(0)
@@ -471,6 +500,84 @@ class HandoffMediaTest {
         val rawPrint = db.photoDao().files(photo.id).single { it.role == FileRole.RAW }.fingerprint!!
         assertThat(previews.display(rawPrint)).isNotNull()
         assertThat(previews.display(jpegPrint)).isNull()
+    }
+
+    @Test
+    fun `a joined JPEG keeps its display preview while the RAW's preview fails`() = runTest {
+        val making = object : PreviewMaking {
+            override fun display(raw: dev.hfps.image.ImageInput?, rendered: dev.hfps.image.ImageInput?, out: File) {
+                check(raw == null) { "the RAW cannot be decoded" }
+                out.writeBytes(byteArrayOf(1))
+            }
+
+            override fun smart(main: dev.hfps.image.ImageInput, out: File) = out.writeBytes(byteArrayOf(2))
+        }
+        val previews = LocalPreviews(temp.newFolder("previews"))
+        val previewer = HandoffPreviewer(tree, previews, CoroutineScope(Dispatchers.IO), making)
+        val staged = HandoffRepository(resolver, db, LibraryIndexer(db) { now }, tree, previewer, originals) { now }
+        staged.receive(HandoffRequest(listOf(image(62, "IMG_0062.JPG")), title = "Trip", batchAt = 7_000L))
+        previewer.editorOpened()
+        previewer.editorClosed()
+        previewer.idle()
+        val jpegPrint = db.photoDao().handoffFiles().single().fingerprint!!
+        assertThat(previews.display(jpegPrint)).isNotNull()
+
+        staged.receive(
+            HandoffRequest(listOf(download(63, "IMG_0062.CR3")), title = "Trip", batchAt = 7_000L, batchIndex = 1),
+        )
+        previewer.idle()
+        val rawPrint = db.photoDao().files(rows().single().id).single { it.role == FileRole.RAW }.fingerprint!!
+        assertThat(previews.display(rawPrint)).isNull()
+        // Nothing replaced it: the photo still shows the JPEG's preview.
+        assertThat(previews.display(jpegPrint)).isNotNull()
+    }
+
+    @Test
+    fun `an earlier chunk's queued preview of a JPEG does nothing once a RAW joined it`() = runTest {
+        val gate = java.util.concurrent.CountDownLatch(1)
+        val made = java.util.Collections.synchronizedList(mutableListOf<String>())
+        val making = object : PreviewMaking {
+            override fun display(raw: dev.hfps.image.ImageInput?, rendered: dev.hfps.image.ImageInput?, out: File) {
+                if (raw == null && rendered == null) gate.await() // The shot ahead of the queue.
+                made += when {
+                    raw != null -> "raw"
+                    rendered != null -> "jpeg"
+                    else -> "ahead"
+                }
+                out.writeBytes(byteArrayOf(1))
+            }
+
+            override fun smart(main: dev.hfps.image.ImageInput, out: File) = out.writeBytes(byteArrayOf(2))
+        }
+        val previews = LocalPreviews(temp.newFolder("previews"))
+        val scope = CoroutineScope(Dispatchers.IO)
+        val previewer = HandoffPreviewer(tree, previews, scope, making)
+        val staged = HandoffRepository(
+            resolver,
+            db,
+            LibraryIndexer(db) { now },
+            tree,
+            previewer,
+            originals,
+            background = scope,
+        ) { now }
+        // Another shot holds the queue, so the JPEG's display preview is still queued when the RAW joins it.
+        val ahead = HandoffPreviewer.Document("content://none/ahead", "ahead.jpg")
+        previewer.schedule(listOf(HandoffPreviewer.Shot("ahead", ahead, null, null, smart = false)))
+        staged.receiveStaged(HandoffRequest(listOf(image(64, "IMG_0064.JPG")), title = "Trip", batchAt = 7_000L))
+        val jpegPrint = db.photoDao().handoffFiles().single().fingerprint!!
+        staged.receiveStaged(
+            HandoffRequest(listOf(download(65, "IMG_0064.CR3")), title = "Trip", batchAt = 7_000L, batchIndex = 1),
+        )
+        gate.countDown()
+        previewer.editorOpened()
+        previewer.editorClosed()
+        previewer.idle()
+        val rawPrint = db.photoDao().files(rows().single().id).single { it.role == FileRole.RAW }.fingerprint!!
+        assertThat(made).containsExactly("ahead", "raw").inOrder()
+        assertThat(previews.display(rawPrint)).isNotNull()
+        assertThat(previews.display(jpegPrint)).isNull()
+        assertThat(previews.smart(jpegPrint)).isNull()
     }
 
     @Test

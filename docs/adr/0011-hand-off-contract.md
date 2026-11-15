@@ -635,16 +635,34 @@ safety net for a sender that does not (item 5).
    still works (`checkCallingOrSelfUriPermission`), else finishes.
    `LocalOriginals` sweeps its `.tmp` files once, when the store is created (the app's start), never from a copy:
    a sweep from a copy deleted the temporary files of copies running beside it.
+11. *Grant service (fix round 3).* Started only when a document needs the grant after the activity is gone
+   (`HandoffGrants.needing`): a Downloads document (copied), a `MediaStore.Images` document while the photo permission
+   is not FULL (its previews), another provider's document without a persistable grant. An ordinary gallery share under
+   FULL starts nothing. The notification counts those documents and names the sender (`HandoffApps.senderLabel`: the
+   app serving a URI, else the referrer) or is neutral ("Copying N photos…"). It is never a background service: a
+   start whose `startForeground` fails (a background-start refusal, Android 15's exhausted dataSync time) settles at
+   once and returns `START_NOT_STICKY`; `onTimeout(startId, fgsType)` (Android 15's limit) settles every start and
+   stops the service; the copies left lose the grant and are reported as not copied. The start bookkeeping is
+   `GrantStarts` (pure, unit-tested). The settled notice and a silent member's `done` run in the app's scope
+   (`HandoffIngests.whenSettled`), so they outlive the service. A redelivered start (`START_FLAG_REDELIVERY`) whose
+   ingest died with the process receives its request again from the activity's intent it carries (`EXTRA_REQUEST`,
+   with the batch key and media flag) under the start's own grant; copies already kept are reused by fingerprint
+   and the photos found again by fingerprint, so a second receive is harmless.
+   A RAW that joins its JPEG from an earlier chunk retires the JPEG's fingerprint (`HandoffPreviewer.retire`): the
+   earlier chunk's queued display and smart previews for it do nothing, and the JPEG's existing previews are deleted
+   only once the RAW's display preview exists (`Shot.replaces`); a RAW that cannot be previewed keeps the JPEG's.
 
 Tests: `HandoffMediaTest` (JVM: offer state machine and its own answer, Hoard-only Images trigger, no persistable
 grant, cross-collection pairing by relative path (DCIM never pairs with Hoard), a RAW in a later chunk joining its
 JPEG, kept original + revoked grant + restart + forget, no copy for a folder's photo, a kept copy reused when the URI
 cannot be opened, forget by fingerprint, free-space refusal, `.tmp` sweep at creation with two copies running together,
 the grant held by the service after the activity left (every copy made) and, without it, the refused copies counted,
-root-folder keys, a joined RAW dropping the JPEG's preview, an extensionless Downloads item, a silent
+root-folder keys, a joined RAW dropping the JPEG's preview (only after its own exists; a queued JPEG preview
+skipped), a request received again after the process died (photos and copies reused), an extensionless Downloads item, a silent
 chunk whose grant is revoked after it settled (display previews made, no smart preview attempted), access check,
 identity incl. a Server photo, URI chunks, retention), `HandoffServerRefsTest` (URI/server/mixed chunks),
-`HandoffAdoptionTest` (kept originals never adopted), `ReadOnlyGrantsTest`; instrumented `HandoffMediaTest` (real
+`HandoffAdoptionTest` (kept originals never adopted), `ReadOnlyGrantsTest`, `HandoffGrantsTest` (which documents
+start the service), app `GrantStartsTest` (ordered stops, refused foreground, time limit); instrumented `HandoffMediaTest` (real
 MediaStore Images/Downloads, read grant only through `HandoffHostActivity`, 600 URIs in 3 chunks of 200, the editor's
 offer once, a batch that survives `recreate()` mid-ingest), `HandoffGrantServiceTest` (shell-owned Downloads files
 granted by `am start --grant-read-uri-permission` as three silent members: each activity leaves before any copy, every

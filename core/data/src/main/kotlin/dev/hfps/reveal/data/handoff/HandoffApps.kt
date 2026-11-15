@@ -23,6 +23,19 @@ object HandoffApps {
         SenderApp(app.packageName, packageManager.getApplicationLabel(app).toString(), launch)
     }.getOrNull()
 
+    /**
+     * The name of the app a hand-off came from, for the grant service's notification: the app serving one of [uris]
+     * ([sender]), else the app that started Reveal ([referrer], e.g. Hoard handing over MediaStore copies). Null when
+     * neither is known (the notification is neutral then).
+     */
+    fun senderLabel(packageManager: PackageManager, uris: List<Uri>, referrer: String?, ownPackage: String): String? =
+        uris.firstNotNullOfOrNull { sender(packageManager, it, ownPackage) }?.label
+            ?: referrer?.takeIf { it != ownPackage }?.let { name ->
+                runCatching {
+                    packageManager.getApplicationLabel(packageManager.getApplicationInfo(name, 0)).toString()
+                }.getOrNull()?.takeIf { it.isNotBlank() }
+            }
+
     /** The package that started Reveal ([android.app.Activity.getReferrer]: `android-app://<package>`), or null. */
     fun referrerPackage(referrer: Uri?): String? =
         referrer?.takeIf { it.scheme == "android-app" }?.host?.takeIf { it.isNotBlank() }

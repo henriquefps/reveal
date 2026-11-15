@@ -33,7 +33,10 @@ All notable changes to Reveal are documented here. The format follows
   for access to all your photos so they stay openable later, keeps its own copy of the files the gallery cannot share
   (such as CR3, in Settings → Storage → "Originals from other apps", never cleared automatically), pairs a RAW in
   Downloads with its JPEG in Pictures, and no longer moves a readable local copy to the server's. Big batches (split
-  in chunks of 200) arrive as one entry and are never cut by the 400-photo retention.
+  in chunks of 200) arrive as one entry and are never cut by the 400-photo retention. The "Copying photos"
+  notification appears only while files that need the sender's permission are copied or previewed (never for an
+  ordinary gallery share with full photo access), names the sending app, stops at Android 15's time limit instead of
+  crashing, and a batch interrupted by the system killing Reveal resumes from where it was.
 - Reveal no longer writes `.xmp` sidecars on its own, anywhere (edits, ratings, flags, labels, hand-offs): they travel
   through the server, and Export XMP writes sidecars when you ask. The "Write edits to XMP sidecars" setting is gone.
   New folders and hand-offs are granted read access only; reading existing sidecars is unchanged.

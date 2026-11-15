@@ -9,9 +9,11 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * The hand-offs being received, in the app's scope rather than an activity's (ADR 0011 "Amendment W4"): the whole
@@ -143,6 +145,17 @@ class HandoffIngests(
 
     /** The ingest of [key] (a recreated activity re-attaching, the grant service), or null when unknown or over. */
     fun attach(key: String): Ingest? = running[key]
+
+    /**
+     * Runs [block] on the main thread once [ingest] settled, in the app's scope: it outlives the activity and the grant
+     * service (a service stopped by its time limit still lets the notice of the copies it could not finish show).
+     */
+    fun whenSettled(ingest: Ingest, block: (HandoffRepository.Settled) -> Unit) {
+        scope.launch {
+            val settled = runCatching { ingest.awaitSettled() }.getOrNull() ?: return@launch
+            withContext(Dispatchers.Main) { block(settled) }
+        }
+    }
 
     /** The screen is done with [key] (shown, and settled). */
     fun done(key: String) {

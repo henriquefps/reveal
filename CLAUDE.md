@@ -356,7 +356,9 @@ plus `joinEarlierChunk` for a split shot. `handoff/LocalOriginals` copies a Down
 `receiveStaged` returns the outcome once the first photo is in, `Received.settled` when the rest (copies 2 at a time,
 display previews of grant-only shots) is done (`noSpace`, `notCopied` reported once, `HandoffNotices`). The intent's
 grant is passed to `HandoffGrantService` (app, dataSync FGS, URIs as ClipData + FLAG_GRANT_READ, starts stopped in
-order) until the ingest settles, so back returns to Hoard and silent chunks finish at once; `HandoffIngests.receive`
+order by `GrantStarts`; started only when `HandoffGrants.needing` finds documents that need the grant; a failed
+`startForeground` or `onTimeout` settles and stops, never a background service; a redelivered start whose ingest died
+re-receives its `EXTRA_REQUEST`; notices via `HandoffIngests.whenSettled`) until the ingest settles, so back returns to Hoard and silent chunks finish at once; `HandoffIngests.receive`
 holds no activity; holders are counted (`handOver`/`holderGone`), smart previews of grant-only documents need one.
 `LocalOriginals` sweeps `.tmp` only when created. Grant test: `HandoffGrantServiceTest` (shell-owned Downloads files,
 `am start --grant-read-uri-permission`; emulator is fine, no GL).

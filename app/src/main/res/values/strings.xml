@@ -50,8 +50,12 @@
         <item quantity="other">%1$d photos from Hoard could not be copied: Reveal will use their previews.</item>
     </plurals>
     <plurals name="handoff_copying">
-        <item quantity="one">Copying %1$d photo from Hoard</item>
-        <item quantity="other">Copying %1$d photos from Hoard</item>
+        <item quantity="one">Copying %1$d photo…</item>
+        <item quantity="other">Copying %1$d photos…</item>
+    </plurals>
+    <plurals name="handoff_copying_from">
+        <item quantity="one">Copying %1$d photo from %2$s</item>
+        <item quantity="other">Copying %1$d photos from %2$s</item>
     </plurals>
     <string name="handoff_channel">Photos from other apps</string>
 </resources>

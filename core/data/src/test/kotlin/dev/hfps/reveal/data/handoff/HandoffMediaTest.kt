@@ -381,12 +381,13 @@ class HandoffMediaTest {
         val ingests = HandoffIngests(scope, staged, HandoffBatches(db) { now })
         val uris = (1..3).map { download(40 + it + if (serviceHolds) 10 else 0, "IMG_%04d.CR3".format(40 + it)) }
         val activityGone = java.util.concurrent.CountDownLatch(1)
-        val opened = HashMap<String, Int>()
         lateinit var ingest: HandoffIngests.Ingest
+
+        fun headKept() = originals.dir.listFiles { f -> f.isFile && !f.name.endsWith(".tmp") }?.isNotEmpty() == true
         tree.onOpen = { id ->
-            // The first open is the fingerprint; the copy of a photo after the first waits for the activity to go.
-            val n = synchronized(opened) { opened.merge(id, 1, Int::plus)!! }
-            if (n == 2 && id != uris.first().toString()) {
+            // The head is copied before the outcome, the other photos only after it: an open of another photo once the
+            // head's copy exists is its copy, which waits for the activity to go (fingerprints and headers come first).
+            if (id != uris.first().toString() && headKept()) {
                 activityGone.await(GATE_S, java.util.concurrent.TimeUnit.SECONDS)
             }
         }

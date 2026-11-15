@@ -141,7 +141,7 @@ class FileOpensTest {
         val done = CountDownLatch(36)
         repeat(36) {
             pool.execute {
-                // Thumbnails and checks (gated directly), the editor and the export (openDocument, the same gate) alike.
+                // Thumbnails, checks, the editor and the export all take the same gate.
                 FileOpens.gated { release ->
                     peak.accumulateAndGet(open.incrementAndGet(), ::maxOf)
                     Thread.sleep(10)

@@ -25,19 +25,13 @@ object LocalCopies {
         uri.scheme == "content" && uri.authority?.startsWith(ownPackage) != true
 
     /**
-     * Whether [error] says Hoard's proxy descriptor is gone (Hoard 2.0.2: idle too long, parked, or its slot lost): `EIO`.
-     * Never "unreadable": close the descriptor and open the URI again ([copy]'s [reopen]).
+     * Whether [error] says Hoard's proxy descriptor is gone (Hoard 2.0.2: idle too long, parked, or its slot lost):
+     * `EIO`. Never "unreadable": close the descriptor and open the URI again ([copy]'s `reopen`).
      */
-    fun isDescriptorGone(error: Throwable): Boolean {
-        var e: Throwable? = error
-        var depth = 0
-        while (e != null && depth++ < MAX_CAUSES) {
-            if (e is android.system.ErrnoException && e.errno == android.system.OsConstants.EIO) return true
-            val message = e.message.orEmpty()
-            if (e is IOException && (message.contains("EIO") || message.contains("I/O error"))) return true
-            e = e.cause
-        }
-        return false
+    fun isDescriptorGone(error: Throwable): Boolean = generateSequence(error) { it.cause }.take(MAX_CAUSES).any { e ->
+        val message = e.message.orEmpty()
+        (e is android.system.ErrnoException && e.errno == android.system.OsConstants.EIO) ||
+            (e is IOException && (message.contains("EIO") || message.contains("I/O error")))
     }
 
     /**

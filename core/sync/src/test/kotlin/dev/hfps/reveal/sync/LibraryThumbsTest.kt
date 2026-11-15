@@ -132,6 +132,8 @@ class LibraryThumbsTest {
             assertThat(thumbs.thumbnail(unavailable)).isEqualTo(ServerThumb.NotServed)
             assertThat(thumbs.thumbnail(lacking)).isEqualTo(ServerThumb.NotServed)
             assertThat(phone.db.serverThumbDao().get(pending)!!.state).isEqualTo(ServerThumbState.PENDING)
+            // A file no item has yet is asked again soon (the server makes items after its walks and uploads).
+            assertThat(phone.db.serverThumbDao().get(lacking)!!.state).isEqualTo(ServerThumbState.PENDING)
             // An unavailable one is not asked again for a week.
             val warms = server.previews.warms.size
             assertThat(thumbs.thumbnail(unavailable)).isEqualTo(ServerThumb.NotServed)

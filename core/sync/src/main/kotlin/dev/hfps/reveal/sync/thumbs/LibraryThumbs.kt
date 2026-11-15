@@ -165,10 +165,12 @@ class LibraryThumbs(
         val now = clock()
         val items = itemsOf(client, fingerprints)
         val results = HashMap<String, ServerThumb>()
-        val unavailable = fingerprints.filter { it !in items }
-        unavailable.forEach { results[it] = ServerThumb.NotServed }
-        if (unavailable.isNotEmpty()) {
-            dao.upsert(unavailable.map { ServerThumbEntity(it, state = ServerThumbState.UNAVAILABLE, updatedAt = now) })
+        // No item has the file (yet: the server makes one after a NAS walk or an upload): read the file for now, and ask
+        // again after the pending delay (never a week, which is only for the server's own "unavailable").
+        val unknown = fingerprints.filter { it !in items }
+        unknown.forEach { results[it] = ServerThumb.NotServed }
+        if (unknown.isNotEmpty()) {
+            dao.upsert(unknown.map { ServerThumbEntity(it, state = ServerThumbState.PENDING, updatedAt = now) })
         }
         var waiting = items.entries.groupBy({ it.value }, { it.key })
         var attempt = 0

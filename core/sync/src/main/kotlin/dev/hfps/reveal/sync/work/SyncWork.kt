@@ -107,7 +107,16 @@ class LibraryThumbsWorker(context: Context, params: WorkerParameters) : Coroutin
         val thumbs = EntryPointAccessors.fromApplication(applicationContext, LibraryThumbsEntryPoint::class.java)
             .libraryThumbs()
         val report = thumbs.prefetch()
-        if (report.left) SyncScheduler.libraryThumbs(applicationContext, again = true)
+        when {
+            report.left -> SyncScheduler.libraryThumbs(applicationContext, again = true)
+
+            // The server is still making some: ask again once their retry time has passed, not in 6 h.
+            report.pending > 0 -> SyncScheduler.libraryThumbs(
+                applicationContext,
+                again = true,
+                delayMinutes = LibraryThumbs.PENDING_RETRY_MS / MINUTE_MS,
+            )
+        }
         Result.success()
     } catch (e: IOException) {
         Log.i(TAG, "library thumbnails will retry: ${e.javaClass.simpleName}")
@@ -116,6 +125,7 @@ class LibraryThumbsWorker(context: Context, params: WorkerParameters) : Coroutin
 
     private companion object {
         const val THUMB_ATTEMPTS = 5
+        const val MINUTE_MS = 60_000L
     }
 }
 
@@ -174,16 +184,19 @@ object SyncScheduler {
      * The library thumbnails' prefetch (ADR 0018 "W3/C"): unmetered network and storage not low, plus charging (and a
      * battery not low) for one request, the device idle for the other; a periodic one resumes it every few hours.
      */
-    fun libraryThumbs(context: Context, again: Boolean = false) {
+    fun libraryThumbs(context: Context, again: Boolean = false, delayMinutes: Long = 0) {
         val work = WorkManager.getInstance(context)
         val policy = if (again) ExistingWorkPolicy.APPEND_OR_REPLACE else ExistingWorkPolicy.KEEP
         val charging = whileCharging()
         val idle = whileIdle()
-        for ((name, constraints) in listOf(THUMBS_CHARGING to charging, THUMBS_IDLE to idle)) {
-            val request = OneTimeWorkRequestBuilder<LibraryThumbsWorker>().setConstraints(constraints)
-                .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, BACKOFF_SECONDS, TimeUnit.SECONDS).build()
-            work.enqueueUniqueWork(name, policy, request)
-        }
+        val whileCharging = OneTimeWorkRequestBuilder<LibraryThumbsWorker>().setConstraints(charging)
+            .setInitialDelay(delayMinutes, TimeUnit.MINUTES)
+            .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, BACKOFF_SECONDS, TimeUnit.SECONDS).build()
+        work.enqueueUniqueWork(THUMBS_CHARGING, policy, whileCharging)
+        // WorkManager refuses a backoff on an idle-mode job (it would never be retried while idle anyway).
+        val whileIdle = OneTimeWorkRequestBuilder<LibraryThumbsWorker>().setConstraints(idle)
+            .setInitialDelay(delayMinutes, TimeUnit.MINUTES).build()
+        work.enqueueUniqueWork(THUMBS_IDLE, policy, whileIdle)
         val periodic = PeriodicWorkRequestBuilder<LibraryThumbsWorker>(THUMBS_PERIOD_HOURS, TimeUnit.HOURS)
             .setConstraints(charging).build()
         work.enqueueUniquePeriodicWork(THUMBS_PERIODIC, ExistingPeriodicWorkPolicy.KEEP, periodic)

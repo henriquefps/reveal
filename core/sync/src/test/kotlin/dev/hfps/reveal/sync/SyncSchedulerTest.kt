@@ -50,4 +50,24 @@ class SyncSchedulerTest {
         SyncScheduler.cancel(context)
         assertThat(info("reveal-sync").state).isEqualTo(WorkInfo.State.CANCELLED)
     }
+
+    @Test
+    fun `the library thumbnails prefetch waits for an unmetered network and charging or idle`() {
+        SyncScheduler.libraryThumbs(context)
+        val charging = info("reveal-thumbs-charging").constraints
+        assertThat(charging.requiredNetworkType).isEqualTo(NetworkType.UNMETERED)
+        assertThat(charging.requiresCharging()).isTrue()
+        assertThat(charging.requiresDeviceIdle()).isFalse()
+        val idle = info("reveal-thumbs-idle").constraints
+        assertThat(idle.requiredNetworkType).isEqualTo(NetworkType.UNMETERED)
+        assertThat(idle.requiresDeviceIdle()).isTrue()
+        assertThat(idle.requiresCharging()).isFalse()
+        assertThat(info("reveal-thumbs-periodic").constraints.requiresCharging()).isTrue()
+        // Asked again while queued (and again with more left): one of each.
+        SyncScheduler.libraryThumbs(context)
+        SyncScheduler.libraryThumbs(context, again = true)
+        assertThat(work.getWorkInfosForUniqueWork("reveal-thumbs-periodic").get()).hasSize(1)
+        SyncScheduler.cancelLibraryThumbs(context)
+        assertThat(info("reveal-thumbs-periodic").state).isEqualTo(WorkInfo.State.CANCELLED)
+    }
 }

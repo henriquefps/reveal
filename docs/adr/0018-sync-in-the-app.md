@@ -544,3 +544,26 @@ hold a slot until Reveal closes them. Audit of every path that opens a hand-off 
 `HandoffDescriptorsTest` (debug provider counting its open descriptors and answering `busy:` beyond 6) opens a
 handed-over RAW in the editor (preview, proxy, full resolution) and exports it: never more than 4 open at once, none
 left open while the editor shows the photo or after the export.
+
+### Measurements (W3/C)
+
+Galaxy S24 Ultra, debug builds, local hoard-server 0.9.0 (loopback on cachyos-fps, `ssh -R` + `adb reverse`), 21,000
+synthetic NAS JPEGs + 6 CC0 ZV-E10 RAW copies, 300 of the JPEGs also handed over through the debug provider.
+
+| | 0.8.0 | 0.9.0 (W3/C) |
+| --- | --- | --- |
+| Cold start, 60 s on the first screen: appfuse mounts | 276 (peak 14/s) | 0 |
+| … system_server watchdog "might be slow" pauses | 1,452 (peak 57/s) | 0 |
+| … range GETs of originals | 685 | 0 |
+| … `FileOpens` opens (`LargeLibraryFlowTest#startUpDoesNotBurst`) | — | 0 |
+| Cold start, then 15 flings in 30 s: appfuse mounts / watchdog pauses | 243 / 1,226 | not measured again (the grid reads the library thumbnails, no original) |
+| `am start -W` TotalTime / first grid frame | 690 ms / 1,054 ms | 705 ms / 1,136 ms (with the prefetch running) |
+| Server headers per sync | 300 range reads | 5,000 photos per item lookup batch, 21,006 in two syncs, no file opened |
+| Open a 24 MP Server RAW in the editor (first time) | 6,348 ms (preview 1,397 ms) | 4,376 ms (preview 336 ms) |
+| Reopen it after an edit and 90 s idle | 3,528 ms (preview 1,407 ms; blocks all cached) | **1,349 ms** (preview 199 ms; kept whole: 24.9 MB) |
+| Offline grid (server unreachable): newest 120 Server photos | — | 120 of 120 from the library thumbnails, 2.4 s in all (sequential) |
+| Library thumbnails stored by the prefetch | — | 17,059 (the server had made 17,468 so far) in 78 MB; the rest pending, asked again in 30 min |
+| Hand-off RAW opened (preview, proxy, full resolution) and exported: descriptors open at once / left open (`HandoffDescriptorsTest`) | — | 2 / 0 |
+
+The synthetic JPEGs compress far better than photos (4.6 KB per stored thumbnail); see "Library thumbnails" for the
+size on real camera images (about 16 KB, about 330 MB for 21,000).

@@ -32,7 +32,10 @@ class FileOpensTest {
         val waits = ArrayList<Long>()
         val heldWhileWaiting = ArrayList<Int>()
         var left = 3
-        val value = FileOpens.gated(sleep = { waits += it; heldWhileWaiting += FileOpens.open }) { release ->
+        val value = FileOpens.gated(sleep = {
+            waits += it
+            heldWhileWaiting += FileOpens.open
+        }) { release ->
             try {
                 if (left-- > 0) throw busy()
                 "read"
@@ -97,7 +100,10 @@ class FileOpensTest {
         val proceed = CountDownLatch(1)
         val busyCaller = Thread {
             runCatching {
-                FileOpens.gated(sleep = { pausing.countDown(); proceed.await() }) { release ->
+                FileOpens.gated(sleep = {
+                    pausing.countDown()
+                    proceed.await()
+                }) { release ->
                     release()
                     throw busy()
                 }

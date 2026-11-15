@@ -7,6 +7,8 @@ plugins {
 android {
     namespace = "dev.hfps.reveal.sync"
     testOptions.unitTests.isIncludeAndroidResources = true
+    // The exported Room schemas (core:data) are the upgrade test's fixtures: a version 13 (0.8.0) database.
+    sourceSets.getByName("test").assets.directories.add("${project(":core:data").projectDir}/schemas")
 }
 
 dependencies {
@@ -23,6 +25,7 @@ dependencies {
     implementation(libs.okhttp)
 
     testImplementation(libs.robolectric)
+    testImplementation(libs.androidx.room.testing)
     testImplementation(libs.androidx.test.ext.junit)
     testImplementation(libs.okhttp.mockwebserver)
     testImplementation(libs.androidx.work.testing)

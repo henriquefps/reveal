@@ -9,7 +9,10 @@ class LocalCopiesSweepTest {
     @Test
     fun `sweep deletes only files older than the process start`() {
         val dir = kotlin.io.path.createTempDirectory("copies").toFile()
-        val old = File(dir, "old").apply { writeText("x"); setLastModified(1_000) }
+        val old = File(dir, "old").apply {
+            writeText("x")
+            setLastModified(1_000)
+        }
         val fresh = File(dir, "fresh").apply { writeText("x") }
         LocalCopies.sweep(dir, before = System.currentTimeMillis() - 10_000)
         assertThat(old.exists()).isFalse()
@@ -20,7 +23,10 @@ class LocalCopiesSweepTest {
     @Test
     fun `the provider path returns at once and does not touch the disk before the first frame`() {
         val dir = kotlin.io.path.createTempDirectory("copies").toFile()
-        val old = File(dir, "old").apply { writeText("x"); setLastModified(1_000) }
+        val old = File(dir, "old").apply {
+            writeText("x")
+            setLastModified(1_000)
+        }
         val before = System.nanoTime()
         LocalCopies.sweepAfterFirstFrame(dir)
         assertThat((System.nanoTime() - before) / 1_000_000).isLessThan(500)

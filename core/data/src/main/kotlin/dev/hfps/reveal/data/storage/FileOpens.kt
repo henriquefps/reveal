@@ -1,9 +1,9 @@
 package dev.hfps.reveal.data.storage
 
 import android.util.Log
+import dev.hfps.image.ImageInput
 import java.io.FileNotFoundException
 import java.io.IOException
-import dev.hfps.image.ImageInput
 import java.util.concurrent.Semaphore
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong

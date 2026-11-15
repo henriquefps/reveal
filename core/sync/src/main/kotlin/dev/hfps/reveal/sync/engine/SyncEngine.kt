@@ -95,13 +95,7 @@ class SyncEngine(
         pulled += retried.applied
         copies += retried.copies
         parked = db.syncDao().inbox().size
-        // 0.5.4 (FIX/W), once and after a pull (so nothing newer is overwritten): this device's rotated photos go up
-        // again with their orientation, which older versions never sent (other devices showed them stretched).
-        if (meta.get(KEY_ORIENTATION) != ORIENTATION_VERSION) {
-            val marked = db.syncDao().markOrientedPhotosDirty(clock())
-            if (marked > 0) pushed += push(api, info).first
-            meta.put(MetaEntity(KEY_ORIENTATION, ORIENTATION_VERSION))
-        }
+        pushed += upgrades(api, info, first)
         val cullingReport = if (serverCulling) culling.run(api, info) else null
         val nas = pullNas(api, info)
         val lookups = lookup(api, info)
@@ -115,6 +109,28 @@ class SyncEngine(
         }
         meta.put(MetaEntity(KEY_LAST_SYNC, clock().toString()))
         return SyncReport(pushed, conflicts, pulled, copies, parked, nas, lookups, cleaned, cullingReport)
+    }
+
+    /** The one-off steps of updates that run after a pull ([sync]); returns how many changes they pushed. */
+    private suspend fun upgrades(api: SyncApi, info: ServerInfo, first: Boolean): Int {
+        var count = 0
+        // 0.5.4 (FIX/W), once and after a pull (so nothing newer is overwritten): this device's rotated photos go up
+        // again with their orientation, which older versions never sent (other devices showed them stretched).
+        if (meta.get(KEY_ORIENTATION) != ORIENTATION_VERSION) {
+            val marked = db.syncDao().markOrientedPhotosDirty(clock())
+            if (marked > 0) count += push(api, info).first
+            meta.put(MetaEntity(KEY_ORIENTATION, ORIENTATION_VERSION))
+        }
+        // 0.9.0 (W5), once and after a pull (every local revision is the server's latest, so a version pushed again
+        // never turns a newer edit of another device into a conflict copy): edited versions whose photo the server
+        // never heard of go up with their photo, and this device's edited versions go up again naming their photo's
+        // current id and main-file fingerprint. A first sync with a server needs none: everything just went up.
+        if (meta.get(KEY_VERSION_PHOTOS) != VERSION_PHOTOS_VERSION) {
+            val marked = if (first) 0 else store.repairVersionPhotos()
+            if (marked > 0) count += push(api, info).first
+            meta.put(MetaEntity(KEY_VERSION_PHOTOS, VERSION_PHOTOS_VERSION))
+        }
+        return count
     }
 
     /**
@@ -190,7 +206,7 @@ class SyncEngine(
     }
 
     private suspend fun refuse(change: PushChange, stamp: Long) {
-        db.syncDao().clean(change.kind, change.id, stamp)
+        store.refused(change, stamp)
     }
 
     // ------------------------------------------------------------------ pull
@@ -290,6 +306,7 @@ class SyncEngine(
             KEY_CLEANUP,
             KEY_CLEANUP_PULLED,
             KEY_ORIENTATION,
+            KEY_VERSION_PHOTOS,
             KEY_DEVICE_REPORTED,
             KEY_PHYSICAL_DEVICE,
         )
@@ -321,6 +338,10 @@ class SyncEngine(
         /** This device's rotated photos were pushed again with their orientation (FIX/W). */
         const val KEY_ORIENTATION = "sync.orientation"
         const val ORIENTATION_VERSION = "1"
+
+        /** Edited versions were pushed again with their photo (ADR 0018 "W5"). */
+        const val KEY_VERSION_PHOTOS = "sync.versionPhotos"
+        const val VERSION_PHOTOS_VERSION = "1"
         private const val DEFAULT_PUSH = 500
         private const val DEFAULT_PULL = 500
         private const val DEFAULT_LOOKUP = 1000

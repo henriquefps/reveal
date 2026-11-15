@@ -582,3 +582,57 @@ synthetic NAS JPEGs + 6 CC0 ZV-E10 RAW copies, 300 of the JPEGs also handed over
 
 The synthetic JPEGs compress far better than photos (4.6 KB per stored thumbnail); see "Library thumbnails" for the
 size on real camera images (about 16 KB, about 330 MB for 21,000).
+
+## Amendment W5 (0.9.0): photo records for edited photos
+
+Context: the owner edited a NAS photo (a Server photo made from the NAS feed) on the phone and the tablet never showed
+the edit. Present since MS/2:
+
+- `SyncStore.applyNas` makes a NAS file's photo quietly (no `photo` record) with a random uuid, so the same NAS file has
+  a different id on every device and none reaches the server unless the photo's culling changes. Hand-off photos filed
+  quietly (server references, ADR 0011 "Amendment W3/H") are the same.
+- An edit marks only the version: `versionChange` named `photo.uuid` and never made sure the server knew that photo.
+- `version.data` had no fingerprint and `applyVersion` (and the inbox retry) mapped a version's photo by uuid or alias
+  only, so the other device parked it forever. Only photo records had the fingerprint fallback (`localPhoto`).
+- In production the tablet later culled the photo (its own photo record went up), the phone pulled it and its photo
+  took the tablet's id (`localPhoto` adoption), but the version on the server still named the phone's old id.
+
+Decisions:
+
+- **The photo goes up before its version.** When the push batch is read, a version change whose photo has no `photo`
+  record the server accepted (`rev > 0`) brings that photo's change into the same batch, ahead of it (`photoFirst`;
+  the record is made dirty, or created, even for a photo made quietly). Another device maps the photo by fingerprint
+  (`localPhoto`: adopts the id when its own never went up, else an alias) and the version applies. A photo whose main
+  file has no fingerprint yet cannot be described: its version is **held** (`sync_records.rev = -1`,
+  `SyncRecordEntity.HELD_REV`, not dirty) and `SyncDao.releaseHeldVersions` marks it again (rev 0, its edit time kept)
+  once the photo's record is accepted (a push, or a pulled record placed on it). A photo record that is a tombstone
+  (deleted from the server on purpose) is never brought back this way; one the server refuses (`invalid_change`) is
+  not offered again by this process (the version then goes up alone, as before).
+- **A version finds its photo by fingerprint** (additive, `/v1` unchanged): `version.data.photoFingerprint` = the
+  photo's main-file fingerprint (older apps ignore it; records without it apply as before). `applyVersion`, and so the
+  inbox retry: uuid → alias → the version's own local photo (a version already here) → the photo whose main file has
+  that fingerprint (`SyncDao.photosWithMainFile`), then an alias from the record's photo id to it, so later records map
+  directly. Several local photos with that main file (the same file in two folders): the oldest one that is not hidden,
+  logged (`RevealSync`).
+- **One-off repair** (`SyncStore.repairVersionPhotos`, meta `sync.versionPhotos` = 1): in the first sync after the
+  update, **after its pull** (every local revision is then the server's latest, so pushing a version again cannot make
+  another device's newer edit a conflict copy), then a push. Versions a user edited (a recipe that is not the default,
+  a name, a virtual copy, a conflict copy or snapshots, `SyncDao.editedVersions`):
+  - whose photo has no accepted record: the photo and the version are marked (the push sends the photo first);
+  - this device's own edits (`versions.edit_device` "" or null) already on the server, not dirty and not conflict
+    copies, of a photo the server knows that was not made from another device's record (a Server photo whose
+    `stem_key` is its uuid): marked again with their **original** `modifiedAt` and pushed with the photo's current id
+    and fingerprint. Reveal never stored which photo id a version went up with, and an adoption leaves no trace, so
+    every such version goes again (a few hundred records at most, once); the server compares the data bytes, so the
+    new `photoId`/`photoFingerprint` make a new revision. On the other devices the newer revision applies and the
+    parked older one is dropped by the inbox retry (`applied()`: a higher local revision).
+  A first sync with a server (pairing) marks the repair done without running it: everything just went up.
+- **App version on the server:** hoard-server's `PATCH /v1/device` accepts `app`, `manufacturer`, `model` and
+  `features` only (Hoard ADR 0013 "Physical devices", ADR 0017 "Client calls" 2; `server/internal/server/
+  device_api.go`); the app version is only sent at pairing (`POST /v1/pair` `appVersion`). Nothing changes in Reveal:
+  refreshing it needs a server change first (Hoard ADR 0012: additions are made in Hoard).
+
+Tests: `VersionPhotoSyncTest` (FakeSyncServer, two devices: an unculled NAS photo, a hand-off never culled against the
+other device's folder photo, the exact production sequence, the repair of a photo the server never had, a version
+before its photo record, the ambiguity, a held version, a tombstoned photo), `RealServerVersionPhotoTest` (the pinned
+hoard-server: the NAS case and the production sequence; `REVEAL_VERSION_DIR`, `REVEAL_VERSION_LINKS`).

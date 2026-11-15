@@ -57,6 +57,17 @@ data class SyncCounts(
     @ColumnInfo(name = "uploaded_bytes") val uploadedBytes: Long,
 )
 
+/** One row of [SyncDao.editedVersions]. */
+data class EditedVersion(
+    @ColumnInfo(name = "version_uuid") val versionUuid: String,
+    @ColumnInfo(name = "photo_uuid") val photoUuid: String,
+    @ColumnInfo(name = "edit_device") val editDevice: String?,
+    @ColumnInfo(name = "edited_at") val editedAt: Long?,
+    @ColumnInfo(name = "copy_of") val copyOf: String?,
+    /** A Server photo made from another device's photo record (its uuid is the record's, its stem key too). */
+    @ColumnInfo(name = "from_record") val fromRecord: Boolean,
+)
+
 @Dao
 @Suppress("TooManyFunctions")
 interface SyncDao {
@@ -89,6 +100,30 @@ interface SyncDao {
 
     @Query("DELETE FROM sync_records WHERE kind = :kind AND record_id = :id")
     suspend fun deleteRecord(kind: String, id: String)
+
+    /**
+     * The versions of the photo [photoUuid] held back until its record was on the server ([SyncRecordEntity.HELD_REV],
+     * ADR 0018 "W5"): marked to push (rev 0, their edit time kept). Returns how many.
+     */
+    @Query(
+        "UPDATE sync_records SET dirty = 1, rev = 0 WHERE kind = 'version' AND rev = -1 AND record_id IN " +
+            "(SELECT v.uuid FROM versions v JOIN photos p ON p.id = v.photo_id WHERE p.uuid = :photoUuid)",
+    )
+    suspend fun releaseHeldVersions(photoUuid: String): Int
+
+    /**
+     * Versions a user edited (a recipe that is not the default, a name, a virtual copy, a conflict copy or snapshots)
+     * and their photo, for the one-off repair of ADR 0018 "W5".
+     */
+    @Query(
+        "SELECT v.uuid AS version_uuid, p.uuid AS photo_uuid, v.edit_device, v.edited_at, v.copy_of, " +
+            "(s.kind = 'SERVER' AND p.stem_key = p.uuid) AS from_record FROM versions v " +
+            "JOIN photos p ON p.id = v.photo_id JOIN sources s ON s.id = p.source_id " +
+            "WHERE EXISTS (SELECT 1 FROM recipes r WHERE r.version_id = v.id AND r.is_default = 0) " +
+            "OR v.name IS NOT NULL OR v.position > 0 OR v.copy_of IS NOT NULL " +
+            "OR EXISTS (SELECT 1 FROM snapshots n WHERE n.version_id = v.id) ORDER BY v.id",
+    )
+    suspend fun editedVersions(): List<EditedVersion>
 
     /** First sync with a server: every photo and version is to be pushed (rev 0 = created there). */
     @Query(

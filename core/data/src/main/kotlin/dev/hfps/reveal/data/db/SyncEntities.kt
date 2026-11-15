@@ -27,6 +27,12 @@ data class SyncRecordEntity(
         /** The record kinds the library's own code writes (the sync module's `Kinds`). */
         const val KIND_PHOTO = "photo"
         const val KIND_VERSION = "version"
+
+        /**
+         * `rev` of a version record held back until its photo's record is on the server (ADR 0018 "W5"): not dirty,
+         * never pushed; [SyncDao.releaseHeldVersions] marks it again (rev 0) once the photo's record is accepted.
+         */
+        const val HELD_REV = -1L
     }
 }
 

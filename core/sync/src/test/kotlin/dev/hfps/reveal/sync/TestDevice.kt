@@ -17,13 +17,16 @@ import dev.hfps.reveal.data.model.PickFlag
 import dev.hfps.reveal.data.model.SourceState
 import dev.hfps.reveal.data.preset.PresetRepository
 import dev.hfps.reveal.pipeline.recipe.Recipe
+import dev.hfps.reveal.pipeline.recipe.RecipeCodec
 import dev.hfps.reveal.pipeline.recipe.RecipeDiff
 import dev.hfps.reveal.sync.account.ClientDevice
+import dev.hfps.reveal.sync.api.PushChange
 import dev.hfps.reveal.sync.api.SyncApi
 import dev.hfps.reveal.sync.engine.SyncEngine
 import dev.hfps.reveal.sync.engine.SyncReport
 import dev.hfps.reveal.sync.engine.SyncStore
 import dev.hfps.reveal.sync.engine.SyncedSetting
+import dev.hfps.reveal.sync.engine.VersionData
 import kotlinx.coroutines.runBlocking
 
 /** One simulated device: its own in-memory database, sync store and engine, paired with [key]. */
@@ -175,6 +178,32 @@ class TestDevice(
     }
 
     fun pending(): Int = runBlocking { db.syncDao().dirty(10_000).size }
+
+    /**
+     * What 0.8 pushed for an edit of a photo without a record (ADR 0018 "W5"): the version alone, naming this device's
+     * id for the photo and without its fingerprint. Returns the version's uuid.
+     */
+    fun legacyPushVersion(photoId: Long): String = runBlocking {
+        val version = versions(photoId).first()
+        val data = VersionData(
+            photoId = photo(photoId).uuid,
+            recipe = SyncApi.json.parseToJsonElement(RecipeCodec.Default.encode(recipe(version.id))),
+        )
+        val local = checkNotNull(db.syncDao().record("version", version.uuid))
+        val result = api.push(
+            listOf(
+                PushChange(
+                    "version",
+                    version.uuid,
+                    0,
+                    local.modifiedAt,
+                    data = SyncApi.json.encodeToJsonElement(VersionData.serializer(), data),
+                ),
+            ),
+        ).results.single()
+        db.syncDao().putRecord(local.copy(rev = result.rev, dirty = false))
+        version.uuid
+    }
 
     // ------------------------------------------------------------------ culling (ADR 0027)
 

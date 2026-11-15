@@ -65,6 +65,8 @@ data class SnapshotData(val id: String, val name: String, val recipe: JsonElemen
  * `version.data` (ADR 0017): the photo it belongs to, its place among the photo's versions, the committed recipe, the
  * history steps and the undo cursor (-1 = before the first step). [name] is a virtual copy's name and [snapshots] the
  * version's snapshots (docs/adr/0025; absent from records of 0.6.x, which apply as "no snapshots").
+ * [photoFingerprint] is the photo's main-file fingerprint (ADR 0018 "W5"): a device that does not know [photoId] finds
+ * the photo by it (absent from records of apps before 0.9.0, which ignore it).
  */
 @Serializable
 data class VersionData(
@@ -75,6 +77,7 @@ data class VersionData(
     val history: List<StepData> = emptyList(),
     val cursor: Int = -1,
     val snapshots: List<SnapshotData>? = null,
+    val photoFingerprint: String? = null,
 )
 
 /**

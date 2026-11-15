@@ -6,6 +6,7 @@ import androidx.room.withTransaction
 import dev.hfps.image.format.ImageFormats
 import dev.hfps.image.format.ImageKind
 import dev.hfps.reveal.data.db.ADOPT_FAILED_PREFIX
+import dev.hfps.reveal.data.db.EditedVersion
 import dev.hfps.reveal.data.db.FingerprintMatch
 import dev.hfps.reveal.data.db.HistoryCursorEntity
 import dev.hfps.reveal.data.db.HistoryEntity
@@ -135,23 +136,93 @@ class SyncStore(
 
     private suspend fun readOutgoing(limit: Int, maxData: Int): OutgoingBatch {
         val out = ArrayList<Outgoing>()
+        // Photos whose record is in this batch: a version's photo goes up before it (ADR 0018 "W5").
+        val photosInBatch = HashSet<String>()
         val records = sync.dirty((limit - settings.size).coerceAtLeast(1))
         for (record in records) {
+            var held = false
             val change = when (record.kind) {
-                Kinds.PHOTO -> photoChange(record)
-                Kinds.VERSION -> versionChange(record, maxData)
+                Kinds.PHOTO -> photoChange(record)?.also { photosInBatch += it.id }
+
+                Kinds.VERSION -> versionChange(record, maxData)?.let { version ->
+                    val photo = version.photo
+                    held = photo != null && !photoFirst(photo, photosInBatch, out)
+                    version.change
+                }
+
                 Kinds.PRESET -> presetSync.change(record)
+
                 Kinds.SETTING -> exportPresetSync.change(record)
+
                 else -> null
             }
-            if (change == null) {
-                sync.clean(record.kind, record.recordId, record.modifiedAt)
-            } else {
-                out += Outgoing(change, record.modifiedAt)
+            when {
+                held -> hold(record)
+                change == null -> sync.clean(record.kind, record.recordId, record.modifiedAt)
+                else -> out += Outgoing(change, record.modifiedAt)
             }
         }
         out += settingChanges()
         return OutgoingBatch(out, read = records.size)
+    }
+
+    /**
+     * Makes sure the server knows [photo] before a version naming it goes up (ADR 0018 "W5"): a photo whose record the
+     * server never accepted (a NAS photo made quietly from the feed, a hand-off, a photo whose record was never pushed)
+     * joins this batch ahead of the version, so another device can map it by its fingerprint and the version applies
+     * there instead of waiting in its inbox forever. False while the photo cannot be described yet (its main file has
+     * no fingerprint): the version is held back until then ([hold]).
+     */
+    private suspend fun photoFirst(
+        photo: PhotoEntity,
+        inBatch: MutableSet<String>,
+        out: MutableList<Outgoing>,
+    ): Boolean {
+        // A photo record the server refused is not offered again in this process (the version goes up alone).
+        if (photo.uuid in inBatch || photo.uuid in refusedPhotos) return true
+        val record = sync.record(Kinds.PHOTO, photo.uuid)
+        // Accepted already, or deleted from the server on purpose (ServerLibrary): never brought back from here.
+        if (record != null && (record.rev > 0 || record.deleted)) return true
+        val data = photoData(photo)
+        val marked = when {
+            record == null -> SyncRecordEntity(Kinds.PHOTO, photo.uuid, 0, dirty = true, modifiedAt = clock())
+            !record.dirty -> record.copy(dirty = true)
+            else -> record
+        }
+        if (marked != record) sync.putRecord(marked)
+        // Without a fingerprint the record waits (and is pushed once the indexer fills it in: its trigger marks it).
+        if (data == null) return false
+        out += Outgoing(
+            PushChange(
+                kind = Kinds.PHOTO,
+                id = photo.uuid,
+                baseRev = marked.rev,
+                modifiedAt = marked.modifiedAt,
+                data = json.encodeToJsonElement(PhotoData.serializer(), data),
+            ),
+            marked.modifiedAt,
+        )
+        inBatch += photo.uuid
+        return true
+    }
+
+    /** Photo records the server refused (`invalid_change`) since this process started. */
+    private val refusedPhotos: MutableSet<String> = java.util.Collections.synchronizedSet(HashSet())
+
+    /** The server refused this change (`invalid_change`): it is dropped from the run, and a photo is not re-offered. */
+    suspend fun refused(change: PushChange, stamp: Long) {
+        if (change.kind == Kinds.PHOTO) refusedPhotos += change.id
+        sync.clean(change.kind, change.id, stamp)
+    }
+
+    /** A version waiting for its photo's record ([SyncRecordEntity.HELD_REV]): released by [releaseHeld]. */
+    private suspend fun hold(record: SyncRecordEntity) {
+        sync.putRecord(record.copy(rev = SyncRecordEntity.HELD_REV, dirty = false))
+    }
+
+    /** The photo [photoUuid]'s record is on the server now: its held versions go up with the next push. */
+    private suspend fun releaseHeld(photoUuid: String) {
+        sync.releaseHeldVersions(photoUuid)
     }
 
     private suspend fun photoChange(record: SyncRecordEntity): PushChange? {
@@ -196,10 +267,18 @@ class SyncStore(
         )
     }
 
+    /** One version change to push and the photo it names. */
+    private data class VersionChange(val change: PushChange, val photo: PhotoEntity?)
+
     @Suppress("CyclomaticComplexMethod", "ComplexCondition")
-    private suspend fun versionChange(record: SyncRecordEntity, maxData: Int): PushChange? {
+    private suspend fun versionChange(record: SyncRecordEntity, maxData: Int): VersionChange? {
+        // A held version (rev -1) that changed again is still new to the server.
+        val baseRev = record.rev.coerceAtLeast(0)
         if (record.deleted) {
-            return PushChange(Kinds.VERSION, record.recordId, record.rev, record.modifiedAt, deleted = true)
+            return VersionChange(
+                PushChange(Kinds.VERSION, record.recordId, record.rev, record.modifiedAt, deleted = true),
+                null,
+            )
         }
         val version = sync.versionByUuid(record.recordId) ?: return null
         val photo = photos.get(version.photoId) ?: return null
@@ -214,6 +293,7 @@ class SyncStore(
             return null
         }
         val cursor = edits.cursor(version.id) ?: (steps.size - 1)
+        val photoFingerprint = mainFile(photos.files(photo.id))?.fingerprint
         var history = steps.map { StepData(parse(it.recipeJson), parse(it.labelsJson)) }
         var offset = 0
         var data: JsonElement
@@ -228,6 +308,7 @@ class SyncStore(
                     history = history,
                     cursor = (cursor - offset).coerceAtLeast(-1),
                     snapshots = snapshots.map { SnapshotData(it.uuid, it.name, parse(it.recipeJson), it.createdAt) },
+                    photoFingerprint = photoFingerprint,
                 ),
             )
             // A record is at most 2 MiB (ADR 0017): the oldest steps go first; undo then stops at the oldest kept one.
@@ -236,7 +317,7 @@ class SyncStore(
             history = history.drop(drop)
             offset += drop
         }
-        return PushChange(Kinds.VERSION, version.uuid, record.rev, record.modifiedAt, data = data)
+        return VersionChange(PushChange(Kinds.VERSION, version.uuid, baseRev, record.modifiedAt, data = data), photo)
     }
 
     private suspend fun settingChanges(): List<Outgoing> = settings.mapNotNull { setting ->
@@ -269,6 +350,7 @@ class SyncStore(
         }
         if (result.status == STATUS_APPLIED || result.winner == WINNER_INCOMING) {
             sync.pushed(change.kind, change.id, result.rev, outgoing.stamp)
+            if (change.kind == Kinds.PHOTO && !change.deleted) releaseHeld(change.id)
         } else {
             // The server's state won: stay at our old base so the pull that follows (or the inbox, if it was pulled
             // already) applies it; for a version our losing state comes back as a copy.
@@ -477,6 +559,8 @@ class SyncStore(
             )
         }
         if (photo.sourceId == serverSource().id) refreshServerPhoto(photo, data)
+        // The photo is on the server under this id now (adopted, or our own record seen again): its held versions go.
+        releaseHeld(record.id)
         return true
     }
 
@@ -584,7 +668,10 @@ class SyncStore(
             return true
         }
         val data = decode(record.data, VersionData.serializer()) ?: return true
-        val photo = sync.photoByUuid(data.photoId) ?: sync.alias(data.photoId)?.let { photos.get(it) } ?: return false
+        val photo = sync.photoByUuid(data.photoId) ?: sync.alias(data.photoId)?.let { photos.get(it) }
+            ?: existing?.let { photos.get(it.photoId) }
+            ?: data.photoFingerprint?.let { photoByFingerprint(data.photoId, it) }
+            ?: return false
         val copyDevice = record.copyOf?.let { deviceName(record.deviceId) ?: record.deviceId.take(DEVICE_SHORT) }
         val target = existing ?: placeVersion(photo.id, record.id, data, record.copyOf)
         val updated = target.copy(
@@ -600,6 +687,31 @@ class SyncStore(
         stats.versions += target.id
         if (record.copyOf != null && existing == null) stats.copies++
         return true
+    }
+
+    /**
+     * The local photo of a version whose photo id this device does not know (ADR 0018 "W5"): the photo whose main file
+     * is [fingerprint]. Later records naming [photoId] then find it directly ([SyncAliasEntity]). Several photos with
+     * that main file (the same file in two folders): the oldest one that is not hidden.
+     */
+    private suspend fun photoByFingerprint(photoId: String, fingerprint: String): PhotoEntity? {
+        val candidates = sync.photosWithMainFile(fingerprint)
+        if (candidates.isEmpty()) return null
+        val photo = if (candidates.size == 1) {
+            candidates.single()
+        } else {
+            (candidates.firstOrNull { !it.hidden } ?: candidates.first()).also {
+                runCatching {
+                    android.util.Log.i(
+                        TAG,
+                        "version of photo ${photoId.take(DEVICE_SHORT)}: ${candidates.size} local photos share its " +
+                            "main file, placed on photo ${it.id}",
+                    )
+                }
+            }
+        }
+        sync.putAlias(SyncAliasEntity(photoId, photo.id))
+        return photo
     }
 
     /** Where a version new to this device goes: its own position when free, else adopting an untouched local one. */
@@ -724,6 +836,61 @@ class SyncStore(
             sync.deleteRecord(Kinds.VERSION, version.uuid)
         }
     }
+
+    // ------------------------------------------------------------------ W5 repair
+
+    /**
+     * The one-off repair of ADR 0018 "W5" (after a pull, so every local revision is the server's latest): before 0.9.0
+     * an edited version could go up naming a photo the server never heard of (a NAS photo made quietly from the feed, a
+     * hand-off), and other devices parked it forever. Two cases are marked to push:
+     * - an edited version whose photo has no accepted record: the photo and the version (the push sends the photo
+     *   first);
+     * - an edited version of this device already on the server whose photo the server knows: pushed again, with its
+     *   original time and the photo's main-file fingerprint, so it names the photo's current id (the photo may have
+     *   adopted another device's id after the version went up). A Server photo made from another device's record and
+     *   conflict copies are left alone: their ids never changed.
+     * Returns how many versions it marked.
+     */
+    suspend fun repairVersionPhotos(): Int = db.withTransaction {
+        val now = clock()
+        var marked = 0
+        for (row in sync.editedVersions()) {
+            val photo = sync.record(Kinds.PHOTO, row.photoUuid)
+            val version = sync.record(Kinds.VERSION, row.versionUuid)
+            val repaired = when {
+                photo?.deleted == true || version?.deleted == true -> false
+                photo == null || photo.rev <= 0 -> markWithPhoto(row, photo, version, now)
+                version != null && isRepushed(row, version) -> true.also { sync.putRecord(version.copy(dirty = true)) }
+                else -> false
+            }
+            if (repaired) marked++
+        }
+        marked
+    }
+
+    /** Marks a version and its photo that the server never accepted ([repairVersionPhotos]). */
+    private suspend fun markWithPhoto(
+        row: EditedVersion,
+        photo: SyncRecordEntity?,
+        version: SyncRecordEntity?,
+        now: Long,
+    ): Boolean {
+        when {
+            photo == null -> sync.putRecord(SyncRecordEntity(Kinds.PHOTO, row.photoUuid, 0, modifiedAt = now))
+            !photo.dirty -> sync.putRecord(photo.copy(dirty = true))
+        }
+        when {
+            version == null ->
+                sync.putRecord(SyncRecordEntity(Kinds.VERSION, row.versionUuid, 0, modifiedAt = row.editedAt ?: now))
+
+            !version.dirty -> sync.putRecord(version.copy(dirty = true, rev = version.rev.coerceAtLeast(0)))
+        }
+        return true
+    }
+
+    /** This device's own clean edit on the server, of a photo whose id may have changed ([repairVersionPhotos]). */
+    private fun isRepushed(row: EditedVersion, version: SyncRecordEntity): Boolean =
+        version.rev > 0 && !version.dirty && row.copyOf == null && row.editDevice.isNullOrEmpty() && !row.fromRecord
 
     // ------------------------------------------------------------------ conflict chooser
 
@@ -1047,6 +1214,7 @@ class SyncStore(
     private data class SettingState(val value: String)
 
     companion object {
+        private const val TAG = "RevealSync"
         const val STATUS_APPLIED = "applied"
         const val WINNER_INCOMING = "incoming"
         const val SOURCE_NAS = "nas"

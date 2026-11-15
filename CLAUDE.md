@@ -1087,6 +1087,16 @@ FIX/W (0.5.4, ADR 0018 amendment, DB v11): `photo.data.orientation` (Server phot
 `feature/settings/storage/StorageScreen.kt`). A new disk cache: make it a `CacheArea`, register it with the budget,
 cap it at `budget::cap`, and add its directory to `AppStorage.AREA_DIRS`.
 
+Photo before version (W5, 0.9.0, ADR 0018 "Amendment W5"): NAS photos and quietly filed hand-offs have random
+uuids and no `photo` record, so `SyncStore.readOutgoing` puts a version's photo change ahead of it when the photo has
+no accepted record (`photoFirst`); a photo without a fingerprint yet holds its versions (`sync_records.rev = -1` =
+`SyncRecordEntity.HELD_REV`, released by `SyncDao.releaseHeldVersions` when the photo's record is accepted or pulled).
+`VersionData.photoFingerprint` (main file) lets `applyVersion` find the photo by fingerprint (oldest non-hidden when
+ambiguous) and alias the record's photo id. One-off `repairVersionPhotos` (meta `sync.versionPhotos`, after the pull,
+skipped on a first sync): edited versions of photos the server never had + this device's edited versions again (their
+original `modifiedAt`). Tests: `VersionPhotoSyncTest`, `RealServerVersionPhotoTest` (`REVEAL_VERSION_DIR`,
+`REVEAL_VERSION_LINKS`, two links).
+
 Culling with hoard-server (R0.8, ADR 0027, DB v13; only when `/v1/server` lists `culling`, else culling stays in
 `photo` records): `engine/CullingSync` (seed once per server, push `POST /v1/culling` per field by main fingerprint,
 pull `GET /v1/items/changes?include=culling` with its own cursor, mirror every record in `culling_records` +

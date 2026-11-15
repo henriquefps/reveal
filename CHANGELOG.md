@@ -49,6 +49,10 @@ All notable changes to Reveal are documented here. The format follows
 - Server photos without a capture time sort by their NAS file's time, or go to "No date", instead of the time their
   record arrived.
 ### Fixed
+- Sync (W5, docs/adr/0018 "Amendment W5"): an edit of a photo from the server's NAS folders (or of a photo opened
+  from another app) that nobody had rated, flagged or labelled never reached the other devices. The photo now goes to
+  the server before its edit, an edit finds its photo on the other device by the file itself, and the first sync after
+  updating sends such edits again (they then show up on the other devices).
 - Photos from Hoard (W4): a camera's `IMG_0001.JPG` no longer pairs with a Hoard `IMG_0001.CR3` of the same name; a
   RAW and its JPEG that arrive in different parts of a big batch still become one photo; the originals Reveal keeps
   for Hoard's Downloads copies are no longer left behind (backups of photos the server holds, a failed re-copy, a

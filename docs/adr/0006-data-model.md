@@ -328,3 +328,35 @@ The UI layer cannot remove the accessibility cost noted above on a phone with an
 A sidecar write touches only the culling fields the user changed (rating and flag share `xmp:Rating` +
 `digiKam:PickLabel`); a reject read from `xmp:Rating="-1"` keeps the photo's stars; an import applies only the fields
 that changed in the file since it was last read (`sidecar_culling`).
+
+## Amendment W3/D: navigating a large library by date
+
+A library of ~21,000 photos needs more than a fling. The grid keeps its one in-memory list (rows arrive from Room as
+before); everything new is derived from it off the main thread.
+
+- **Date.** A photo's date is `photos.sort_time`: the capture time on the camera's clock (stored as UTC millis), else
+  the file's time; `<= 0` is "No date" and closes the grid. Server photos without a capture time sort by their NAS
+  file's time, or go to "No date", instead of the time their record arrived (migration 14 -> 15).
+- **Grouping.** `buildGrid` makes, in the same pass on `Dispatchers.Default` that builds the entries today, a month
+  header (with its count), optionally day sub-headers (`DateGrouping.MONTH|DAY`, remembered in `meta`
+  `library.grouping`, set in the sort menu), and a `DateIndex` (month keys, header positions, counts). Only date sorts
+  group; name order and Recent keep their own layouts. The current month is pinned above the grid (the sticky header is
+  an overlay; the next month's header pushes it up, read in the draw phase).
+- **Fast scroller.** A thumb on the grid's edge (a 48 dp touch target) shows while the grid scrolls or a pen/mouse hovers
+  near the edge; dragging calls `scrollToItem` on the header of the month under the thumb. Nothing is paged, so a jump
+  loads no page in between. TalkBack: an adjustable control ("Scroll by date", the month as its state) with previous and
+  next month actions.
+- **Go to date.** From the ⋯ menu or a tap on the pinned month: a year list with twelve month chips and their counts
+  (of the current filters), months without photos greyed.
+- **Filters.** `DateFilter` (this month, last 30 days, this year, on this day in earlier years, a custom range from a
+  date range picker), `CameraFilter(make, model)`, `LensFilter`. SQL clauses bind their arguments and use the
+  `sort_time`, `(camera_make, camera_model)` and `lens` indexes (EXPLAIN in `DateCameraFiltersTest`); tokens `d:`, `cam:`,
+  `lens:` (percent-encoded) in `PhotoListCodec`; their lists and counts are queried only while the filter sheet is open.
+- **Data.** DB v15: `photos.camera_make`, `camera_model`, `lens` (`""` = none, null = not read) and `metadata_version`.
+  Folder and hand-off photos fill them from the header the indexer already reads; photos indexed before are read again
+  in the background (`backfillCameras`: batched, cancellable, folders after their fingerprints, hand-offs on start,
+  Server photos within each sync's header budget). The columns are **not** synced: no sync trigger watches them and no
+  record carries them, so the backfill never marks a photo for sync; every device reads its own headers.
+- **Cost.** Grouping adds one pass over the rows next to `buildGridEntries` (it replaced the day-header pass), no
+  per-frame work beyond a derived month and a draw-phase offset. Numbers: see the PR (`LibraryScrollBenchmark`,
+  `LibraryMeasurementsTest`).

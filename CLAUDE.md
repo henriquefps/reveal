@@ -187,7 +187,7 @@ folder = `LibraryViewModel.showFolder`, backup mode, remove). The viewer and the
 (`PhotoListCodec.encode(state.gridQuery)`). Pending uploads: `CloudState.UPLOADING`. Instrumented steps that work in
 any language: `library/LibraryFilterSteps` (`showOnly`, `openFolder`, `activeTokens`).
 
-Dates, scroller, cameras (W3/D, ADR 0006 "W3/D", DB v14): the grid's date is `photos.sort_time` (camera wall clock
+Dates, scroller, cameras (W3/D, ADR 0006 "W3/D", DB v15): the grid's date is `photos.sort_time` (camera wall clock
 as UTC millis, else the file's time; `<= 0` = "No date"). `buildGrid(rows, query, DateGrouping)` (one pass on
 `Dispatchers.Default`, never the main thread) makes `GridEntry.Month` headers (+ `Header` day sub-headers in
 `DateGrouping.DAY`, meta `library.grouping`) and the `DateIndex` (month keys `year * 12 + month - 1`, header entry
@@ -200,7 +200,7 @@ Reveal colours). Filters: `DateFilter` (`ThisMonth`, `Last30Days`, `ThisYear`, `
 `camera_make, camera_model`), `LensFilter` (index `lens`); tokens `d:month|30d|year|onthisday|<from>_<to>`,
 `cam:<make>~<model>`, `lens:<name>` (percent-encoded); lists/counts `PhotoDao.observeCameras/observeLenses/
 observeDateCounts` (read only while the filter sheet is open). Columns `camera_make/camera_model/lens`
-(`""` = none, null = not read) and `metadata_version` (`CURRENT_METADATA_VERSION`): headers read before v14 are read
+(`""` = none, null = not read) and `metadata_version` (`CURRENT_METADATA_VERSION`): headers read before v15 are read
 again by `LibraryIndexer.backfillCameras` (`setCamera` touches no synced column). Tags `LibraryTags.STICKY_MONTH`,
 `SCROLLER`, `SCROLLER_BUBBLE`, `GO_TO_DATE*`, `month(key)`, `monthHeader(key)`, `GROUP_BY_*`, `DATE_RANGE_*`.
 

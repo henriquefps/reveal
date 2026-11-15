@@ -6,6 +6,28 @@ All notable changes to Reveal are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- Navigate a large library by date (W3/D, docs/adr/0006 "W3/D"): the grid groups photos under a header per month
+  (with its photo count) and, by default, a sub-header per day; "Group by month" / "Group by day" in the sort menu
+  (remembered). The current month stays pinned at the top of the grid; photos without any date close the grid in a
+  "No date" group. Dates are the capture time on the camera's clock (the file's time when there is none) and follow
+  the device's language ("Novembro de 2026").
+- A fast scroller on the grid's edge: it shows while the grid scrolls (or while a pen hovers near the edge), and
+  dragging its thumb jumps straight to any point with a bubble naming the month. TalkBack reads it as "Scroll by date"
+  with the month shown and previous/next month actions.
+- "Go to date" (⋯ menu, or a tap on the pinned month): every year with its twelve months and their photo counts,
+  months without photos greyed; a month scrolls the grid to it.
+- New filters: **Date** (this month, last 30 days, this year, on this day in earlier years, and custom ranges from a
+  date range picker), **Camera** (make and model, with counts) and **Lens**. They combine with the other filters as
+  before (OR within a group, AND across).
+
+### Changed
+- The database is at version 14: photos keep their camera make, model and lens. Photos indexed before read them again
+  in the background (folders after their walk, hand-offs on start, Server photos within each sync's header budget),
+  without marking anything for sync.
+- Server photos without a capture time sort by their NAS file's time, or go to "No date", instead of the time their
+  record arrived.
+
 ## [0.8.0] - 2026-11-15
 
 ### Added

@@ -1,6 +1,7 @@
 package dev.hfps.reveal.data.model
 
 import com.google.common.truth.Truth.assertThat
+import java.time.LocalDate
 import org.junit.Test
 
 class PhotoListCodecTest {
@@ -15,6 +16,15 @@ class PhotoListCodecTest {
         edits = EditFilter.entries.toSet(),
         types = TypeFilter.entries.toSet(),
         sync = SyncFilter.entries.toSet(),
+        dates = setOf(
+            DateFilter.ThisMonth,
+            DateFilter.Last30Days,
+            DateFilter.ThisYear,
+            DateFilter.OnThisDay,
+            DateFilter.Range(LocalDate.of(2024, 1, 31), LocalDate.of(2024, 3, 1)),
+        ),
+        cameras = setOf(CameraFilter("SONY", "ZV-E10"), CameraFilter("", "Pixel, 8 ~ Pro"), CameraFilter("Ü", "%")),
+        lenses = setOf(LensFilter("E 18-135mm F3.5-5.6 OSS"), LensFilter("a,b~c\u0001d")),
     )
 
     @Test
@@ -94,5 +104,18 @@ class PhotoListCodecTest {
         assertThat(PhotoFilters.folder(1).toggle(SourceFilter.Folder(2)).withFolders(listOf(2L)))
             .isEqualTo(PhotoFilters.folder(2))
         assertThat(PhotoFilters.NONE.isEmpty).isTrue()
+    }
+
+    @Test
+    fun w3dTokensAreStableAndUnknownOnesAreSkipped() {
+        val filters = PhotoFilters(
+            dates = setOf(DateFilter.Range(LocalDate.of(2024, 1, 1), LocalDate.of(2024, 3, 31))),
+            cameras = setOf(CameraFilter("NIKON CORPORATION", "NIKON D5600")),
+            lenses = setOf(LensFilter("FE 50mm F1.8")),
+        )
+        assertThat(PhotoListCodec.encodeFilters(filters))
+            .isEqualTo("d:2024-01-01_2024-03-31,cam:NIKON+CORPORATION~NIKON+D5600,lens:FE+50mm+F1.8")
+        assertThat(PhotoListCodec.decodeFilters("d:month,d:nonsense,d:2024-03-01_2024-01-01,t:RAW"))
+            .isEqualTo(PhotoFilters(dates = setOf(DateFilter.ThisMonth), types = setOf(TypeFilter.RAW)))
     }
 }

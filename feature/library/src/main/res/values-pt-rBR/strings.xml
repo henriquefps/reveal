@@ -336,4 +336,25 @@
         <item quantity="other">Excluir %1$d cópias virtuais?</item>
     </plurals>
     <string name="versions_delete_body">A edição, o histórico e os instantâneos também são excluídos, em todos os aparelhos sincronizados. A foto e as outras versões continuam.</string>
+    <!-- W3/D: datas, rolagem rápida, ir para data, filtros Data / Câmera / Lente -->
+    <string name="library_no_date">Sem data</string>
+    <string name="library_go_to_date">Ir para data</string>
+    <string name="library_go_to_date_current">Mostrando %1$s</string>
+    <string name="library_group_by_month">Agrupar por mês</string>
+    <string name="library_group_by_day">Agrupar por dia</string>
+    <string name="library_scroller">Rolar por data</string>
+    <string name="library_scroller_previous">Mês anterior</string>
+    <string name="library_scroller_next">Próximo mês</string>
+    <string name="library_month_cell">%1$s: %2$s</string>
+    <string name="library_month_empty">%1$s: nenhuma foto</string>
+    <string name="library_filter_group_date">Data</string>
+    <string name="library_filter_this_month">Este mês</string>
+    <string name="library_filter_last_30_days">Últimos 30 dias</string>
+    <string name="library_filter_this_year">Este ano</string>
+    <string name="library_filter_on_this_day">Neste dia</string>
+    <string name="library_filter_custom_range">Período personalizado…</string>
+    <string name="library_filter_group_camera">Câmera</string>
+    <string name="library_filter_group_lens">Lente</string>
+    <string name="library_date_range_title">Escolher datas</string>
+    <string name="library_date_range_apply">Aplicar</string>
 </resources>

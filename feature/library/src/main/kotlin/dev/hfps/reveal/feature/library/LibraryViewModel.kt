@@ -212,18 +212,35 @@ class LibraryViewModel @Inject constructor(
         viewModelScope.launch {
             library.filterCounts().collect { counts -> _state.update { it.copy(counts = counts) } }
         }
+        // The Camera, Lens and Date choices and their counts (W3/D): aggregates over every photo, asked only while the
+        // filter sheet shows them (indexing changes the photos many times a second).
         viewModelScope.launch {
-            _state.map { it.gridQuery }.distinctUntilChanged().collectLatest { query ->
+            _state.map { it.filtersOpen }.distinctUntilChanged().collectLatest { open ->
+                if (!open) return@collectLatest
+                combine(library.cameras(), library.lenses(), library.dateCounts()) { cameras, lenses, dates ->
+                    Triple(cameras, lenses, dates)
+                }.collect { (cameras, lenses, dates) ->
+                    _state.update { it.copy(cameras = cameras, lenses = lenses, dateCounts = dates) }
+                }
+            }
+        }
+        viewModelScope.launch {
+            val saved = library.dateGrouping()?.let { name -> DateGrouping.entries.firstOrNull { it.name == name } }
+            if (saved != null) _state.update { it.copy(grouping = saved) }
+        }
+        viewModelScope.launch {
+            _state.map { it.gridQuery to it.grouping }.distinctUntilChanged().collectLatest { (query, grouping) ->
                 // While indexing, rows arrive in batches: coalesce to a few updates per second.
                 library.photos(query).conflate().debounceAfterFirst(GRID_DEBOUNCE_MS)
-                    .map { rows -> rows to buildGridEntries(rows, query) }
+                    .map { rows -> rows to buildGrid(rows, query, grouping) }
                     .flowOn(Dispatchers.Default)
-                    .collect { (rows, entries) ->
+                    .collect { (rows, grid) ->
                         LibraryMetrics.firstRows(SystemClock.elapsedRealtime(), rows.size)
                         _state.update { s ->
                             val visible = rows.mapTo(HashSet(rows.size)) { it.versionId }
                             s.copy(
-                                entries = entries,
+                                entries = grid.entries,
+                                dateIndex = grid.dateIndex,
                                 photoCount = rows.size,
                                 photosLoaded = true,
                                 selected = s.selected.filterTo(HashSet()) { it in visible },
@@ -370,6 +387,17 @@ class LibraryViewModel @Inject constructor(
     }
 
     fun setFiltersOpen(open: Boolean) = _state.update { it.copy(filtersOpen = open) }
+
+    /** Month headers only, or with day sub-headers (W3/D): remembered for the next start. */
+    fun setGrouping(grouping: DateGrouping) {
+        if (grouping == _state.value.grouping) return
+        _state.update { it.copy(grouping = grouping) }
+        viewModelScope.launch { library.setDateGrouping(grouping.name) }
+    }
+
+    fun setDateJumpOpen(open: Boolean) = _state.update { it.copy(dateJumpOpen = open) }
+
+    fun setDateRangeOpen(open: Boolean) = _state.update { it.copy(dateRangeOpen = open) }
 
     fun setFoldersOpen(open: Boolean) = _state.update { it.copy(foldersOpen = open) }
 
@@ -660,9 +688,31 @@ object LibraryMetrics {
         }
     }
 
+    /** The fast scroller's track in window pixels (left, top, right, bottom), null until shown (W3/D, measurements). */
+    @Volatile
+    var scrollerTrack: IntArray? = null
+        private set
+
+    private val jumpTimes = java.util.concurrent.ConcurrentLinkedQueue<Long>()
+
+    /** How long each scroller jump took, from the drag to the frame that shows it (µs, W3/D, measurements). */
+    val jumpsMicros: List<Long> get() = jumpTimes.toList()
+
+    internal fun scrollerTrack(left: Int, top: Int, right: Int, bottom: Int) {
+        scrollerTrack = intArrayOf(left, top, right, bottom)
+    }
+
+    internal fun jump(micros: Long) {
+        jumpTimes += micros
+        while (jumpTimes.size > MAX_JUMPS) jumpTimes.poll()
+    }
+
+    private const val MAX_JUMPS = 2_000
+
     /** Resets for a new measurement (tests). */
     fun reset() {
         firstRowsMs = -1
         firstGridFrameMs = -1
+        jumpTimes.clear()
     }
 }

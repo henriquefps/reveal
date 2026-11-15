@@ -72,7 +72,6 @@ import dev.hfps.reveal.designsystem.icons.PhosphorRegular
 import dev.hfps.reveal.designsystem.theme.RevealTheme
 import java.text.DateFormat
 import java.util.Date
-import java.util.TimeZone
 import kotlin.math.max
 import kotlin.math.roundToInt
 
@@ -158,6 +157,30 @@ object LibraryTags {
     const val DELETE_COPIES = "library-delete-copies"
 
     fun source(id: Long) = "library-source-$id"
+
+    /** W3/D: the sticky month, the fast scroller and its bubble, "Go to date", grouping, the custom range. */
+    const val STICKY_MONTH = "library-sticky-month"
+    const val SCROLLER = "library-scroller"
+    const val SCROLLER_BUBBLE = "library-scroller-bubble"
+    const val GO_TO_DATE = "library-go-to-date"
+    const val GO_TO_DATE_SHEET = "library-go-to-date-sheet"
+    const val GROUP_BY_MONTH = "library-group-month"
+    const val GROUP_BY_DAY = "library-group-day"
+    const val DATE_RANGE_SHEET = "library-date-range"
+    const val DATE_RANGE_APPLY = "library-date-range-apply"
+
+    /** A month by its `DateIndex` key: `2026-11`, or `nodate`. */
+    fun monthKey(month: Int): String = if (month == DateIndex.NO_DATE) {
+        "nodate"
+    } else {
+        "%04d-%02d".format(java.util.Locale.ROOT, DateIndex.year(month), DateIndex.monthOfYear(month))
+    }
+
+    /** A month's cell in "Go to date". */
+    fun month(month: Int) = "library-month-${monthKey(month)}"
+
+    /** A month's header in the grid. */
+    fun monthHeader(month: Int) = "library-month-header-${monthKey(month)}"
 }
 
 /** Grid columns: 3 on a portrait phone (whatever its width), adaptive with a 120 dp minimum cell above. */
@@ -185,6 +208,10 @@ fun PhotoGrid(
     modifier: Modifier = Modifier,
     state: LazyGridState = rememberLazyGridState(),
     onDraw: (Int) -> Unit = {},
+    /** Where each month starts (W3/D): month headers, the sticky month and the scroller's dates; null = no dates. */
+    dateIndex: DateIndex? = null,
+    /** A tap on the sticky month: "Go to date". */
+    onMonthClick: () -> Unit = {},
 ) {
     val window = LocalWindowInfo.current.containerSize
     val windowWidth = with(LocalDensity.current) { window.width.toDp() }
@@ -194,7 +221,10 @@ fun PhotoGrid(
     val currentOnDraw by rememberUpdatedState(onDraw)
     val haptics = LocalHapticFeedback.current
     val autoScroll = rememberAutoScroll(state)
-    BoxWithConstraints(modifier) {
+    val labels = rememberDateLabels()
+    val scroller = remember { DateScrollerState() }
+    val hoverEdge = with(LocalDensity.current) { SCROLLER_HOVER_EDGE.toPx() }
+    BoxWithConstraints(modifier.dateScrollerHover(scroller, hoverEdge)) {
         val columns = gridColumns(maxWidth, portraitPhone)
         // The cells' width in pixels: the thumbnails are decoded no larger than they are drawn.
         val cellPx = with(LocalDensity.current) { ((maxWidth - GAP * (columns - 1)) / columns).roundToPx() }
@@ -224,12 +254,20 @@ fun PhotoGrid(
                 entries = entries,
                 selected = selected,
                 thumbnails = thumbnails,
+                labels = labels,
                 cellPx = cellPx,
                 onLongClick = { row -> onSelectionChange(currentSelected + row.versionId) },
             ) { row ->
                 if (currentSelected.isEmpty()) onOpen(row) else onSelectionChange(currentSelected.toggle(row.versionId))
             }
         }
+        if (dateIndex != null) StickyMonthHeader(state, dateIndex, labels, onMonthClick)
+        DateScroller(
+            state = state,
+            index = dateIndex,
+            labelAt = { at -> scrollerLabel(currentEntries, dateIndex, labels, at) },
+            scroller = scroller,
+        )
     }
     LaunchedEffect(entries.isNotEmpty()) {
         if (entries.isNotEmpty()) {
@@ -239,6 +277,14 @@ fun PhotoGrid(
     }
 }
 
+/** The scroller's bubble at entry [at]: its month in a date order, else the photo name's first letter. */
+private fun scrollerLabel(entries: List<GridEntry>, index: DateIndex?, labels: DateLabels, at: Int): String? {
+    if (index != null) return index.monthAt(at)?.let(labels::monthShort)
+    val row = (entries.getOrNull(at) as? GridEntry.Photo)?.row ?: return null
+    return row.name.firstOrNull()?.uppercaseChar()?.toString()
+}
+
+private val SCROLLER_HOVER_EDGE = 48.dp
 private val AUTO_SCROLL_EDGE = 64.dp
 private val AUTO_SCROLL_SPEED = 12.dp
 
@@ -247,6 +293,7 @@ private fun LazyGridScope.photoItems(
     entries: List<GridEntry>,
     selected: Set<Long>,
     thumbnails: ThumbnailSource,
+    labels: DateLabels,
     cellPx: Int,
     onLongClick: (PhotoRow) -> Unit,
     onClick: (PhotoRow) -> Unit,
@@ -255,10 +302,18 @@ private fun LazyGridScope.photoItems(
         items = entries,
         key = { it.key },
         span = { if (it is GridEntry.Photo) GridItemSpan(1) else GridItemSpan(maxLineSpan) },
-        contentType = { if (it is GridEntry.Photo) 1 else 0 },
+        contentType = {
+            when (it) {
+                is GridEntry.Photo -> 1
+                is GridEntry.Month -> 2
+                else -> 0
+            }
+        },
     ) { entry ->
         when (entry) {
-            is GridEntry.Header -> DateHeader(entry)
+            is GridEntry.Month -> GridMonthHeader(entry, labels)
+
+            is GridEntry.Header -> DateHeader(entry, labels)
 
             is GridEntry.Group -> GroupHeader(entry)
 
@@ -369,14 +424,10 @@ private fun Modifier.photoDragSelect(
     )
 }
 
+/** A day sub-header under its month (W3/D): weekday, day and month, in the camera's date. */
 @Composable
-private fun DateHeader(header: GridEntry.Header, modifier: Modifier = Modifier) {
-    val text = remember(header.day) {
-        // Capture times are the camera's wall clock stored as UTC: format them in UTC to get the camera's date.
-        DateFormat.getDateInstance(DateFormat.FULL).apply {
-            timeZone = TimeZone.getTimeZone("UTC")
-        }.format(Date(header.time))
-    }
+private fun DateHeader(header: GridEntry.Header, labels: DateLabels, modifier: Modifier = Modifier) {
+    val text = remember(header.day, labels) { labels.day(header.time) }
     Eyebrow(
         text = text,
         modifier = modifier

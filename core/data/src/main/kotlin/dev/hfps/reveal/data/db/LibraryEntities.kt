@@ -13,6 +13,9 @@ import dev.hfps.reveal.data.model.SourceKind
 import dev.hfps.reveal.data.model.SourceState
 import java.util.UUID
 
+/** [PhotoEntity.metadataVersion] of a header read today: 1 = camera make/model and lens (W3/D). */
+const val CURRENT_METADATA_VERSION = 1
+
 /** A new random (version 4) UUID, lower-case with dashes: the stable id of a synced row (ADR 0006 "Stable ids"). */
 fun newUuid(): String = UUID.randomUUID().toString()
 
@@ -65,6 +68,8 @@ data class SourceEntity(
         Index(value = ["sort_time"]),
         Index(value = ["last_opened_at"]),
         Index(value = ["uuid"], unique = true),
+        Index(value = ["camera_make", "camera_model"]),
+        Index(value = ["lens"]),
     ],
 )
 data class PhotoEntity(
@@ -99,6 +104,18 @@ data class PhotoEntity(
     /** A non-default recipe exists for one of its versions (denormalised for the grid). */
     @ColumnInfo(name = "has_edit") val hasEdit: Boolean = false,
     @ColumnInfo(name = "metadata_state") val metadataState: MetadataState = MetadataState.PENDING,
+    /**
+     * Camera make, model and lens from the header (W3/D, ADR 0006 "W3/D"), trimmed; "" = the header has none, null =
+     * not read yet. The library's Camera and Lens filters.
+     */
+    @ColumnInfo(name = "camera_make") val cameraMake: String? = null,
+    @ColumnInfo(name = "camera_model") val cameraModel: String? = null,
+    val lens: String? = null,
+    /**
+     * Which header fields the last read stored ([CURRENT_METADATA_VERSION]): photos read before W3/D have no camera
+     * or lens yet and are read again in the background (`LibraryIndexer.backfillCameras`).
+     */
+    @ColumnInfo(name = "metadata_version", defaultValue = "0") val metadataVersion: Int = 0,
     /** The XMP sidecar last applied: document id and its mtime (a newer mtime is read again). */
     @ColumnInfo(name = "xmp_document_id") val xmpDocumentId: String? = null,
     @ColumnInfo(name = "xmp_modified") val xmpModified: Long? = null,

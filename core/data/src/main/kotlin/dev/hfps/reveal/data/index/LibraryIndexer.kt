@@ -9,6 +9,7 @@ import dev.hfps.image.format.Shot
 import dev.hfps.image.format.ShotPairing
 import dev.hfps.image.source.readRange
 import dev.hfps.image.tiff.JpegMarkers
+import dev.hfps.reveal.data.db.CURRENT_METADATA_VERSION
 import dev.hfps.reveal.data.db.IndexedFile
 import dev.hfps.reveal.data.db.IndexedPhoto
 import dev.hfps.reveal.data.db.MetaEntity
@@ -167,8 +168,54 @@ class LibraryIndexer(
     suspend fun readServerMetadata(sourceId: Long, tree: DocumentTree, limit: Int): Int {
         // Only photos whose original the server serves: another device's preview-only photo has no header to read.
         val readable = db.syncDao().serverHeaderCandidates(sourceId, limit).toSet()
-        if (readable.isEmpty()) return 0
-        return readHeaders(sourceId, tree, only = readable, untracked = true) {}
+        val read = if (readable.isEmpty()) 0 else readHeaders(sourceId, tree, only = readable, untracked = true) {}
+        // Then the camera fields of photos read before W3/D, within the same budget.
+        return read + backfillCameras(sourceId, tree, limit - read, server = true)
+    }
+
+    /**
+     * Camera make, model and lens of photos whose header was read before W3/D (ADR 0006 "W3/D"): their headers read
+     * again, [HEADER_BATCH] per transaction, cancellable between batches, at most [limit] photos. Writes only
+     * columns no sync trigger watches. A photo whose files cannot be read is marked read too (it would fail every
+     * time); a later change of its file reads the whole header again. Returns how many photos were done.
+     */
+    suspend fun backfillCameras(
+        sourceId: Long,
+        tree: DocumentTree,
+        limit: Int = Int.MAX_VALUE,
+        server: Boolean = false,
+    ): Int {
+        var done = 0
+        val gate = Semaphore(HEADER_PARALLELISM)
+        while (done < limit) {
+            currentCoroutineContext().ensureActive()
+            val size = minOf(HEADER_BATCH, limit - done)
+            val files = if (server) {
+                photos.serverCameraBackfillFiles(sourceId, CURRENT_METADATA_VERSION, size)
+            } else {
+                photos.cameraBackfillFiles(sourceId, CURRENT_METADATA_VERSION, size)
+            }
+            val batch = files.groupBy { it.photoId }
+            if (batch.isEmpty()) break
+            val headers = coroutineScope {
+                batch.map { (photoId, files) -> async { gate.withPermit { readHeader(photoId, files, tree) } } }
+                    .awaitAll()
+            }
+            db.withTransaction {
+                for (header in headers) {
+                    val m = header.metadata
+                    photos.setCamera(
+                        header.photoId,
+                        cameraText(m?.make),
+                        cameraText(m?.model),
+                        lensText(m?.lens),
+                        CURRENT_METADATA_VERSION,
+                    )
+                }
+            }
+            done += batch.size
+        }
+        return done
     }
 
     /**
@@ -472,6 +519,9 @@ class LibraryIndexer(
                         height = m.height,
                         orientation = m.orientation.coerceIn(1, MAX_ORIENTATION),
                         state = MetadataState.READ,
+                        make = cameraText(m.make),
+                        model = cameraText(m.model),
+                        lens = lensText(m.lens),
                     )
                     applyEmbedded(header)
                 }
@@ -542,6 +592,15 @@ class LibraryIndexer(
     }
 
     companion object {
+        /** A header's make or model as stored: trimmed of spaces and NULs, "" when absent (null = not read). */
+        fun cameraText(text: String?): String = text.orEmpty().trim { it <= ' ' }
+
+        /** A lens name as stored: [cameraText], and "" for placeholders some bodies write ("----", "0.0 mm f/0.0"). */
+        fun lensText(text: String?): String {
+            val lens = cameraText(text)
+            return if (lens.none { it.isLetter() } || lens.startsWith("0.0 mm")) "" else lens
+        }
+
         private const val BATCH = 500
         private const val SQL_ARGS = 900
         private const val HEADER_BATCH = 64

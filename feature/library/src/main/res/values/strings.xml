@@ -323,4 +323,25 @@
         <item quantity="other">Delete %1$d virtual copies?</item>
     </plurals>
     <string name="versions_delete_body">Its edit, history and snapshots are deleted too, on every synced device. The photo and its other versions stay.</string>
+    <!-- W3/D: dates, fast scroller, go to date, Date / Camera / Lens filters -->
+    <string name="library_no_date">No date</string>
+    <string name="library_go_to_date">Go to date</string>
+    <string name="library_go_to_date_current">Showing %1$s</string>
+    <string name="library_group_by_month">Group by month</string>
+    <string name="library_group_by_day">Group by day</string>
+    <string name="library_scroller">Scroll by date</string>
+    <string name="library_scroller_previous">Previous month</string>
+    <string name="library_scroller_next">Next month</string>
+    <string name="library_month_cell">%1$s: %2$s</string>
+    <string name="library_month_empty">%1$s: no photos</string>
+    <string name="library_filter_group_date">Date</string>
+    <string name="library_filter_this_month">This month</string>
+    <string name="library_filter_last_30_days">Last 30 days</string>
+    <string name="library_filter_this_year">This year</string>
+    <string name="library_filter_on_this_day">On this day</string>
+    <string name="library_filter_custom_range">Custom range…</string>
+    <string name="library_filter_group_camera">Camera</string>
+    <string name="library_filter_group_lens">Lens</string>
+    <string name="library_date_range_title">Choose dates</string>
+    <string name="library_date_range_apply">Apply</string>
 </resources>

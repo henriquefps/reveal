@@ -8,6 +8,7 @@ import com.google.common.truth.Truth.assertThat
 import dev.hfps.image.format.ExifTime
 import dev.hfps.image.source.FileFingerprint
 import dev.hfps.reveal.data.FileDocumentTree
+import dev.hfps.reveal.data.db.CURRENT_METADATA_VERSION
 import dev.hfps.reveal.data.db.PhotoQuerySql
 import dev.hfps.reveal.data.db.RevealDatabase
 import dev.hfps.reveal.data.db.SourceEntity
@@ -312,5 +313,49 @@ class LibraryIndexerTest {
         assertThat(runCatching { job.await() }.exceptionOrNull()).isInstanceOf(CancellationException::class.java)
         assertThat(tree.listings).isLessThan(31)
         assertThat(rows()).isEmpty()
+    }
+
+    @Test
+    fun `headers store the camera and lens, and photos read before W3-D get them in the background`() = runTest {
+        File(root, "A.JPG").writeBytes(
+            SyntheticShoot.jpeg(
+                SyntheticShoot.markerOnlyJpeg(600, 400),
+                SyntheticExif(make = "NIKON CORPORATION ", model = "NIKON D5600", lens = "----"),
+            ),
+        )
+        jpeg("B.JPG", "2026:08:07 09:00:00")
+        index()
+        val photos = rows().associateBy { it.name }.mapValues { db.photoDao().get(it.value.id)!! }
+        val a = photos.getValue("A.JPG")
+        assertThat(a.cameraMake).isEqualTo("NIKON CORPORATION")
+        assertThat(a.cameraModel).isEqualTo("NIKON D5600")
+        // A placeholder lens is no lens.
+        assertThat(a.lens).isEqualTo("")
+        assertThat(a.metadataVersion).isEqualTo(CURRENT_METADATA_VERSION)
+        assertThat(photos.getValue("B.JPG").lens).isEqualTo("E 16-50mm F3.5-5.6 OSS")
+
+        // A photo read before W3/D: header read, camera fields empty and version 0. The backfill touches only them.
+        db.openHelper.writableDatabase.execSQL(
+            "UPDATE photos SET camera_make = NULL, camera_model = NULL, lens = NULL, metadata_version = 0",
+        )
+        val before = db.photoDao().get(a.id)!!
+        assertThat(LibraryIndexer(db).backfillCameras(sourceId, FileDocumentTree(root), limit = 1)).isEqualTo(1)
+        assertThat(LibraryIndexer(db).backfillCameras(sourceId, FileDocumentTree(root))).isEqualTo(1)
+        assertThat(LibraryIndexer(db).backfillCameras(sourceId, FileDocumentTree(root))).isEqualTo(0)
+        val after = db.photoDao().get(a.id)!!
+        assertThat(after).isEqualTo(
+            before.copy(
+                cameraMake = "NIKON CORPORATION",
+                cameraModel = "NIKON D5600",
+                lens = "",
+                metadataVersion = CURRENT_METADATA_VERSION,
+            ),
+        )
+        // A file that can no longer be read is marked done (not retried every walk), its camera unknown ("").
+        db.openHelper.writableDatabase.execSQL("UPDATE photos SET metadata_version = 0")
+        File(root, "A.JPG").delete()
+        File(root, "B.JPG").delete()
+        assertThat(LibraryIndexer(db).backfillCameras(sourceId, FileDocumentTree(root))).isEqualTo(2)
+        assertThat(db.photoDao().get(a.id)!!.cameraModel).isEqualTo("")
     }
 }

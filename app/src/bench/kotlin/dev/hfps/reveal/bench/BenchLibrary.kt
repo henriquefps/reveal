@@ -24,10 +24,12 @@ import kotlinx.coroutines.withTimeout
 /**
  * The library of `LibraryMeasurementsTest` (docs/adr/0006 "Measurements") for the minified bench app: one folder of
  * 10,000 generated files (3,000 RAW+JPEG pairs with 640 x 427 embedded previews, 4,000 JPEGs, a sidecar on every
- * tenth pair) served by the generated-files SAF provider, added and indexed like a picked folder. Nothing private.
+ * tenth pair; capture times over seven years and three cameras, `SyntheticExif.spread`, W3/D) served by the
+ * generated-files SAF provider, added and indexed like a picked folder. Nothing private.
  */
 internal object BenchLibrary {
-    private const val FOLDER = "bench-10k"
+    // A new name for the W3/D files (dates over seven years): a kept library of the older files is made again.
+    private const val FOLDER = "bench-10k-dated"
     private const val PAIRS = 3_000
     private const val JPEGS = 4_000
     private const val SIDECAR_EVERY = 10
@@ -78,29 +80,20 @@ internal object BenchLibrary {
         for (i in 0 until PAIRS) {
             val stem = String.format(Locale.ROOT, "DSC%05d", i)
             val preview = previews[i % previews.size]
-            File(dir, "$stem.ARW").writeBytes(SyntheticShoot.raw(preview, exif(i)))
-            File(dir, "$stem.JPG").writeBytes(SyntheticShoot.jpeg(preview, exif(i)))
+            File(dir, "$stem.ARW").writeBytes(SyntheticShoot.raw(preview, SyntheticExif.spread(i)))
+            File(dir, "$stem.JPG").writeBytes(SyntheticShoot.jpeg(preview, SyntheticExif.spread(i)))
             if (i % SIDECAR_EVERY == 0) {
                 File(dir, "$stem.xmp").writeText(SyntheticShoot.sidecar(i % RATINGS, creatorTool = "Hoard 1.7.2"))
             }
         }
         for (i in 0 until JPEGS) {
             val name = String.format(Locale.ROOT, "IMG_%05d.JPG", i)
-            File(dir, name).writeBytes(SyntheticShoot.jpeg(previews[i % previews.size], exif(PAIRS + i)))
+            File(
+                dir,
+                name,
+            ).writeBytes(SyntheticShoot.jpeg(previews[i % previews.size], SyntheticExif.spread(PAIRS + i)))
         }
     }
-
-    @Suppress("MagicNumber") // The same capture times as SyntheticFolder.exif.
-    private fun exif(index: Int) = SyntheticExif(
-        dateTime = String.format(
-            Locale.ROOT,
-            "2026:08:07 %02d:%02d:%02d",
-            10 + index / 3600 % 10,
-            index / 60 % 60,
-            index % 60,
-        ),
-        subSecond = String.format(Locale.ROOT, "%03d", index * 37 % 1000),
-    )
 
     @Suppress("MagicNumber")
     private fun gradientJpeg(seed: Int): ByteArray {

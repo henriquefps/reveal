@@ -1,5 +1,7 @@
 package dev.hfps.reveal.data.model
 
+import java.time.LocalDate
+
 /**
  * What a source is: an added SAF folder, the one source that collects photos other apps hand to Reveal, or the one
  * source of photos only the sync server has (its NAS folders, other devices' photos; ADR 0018).
@@ -112,6 +114,47 @@ enum class SyncFilter {
 }
 
 /**
+ * The Date group (W3/D, ADR 0006 "W3/D"): presets relative to today and custom day ranges, all on the grid's date (the
+ * capture time on the camera's clock, else the file's time; photos without one match none).
+ */
+sealed interface DateFilter {
+    /** The current calendar month. */
+    data object ThisMonth : DateFilter
+
+    /** Today and the 29 days before it. */
+    data object Last30Days : DateFilter
+
+    /** The current calendar year. */
+    data object ThisYear : DateFilter
+
+    /** Today's day and month in every earlier year. */
+    data object OnThisDay : DateFilter
+
+    /** [from] to [to], both days included (a custom range). */
+    data class Range(val from: LocalDate, val to: LocalDate) : DateFilter {
+        init {
+            require(!to.isBefore(from)) { "range ends before it starts" }
+        }
+    }
+}
+
+/** One camera of the Camera group (W3/D): the header's make and model (trimmed; "" when the header has no make). */
+data class CameraFilter(val make: String, val model: String) {
+    /**
+     * What the user reads: the model when it already names the maker ("Canon EOS R5", "NIKON D5600"), else the make's
+     * first word and the model ("SONY ILCE-7M4", "OLYMPUS E-M1").
+     */
+    val label: String
+        get() {
+            val brand = make.trim().substringBefore(' ')
+            return if (brand.isEmpty() || model.startsWith(brand, ignoreCase = true)) model else "$brand $model"
+        }
+}
+
+/** One lens of the Lens group (W3/D): the header's lens model, as written. */
+data class LensFilter(val name: String)
+
+/**
  * The grid's combinable filters (FIX/L, ADR 0006 "Filters"): within a group the choices are OR, across groups AND; an
  * empty group does not narrow. Pure data, turned into SQL by `PhotoQuerySql`.
  */
@@ -121,12 +164,16 @@ data class PhotoFilters(
     val edits: Set<EditFilter> = emptySet(),
     val types: Set<TypeFilter> = emptySet(),
     val sync: Set<SyncFilter> = emptySet(),
+    val dates: Set<DateFilter> = emptySet(),
+    val cameras: Set<CameraFilter> = emptySet(),
+    val lenses: Set<LensFilter> = emptySet(),
 ) {
-    val isEmpty: Boolean
-        get() = sources.isEmpty() && culling.isEmpty() && edits.isEmpty() && types.isEmpty() && sync.isEmpty()
+    val isEmpty: Boolean get() = count == 0
 
     /** How many choices are on (the Filters button's badge). */
-    val count: Int get() = sources.size + culling.size + edits.size + types.size + sync.size
+    val count: Int
+        get() = sources.size + culling.size + edits.size + types.size + sync.size + dates.size + cameras.size +
+            lenses.size
 
     /** The one folder the grid is narrowed to, if the Source group holds exactly a folder. */
     val singleFolder: Long? get() = (sources.singleOrNull() as? SourceFilter.Folder)?.sourceId
@@ -143,6 +190,12 @@ data class PhotoFilters(
     fun toggle(choice: TypeFilter) = copy(types = types.toggle(choice))
 
     fun toggle(choice: SyncFilter) = copy(sync = sync.toggle(choice))
+
+    fun toggle(choice: DateFilter) = copy(dates = dates.toggle(choice))
+
+    fun toggle(choice: CameraFilter) = copy(cameras = cameras.toggle(choice))
+
+    fun toggle(choice: LensFilter) = copy(lenses = lenses.toggle(choice))
 
     /** Folders that no longer exist leave the Source group. */
     fun withFolders(existing: Collection<Long>): PhotoFilters {

@@ -677,8 +677,9 @@ Decisions (`SyncRepository.pair`):
   and `deviceId` -> only the address changes (`SyncAccount.url`). Device id, key, physical device (Hoard's grouping),
   cursors and records stay; the pairing token is left unused. This is the owner's case from now on.
   Hardening (fix rounds 2 and 3): even with a matching `server=` the key goes **on its own** only to the host the
-  account already uses (a port or scheme change there: `KeyReuse.AUTO`, `SyncRepository.sameHost`, hosts compared
-  case-insensitively). Any other host asks first, whatever its scheme (a `server=` in a code is not a secret: anyone
+  account already uses (a port or scheme change there: `KeyReuse.AUTO`, `SyncRepository.quietReuse`, hosts compared
+  case-insensitively; final fix: never from `https` down to an address that is not `keySafe`, which asks with the
+  cleartext warning). Any other host asks first, whatever its scheme (a `server=` in a code is not a secret: anyone
   shown the QR could put it in a link to their own host), naming the host (`SyncRepository.keyReuseQuestion` ->
   `KeyReuseQuestion(host, protected)` -> `PairingState.ConfirmKeyReuse`, "Same server at <host>? Reveal will reuse
   this device's key"). `account/ServerAddresses.keySafe` (`https`, loopback, Tailscale `100.64.0.0/10` and `*.ts.net`,
@@ -705,7 +706,8 @@ Decisions (`SyncRepository.pair`):
   the edits of its NAS photos without a word. Now, while paired:
   - a code whose `server=` names another server is refused before anything is sent (`PairProblem.PAIRED_ELSEWHERE`,
     the token unused); the message offers "Switch server", which opens the usual Unpair confirmation and, confirmed,
-    unpairs and pairs with that code (`SyncSettingsViewModel.switchServer`);
+    pairs with that code first and only then forgets the paired server (`SyncSettingsViewModel.switchServer` ->
+    `SyncRepository.pairSwitching`, like `switchServer`); a failed pairing keeps the account and shows the error;
   - a code without `server=` (older hoard-server) can only be judged after `POST /v1/pair` (`/v1` has no
     unauthenticated way to name a server): when the answer's `serverId` is not the account's, nothing local changes;
     the new pairing (its key) waits **in memory only** (`SyncRepository.PendingSwitch`) and `ServerSwitchException`
@@ -729,7 +731,8 @@ new device that keeps the records, rejoins Hoard's phone, reports itself, and st
 still live -> no forced claim; unpair + pair -> no conflict copy; a public http address asks, a declined reuse
 never sends the key and keeps the sync state; fix round 3: another host asks whatever the scheme, the same host on
 another port or scheme does not, AUTO never sends the key to another host; while paired a code naming another server
-is refused unsent and "Switch server" (unpair, pair) works; a code without `server=` for another server keeps
+is refused unsent and "Switch server" (unpair, pair) works; final fix: `pairSwitching` with a refused token keeps
+the account and the records, then switches; https -> public http on the same host asks and AUTO never sends the key; a code without `server=` for another server keeps
 everything on Cancel and keeps syncing, and Switch forgets the state and keeps the new pairing),
 `ServerAddressesTest` (the classification), `SyncApiTest` (a used token is refused once unpaired),
 `VersionPhotoSyncTest` (a refused photo releases its held versions; deleted held versions leave the list).

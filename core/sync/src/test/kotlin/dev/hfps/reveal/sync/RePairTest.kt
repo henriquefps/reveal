@@ -75,14 +75,21 @@ class RePairTest {
         )!!
 
     /** An installation: its library ([TestDevice]) and the app's sync repository over the same database. */
-    private class Install(val device: TestDevice, val repository: SyncRepository)
+    private class Install(val device: TestDevice, val repository: SyncRepository, val accounts: SyncAccountStore)
+
+    /** [PUBLIC_HOST] (http or https, any port) reaches the fake server: a public name the key is not safe at. */
+    private fun api(at: String, key: String?): SyncApi {
+        val here = URI(url)
+        return SyncApi(at.replace(Regex("^https?://$PUBLIC_HOST"), "${here.scheme}://${here.host}"), key)
+    }
 
     private fun install(): Install {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val device = TestDevice("Phone", url, "unused", server.serverId, device = pixel).also { devices += it }
+        val accounts = SyncAccountStore(context, MemorySecretStore())
         val repository = SyncRepository(
             db = device.db,
-            accounts = SyncAccountStore(context, MemorySecretStore()),
+            accounts = accounts,
             store = device.store,
             engine = device.engine,
             uploader = BlobUploader(
@@ -93,8 +100,9 @@ class RePairTest {
             ),
             files = ServerFiles(device.db, { null }, context.cacheDir),
             clientInfo = SyncRepository.ClientInfo("Pixel 8", "android", "0.9.0", pixel),
+            newApi = ::api,
         )
-        return Install(device, repository)
+        return Install(device, repository, accounts)
     }
 
     private fun hoardOnPixel(): String = SyncApi(url, null).pair(
@@ -234,6 +242,64 @@ class RePairTest {
         } finally {
             other.shutdown()
         }
+    }
+
+    @Test
+    fun `switch server pairs first and a failed pairing keeps the paired server and its sync state`() {
+        val app = install()
+        pairedWithAnEdit(app, hoardOnPixel())
+        val before = app.repository.account.value!!
+        val rows = records(app.device)
+        val other = FakeSyncServer("858e1b9d-0000-4000-8000-0000000000ff")
+        try {
+            val otherUrl = other.start()
+            val spent = link(otherUrl, "not-a-token", serverId = other.serverId)
+            val error = assertThrows(PairException::class.java) {
+                runBlocking { app.repository.pairSwitching(spent) }
+            }
+            assertThat(error.problem).isEqualTo(PairProblem.INVALID_TOKEN)
+            assertThat(app.repository.account.value).isEqualTo(before)
+            assertThat(records(app.device)).isEqualTo(rows)
+            runBlocking { app.repository.syncMetadata() }
+            assertThat(app.device.pending()).isEqualTo(0)
+
+            val after = runBlocking {
+                app.repository.pairSwitching(link(otherUrl, other.pairingToken(), serverId = other.serverId))
+            }!!
+            assertThat(after.serverId).isEqualTo(other.serverId)
+            assertThat(app.repository.account.value).isEqualTo(after)
+            assertThat(records(app.device)).isEmpty()
+        } finally {
+            other.shutdown()
+        }
+    }
+
+    @Test
+    fun `the same host from https down to a cleartext public address asks before sending the key`() {
+        val app = install()
+        runBlocking { app.repository.pair(link()) }
+        val port = URI(url).port
+        val key = app.accounts.apiKey()!!
+        val paired = app.repository.account.value!!
+        app.accounts.save(paired.copy(url = "https://$PUBLIC_HOST:$port"), key)
+
+        fun question(at: String) = runBlocking { app.repository.keyReuseQuestion(link(at)) }
+        val cleartext = "http://$PUBLIC_HOST:$port"
+        assertThat(question(cleartext)).isEqualTo(KeyReuseQuestion(PUBLIC_HOST, protected = false))
+        assertThat(question("https://$PUBLIC_HOST:1")).isNull()
+
+        // Without an answer the key never goes over cleartext: a new device.
+        val known = server.authorizations.size
+        val auto = runBlocking { app.repository.pair(link(cleartext)) }
+        assertThat(server.authorizations.drop(known).filter { key in it }).isEmpty()
+        assertThat(auto.deviceId).isNotEqualTo(paired.deviceId)
+
+        // From cleartext up to https on the same host stays quiet: the key goes there and the device stays.
+        val newKey = app.accounts.apiKey()!!
+        val sent = server.authorizations.size
+        val moved = runBlocking { app.repository.pair(link("https://$PUBLIC_HOST:$port")) }
+        assertThat(server.authorizations.drop(sent).filter { newKey in it }).isNotEmpty()
+        assertThat(moved.deviceId).isEqualTo(auto.deviceId)
     }
 
     @Test
@@ -391,5 +457,9 @@ class RePairTest {
         ).results.single()
         app.device.db.syncDao().putRecord(local.copy(rev = result.rev, dirty = false))
         version.uuid
+    }
+
+    private companion object {
+        const val PUBLIC_HOST = "reveal.example.com"
     }
 }

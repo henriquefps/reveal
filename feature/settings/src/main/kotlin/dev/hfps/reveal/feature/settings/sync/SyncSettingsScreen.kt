@@ -134,7 +134,10 @@ data class SyncActions(
     /** The answer to [PairingState.ConfirmKeyReuse]: true = same server, false = pair as a new device. */
     val onKeyReuse: (Boolean) -> Unit = {},
     val onKeyReuseCancel: () -> Unit = {},
-    /** After the Unpair confirmation opened by "Switch server" ([PairProblem.PAIRED_ELSEWHERE]): unpair, then pair. */
+    /**
+     * After the Unpair confirmation opened by "Switch server" ([PairProblem.PAIRED_ELSEWHERE]): pair, and only then
+     * forget the paired server.
+     */
     val onSwitchServer: () -> Unit = {},
     /** The answer to [PairingState.ConfirmSwitch]: true = switch, false = keep the paired server. */
     val onConfirmSwitch: (Boolean) -> Unit = {},
@@ -234,14 +237,22 @@ class SyncSettingsViewModel @Inject constructor(
         }
     }
 
-    /** "Switch server", confirmed in the Unpair dialog: forget the paired server, then pair with the code. */
+    /**
+     * "Switch server", confirmed in the Unpair dialog: pair with the code, and only once that worked forget the paired
+     * server. A failed pairing keeps the paired server and shows the error.
+     */
     fun switchServer() {
         val link = switching ?: return
         switching = null
         pairing.update { PairingState.Working }
         viewModelScope.launch {
-            sync.unpair()
-            pair(link, SyncRepository.KeyReuse.AUTO)
+            try {
+                sync.pairSwitching(link)
+                pairing.update { PairingState.Idle }
+                SyncScheduler.now(context)
+            } catch (e: PairException) {
+                pairing.update { PairingState.Failed(e.problem) }
+            }
         }
     }
 

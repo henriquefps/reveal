@@ -30,6 +30,8 @@ import dev.hfps.reveal.sync.engine.SyncReport
 import dev.hfps.reveal.sync.engine.SyncStore
 import dev.hfps.reveal.sync.files.ServerFiles
 import java.io.IOException
+import java.net.URI
+import java.util.Locale
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -320,6 +322,26 @@ class SyncRepository(
         }
     }
 
+    /**
+     * "Switch server" after a [PairProblem.PAIRED_ELSEWHERE] (ADR 0018 "W5 (g)"): pairs with [link]'s server first, and
+     * only once that worked forgets the paired server and keeps the new account, like [switchServer]. A failed pairing
+     * throws [PairException] and leaves the paired server and its sync state as they were. Null when the paired account
+     * changed meanwhile (the new pairing is dropped then).
+     */
+    suspend fun pairSwitching(link: PairingLink): SyncAccount? = withContext(Dispatchers.IO) {
+        pendingSwitch = null
+        val from = accounts.account.value ?: return@withContext pair(link)
+        val response = requestPairing(link)
+        if (link.serverId != null && link.serverId != response.serverId) throw PairException(PairProblem.OTHER_SERVER)
+        mutex.withLock {
+            if (accounts.account.value != from) return@withLock null
+            accounts.clear()
+            forgetLocked()
+            dismissCandidates()
+            saveLocked(link, response)
+        }
+    }
+
     /** "Cancel" after a [ServerSwitchException]: the paired server stays; the other server's key is dropped. */
     fun cancelSwitch() {
         pendingSwitch = null
@@ -333,8 +355,9 @@ class SyncRepository(
      * i.e. a link whose `server=` (hoard-server prints it in every pairing code) is the account's server id. A link
      * without one, or naming another server, pairs normally and never sees the key (`/v1` has no unauthenticated way to
      * ask an address which server it is: `/v1/health` names none, and `/v1/server` needs a key). Even then it goes on
-     * its own only to the host the account already uses (a new port or scheme there); any other host only when the
-     * user confirmed it ([keyReuseQuestion], [KeyReuse.CONFIRMED]), and never after a [KeyReuse.DECLINED].
+     * its own only to the host the account already uses (a new port or scheme there, never from https down to a
+     * cleartext address the key is not safe at, [ServerAddresses.keySafe]); anything else only when the user confirmed
+     * it ([keyReuseQuestion], [KeyReuse.CONFIRMED]), and never after a [KeyReuse.DECLINED].
      */
     @Suppress("ReturnCount")
     private suspend fun sameDevice(link: PairingLink, keyReuse: KeyReuse): SyncAccount? {
@@ -342,7 +365,7 @@ class SyncRepository(
         if (link.serverId == null || link.serverId != account.serverId) return null
         // Another host goes only after the user said it is the same server.
         if (keyReuse == KeyReuse.DECLINED) return null
-        if (keyReuse == KeyReuse.AUTO && !sameHost(link, account)) return null
+        if (keyReuse == KeyReuse.AUTO && !quietReuse(link, account)) return null
         val key = accounts.apiKey() ?: return null
         val info = try {
             newApi(link.url, key).server()
@@ -367,17 +390,30 @@ class SyncRepository(
     /**
      * "Same server at <host>?" before [pair]ing with [link] (ADR 0018 "W5 (f)"), or null when no question is needed:
      * the link is for another server (or names none), there is no key, or the address is on the host the account
-     * already uses (a port or scheme change). Any other host asks, whatever its scheme; [KeyReuseQuestion.protected]
+     * already uses (a port or scheme change that is not https -> cleartext, unless the address is [ServerAddresses
+     * .keySafe]). Any other host asks, whatever its scheme, and so does such a downgrade; [KeyReuseQuestion.protected]
      * only changes the wording. The answer is passed to [pair] as [KeyReuse.CONFIRMED] or [KeyReuse.DECLINED].
      */
     suspend fun keyReuseQuestion(link: PairingLink): KeyReuseQuestion? = withContext(Dispatchers.IO) {
         val account = accounts.account.value
         when {
             account == null || link.serverId == null || link.serverId != account.serverId -> null
-            sameHost(link, account) || accounts.apiKey() == null -> null
+            quietReuse(link, account) || accounts.apiKey() == null -> null
             else -> KeyReuseQuestion(ServerAddresses.host(link.url) ?: link.url, ServerAddresses.keySafe(link.url))
         }
     }
+
+    /**
+     * The key may go to [link] without asking: the host the account already uses, and not moved from https to an
+     * address where the key would travel in cleartext over a network that is not private.
+     */
+    private fun quietReuse(link: PairingLink, account: SyncAccount): Boolean {
+        if (!sameHost(link, account)) return false
+        val downgrade = scheme(account.url) == "https" && scheme(link.url) != "https"
+        return !downgrade || ServerAddresses.keySafe(link.url)
+    }
+
+    private fun scheme(url: String): String? = runCatching { URI(url).scheme }.getOrNull()?.lowercase(Locale.ROOT)
 
     private fun sameHost(link: PairingLink, account: SyncAccount): Boolean {
         val host = ServerAddresses.host(link.url)
@@ -387,7 +423,7 @@ class SyncRepository(
 
     /** Whether [pair] may try this installation's key at a new address of the same server (ADR 0018 "W5 (f)"). */
     enum class KeyReuse {
-        /** Only on the host the account already uses (a new port or scheme there). */
+        /** Only on the host the account already uses (a new port or scheme there; never https -> unsafe cleartext). */
         AUTO,
 
         /** The user confirmed the address is the same server: any address. */

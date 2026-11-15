@@ -6,6 +6,7 @@ import android.os.SystemClock
 import dev.hfps.reveal.data.db.RevealDatabase
 import dev.hfps.reveal.data.storage.CacheArea
 import dev.hfps.reveal.data.storage.CacheItem
+import dev.hfps.reveal.data.storage.CacheTier
 import dev.hfps.reveal.data.storage.StorageKind
 import dev.hfps.reveal.pipeline.preview.SmartPreviewCodec
 import dev.hfps.reveal.sync.api.SyncApi
@@ -14,15 +15,31 @@ import java.io.File
 import java.io.IOException
 import java.util.concurrent.ConcurrentHashMap
 
-/** A file the server serves, read by range through [cache]. */
+/**
+ * A file the server serves, read by range through [cache], or from the kept whole copy once there is one ([kept],
+ * ADR 0018 "W3/C": the blocks may be dropped after it was assembled).
+ */
 class RemoteFile internal constructor(
     val size: Long,
     private val key: String,
     private val cache: RangeCache,
+    private val kept: () -> File? = { null },
     private val fetch: (Long, Int) -> ByteArray,
 ) {
     /** Reads up to [length] bytes at [offset] into [into]; 0 at the end. */
-    fun read(offset: Long, length: Int, into: ByteArray): Int = cache.read(key, size, offset, length, into, fetch)
+    fun read(offset: Long, length: Int, into: ByteArray): Int {
+        val whole = kept()
+        if (whole != null && whole.length() == size) {
+            if (offset >= size || length <= 0) return 0
+            val n = minOf(size - offset, length.toLong()).toInt()
+            java.io.RandomAccessFile(whole, "r").use { raf ->
+                raf.seek(offset)
+                raf.readFully(into, 0, n)
+            }
+            return n
+        }
+        return cache.read(key, size, offset, length, into, fetch)
+    }
 }
 
 /**
@@ -42,12 +59,115 @@ class ServerFiles(
     private val ranges = RangeCache(File(cacheDir, "sync-originals"), maxBytes)
     private val previews = File(cacheDir, "sync-previews")
 
-    /** The two caches as budget areas (Settings -> Storage: "Server files"). */
+    /** Whole originals of photos opened in the editor (ADR 0018 "W3/C"): `<fingerprint hex>`, served as files. */
+    private val kept = File(cacheDir, KEPT_DIR)
+    private val keeping = ConcurrentHashMap.newKeySet<String>()
+
+    /** One download at a time, at most [KEEP_QUEUE] waiting: the rest (a big export) is read by range, not kept. */
+    private val keeper = java.util.concurrent.ThreadPoolExecutor(
+        1,
+        1,
+        0L,
+        java.util.concurrent.TimeUnit.MILLISECONDS,
+        java.util.concurrent.ArrayBlockingQueue(KEEP_QUEUE),
+        { r -> Thread(r, "reveal-keep-original") },
+        { job, _ -> (job as KeepJob).skipped() },
+    )
+
+    private class KeepJob(private val body: () -> Unit, private val onSkipped: () -> Unit) : Runnable {
+        override fun run() = body()
+
+        fun skipped() = onSkipped()
+    }
+
+    /** Originals being downloaded or waiting to be (tests). */
+    internal val pendingKeeps: Int get() = keeping.size
+
+    @Volatile
+    private var pinnedAt = 0L
+
+    @Volatile
+    private var pinnedKeys: Set<String> = emptySet()
+
+    /**
+     * The originals to keep (fingerprint hex): every file of the [PINNED_PHOTOS] photos opened most recently in the
+     * last [PINNED_DAYS] days (ADR 0018 "W3/C"), memoised for a minute.
+     */
+    suspend fun pinned(): Set<String> {
+        val now = System.currentTimeMillis()
+        if (now - pinnedAt < PINNED_TTL_MS) return pinnedKeys
+        pinnedKeys = db.photoDao().recentlyOpenedFingerprints(now - PINNED_DAYS * DAY_MS, PINNED_PHOTOS)
+            .mapTo(HashSet()) { it.removePrefix("v1:") }
+        pinnedAt = now
+        return pinnedKeys
+    }
+
+    /** Forgets the memo (a photo was just opened). */
+    fun repin() {
+        pinnedAt = 0
+    }
+
+    /** The kept whole original of [fingerprint], or null (its last use is refreshed). */
+    fun keptOriginal(fingerprint: String): File? {
+        val file = File(kept, fingerprint.removePrefix("v1:"))
+        if (!file.isFile) return null
+        file.setLastModified(System.currentTimeMillis())
+        return file
+    }
+
+    /**
+     * Downloads the rest of [remote] in the background and keeps it as one file (ADR 0018 "W3/C"): an original opened
+     * in the editor or the export then opens from this device, whole, as a plain file. One at a time; nothing when it
+     * is kept already or being kept, or when [KEEP_QUEUE] others already wait (a 500-photo export reads by range
+     * instead of queueing 500 downloads). The blocks are dropped once the file is complete.
+     */
+    fun keep(fingerprint: String, remote: RemoteFile) {
+        val key = fingerprint.removePrefix("v1:")
+        if (File(kept, key).isFile || !keeping.add(key)) return
+        keeper.execute(KeepJob(body = { keepNow(key, remote) }, onSkipped = { keeping.remove(key) }))
+    }
+
+    private fun keepNow(key: String, remote: RemoteFile) {
+        try {
+            val buffer = ByteArray(RangeCache.BLOCK.toInt())
+            var offset = 0L
+            while (offset < remote.size) {
+                val n = remote.read(offset, minOf(RangeCache.BLOCK, remote.size - offset).toInt(), buffer)
+                if (n <= 0) break
+                offset += n
+            }
+            assembleKept(key, remote.size)
+        } catch (e: IOException) {
+            android.util.Log.i("RevealSyncFiles", "An original could not be kept: ${e.javaClass.simpleName}")
+        } finally {
+            keeping.remove(key)
+        }
+    }
+
+    private fun assembleKept(key: String, size: Long) {
+        kept.mkdirs()
+        val temp = File(kept, "$key.tmp")
+        if (ranges.complete(key, size) && ranges.assemble(key, size, temp) && temp.renameTo(File(kept, key))) {
+            ranges.evict(listOf(key))
+            onTrimmed()
+        }
+        temp.delete()
+    }
+
+    /**
+     * The caches as budget areas (Settings -> Storage: "Server files", "Originals kept"). Blocks and kept originals of
+     * photos opened lately are [CacheTier.PINNED]: evicted after every ordinary cache (ADR 0018 "W3/C").
+     */
     val areas: List<CacheArea> = listOf(
         object : CacheArea {
             override val kind = StorageKind.SERVER_FILES
 
-            override suspend fun items() = ranges.files().map { (key, bytes, used) -> CacheItem(key, bytes, used) }
+            override suspend fun items(): List<CacheItem> {
+                val pinned = pinned()
+                return ranges.files().map { (key, bytes, used) ->
+                    CacheItem(key, bytes, used, if (key in pinned) CacheTier.PINNED else CacheTier.NORMAL)
+                }
+            }
 
             override suspend fun evict(keys: Collection<String>) = ranges.evict(keys)
 
@@ -64,6 +184,27 @@ class ServerFiles(
             override suspend fun clear() {
                 previews.deleteRecursively()
                 missing.clear()
+            }
+        },
+        object : CacheArea {
+            override val kind = StorageKind.ORIGINALS_KEPT
+
+            override suspend fun items(): List<CacheItem> {
+                val pinned = pinned()
+                return kept.listFiles()?.filter { it.isFile && !it.name.endsWith(".tmp") }?.map {
+                    CacheItem(
+                        it.name,
+                        it.length(),
+                        it.lastModified(),
+                        if (it.name in pinned) CacheTier.PINNED else CacheTier.NORMAL,
+                    )
+                }.orEmpty()
+            }
+
+            override suspend fun evict(keys: Collection<String>) = keys.forEach { File(kept, it).delete() }
+
+            override suspend fun clear() {
+                kept.deleteRecursively()
             }
         },
     )
@@ -96,9 +237,10 @@ class ServerFiles(
                 return null
             }
         }
-        ranges.trim()
+        ranges.trim(pinned())
         onTrimmed()
-        return RemoteFile(size, fingerprint.removePrefix("v1:"), ranges) { offset, length ->
+        val key = fingerprint.removePrefix("v1:")
+        return RemoteFile(size, key, ranges, { File(kept, key).takeIf { it.isFile } }) { offset, length ->
             client.readOriginal(fingerprint, offset, length)
         }
     }
@@ -155,15 +297,23 @@ class ServerFiles(
     fun clear() {
         ranges.clear()
         previews.deleteRecursively()
+        kept.deleteRecursively()
         missing.clear()
     }
 
     /** Bytes held by the caches. */
-    fun cachedBytes(): Long = ranges.bytes() + (previews.listFiles()?.sumOf { it.length() } ?: 0L)
+    fun cachedBytes(): Long = ranges.bytes() + (previews.listFiles()?.sumOf { it.length() } ?: 0L) +
+        (kept.listFiles()?.sumOf { it.length() } ?: 0L)
 
     private companion object {
         const val NEGATIVE_MS = 5 * 60 * 1000L
         const val HTTP_UNAVAILABLE = 503
         const val PREVIEW_CACHE_BYTES = 512L * 1024 * 1024
+        const val KEEP_QUEUE = 4
+        const val KEPT_DIR = "sync-kept"
+        const val PINNED_PHOTOS = 50
+        const val PINNED_DAYS = 7L
+        const val DAY_MS = 24 * 60 * 60 * 1000L
+        const val PINNED_TTL_MS = 60_000L
     }
 }

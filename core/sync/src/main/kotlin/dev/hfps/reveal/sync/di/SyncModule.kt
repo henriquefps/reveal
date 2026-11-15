@@ -17,6 +17,8 @@ import dev.hfps.reveal.data.export.ExportPreferences
 import dev.hfps.reveal.data.handoff.LocalPreviews
 import dev.hfps.reveal.data.library.DocumentTreeFactory
 import dev.hfps.reveal.data.storage.CacheBudget
+import dev.hfps.reveal.data.storage.LibraryThumbsPreferences
+import dev.hfps.reveal.data.thumb.ServerThumbs
 import dev.hfps.reveal.data.thumb.ThumbnailRepository
 import dev.hfps.reveal.pipeline.preview.SmartPreviewMaker
 import dev.hfps.reveal.sync.SyncRepository
@@ -33,6 +35,7 @@ import dev.hfps.reveal.sync.engine.SyncEngine
 import dev.hfps.reveal.sync.engine.SyncStore
 import dev.hfps.reveal.sync.engine.SyncedSetting
 import dev.hfps.reveal.sync.files.ServerFiles
+import dev.hfps.reveal.sync.thumbs.LibraryThumbs
 import dev.hfps.reveal.sync.work.SyncController
 import java.io.ByteArrayOutputStream
 import java.io.File
@@ -118,6 +121,34 @@ object SyncModule {
         onTrimmed = budget::requestTrim,
     ).also { files -> files.areas.forEach(budget::register) }
 
+    /** The library thumbnails (ADR 0018 "W3/C"), one of the budget's areas (evicted last). */
+    @Provides
+    @Singleton
+    fun provideLibraryThumbs(
+        @ApplicationContext context: Context,
+        database: RevealDatabase,
+        accounts: SyncAccountStore,
+        budget: CacheBudget,
+        preferences: LibraryThumbsPreferences,
+        @DataScope scope: CoroutineScope,
+    ): LibraryThumbs = LibraryThumbs(
+        db = database,
+        api = {
+            val account = accounts.account.value
+            val key = accounts.apiKey()
+            if (account == null || key == null) null else SyncApi(account.url, key)
+        },
+        dir = File(context.noBackupFilesDir, LibraryThumbs.DIR),
+        preferences = preferences,
+        scope = scope,
+        cap = budget::cap,
+        onWrite = budget::requestTrim,
+    ).also(budget::register)
+
+    /** The grid's server thumbnails are the library thumbnails (`:core:data`'s optional binding). */
+    @Provides
+    fun provideServerThumbs(thumbs: LibraryThumbs): ServerThumbs = thumbs
+
     @Provides
     @Singleton
     @Suppress("LongParameterList")
@@ -131,6 +162,7 @@ object SyncModule {
         files: ServerFiles,
         trees: DocumentTreeFactory,
         thumbnails: ThumbnailRepository,
+        libraryThumbs: LibraryThumbs,
     ): SyncRepository {
         val version = runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }
             .getOrNull().orEmpty()
@@ -151,6 +183,7 @@ object SyncModule {
             ),
             trees = trees,
             editPreviews = EditPreviews(database, editRenderer(thumbnails)),
+            libraryThumbs = libraryThumbs,
         )
     }
 
@@ -195,7 +228,8 @@ object SyncModule {
         @ApplicationContext context: Context,
         sync: SyncRepository,
         @DataScope scope: CoroutineScope,
-    ): SyncController = SyncController(context, sync, scope)
+        thumbs: LibraryThumbsPreferences,
+    ): SyncController = SyncController(context, sync, scope, thumbs)
 
     private const val MAX_NAME = 100
     private const val MAX_VERSION = 40

@@ -38,4 +38,38 @@ class RangeCacheTest {
         val m = cache.read("a", size.toLong(), size - 5000L, 5000, check, fetch)
         assertThat(check.copyOf(m)).isEqualTo(data.copyOfRange(size - 5000, size))
     }
+
+    @Test
+    fun `a complete file assembles into one exact copy, an incomplete one does not`() {
+        val dir = Files.createTempDirectory("ranges").toFile()
+        val cache = RangeCache(dir)
+        val buffer = ByteArray(1_000_000)
+        cache.read("a", size.toLong(), 0, buffer.size, buffer, fetch)
+        assertThat(cache.complete("a", size.toLong())).isFalse()
+        val partial = java.io.File(dir, "partial")
+        assertThat(cache.assemble("a", size.toLong(), partial)).isFalse()
+        assertThat(partial.exists()).isFalse()
+        var offset = 0L
+        while (offset < size) offset += cache.read("a", size.toLong(), offset, buffer.size, buffer, fetch)
+        assertThat(cache.complete("a", size.toLong())).isTrue()
+        val whole = java.io.File(dir, "whole")
+        assertThat(cache.assemble("a", size.toLong(), whole)).isTrue()
+        assertThat(whole.readBytes()).isEqualTo(data)
+    }
+
+    @Test
+    fun `the trim drops files that are not pinned first`() {
+        val dir = Files.createTempDirectory("ranges").toFile()
+        var cap = Long.MAX_VALUE
+        val cache = RangeCache(dir) { cap }
+        val buffer = ByteArray(RangeCache.BLOCK.toInt())
+        for (key in listOf("pinned", "recent")) {
+            cache.read(key, size.toLong(), 0, buffer.size, buffer, fetch)
+            Thread.sleep(20)
+        }
+        java.io.File(dir, "pinned").setLastModified(1_000)
+        cap = RangeCache.BLOCK
+        cache.trim(pinned = setOf("pinned"))
+        assertThat(cache.files().map { it.first }).containsExactly("pinned")
+    }
 }

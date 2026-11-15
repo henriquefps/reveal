@@ -18,8 +18,7 @@ data class StorageUsage(
 
     /** What "Clear cache" would free (about: other caches written in the last minutes are kept). */
     val clearable: Long
-        get() = get(StorageKind.THUMBNAILS) + get(StorageKind.SERVER_FILES) + get(StorageKind.MASKS) +
-            get(StorageKind.OTHER) +
+        get() = AppStorage.AREA_KINDS.sumOf { get(it) } + get(StorageKind.OTHER) +
             (get(StorageKind.HANDOFF_PREVIEWS) - keptPreviews).coerceAtLeast(0)
 }
 
@@ -45,7 +44,7 @@ class AppStorage(
     suspend fun usage(): StorageUsage = withContext(Dispatchers.IO) {
         val areas = budget.areas().groupBy { it.kind }
         val bytes = LinkedHashMap<StorageKind, Long>()
-        for (kind in listOf(StorageKind.THUMBNAILS, StorageKind.SERVER_FILES, StorageKind.MASKS)) {
+        for (kind in AREA_KINDS) {
             bytes[kind] = areas[kind].orEmpty().sumOf { area -> area.items().sumOf { it.bytes } }
         }
         val local = previewFiles()
@@ -100,10 +99,23 @@ class AppStorage(
     }
 
     companion object {
-        /** The cache directories the budget's areas own (thumbnails, server parts and previews, masks, fills). */
+        /** The kinds the budget's areas hold (each a row of Settings -> Storage). */
+        val AREA_KINDS = listOf(
+            StorageKind.LIBRARY_THUMBNAILS,
+            StorageKind.THUMBNAILS,
+            StorageKind.ORIGINALS_KEPT,
+            StorageKind.SERVER_FILES,
+            StorageKind.MASKS,
+        )
+
+        /**
+         * The cache directories the budget's areas own (thumbnails, server parts, kept originals and previews, masks,
+         * fills). The library thumbnails live in `no_backup` (`library-thumbs`): the system never clears them.
+         */
         val AREA_DIRS = setOf(
             "thumbs",
             "sync-originals",
+            "sync-kept",
             "sync-previews",
             MaskCacheArea.DIR,
             FillCacheArea.DIR,

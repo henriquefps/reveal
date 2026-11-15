@@ -36,7 +36,11 @@ service and no server of its own: it talks to the network only in the two cases 
 
 | When | To where | What is sent | What comes back |
 | --- | --- | --- | --- |
-| Sync (only after you pair a server, docs/adr/0017, 0018) | Your own reveal-sync server, at the address in its pairing QR code | Your edits, ratings, presets, smart previews and, if you turn on the backup, originals; authenticated by the device key from pairing | The other devices' changes; NAS photos you open |
+| Sync (only after you pair a server, docs/adr/0017, 0018) | Your own reveal-sync server, at the address in its pairing QR code | Your edits, ratings, presets, smart previews and, if you turn on the backup, originals; authenticated by the device key from pairing | The other devices' changes; NAS photos you open; small thumbnails of the photos your server holds (asked by their item id, docs/adr/0018 "W3/C") |
 | Import presets from a link (docs/adr/0019 "Import from a link") | The `https` host of the link you pasted or shared, after you confirm it by name | One `GET` of that URL with a generic `User-Agent: Reveal`; no cookies, no identity, nothing about you or your photos | One `.revealpreset` / `.revealpack` (at most 32 MiB), checked like a file you open |
 
 There are no background fetches besides sync: a link is downloaded once, when you tap Download, and never refreshed.
+While paired, sync's background work includes "Keep thumbnails of the whole library" (Settings -> Storage, on by
+default): on an unmetered network while the phone charges or is idle, Reveal fetches from your own server a small
+thumbnail of every photo it holds and keeps them on this device (docs/adr/0018 "W3/C"). Nothing about your photos is
+sent beyond the server's own item ids; turn the switch off to fetch thumbnails only as the grid shows them.

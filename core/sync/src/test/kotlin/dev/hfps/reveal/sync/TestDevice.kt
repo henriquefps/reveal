@@ -114,7 +114,11 @@ class TestDevice(
         )
 
     /** A photo another app handed over (ADR 0011): the JPEG under the "Opened from other apps" source. */
-    fun addHandoffPhoto(stem: String, jpeg: ByteArray): Long = runBlocking {
+    fun addHandoffPhoto(
+        stem: String,
+        jpeg: ByteArray,
+        uri: String = "content://media/external/images/media/${stem.hashCode()}",
+    ): Long = runBlocking {
         val source = db.sourceDao().handoff()?.id ?: db.sourceDao().insert(
             SourceEntity(
                 treeUri = "reveal-handoff:", rootDocumentId = "", displayName = "apps", volumeId = null,
@@ -122,7 +126,6 @@ class TestDevice(
                 kind = dev.hfps.reveal.data.model.SourceKind.HANDOFF,
             ),
         )
-        val uri = "content://media/external/images/media/${stem.hashCode()}"
         val photoId = db.photoDao().insertPhoto(
             PhotoEntity(
                 sourceId = source, folder = uri, folderDocumentId = "", stemKey = stem.lowercase(), name = "$stem.JPG",

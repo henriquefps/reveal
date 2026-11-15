@@ -13,6 +13,7 @@ import androidx.activity.viewModels
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.core.view.doOnPreDraw
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.navigation.NavController
@@ -30,6 +31,7 @@ import dev.hfps.reveal.data.model.PhotoQuery
 import dev.hfps.reveal.data.preset.PresetFilesIo
 import dev.hfps.reveal.data.preset.PresetIntents
 import dev.hfps.reveal.data.preset.PresetRepository
+import dev.hfps.reveal.data.storage.AppStart
 import dev.hfps.reveal.designsystem.theme.RevealTheme
 import dev.hfps.reveal.designsystem.theme.isDark
 import dev.hfps.reveal.feature.editor.EditorRoute
@@ -92,6 +94,9 @@ class MainActivity : ComponentActivity() {
         if (savedInstanceState == null) handleIntent(intent)
         watchServer()
         openedFromIntent = savedInstanceState?.getBoolean(KEY_FROM_INTENT) ?: openedFromIntent
+        // Bulk background work (indexing, access checks, sync, the thumbnail prefetch) waits for the first frame
+        // (ADR 0018 "W3/C": nothing reads files before it).
+        window.decorView.doOnPreDraw { view -> view.post { AppStart.firstFrame() } }
         setContent {
             val mode by themeModeStore.mode.collectAsStateWithLifecycle()
             val navController = rememberNavController()

@@ -26,6 +26,7 @@ import dev.hfps.reveal.data.model.PickFlag
 import dev.hfps.reveal.data.model.SourceFilter
 import dev.hfps.reveal.data.preset.PresetLibrary
 import dev.hfps.reveal.data.preset.PresetRepository
+import dev.hfps.reveal.data.storage.AppStart
 import dev.hfps.reveal.data.storage.StorageVolumes
 import dev.hfps.reveal.data.thumb.ThumbnailRepository
 import dev.hfps.reveal.feature.library.presets.PresetBatchWorker
@@ -129,12 +130,12 @@ class LibraryViewModel @Inject constructor(
     fun onGalleryAccessResult() {
         gallery.setAsked()
         gallery.refresh()
-        viewModelScope.launch { library.checkHandoffs() }
+        library.scheduleAccessCheck(again = true)
     }
 
     /** The app came back (the permission may have changed in the system settings). */
     fun onResumed() {
-        if (gallery.refresh()) viewModelScope.launch { library.checkHandoffs() }
+        if (gallery.refresh()) library.scheduleAccessCheck(again = true)
     }
 
     /** The preset library, for "Apply preset" on the selection (docs/adr/0019 "Batch"). */
@@ -232,16 +233,21 @@ class LibraryViewModel @Inject constructor(
                     }
             }
         }
-        // A new grid re-checks the files marked unreadable (batch, in the background, rate-limited by the
-        // repository): the placeholder marks this device's own unreadable photos in place (no filter, FIX/V).
-        viewModelScope.launch {
-            _state.map { it.gridQuery }.distinctUntilChanged().collectLatest { library.recheckAccess() }
-        }
+        // The hand-offs and the files marked unreadable are checked by one paced background pass after the app
+        // settled (ADR 0018 "W3/C"): never at start, never per grid query (that opened every file in a burst).
+        library.scheduleAccessCheck()
         // Volumes coming and going (SD card, USB drive) re-check the sources and index what came back.
         viewModelScope.launch {
-            volumes.changes().drop(1).debounce(VOLUME_DEBOUNCE_MS).collect { library.refresh() }
+            volumes.changes().drop(1).debounce(VOLUME_DEBOUNCE_MS).collect {
+                library.refresh()
+                library.scheduleAccessCheck(again = true)
+            }
         }
-        viewModelScope.launch { library.refresh() }
+        // The folders' incremental walk waits for the first frame (nothing reads files before it).
+        viewModelScope.launch {
+            AppStart.awaitSettled()
+            library.refresh()
+        }
         viewModelScope.launch {
             edits.clipboard().collect { clip -> _state.update { it.copy(clipboard = clip?.recipe) } }
         }

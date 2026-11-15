@@ -74,6 +74,9 @@ enum class DropResult {
 class SyncApi(baseUrl: String, private val apiKey: String?, private val client: OkHttpClient = defaultClient) {
     private val base: HttpUrl = normalise(baseUrl)
 
+    /** The server's address (normalised): the key of per-server memos. */
+    val baseUrl: String get() = base.toString()
+
     fun health(): HealthResponse = get(url("v1/health"), HealthResponse.serializer(), auth = false)
 
     fun pair(request: PairRequest): PairResponse =
@@ -168,6 +171,42 @@ class SyncApi(baseUrl: String, private val apiKey: String?, private val client: 
             if (response.code == HTTP_NOT_FOUND || response.code == HTTP_ACCEPTED) return null
             check(response)
             response.body.bytes()
+        }
+    }
+
+    // ------------------------------------------------------------------ gallery previews (Hoard ADR 0015, W3/C)
+
+    /**
+     * `POST /v1/items/previews` (≤ `previews.maxWarm`, 500): the state of each item's [size] preview of [edit] (null =
+     * the item's own), with the `v` key of the ready ones; the others are queued on the server, first item first.
+     */
+    fun warmPreviews(itemIds: List<String>, size: String = PREVIEW_THUMB, edit: String? = null): WarmResponse = post(
+        url("v1/items/previews"),
+        WarmRequest.serializer(),
+        WarmRequest(itemIds, listOf(size), edit),
+        WarmResponse.serializer(),
+    )
+
+    /**
+     * `GET /v1/items/{itemId}/preview?size=&format=webp&v=&edit=`: the preview's bytes (with `v`, an immutable URL),
+     * [PreviewAnswer.Pending] while the server makes it (`202`), [PreviewAnswer.Unavailable] (`404`).
+     */
+    fun preview(itemId: String, size: String = PREVIEW_THUMB, v: String? = null, edit: String? = null): PreviewAnswer {
+        val builder = url("v1/items").newBuilder().addPathSegment(itemId).addPathSegment("preview")
+            .addQueryParameter("size", size).addQueryParameter("format", "webp")
+        if (v != null) builder.addQueryParameter("v", v)
+        if (edit != null) builder.addQueryParameter("edit", edit)
+        return client.newCall(authed(Request.Builder().url(builder.build())).build()).execute().use { response ->
+            when (response.code) {
+                HTTP_ACCEPTED -> PreviewAnswer.Pending
+
+                HTTP_NOT_FOUND -> PreviewAnswer.Unavailable
+
+                else -> {
+                    check(response)
+                    PreviewAnswer.Ready(response.body.bytes(), response.header("X-Hoard-Preview-Version") ?: v)
+                }
+            }
         }
     }
 
@@ -766,9 +805,57 @@ data class ServerEdit(
     val deviceId: String = "",
 )
 
-/** An item as the lookup answers it: only what the edited previews need. */
+/**
+ * An item as the lookup answers it (Hoard ADR 0014): what the edited previews and the library need (its capture time,
+ * size and orientation fill a Server photo's header without reading the file, ADR 0018 "W3/C").
+ */
 @Serializable
-data class ServerItem(val id: String, val edits: List<ServerEdit> = emptyList())
+data class ServerItem(
+    val id: String,
+    val edits: List<ServerEdit> = emptyList(),
+    val mainFingerprint: String? = null,
+    val sortTime: Long? = null,
+    val capture: ItemCapture? = null,
+    val width: Int? = null,
+    val height: Int? = null,
+    val orientation: Int? = null,
+)
+
+/** An item's capture time: [local] wall clock (`2024-05-01T10:00:00.500`), [offset] (`-03:00`), [utc] ms. */
+@Serializable
+data class ItemCapture(val local: String? = null, val offset: String? = null, val utc: Long? = null)
+
+@Serializable
+data class WarmRequest(val items: List<String>, val previews: List<String>, val edit: String? = null)
+
+/** One preview's state in a warm answer: `ready` (with [v]), `pending` or `unavailable` ([reason]). */
+@Serializable
+data class WarmPreview(
+    val status: String,
+    val v: String? = null,
+    val width: Int? = null,
+    val height: Int? = null,
+    val webpBytes: Long? = null,
+    val reason: String? = null,
+)
+
+@Serializable
+data class WarmItem(val id: String, val thumb: WarmPreview? = null, val screen: WarmPreview? = null)
+
+@Serializable
+data class WarmResponse(val items: List<WarmItem> = emptyList(), val missing: List<String> = emptyList())
+
+/** What `GET .../preview` answered. */
+sealed interface PreviewAnswer {
+    class Ready(val bytes: ByteArray, val v: String?) : PreviewAnswer
+
+    data object Pending : PreviewAnswer
+
+    data object Unavailable : PreviewAnswer
+}
+
+const val PREVIEW_THUMB = "thumb"
+const val PREVIEW_SCREEN = "screen"
 
 @Serializable
 data class ItemMatch(val fingerprint: String, val itemId: String, val role: String = "")

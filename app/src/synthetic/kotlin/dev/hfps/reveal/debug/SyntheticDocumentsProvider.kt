@@ -56,7 +56,12 @@ class SyntheticDocumentsProvider : DocumentsProvider() {
 
     override fun openDocument(documentId: String, mode: String, signal: CancellationSignal?): ParcelFileDescriptor {
         checkAccess(documentId)
-        val opened = ParcelFileDescriptor.open(file(documentId), ParcelFileDescriptor.parseMode(mode))
+        busyOnce(documentId)
+        val opened = if (File(base, TRACK).isFile) {
+            tracked(documentId, mode)
+        } else {
+            ParcelFileDescriptor.open(file(documentId), ParcelFileDescriptor.parseMode(mode))
+        }
         // A grant that lasts for one read only: every later query or open is refused.
         val once = File(base, ONCE)
         if (once.isFile && documentId in once.readLines()) {
@@ -71,6 +76,53 @@ class SyntheticDocumentsProvider : DocumentsProvider() {
         }
         return opened
     }
+
+    /**
+     * Hoard's busy answer (Hoard ADR 0010, `busy:` prefix): a document listed in `.busy` as `<id> <n>` refuses its next
+     * n opens with a `FileNotFoundException("busy: …")` (tests of the bounded retry, ADR 0018 "W3/C").
+     */
+    private fun busyOnce(documentId: String) {
+        val busy = File(base, BUSY)
+        val refused = busy.isFile && synchronized(LOCK) {
+            val lines = busy.readLines().filter { it.isNotBlank() }
+            val line = lines.firstOrNull { it.substringBeforeLast(' ') == documentId }
+            val left = line?.substringAfterLast(' ')?.toIntOrNull() ?: 0
+            if (line != null && left > 0) {
+                busy.writeText((lines - line + "$documentId ${left - 1}").joinToString("") { "$it\n" })
+            }
+            left > 0
+        }
+        if (refused) throw java.io.FileNotFoundException("busy: 8 hand-off reads in progress, retry")
+    }
+
+    /**
+     * Hoard's descriptor rule (integration contract 11, Hoard 2.0.1): while `.track` exists, the descriptors this
+     * provider hands out are counted until the reader closes them (`.track` holds `<open now> <most at once>`), and
+     * an open beyond [HOARD_MAX_READS] answers `busy:` as Hoard does.
+     */
+    private fun tracked(documentId: String, mode: String): ParcelFileDescriptor {
+        synchronized(LOCK) {
+            val (now, most) = readTrack()
+            if (now >= HOARD_MAX_READS) {
+                throw java.io.FileNotFoundException("busy: $now hand-off reads in progress, retry")
+            }
+            writeTrack(now + 1, maxOf(most, now + 1))
+        }
+        val handler = android.os.Handler(android.os.Looper.getMainLooper())
+        return ParcelFileDescriptor.open(file(documentId), ParcelFileDescriptor.parseMode(mode), handler) {
+            synchronized(LOCK) {
+                val (now, most) = readTrack()
+                writeTrack((now - 1).coerceAtLeast(0), most)
+            }
+        }
+    }
+
+    private fun readTrack(): Pair<Int, Int> {
+        val parts = File(base, TRACK).readText().trim().split(' ')
+        return (parts.getOrNull(0)?.toIntOrNull() ?: 0) to (parts.getOrNull(1)?.toIntOrNull() ?: 0)
+    }
+
+    private fun writeTrack(now: Int, most: Int) = File(base, TRACK).writeText("$now $most")
 
     private fun checkAccess(documentId: String) {
         val refused = File(base, REFUSED).takeIf { it.isFile }?.readLines().orEmpty()
@@ -129,6 +181,22 @@ class SyntheticDocumentsProvider : DocumentsProvider() {
         const val ROOT_DOCUMENT = ""
         private const val REFUSED = ".refused"
         private const val ONCE = ".refuse-after-open"
+        private const val BUSY = ".busy"
+        private const val TRACK = ".track"
+
+        /** Hoard 2.0.1's concurrent hand-off reads (`MAX_READS`). */
+        const val HOARD_MAX_READS = 6
+
+        /** Starts counting this provider's open descriptors (Hoard's rule); [tracking] reads them. */
+        fun track(filesDir: File) = File(filesDir, "$DIRECTORY/$TRACK").apply { parentFile?.mkdirs() }.writeText("0 0")
+
+        /** Descriptors open now and the most open at once since [track]. */
+        fun tracking(filesDir: File): Pair<Int, Int> {
+            val parts = File(filesDir, "$DIRECTORY/$TRACK").takeIf { it.isFile }?.readText()?.trim()?.split(' ')
+            return (parts?.getOrNull(0)?.toIntOrNull() ?: 0) to (parts?.getOrNull(1)?.toIntOrNull() ?: 0)
+        }
+
+        fun stopTracking(filesDir: File) = File(filesDir, "$DIRECTORY/$TRACK").delete()
         private const val UNKNOWN = "unknown:"
         private val LOCK = Any()
 
@@ -148,6 +216,22 @@ class SyntheticDocumentsProvider : DocumentsProvider() {
             file.parentFile?.mkdirs()
             file.appendText(documentId + "\n")
         }
+
+        /** [documentId]'s next [opens] opens answer "busy" (Hoard ADR 0010). */
+        fun busy(filesDir: File, documentId: String, opens: Int) {
+            val file = File(filesDir, "$DIRECTORY/$BUSY")
+            file.parentFile?.mkdirs()
+            synchronized(LOCK) {
+                val kept = file.takeIf { it.isFile }?.readLines().orEmpty()
+                    .filter { it.isNotBlank() && it.substringBeforeLast(' ') != documentId }
+                file.writeText((kept + "$documentId $opens").joinToString("") { "$it\n" })
+            }
+        }
+
+        /** How many "busy" answers [documentId] still has. */
+        fun busyLeft(filesDir: File, documentId: String): Int = File(filesDir, "$DIRECTORY/$BUSY").takeIf { it.isFile }
+            ?.readLines()?.firstOrNull { it.substringBeforeLast(' ') == documentId }?.substringAfterLast(' ')
+            ?.toIntOrNull() ?: 0
 
         fun allow(filesDir: File, documentId: String) {
             for (name in listOf(REFUSED, ONCE)) {

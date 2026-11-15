@@ -497,3 +497,21 @@ server does not have keep working, with Hoard's `busy:` retry (Hoard ADR 0010) a
 
 Item limit 500; the tiebreak is the ordinal `deviceId`; Hoard learns Reveal's pairing from the server's device grouping
 (Hoard ADR 0017), with no provider (different signing keys); no fingerprint-only references for now; `CULLING_VERSION` 2.
+
+## Amendment W3/C (0.9.0, docs/adr/0018 "W3/C")
+
+- **Access checks are a paced background pass**, never a burst: `checkHandoffs`/`recheckAccess` no longer run at start
+  or per grid query. `LibraryRepository.scheduleAccessCheck` runs one pass after the first frame: files the server
+  holds are skipped (shown and edited from the server's copy), files checked in the last 6 h are skipped
+  (`photo_files.checked_at`, DB v14), documents with a read grant this process holds (persisted, or the sender's
+  temporary one, `checkUriPermission`) count as readable without an open, and every open waits for one of
+  `FileOpens`' 4 app-wide slots, ≥ 100 ms apart. A gallery permission change reopens the unreadable ones at once.
+  "Try again" and the viewer check the photos the user looks at.
+- **Busy senders** (Hoard ADR 0010, Hoard 2.0.1): a `FileNotFoundException` whose message starts exactly with `busy:`
+  (`PROVIDER_BUSY_PREFIX`) is retried, 250 ms doubling to 4 s, for about 30 s, then a transient failure: never
+  `unreadable_at`. Any other `FileNotFoundException` keeps its meaning.
+- **A hand-off the server holds becomes a Server photo** (`SyncStore.adoptHandoffs`): it keeps its identity, edits,
+  culling and `handoff_at` ("Opened from other apps" lists Server photos with a hand-off time), and a later share of
+  the same file opens it (a Server photo is reusable like a folder photo). Its sidecar link goes (no sidecar for server
+  items, "Amendment W3/H"). Only the files the server holds move, and the photo never becomes deletable by the
+  server's records or the NAS feed (docs/adr/0018 "Hand-offs the server holds become Server photos").

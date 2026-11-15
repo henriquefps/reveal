@@ -30,6 +30,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
  * | 13 | Culling sync and edited previews (ADR 0027): `culling_records`, `culling_files`, `culling_pending`, |
  * |    | `sidecar_culling`, `edit_uploads` |
  * |    | ([Migration12To13] fills `sidecar_culling` from the photos' sidecar values) |
+ * | 14 | Large libraries (ADR 0018 "W3/C"): `server_thumbs` (library thumbnails), `photo_files.checked_at` |
  *
  * Open it with [configure] (migrations and the sync triggers of [SyncTriggers]).
  */
@@ -61,6 +62,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         CullingPendingEntity::class,
         SidecarCullingEntity::class,
         EditUploadEntity::class,
+        ServerThumbEntity::class,
     ],
     version = RevealDatabase.VERSION,
     exportSchema = true,
@@ -70,6 +72,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         AutoMigration(from = 7, to = 8), AutoMigration(from = 8, to = 9),
         AutoMigration(from = 9, to = 10), AutoMigration(from = 11, to = 12),
         AutoMigration(from = 12, to = 13, spec = RevealDatabase.Migration12To13::class),
+        AutoMigration(from = 13, to = 14),
     ],
 )
 abstract class RevealDatabase : RoomDatabase() {
@@ -93,6 +96,8 @@ abstract class RevealDatabase : RoomDatabase() {
 
     abstract fun editUploadDao(): EditUploadDao
 
+    abstract fun serverThumbDao(): ServerThumbDao
+
     /**
      * 12 -> 13 (ADR 0027): the culling tables are new; `sidecar_culling` starts as what each photo's sidecar held when
      * it was last applied (the photo's own values: before 0.8 a sidecar import set all three), so the first change of
@@ -111,7 +116,7 @@ abstract class RevealDatabase : RoomDatabase() {
 
     companion object {
         const val NAME = "reveal.db"
-        const val VERSION = 13
+        const val VERSION = 14
 
         /** Every manual migration, for `Room.databaseBuilder(...).addMigrations(*MIGRATIONS)`. */
         val MIGRATIONS: Array<Migration> get() = arrayOf(MIGRATION_4_5, MIGRATION_10_11)

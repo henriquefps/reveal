@@ -311,6 +311,7 @@ class SyncEngine(
         const val KEY_PHYSICAL_DEVICE = "sync.device.physical"
         const val FEATURE_CULLING = "culling"
         const val FEATURE_DEVICE_IDENTITY = "device-identity"
+        const val FEATURE_ITEMS = "items"
 
         /** The one-off clean-up of 0.5.3 is done (its version), and its re-pull is done (a run cut short resumes). */
         const val KEY_CLEANUP = "sync.cleanup"

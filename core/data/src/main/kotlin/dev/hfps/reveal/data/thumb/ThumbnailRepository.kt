@@ -80,6 +80,11 @@ class ThumbnailRepository(
     private val onTrimmed: () -> Unit = {},
     /** The AI masks of edited thumbnails (docs/adr/0022 "M4/F"); null = AI mask parts are left out, as before. */
     private val aiMasks: AiMasks? = null,
+    /**
+     * The server's grid thumbnails (ADR 0018 "W3/C"): Server photos and hand-offs whose file the server holds show
+     * them, never a read of the file through a content provider; null without sync (tests).
+     */
+    private val serverThumbs: (() -> ServerThumbs?)? = null,
 ) : CacheArea {
     private val fallbacks = HandoffFallbacks(db, previews, serverAuthority)
     private val cache = db.cacheDao()
@@ -144,6 +149,11 @@ class ThumbnailRepository(
         val identity: FileIdentity,
         /** A Server photo: a failed read means the server is out of reach, never that the file is unreadable. */
         val server: Boolean = false,
+        /**
+         * The file the server's thumbnail is asked for (ADR 0018 "W3/C"): a Server photo's or a hand-off's file the
+         * server holds (its RAW first), null for folder photos (their file is on this device) and files it lacks.
+         */
+        val serverPrint: String? = null,
     ) {
         /** [error] says this device's file cannot be read (access refused or gone); never for a Server photo. */
         fun refused(error: Throwable): Boolean = !server && isAccessError(error)
@@ -151,7 +161,8 @@ class ThumbnailRepository(
 
     private suspend fun target(photoId: Long): Target? {
         val photo = photos.get(photoId)
-        val server = photo?.let { db.sourceDao().get(it.sourceId) }?.kind == SourceKind.SERVER
+        val kind = photo?.let { db.sourceDao().get(it.sourceId) }?.kind
+        val server = kind == SourceKind.SERVER
         // A Server photo's thumbnail comes from a file the server holds (FIX/V).
         val files = photos.files(photoId).let { all -> if (server) ServerTree.reachable(all) { it.onServer } else all }
         val main = files.firstOrNull { it.role == FileRole.RAW } ?: files.firstOrNull { it.role == FileRole.RENDERED }
@@ -166,6 +177,12 @@ class ThumbnailRepository(
             },
             identity,
             server,
+            serverPrint = if (kind == SourceKind.FOLDER) {
+                null
+            } else {
+                files.filter { it.onServer && it.fingerprint != null }
+                    .sortedBy { if (it.role == FileRole.RAW) 0 else 1 }.firstOrNull()?.fingerprint
+            },
         )
     }
 
@@ -185,8 +202,33 @@ class ThumbnailRepository(
         }
         val key = editedKey(target, versionId, editTime, ai = false)
         return withMasks ?: fromDisk(key, sample)
+            ?: serverEdit(target, versionId)?.also {
+                save(key, target.photoId, KIND_EDITED, it)
+            }?.let { shrink(it, sample) }
             ?: renderEdited(target, versionId, editTime)?.also { save(key, target.photoId, KIND_EDITED, it) }
                 ?.let { shrink(it, sample) }
+    }
+
+    /**
+     * The server's preview of an edit another device made (Hoard ADR 0020) of a photo whose file the server holds
+     * (ADR 0018 "W3/C"): the grid shows it rather than downloading the original to render it here. Null for edits of
+     * this device (their render is newer than what the server has) or when the server has none.
+     */
+    @Suppress("ReturnCount")
+    private suspend fun serverEdit(target: Target, versionId: Long): Bitmap? {
+        val print = target.serverPrint ?: return null
+        val version = db.versionDao().version(versionId) ?: return null
+        val device = version.editDevice
+        if (device == null || device == EditRepository.THIS_DEVICE) return null
+        val thumbs = serverThumbs?.invoke() ?: return null
+        return try {
+            thumbs.editedThumbnail(print, version.uuid)?.let { scaleTo(it, EDGE) }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
+            Log.i(TAG, "No server edit for version $versionId: ${e.javaClass.simpleName}")
+            null
+        }
     }
 
     private fun editedKey(target: Target, versionId: Long, editTime: Long, ai: Boolean) = CacheKeys.key(
@@ -364,17 +406,49 @@ class ThumbnailRepository(
         }
     }
 
+    @Suppress("ReturnCount")
     private suspend fun loadPreview(target: Target, sample: Int = 1): Bitmap? {
         val key = CacheKeys.key(target.identity, Variant.THUMB, EDGE)
-        return fromDisk(key, sample)
-            ?: decodePreview(target)?.also { save(key, target.photoId, KIND_PREVIEW, it) }?.let { shrink(it, sample) }
+        fromDisk(key, sample)?.let { return it }
+        when (val thumb = serverThumb(target)) {
+            is ServerThumb.Image -> return scaleTo(thumb.bitmap, EDGE / sample)
+            ServerThumb.Later -> return null
+            ServerThumb.NotServed, null -> Unit
+        }
+        return decodePreview(target)?.also { save(key, target.photoId, KIND_PREVIEW, it) }?.let { shrink(it, sample) }
+    }
+
+    /** The server's thumbnail of [target]'s file (ADR 0018 "W3/C"), or null when it has none to offer. */
+    @Suppress("ReturnCount")
+    private suspend fun serverThumb(target: Target): ServerThumb? {
+        val print = target.serverPrint ?: return null
+        val thumbs = serverThumbs?.invoke() ?: return null
+        return try {
+            thumbs.thumbnail(print)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
+            Log.i(TAG, "No server thumbnail for photo ${target.photoId}: ${e.javaClass.simpleName}")
+            ServerThumb.Later
+        }
+    }
+
+    /** [bitmap] scaled down so its long edge is at most [edge] (a library thumbnail is already small). */
+    private fun scaleTo(bitmap: Bitmap, edge: Int): Bitmap {
+        val long = maxOf(bitmap.width, bitmap.height)
+        if (long <= edge) return bitmap
+        val scale = edge.toFloat() / long
+        return bitmap.scale(
+            (bitmap.width * scale).toInt().coerceAtLeast(1),
+            (bitmap.height * scale).toInt().coerceAtLeast(1),
+        )
     }
 
     /** An available source's tree, or null (unplugged, access lost, removed). */
     private suspend fun availableTree(sourceId: Long): DocumentTree? =
         db.sourceDao().get(sourceId)?.takeIf { it.state == SourceState.AVAILABLE }?.let(trees::open)
 
-    @Suppress("ReturnCount")
+    @Suppress("ReturnCount", "CyclomaticComplexMethod")
     private suspend fun decodePreview(target: Target): Bitmap? {
         val tree = availableTree(target.sourceId) ?: return null
         val main = target.main
@@ -392,6 +466,7 @@ class ThumbnailRepository(
                 // A hand-off whose grant ended (ADR 0011): remember it, and show its local preview.
                 photos.setUnreadable(main.documentId, clock())
                 localPreview(main)?.let { return it }
+                (serverThumb(target) as? ServerThumb.Image)?.let { return scaleTo(it.bitmap, EDGE) }
                 serverPreview(main)?.let { return it }
                 Log.i(TAG, "No access to photo ${target.photoId} and no preview")
                 return null

@@ -87,6 +87,18 @@
     <string name="storage_section_used">What Reveal stores</string>
     <string name="storage_thumbnails">Thumbnails</string>
     <string name="storage_thumbnails_note">Grid and filmstrip pictures, made again when needed</string>
+    <string name="storage_library_thumbs">Library thumbnails</string>
+    <string name="storage_library_thumbs_note">Small pictures of every photo on your server, so the grid works offline</string>
+    <string name="storage_originals_kept">Originals kept</string>
+    <string name="storage_originals_kept_note">Server originals you opened or edited lately, so they open again at once</string>
+    <string name="storage_section_library_thumbs">Library thumbnails</string>
+    <string name="storage_keep_library_thumbs">Keep thumbnails of the whole library</string>
+    <string name="storage_keep_library_thumbs_note">Fetched from your server on Wi-Fi while charging or idle; the grid then scrolls offline. They go last when the cache is full.</string>
+    <plurals name="storage_keep_library_thumbs_count">
+        <item quantity="one">%1$d of %2$d photo, %3$s. Fetched on Wi-Fi while charging or idle.</item>
+        <item quantity="other">%1$d of %2$d photos, %3$s. Fetched on Wi-Fi while charging or idle.</item>
+    </plurals>
+    <string name="storage_clear_library_thumbs">Clear library thumbnails</string>
     <string name="storage_server_files">Server files</string>
     <string name="storage_server_files_note">Parts of originals and previews from your server, kept while you view them</string>
     <string name="storage_handoff_previews">Photos from other apps</string>

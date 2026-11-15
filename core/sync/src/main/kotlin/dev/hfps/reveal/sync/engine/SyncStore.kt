@@ -5,6 +5,7 @@ package dev.hfps.reveal.sync.engine
 import androidx.room.withTransaction
 import dev.hfps.image.format.ImageFormats
 import dev.hfps.image.format.ImageKind
+import dev.hfps.reveal.data.db.ADOPT_FAILED_PREFIX
 import dev.hfps.reveal.data.db.HistoryCursorEntity
 import dev.hfps.reveal.data.db.HistoryEntity
 import dev.hfps.reveal.data.db.MetaEntity

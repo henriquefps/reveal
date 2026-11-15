@@ -62,9 +62,26 @@ class ServerFiles(
     /** Whole originals of photos opened in the editor (ADR 0018 "W3/C"): `<fingerprint hex>`, served as files. */
     private val kept = File(cacheDir, KEPT_DIR)
     private val keeping = ConcurrentHashMap.newKeySet<String>()
-    private val keeper = java.util.concurrent.Executors.newSingleThreadExecutor { r ->
-        Thread(r, "reveal-keep-original")
+
+    /** One download at a time, at most [KEEP_QUEUE] waiting: the rest (a big export) is read by range, not kept. */
+    private val keeper = java.util.concurrent.ThreadPoolExecutor(
+        1,
+        1,
+        0L,
+        java.util.concurrent.TimeUnit.MILLISECONDS,
+        java.util.concurrent.ArrayBlockingQueue(KEEP_QUEUE),
+        { r -> Thread(r, "reveal-keep-original") },
+        { job, _ -> (job as KeepJob).skipped() },
+    )
+
+    private class KeepJob(private val body: () -> Unit, private val onSkipped: () -> Unit) : Runnable {
+        override fun run() = body()
+
+        fun skipped() = onSkipped()
     }
+
+    /** Originals being downloaded or waiting to be (tests). */
+    internal val pendingKeeps: Int get() = keeping.size
 
     @Volatile
     private var pinnedAt = 0L
@@ -101,12 +118,17 @@ class ServerFiles(
     /**
      * Downloads the rest of [remote] in the background and keeps it as one file (ADR 0018 "W3/C"): an original opened
      * in the editor or the export then opens from this device, whole, as a plain file. One at a time; nothing when it
-     * is kept already or being kept. The blocks are dropped once the file is complete.
+     * is kept already or being kept, or when [KEEP_QUEUE] others already wait (a 500-photo export reads by range instead
+     * of queueing 500 downloads). The blocks are dropped once the file is complete.
      */
     fun keep(fingerprint: String, remote: RemoteFile) {
         val key = fingerprint.removePrefix("v1:")
         if (File(kept, key).isFile || !keeping.add(key)) return
-        keeper.execute {
+        keeper.execute(KeepJob(body = { keepNow(key, remote) }, onSkipped = { keeping.remove(key) }))
+    }
+
+    private fun keepNow(key: String, remote: RemoteFile) {
+        run {
             try {
                 val buffer = ByteArray(RangeCache.BLOCK.toInt())
                 var offset = 0L
@@ -287,6 +309,7 @@ class ServerFiles(
         const val NEGATIVE_MS = 5 * 60 * 1000L
         const val HTTP_UNAVAILABLE = 503
         const val PREVIEW_CACHE_BYTES = 512L * 1024 * 1024
+        const val KEEP_QUEUE = 4
         const val KEPT_DIR = "sync-kept"
         const val PINNED_PHOTOS = 50
         const val PINNED_DAYS = 7L

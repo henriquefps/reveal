@@ -14,11 +14,13 @@ import java.io.FileNotFoundException
  *   no longer serves the URI (`Unknown URI`, `Invalid document id`);
  * - any message that says so (`Permission Denial`, `no access to`), whatever the type.
  *
- * Other failures (a damaged file, no memory, a decoder's own `IllegalArgumentException`) are not about access. One
- * helper for the editor's opener, thumbnails, the viewer, sync and export.
+ * Other failures (a damaged file, no memory, a decoder's own `IllegalArgumentException`) are not about access, and
+ * neither is a busy provider ([PROVIDER_BUSY_PREFIX], Hoard ADR 0010: retried, never marked unreadable). One helper for
+ * the editor's opener, thumbnails, the viewer, sync and export.
  */
 @Suppress("ReturnCount")
 fun isAccessError(error: Throwable): Boolean {
+    if (isProviderBusy(error)) return false
     var e: Throwable? = error
     var depth = 0
     while (e != null && depth++ < MAX_DEPTH) {

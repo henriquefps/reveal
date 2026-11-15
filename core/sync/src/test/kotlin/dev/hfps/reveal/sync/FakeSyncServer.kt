@@ -104,6 +104,9 @@ class FakeSyncServer : Dispatcher() {
     /** Edited previews (hoard-server 0.9.0). */
     val edits = FakeEdits(culling) { clock() }
 
+    /** Gallery previews (hoard-server 0.6.0, Hoard ADR 0015). */
+    val previews = FakePreviews(culling)
+
     /** Turns on what hoard-server 0.7.0+ lists ([edits]: 0.9.0 with previews on). */
     fun hoard(edits: Boolean = false) {
         features.clear()
@@ -200,6 +203,10 @@ class FakeSyncServer : Dispatcher() {
 
             path == "/v1/items/lookup" && "items" in features ->
                 ok(edits.lookup(json.parseToJsonElement(request.body!!.utf8()).jsonObject))
+
+            path == "/v1/items/previews" && method == "POST" && "previews" in features -> previews.warm(request)
+
+            path.matches(Regex("/v1/items/[^/]+/preview")) && "previews" in features -> previews.get(request)
 
             path.matches(Regex("/v1/items/[^/]+/edits/[^/]+")) && "edits" in features -> {
                 val parts = url.pathSegments
@@ -678,6 +685,18 @@ class FakeSyncServer : Dispatcher() {
             put("removed", false)
         }
         nasBytes[fingerprint] = bytes
+    }
+
+    /** The NAS feed reports [path] of [folderId] as removed. */
+    fun removeNasFile(folderId: String, path: String) {
+        nasFiles += buildJsonObject {
+            put("folderId", folderId)
+            put("folderName", "NAS")
+            put("path", path)
+            put("size", 0)
+            put("modifiedAt", 1_700_000_000_000L)
+            put("removed", true)
+        }
     }
 
     fun record(kind: String, id: String): Record? = records[kind to id]

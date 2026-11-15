@@ -95,6 +95,8 @@ data class FingerprintMatch(
     @ColumnInfo(name = "source_kind") val sourceKind: SourceKind,
     @ColumnInfo(name = "source_state") val sourceState: SourceState,
     @ColumnInfo(name = "photo_hidden") val photoHidden: Boolean,
+    /** The photo was opened from another app (an adopted hand-off is one) or has an edit: the one to keep. */
+    @ColumnInfo(name = "photo_kept") val photoKept: Boolean = false,
 )
 
 /** What the incremental walk compares a listed shot with. */
@@ -177,7 +179,7 @@ interface PhotoDao {
      * version: a virtual copy counts once more (docs/adr/0025).
      */
     @Query(
-        "SELECT COALESCE(SUM(p.handoff_at IS NOT NULL AND NOT " + PhotoQuerySql.SERVER_SOURCE_SQL + "), 0) " +
+        "SELECT COALESCE(SUM(p.handoff_at IS NOT NULL), 0) " +
             "AS from_apps, COALESCE(SUM(" + PhotoQuerySql.SERVER_SOURCE_SQL + "), 0) AS server_only, " +
             "COALESCE(SUM(p.flag = 'PICK'), 0) AS picked, COALESCE(SUM(p.rating >= 1), 0) AS starred, " +
             "COALESCE(SUM(p.flag = 'REJECT'), 0) AS rejected, " +
@@ -341,7 +343,8 @@ interface PhotoDao {
     // ---- content fingerprints (ADR 0006 "Identity")
 
     @Query(
-        "SELECT f.*, s.kind AS source_kind, s.state AS source_state, p.hidden AS photo_hidden FROM photo_files f " +
+        "SELECT f.*, s.kind AS source_kind, s.state AS source_state, p.hidden AS photo_hidden, " +
+            "(p.handoff_at IS NOT NULL OR p.has_edit = 1) AS photo_kept FROM photo_files f " +
             "JOIN photos p ON p.id = f.photo_id JOIN sources s ON s.id = f.source_id " +
             "WHERE f.fingerprint IN (:fingerprints) ORDER BY f.id",
     )
@@ -403,6 +406,20 @@ interface PhotoDao {
         "UPDATE photo_files SET unreadable_at = :time WHERE document_id = :documentId AND unreadable_at IS NULL",
     )
     suspend fun setUnreadable(documentId: String, time: Long): Int
+
+    /**
+     * The file fingerprints of the [limit] photos opened most recently since [since] (ADR 0018 "W3/C"): their server
+     * originals stay on this device (pinned) while the cache budget allows.
+     */
+    @Query(
+        "SELECT f.fingerprint FROM photo_files f WHERE f.fingerprint IS NOT NULL AND f.photo_id IN " +
+            "(SELECT id FROM photos WHERE last_opened_at > :since ORDER BY last_opened_at DESC LIMIT :limit)",
+    )
+    suspend fun recentlyOpenedFingerprints(since: Long, limit: Int): List<String>
+
+    /** When the access check last looked at [documentId] (ADR 0018 "W3/C"). */
+    @Query("UPDATE photo_files SET checked_at = :time WHERE document_id = :documentId")
+    suspend fun setChecked(documentId: String, time: Long): Int
 
     /** Clears the mark of [documentId]: it was read again. */
     @Query("UPDATE photo_files SET unreadable_at = NULL WHERE document_id = :documentId AND unreadable_at IS NOT NULL")
@@ -476,11 +493,14 @@ interface PhotoDao {
     )
     suspend fun setHandoffAt(id: Long, at: Long, title: String?)
 
-    /** Folder photos beyond the newest [keep] of "Opened from other apps" leave it (the photos stay). */
+    /**
+     * Folder and Server photos (adopted hand-offs, ADR 0018 "W3/C") beyond the newest [keep] of "Opened from other
+     * apps" leave it (the photos stay).
+     */
     @Query(
         "UPDATE photos SET handoff_at = NULL, handoff_title = NULL WHERE id IN (SELECT p.id FROM photos p WHERE " +
             "p.handoff_at IS NOT NULL ORDER BY p.handoff_at DESC, p.id DESC LIMIT -1 OFFSET :keep) AND " +
-            "source_id IN (SELECT id FROM sources WHERE kind = 'FOLDER')",
+            "source_id IN (SELECT id FROM sources WHERE kind IN ('FOLDER', 'SERVER'))",
     )
     suspend fun clearStaleFolderHandoffs(keep: Int)
 

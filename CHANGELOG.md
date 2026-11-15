@@ -6,10 +6,30 @@ All notable changes to Reveal are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- A large library no longer stalls the phone at start (W3/C, docs/adr/0018 "W3/C"): with about 21,000 photos on the
+  server, every grid thumbnail of a server photo and every server header opened the original through a content
+  provider proxy (an appfuse mount through the storage service per photo), and the photos other apps handed over were
+  all opened again at start and on every filter change. Now nothing reads files before the first frame, the server
+  describes its photos (capture time, size, orientation) without any file being opened, the grid shows the server's
+  thumbnails, other apps' files are opened at most four at a time, paced, and the access check of photos from other
+  apps runs once in the background, skipping the photos your server holds.
+- Hoard's "busy" answer (Hoard 2.0.1) is waited out instead of marking a photo from Hoard unreadable.
+- Re-opening a server photo you opened or edited lately is instant: its original stays on this device (the last 50
+  opened in 7 days), whole, and opens as a plain file.
+
+### Added
+- Library thumbnails: a small thumbnail of every photo on your server, kept on this device so the grid scrolls offline;
+  fetched on Wi-Fi while the phone charges or is idle (Settings -> Storage -> "Keep thumbnails of the whole library", on
+  by default; about 16 KB per photo, evicted last).
+- Settings -> Storage lists library thumbnails and kept originals as their own rows.
+
 ### Changed
 - Hand-off contract (W3/H, docs/adr/0011 "Amendment W3/H"): photos the sender's paired server holds are handed over as
   server references (`SERVER_ITEMS`) instead of content URIs, and `CULLING_VERSION` 2 adds per-field dates and authors
   for URI items (last writer wins, equal times broken by the ordinal device id).
+- Photos handed over from other apps whose file your server holds become server photos (same edits, ratings, versions;
+  they stay in "Opened from other apps"), so Reveal reads your server's copy rather than the other app's file.
 
 ## [0.8.0] - 2026-11-15
 

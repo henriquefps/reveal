@@ -5,6 +5,8 @@ package dev.hfps.reveal.sync.engine
 import androidx.room.withTransaction
 import dev.hfps.image.format.ImageFormats
 import dev.hfps.image.format.ImageKind
+import dev.hfps.reveal.data.db.ADOPT_FAILED_PREFIX
+import dev.hfps.reveal.data.db.FingerprintMatch
 import dev.hfps.reveal.data.db.HistoryCursorEntity
 import dev.hfps.reveal.data.db.HistoryEntity
 import dev.hfps.reveal.data.db.MetaEntity
@@ -437,8 +439,11 @@ class SyncStore(
                 sync.setPhotoUuid(photo.id, survivor)
                 return true
             }
-            // Only photos that live on the server alone go away; a file on this device stays in its folder.
-            if (photo.sourceId == serverSource().id) {
+            // Only photos that live on the server alone go away; a file on this device stays in its folder. A hand-off
+            // the server adopted (`handoff_at`) was never deletable by the server: it stays (with its edits and
+            // culling), only the server's copies are forgotten (its files then read as unavailable, like a hand-off
+            // whose grant ended, until the user forgets it).
+            if (photo.sourceId == serverSource().id && photo.handoffAt == null) {
                 photos.deletePhotos(listOf(photo.id))
             } else {
                 forgetServerCopies(photo.id)
@@ -823,6 +828,7 @@ class SyncStore(
         if (!type.isDisplayable) return
         // The same file on this device (a folder or a hand-off): it is "in the cloud", nothing to add.
         val local = photos.filesByFingerprint(listOf(fingerprint))
+        if (keepAdopted(source, fingerprint, local)) return
         val elsewhere = local.firstOrNull { it.file.sourceId != source.id }
         if (elsewhere != null) {
             sync.setOnServer(fingerprint, true)
@@ -862,6 +868,19 @@ class SyncStore(
             sync.setServerFolder(photoId, folder)
         }
         markOriginal(photoId, SOURCE_NAS)
+    }
+
+    /**
+     * A hand-off the server adopted keeps its own file row (and its photo): the feed never replaces it, so a later
+     * rename or removal on the NAS cannot empty the photo (adoption must not make a hand-off deletable).
+     */
+    private suspend fun keepAdopted(source: SourceEntity, fingerprint: String, local: List<FingerprintMatch>): Boolean {
+        val adopted = local.firstOrNull {
+            it.file.sourceId == source.id && it.file.relativePath.startsWith(ADOPTED_PREFIX)
+        } ?: return false
+        sync.setOnServer(fingerprint, true)
+        if (isMainFile(adopted.file)) markOriginal(adopted.file.photoId, SOURCE_NAS)
+        return true
     }
 
     private suspend fun newNasPhoto(
@@ -923,6 +942,68 @@ class SyncStore(
         sync.putCloud(cloud.copy(originalOnServer = source != null, originalSource = source, checkedAt = clock()))
     }
 
+    // ------------------------------------------------------------------ hand-offs the server holds
+
+    /** What one adoption batch did: photos moved, and photos that failed (marked, skipped until [ADOPT_RETRY_MS]). */
+    data class Adopted(val moved: Int, val failed: Int)
+
+    /**
+     * Makes [photoIds] (hand-off photos whose main file the server holds) Server photos, in place (ADR 0018 "W3/C"):
+     * the same row keeps its uuid, versions, edits, history, culling and `handoff_at` (it stays in "Opened from other
+     * apps"); the files **the server holds** (`on_server`, with a fingerprint) take the server's document ids, so the
+     * grid, the viewer, the editor and the export read the server's copy and never open the sending app's URI again;
+     * every other file stays as it is (a JPEG of a pair the server does not hold is still read from the sender). The
+     * sidecar link goes (culling rides the server, docs/adr/0011 "Amendment W3/H"). Quiet: nothing changes for other
+     * devices.
+     *
+     * One photo per transaction: a photo that fails (a unique path clash is made unique first; anything else is
+     * logged) is marked ([ADOPT_FAILED_PREFIX]) and skipped until [ADOPT_RETRY_MS] have passed, so it never blocks
+     * the others, the batch or the sync. Reusable for photos handed over by server reference.
+     */
+    suspend fun adoptBatch(photoIds: List<Long>): Adopted {
+        var moved = 0
+        var failed = 0
+        for (photoId in photoIds) {
+            try {
+                if (quietly { adoptOne(photoId) }) moved++
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
+                failed++
+                android.util.Log.w("RevealSync", "adopting hand-off photo $photoId failed: ${e.javaClass.simpleName}")
+                runCatching { db.metaDao().put(MetaEntity(ADOPT_FAILED_PREFIX + photoId, clock().toString())) }
+            }
+        }
+        return Adopted(moved, failed)
+    }
+
+    suspend fun adoptHandoffs(photoIds: List<Long>): Int = adoptBatch(photoIds).moved
+
+    private suspend fun adoptOne(photoId: Long): Boolean {
+        val source = serverSource()
+        val keep = photos.files(photoId).filter {
+            it.onServer && it.fingerprint != null && it.role != FileRole.OTHER && it.sourceId != source.id
+        }
+        if (keep.isEmpty()) return false
+        for (file in keep) {
+            val print = checkNotNull(file.fingerprint)
+            var path = "$ADOPTED_PREFIX$print/${file.name}"
+            // The same file under the same name in two hand-offs (backfilled fingerprints): the unique path.
+            if (sync.serverFileByPath(source.id, path) != null) path = "$ADOPTED_PREFIX$print/${file.id}/${file.name}"
+            sync.adoptFile(file.id, source.id, path, ServerTree.documentId(print, file.name))
+        }
+        sync.adoptPhoto(photoId, source.id)
+        markOriginal(photoId, sync.cloud(photoId)?.originalSource ?: SOURCE_NAS)
+        return true
+    }
+
+    /** One batch of [adoptBatch] over what is adoptable now (`moved + failed` = 0: none left to try). */
+    suspend fun adoptNext(limit: Int = ADOPT_BATCH): Adopted =
+        adoptBatch(sync.adoptableHandoffs(limit, clock() - ADOPT_RETRY_MS))
+
+    /** One batch of [adoptHandoffs] over what is adoptable now; returns how many moved (0 = none left). */
+    suspend fun adoptHandoffs(limit: Int = ADOPT_BATCH): Int = adoptNext(limit).moved
+
     // ------------------------------------------------------------------ the Server source
 
     /** The single Server source (created on first use). */
@@ -972,6 +1053,15 @@ class SyncStore(
 
         /** Records applied per transaction (a few milliseconds each on a phone). */
         const val APPLY_CHUNK = 50
+
+        /** Hand-off photos looked at per batch ([adoptBatch], one transaction each). */
+        const val ADOPT_BATCH = 100
+
+        /** A hand-off whose adoption failed is tried again after this long. */
+        const val ADOPT_RETRY_MS = 6 * 60 * 60 * 1000L
+
+        /** Relative path prefix of adopted hand-off files (unique next to the NAS feed's `nas/<folder>/<path>`). */
+        const val ADOPTED_PREFIX = "handoff/"
 
         /** `sources.tree_uri` of the Server source (unique, never a real URI). */
         const val SERVER_TREE = "reveal-sync:server"

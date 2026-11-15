@@ -243,12 +243,21 @@ class HandoffRepository(
                     sameFile(it, item.entry)
             }
         return handoff?.let { Match(it, handoff = true) }
-            ?: samePrint.firstOrNull(::reusableFolderFile)?.let { Match(it.file, handoff = false) }
+            ?: samePrint.filter(::reusableFolderFile).let { reusable ->
+                // A NAS-feed Server photo of the same file must not win over the adopted or edited one (lost edits).
+                reusable.firstOrNull { it.photoKept } ?: reusable.firstOrNull()
+            }?.let { Match(it.file, handoff = false) }
     }
 
-    /** A folder photo a hand-off may open: its folder is there and the photo was not removed from the library. */
-    private fun reusableFolderFile(match: FingerprintMatch) = match.sourceKind == SourceKind.FOLDER &&
-        match.sourceState == SourceState.AVAILABLE && !match.photoHidden
+    /**
+     * A photo a hand-off may open as it is: a folder photo whose folder is there, or a Server photo (the server holds
+     * the file: a hand-off adopted by the Server source, ADR 0018 "W3/C", or a NAS photo), not removed from the
+     * library. The sender's URI is then never read to show or edit it.
+     */
+    private fun reusableFolderFile(match: FingerprintMatch) = !match.photoHidden && (
+        (match.sourceKind == SourceKind.FOLDER && match.sourceState == SourceState.AVAILABLE) ||
+            match.sourceKind == SourceKind.SERVER
+        )
 
     /**
      * The earlier file that decides [shot]'s photo, or null for a new one. The main file's photo wins (a RAW over its

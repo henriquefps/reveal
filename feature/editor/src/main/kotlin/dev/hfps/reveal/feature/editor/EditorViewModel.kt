@@ -162,7 +162,10 @@ class EditorViewModel @Inject constructor(
     /** The library version being edited; null for a photo opened from another app (history in memory only). */
     private val versionId: Long? = route.versionId
     private val cancel = CancelToken()
-    private val opener = PhotoOpener(context.contentResolver)
+    private val opener = PhotoOpener(
+        context.contentResolver,
+        java.io.File(context.cacheDir, dev.hfps.reveal.data.di.DataModule.LOCAL_COPIES_DIR) to context.packageName,
+    )
 
     init {
         handoffPreviews.editorOpened()

@@ -71,7 +71,9 @@ internal object PolishSamples {
     val storage = StorageUiState(
         usage = StorageUsage(
             bytes = mapOf(
+                StorageKind.LIBRARY_THUMBNAILS to 214 * MB,
                 StorageKind.THUMBNAILS to 182 * MB,
+                StorageKind.ORIGINALS_KEPT to 410 * MB,
                 StorageKind.SERVER_FILES to 1_240 * MB,
                 StorageKind.MASKS to 64 * MB,
                 StorageKind.HANDOFF_PREVIEWS to 96 * MB,
@@ -80,6 +82,8 @@ internal object PolishSamples {
             ),
             keptPreviews = 41 * MB,
         ),
+        libraryThumbs = 13_402,
+        libraryPhotos = 21_000,
     )
 }
 

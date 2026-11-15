@@ -21,6 +21,7 @@ import dagger.hilt.InstallIn
 import dagger.hilt.android.EntryPointAccessors
 import dagger.hilt.components.SingletonComponent
 import dev.hfps.image.format.ImageFormats
+import dev.hfps.reveal.data.storage.FileOpens
 import dev.hfps.reveal.data.sync.ServerTree
 import java.io.FileNotFoundException
 import java.io.IOException
@@ -60,9 +61,9 @@ class ServerFilesProvider : ContentProvider() {
         return try {
             runBlocking {
                 when (kind) {
-                    ServerTree.ORIGINAL -> openOriginal(fingerprint, fallback = false)
+                    ServerTree.ORIGINAL -> openOriginal(fingerprint, fallback = false, keep = true)
 
-                    ServerTree.DISPLAY -> openOriginal(fingerprint, fallback = true)
+                    ServerTree.DISPLAY -> openOriginal(fingerprint, fallback = true, keep = false)
 
                     ServerTree.SMART -> files.smartPreview(fingerprint)
                         ?.let { ParcelFileDescriptor.open(it, ParcelFileDescriptor.MODE_READ_ONLY) }
@@ -76,10 +77,23 @@ class ServerFilesProvider : ContentProvider() {
         }
     }
 
-    private suspend fun openOriginal(fingerprint: String, fallback: Boolean): ParcelFileDescriptor? {
+    /**
+     * The original: the kept whole file when there is one (a plain descriptor, ADR 0018 "W3/C"), else a proxy
+     * descriptor over the block cache. Each proxy costs an appfuse mount through vold: only what the user opens asks
+     * for one (the viewer, the editor, the export, an edited thumbnail); the grid's thumbnails and the Server photos'
+     * headers come from the server without any (W3/C), so they no longer mount dozens per second. Counted in
+     * [FileOpens]. [keep]: the editor or the export opens it, so the rest is downloaded and kept as one file.
+     */
+    private suspend fun openOriginal(fingerprint: String, fallback: Boolean, keep: Boolean): ParcelFileDescriptor? {
+        files.keptOriginal(fingerprint)?.let {
+            FileOpens.count()
+            return ParcelFileDescriptor.open(it, ParcelFileDescriptor.MODE_READ_ONLY)
+        }
         val remote = files.original(fingerprint)
         if (remote != null) {
+            if (keep) files.keep(fingerprint, remote)
             val storage = checkNotNull(context).getSystemService(StorageManager::class.java)
+            FileOpens.count()
             return storage.openProxyFileDescriptor(ParcelFileDescriptor.MODE_READ_ONLY, RangeCallback(remote), handler)
         }
         if (!fallback) return null

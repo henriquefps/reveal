@@ -90,12 +90,12 @@ class SettingsViewModel @Inject constructor(
     fun onGalleryResult() {
         gallery.setAsked()
         gallery.refresh()
-        viewModelScope.launch { library.checkHandoffs() }
+        library.scheduleAccessCheck(again = true)
     }
 
     /** Back from the app settings page (or anywhere): the permission may have changed. */
     fun onResumed() {
-        if (gallery.refresh()) viewModelScope.launch { library.checkHandoffs() }
+        if (gallery.refresh()) library.scheduleAccessCheck(again = true)
     }
 
     /** The paired server's name (or address), null when not paired. */

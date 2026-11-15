@@ -99,6 +99,7 @@
     <string name="storage_keep_library_thumbs_note">Baixadas do seu servidor no Wi-Fi enquanto o aparelho carrega ou está ocioso; a grade passa a rolar offline. São as últimas a sair quando o cache enche.</string>
     <plurals name="storage_keep_library_thumbs_count">
         <item quantity="one">%1$d de %2$d foto, %3$s. Baixadas no Wi-Fi enquanto o aparelho carrega ou está ocioso.</item>
+        <item quantity="many">%1$d de %2$d fotos, %3$s. Baixadas no Wi-Fi enquanto o aparelho carrega ou está ocioso.</item>
         <item quantity="other">%1$d de %2$d fotos, %3$s. Baixadas no Wi-Fi enquanto o aparelho carrega ou está ocioso.</item>
     </plurals>
     <string name="storage_clear_library_thumbs">Apagar miniaturas da biblioteca</string>

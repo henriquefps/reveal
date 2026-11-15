@@ -72,6 +72,7 @@ class FakePreviews(private val culling: FakeCulling) {
         )
     }
 
+    @Suppress("ReturnCount")
     fun get(request: RecordedRequest): MockResponse {
         val id = request.url.pathSegments[2]
         val v = request.url.queryParameter("v")

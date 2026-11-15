@@ -177,11 +177,8 @@ object SyncScheduler {
     fun libraryThumbs(context: Context, again: Boolean = false) {
         val work = WorkManager.getInstance(context)
         val policy = if (again) ExistingWorkPolicy.APPEND_OR_REPLACE else ExistingWorkPolicy.KEEP
-        val base = {
-            Constraints.Builder().setRequiredNetworkType(NetworkType.UNMETERED).setRequiresStorageNotLow(true)
-        }
-        val charging = base().setRequiresCharging(true).setRequiresBatteryNotLow(true).build()
-        val idle = base().setRequiresDeviceIdle(true).build()
+        val charging = whileCharging()
+        val idle = whileIdle()
         for ((name, constraints) in listOf(THUMBS_CHARGING to charging, THUMBS_IDLE to idle)) {
             val request = OneTimeWorkRequestBuilder<LibraryThumbsWorker>().setConstraints(constraints)
                 .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, BACKOFF_SECONDS, TimeUnit.SECONDS).build()
@@ -191,6 +188,14 @@ object SyncScheduler {
             .setConstraints(charging).build()
         work.enqueueUniquePeriodicWork(THUMBS_PERIODIC, ExistingPeriodicWorkPolicy.KEEP, periodic)
     }
+
+    /** Unmetered, storage not low, charging with a battery not low (one request of the prefetch). */
+    private fun whileCharging(): Constraints = Constraints.Builder().setRequiredNetworkType(NetworkType.UNMETERED)
+        .setRequiresStorageNotLow(true).setRequiresCharging(true).setRequiresBatteryNotLow(true).build()
+
+    /** Unmetered, storage not low, the device idle (the other request: never charging and idle together). */
+    private fun whileIdle(): Constraints = Constraints.Builder().setRequiredNetworkType(NetworkType.UNMETERED)
+        .setRequiresStorageNotLow(true).setRequiresDeviceIdle(true).build()
 
     fun cancelLibraryThumbs(context: Context) {
         val work = WorkManager.getInstance(context)

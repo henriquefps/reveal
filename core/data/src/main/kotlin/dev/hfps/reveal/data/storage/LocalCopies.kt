@@ -27,25 +27,27 @@ object LocalCopies {
         dir.mkdirs()
         val file = File(dir, UUID.randomUUID().toString())
         try {
-            input.use { source ->
-                FileInputStream(source.descriptor.fileDescriptor).channel.use { from ->
-                    file.outputStream().channel.use { to ->
-                        var position = 0L
-                        val size = source.descriptor.statSize
-                        if (size > 0) {
-                            while (position < size) position += to.transferFrom(from, position, size - position)
-                        } else {
-                            Channels.copy(from, to)
-                        }
-                    }
-                }
-            }
+            input.use { source -> copyTo(source, file) }
         } catch (@Suppress("TooGenericExceptionCaught") e: Throwable) {
             file.delete()
             throw e
         }
         return ImageInput(input.name, ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)) {
             file.delete()
+        }
+    }
+
+    private fun copyTo(source: ImageInput, file: File) {
+        FileInputStream(source.descriptor.fileDescriptor).channel.use { from ->
+            file.outputStream().channel.use { to ->
+                val size = source.descriptor.statSize
+                if (size <= 0) {
+                    Channels.copy(from, to)
+                    return
+                }
+                var position = 0L
+                while (position < size) position += to.transferFrom(from, position, size - position)
+            }
         }
     }
 

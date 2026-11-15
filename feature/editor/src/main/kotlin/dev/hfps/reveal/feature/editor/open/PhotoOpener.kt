@@ -159,7 +159,7 @@ class PhotoOpener(
     fun openFullResolution(uri: Uri, cancel: CancelToken, lens: LensProfile? = null): TileSource =
         openFullSource(uri, cancel).withLens(lens)
 
-    @Suppress("ThrowsCount", "ReturnCount")
+    @Suppress("ThrowsCount", "ReturnCount", "CyclomaticComplexMethod")
     private fun openFullSource(uri: Uri, cancel: CancelToken): TileSource {
         val image = openInput(uri, displayName(uri))
         try {

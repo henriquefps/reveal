@@ -108,7 +108,11 @@ import kotlinx.coroutines.launch
  * format runs in UTC. Labels are cached per month (one formatter call per month, not per frame).
  */
 @Stable
-class DateLabels(private val locale: Locale, private val noDate: String) {
+class DateLabels(
+    private val locale: Locale,
+    private val noDate: String,
+    private val resources: android.content.res.Resources? = null,
+) {
     private fun formatter(skeleton: String) =
         SimpleDateFormat(DateFormat.getBestDateTimePattern(locale, skeleton), locale).apply {
             timeZone = TimeZone.getTimeZone("UTC")
@@ -120,6 +124,9 @@ class DateLabels(private val locale: Locale, private val noDate: String) {
     private val day = formatter("EEEEdMMMM")
     private val titles = HashMap<Int, String>()
     private val shorts = HashMap<Int, String>()
+    private val days = HashMap<Long, String>()
+    private val counts = HashMap<Int, String>()
+    private val numbers = NumberFormat.getIntegerInstance(locale)
 
     private fun capitalised(text: String) = text.replaceFirstChar { it.titlecase(locale) }
 
@@ -145,24 +152,33 @@ class DateLabels(private val locale: Locale, private val noDate: String) {
     fun monthOfYear(month: Int): String = capitalised(monthOfYear.format(start(month)))
 
     /** A day sub-header: "Sunday, November 15" / "domingo, 15 de novembro". */
-    fun day(time: Long): String = capitalised(day.format(Date(time)))
+    fun day(time: Long): String = days.getOrPut(Math.floorDiv(time, DAY_MS)) { capitalised(day.format(Date(time))) }
+
+    /** "1 photo" / "1,204 photos": one lookup per distinct count, never a plural + number format per header. */
+    fun photoCount(count: Int): String = counts.getOrPut(count) {
+        val formatted = numbers.format(count)
+        resources?.getQuantityString(R.plurals.library_photo_count, count, formatted) ?: formatted
+    }
 }
+
+private const val DAY_MS = 86_400_000L
+
+private fun formatCount(count: Int): String = NumberFormat.getIntegerInstance().format(count)
 
 @Composable
 fun rememberDateLabels(): DateLabels {
     val locale = LocalConfiguration.current.locales[0]
     val noDate = stringResource(R.string.library_no_date)
-    return remember(locale, noDate) { DateLabels(locale, noDate) }
+    val resources = LocalContext.current.resources
+    return remember(locale, noDate) { DateLabels(locale, noDate, resources) }
 }
-
-private fun formatCount(count: Int): String = NumberFormat.getIntegerInstance().format(count)
 
 /**
  * A month's header (W3/D): the month in sentence case and its photo count. The sticky copy over the grid draws the
  * same row, so the two line up exactly.
  */
 @Composable
-internal fun MonthHeader(title: String, count: Int, modifier: Modifier = Modifier) {
+internal fun MonthHeader(title: String, countText: String, modifier: Modifier = Modifier) {
     Row(
         modifier = modifier
             .fillMaxWidth()
@@ -179,7 +195,7 @@ internal fun MonthHeader(title: String, count: Int, modifier: Modifier = Modifie
             modifier = Modifier.weight(1f),
         )
         Text(
-            pluralStringResource(R.plurals.library_photo_count, count, formatCount(count)),
+            countText,
             style = RevealTheme.typography.ui,
             color = RevealTheme.colors.mutedForeground,
             maxLines = 1,
@@ -193,7 +209,7 @@ internal fun MonthHeader(title: String, count: Int, modifier: Modifier = Modifie
 internal fun GridMonthHeader(entry: GridEntry.Month, labels: DateLabels) {
     MonthHeader(
         labels.monthTitle(entry.month),
-        entry.count,
+        labels.photoCount(entry.count),
         Modifier
             .semantics { heading() }
             .testTag(LibraryTags.monthHeader(entry.month)),
@@ -223,7 +239,7 @@ internal fun StickyMonthHeader(
     val showing = stringResource(R.string.library_go_to_date_current, title)
     MonthHeader(
         title = title,
-        count = index.counts[at],
+        countText = labels.photoCount(index.counts[at]),
         modifier = modifier
             .testTag(LibraryTags.STICKY_MONTH)
             .onSizeChanged { height = it.height }
@@ -339,7 +355,8 @@ internal fun DateScroller(
                 }
             }
     }
-    val alpha by animateFloatAsState(if (visible) 1f else 0f, label = "scroller")
+    // The fade is read in the draw phase: animating it must not recompose the scroller on every frame.
+    val alpha = animateFloatAsState(if (visible) 1f else 0f, label = "scroller")
     val currentLabelAt by rememberUpdatedState(labelAt)
 
     fun maxFirst(): Int {
@@ -484,7 +501,7 @@ internal fun DateScroller(
             Box(
                 Modifier
                     .padding(end = 4.dp)
-                    .alpha(alpha)
+                    .graphicsLayer { this.alpha = alpha.value }
                     .size(thumbWidth, THUMB_HEIGHT)
                     .clip(CircleShape)
                     .background(if (dragging) RevealTheme.colors.primary else RevealTheme.colors.mutedForeground),

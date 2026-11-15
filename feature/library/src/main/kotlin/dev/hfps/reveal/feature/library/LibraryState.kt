@@ -59,7 +59,8 @@ sealed interface GridEntry {
 
     /** [day] = days since the epoch of the camera's local date; [time] any millis of that day (for formatting). */
     data class Header(val day: Long, val time: Long) : GridEntry {
-        override val key: Any get() = "h$day"
+        // Built once: the lazy grid asks for a key whenever it measures the item, never allocate one per call.
+        override val key: Any = "h$day"
     }
 
     /**
@@ -67,7 +68,7 @@ sealed interface GridEntry {
      * [DateIndex.NO_DATE] for the photos without a date), [count] its cells.
      */
     data class Month(val month: Int, val count: Int) : GridEntry {
-        override val key: Any get() = "m$month"
+        override val key: Any = "m$month"
     }
 
     /** A hand-off batch in "Opened from other apps": when it arrived ([at]) and the sender's title, if any. */

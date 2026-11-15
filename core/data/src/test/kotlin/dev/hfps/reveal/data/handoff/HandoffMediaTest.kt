@@ -386,7 +386,9 @@ class HandoffMediaTest {
         tree.onOpen = { id ->
             // The first open is the fingerprint; the copy of a photo after the first waits for the activity to go.
             val n = synchronized(opened) { opened.merge(id, 1, Int::plus)!! }
-            if (n == 2 && id != uris.first().toString()) activityGone.await(GATE_S, java.util.concurrent.TimeUnit.SECONDS)
+            if (n == 2 && id != uris.first().toString()) {
+                activityGone.await(GATE_S, java.util.concurrent.TimeUnit.SECONDS)
+            }
         }
         tree.granted = { id -> uris.none { it.toString() == id } || ingest.holderAlive }
         // The initial photo is the one copied before the outcome (the head); the others are copied after it.

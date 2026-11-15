@@ -23,6 +23,7 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import dagger.hilt.android.AndroidEntryPoint
 import dev.hfps.reveal.data.handoff.HandoffBatches
+import dev.hfps.reveal.data.handoff.HandoffNotice
 import dev.hfps.reveal.data.handoff.HandoffIntents
 import dev.hfps.reveal.data.handoff.HandoffOutcome
 import dev.hfps.reveal.data.handoff.HandoffRepository
@@ -74,6 +75,9 @@ class MainActivity : ComponentActivity() {
 
     /** What a hand-off of server references could not do (docs/adr/0011 "Amendment W3/H"), until dismissed. */
     private val serverNotice = MutableStateFlow<ServerNotice?>(null)
+
+    /** The outcome whose notices were already reported (merged with its batch's): [show] skips them. */
+    private var noticeShown: HandoffOutcome? = null
 
     private data class ServerNotice(val issue: ServerIssue?, val notFound: Int)
 
@@ -168,8 +172,15 @@ class MainActivity : ComponentActivity() {
     private fun watchServer() {
         // A cascade of intents ended with nothing to open in the editor: the batch shows in the library.
         lifecycleScope.launch {
-            batches.openLibrary.collect { openRequest.value = HandoffOutcome.OpenLibrary(emptyList()) }
+            batches.openLibrary.collect { notice ->
+                val outcome = HandoffOutcome.OpenLibrary(emptyList())
+                noticeShown = outcome
+                notify(notice.issue, notice.notFound)
+                openRequest.value = outcome
+            }
         }
+        // A member that finished after the batch's notice was shown: its own notice, once.
+        lifecycleScope.launch { batches.lateNotices.collect { notify(it.issue, it.notFound) } }
         lifecycleScope.launch {
             sync.account.filterNotNull().collect { account ->
                 handoffs.resumePending(account.serverId)?.let { outcome ->
@@ -185,11 +196,10 @@ class MainActivity : ComponentActivity() {
 
     /** Navigates to what a hand-off resolved to (ADR 0011). */
     private fun show(navController: NavController, outcome: HandoffOutcome) {
-        when (outcome) {
-            is HandoffOutcome.OpenEditor -> notify(outcome.issue, outcome.notFound)
-            is HandoffOutcome.OpenLibrary -> notify(outcome.issue, outcome.notFound)
-            is HandoffOutcome.ServerRefs -> notify(outcome.issue, outcome.notFound)
-            else -> Unit
+        // A hand-off of an intent already reported its notices with the rest of its batch (noticeShown).
+        if (outcome !== noticeShown) {
+            val notice = noticeOf(outcome)
+            notify(notice.issue, notice.notFound)
         }
         when (outcome) {
             is HandoffOutcome.ServerRefs -> Unit
@@ -217,6 +227,13 @@ class MainActivity : ComponentActivity() {
 
             HandoffOutcome.Nothing -> Toast.makeText(this, R.string.handoff_unreadable, Toast.LENGTH_LONG).show()
         }
+    }
+
+    private fun noticeOf(outcome: HandoffOutcome) = when (outcome) {
+        is HandoffOutcome.OpenEditor -> HandoffNotice(outcome.notFound, outcome.issue)
+        is HandoffOutcome.OpenLibrary -> HandoffNotice(outcome.notFound, outcome.issue)
+        is HandoffOutcome.ServerRefs -> HandoffNotice(outcome.notFound, outcome.issue)
+        else -> HandoffNotice()
     }
 
     private fun notify(issue: ServerIssue?, notFound: Int) {
@@ -272,12 +289,18 @@ class MainActivity : ComponentActivity() {
             val outcome = handoffs.receive(request)
             if (key != null) batches.touch(key)
             if (silentMember) {
+                // Its notices wait for the intent that shows the batch: one sheet for all (ADR 0011).
+                batches.report(key, noticeOf(outcome))
                 batches.silentFinished(key)
                 finish()
                 @Suppress("DEPRECATION")
                 overridePendingTransition(0, 0)
                 return@launch
             }
+            // The notices of the whole batch (every member's, summed), shown once with this intent's outcome.
+            val notice = batches.takeNotices(key, noticeOf(outcome))
+            noticeShown = outcome
+            notify(notice.issue, notice.notFound)
             // A single photo opened in the editor: leaving it returns to the calling app.
             openedFromIntent = outcome is HandoffOutcome.OpenUri ||
                 (outcome is HandoffOutcome.OpenEditor && outcome.closeOnBack)

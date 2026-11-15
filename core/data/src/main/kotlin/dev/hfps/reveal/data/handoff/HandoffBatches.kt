@@ -39,14 +39,50 @@ class HandoffBatches(
         val touched: Long,
         val claimed: Boolean = false,
         val shown: Boolean = false,
-    )
+        /** What the members reported so far (summed), until the intent that shows the batch takes it. */
+        val notFound: Int = 0,
+        val notPaired: Int = 0,
+        val otherServer: String? = null,
+        val otherServerCount: Int = 0,
+        val unreachable: Int = 0,
+        /** The notices were handed to the UI: later members report on their own. */
+        val taken: Boolean = false,
+    ) {
+        fun notice() = HandoffNotice(
+            notFound,
+            when {
+                notPaired > 0 -> ServerIssue.NotPaired(notPaired)
+                otherServer != null -> ServerIssue.OtherServer(otherServer, otherServerCount)
+                unreachable > 0 -> ServerIssue.Unreachable(unreachable)
+                else -> null
+            },
+        )
+
+        fun plus(n: HandoffNotice): State {
+            val issue = n.issue
+            return copy(
+                notFound = notFound + n.notFound,
+                notPaired = notPaired + (issue as? ServerIssue.NotPaired)?.count.orZero(),
+                otherServer = otherServer ?: (issue as? ServerIssue.OtherServer)?.serverName,
+                otherServerCount = otherServerCount + (issue as? ServerIssue.OtherServer)?.count.orZero(),
+                unreachable = unreachable + (issue as? ServerIssue.Unreachable)?.count.orZero(),
+            )
+        }
+    }
 
     private val mutex = Mutex()
     private val json = Json { ignoreUnknownKeys = true }
-    private val library = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+    private val library = MutableSharedFlow<HandoffNotice>(extraBufferCapacity = 1)
+    private val late = MutableSharedFlow<HandoffNotice>(extraBufferCapacity = 8)
 
-    /** Fires when a cascade ended with nothing to open in the editor: show "Opened from other apps". */
-    val openLibrary: SharedFlow<Unit> = library.asSharedFlow()
+    /**
+     * Fires when a cascade ended with nothing to open in the editor: show "Opened from other apps", with the notices
+     * every member of the batch reported (summed).
+     */
+    val openLibrary: SharedFlow<HandoffNotice> = library.asSharedFlow()
+
+    /** Notices of a member that finished after the batch's notice was shown (rare): shown on their own. */
+    val lateNotices: SharedFlow<HandoffNotice> = late.asSharedFlow()
 
     private suspend fun load(): State? = db.metaDao().get(KEY)?.let {
         runCatching { json.decodeFromString(State.serializer(), it) }.getOrNull()
@@ -79,27 +115,60 @@ class HandoffBatches(
     }
 
     /**
+     * A member reports its notices (not found, server issue) to the batch [key]; they are shown once, by
+     * [takeNotices], with the ones of every other member. After that they go out on [lateNotices].
+     */
+    suspend fun report(key: String, notice: HandoffNotice) {
+        if (notice.isEmpty) return
+        val tooLate = mutex.withLock {
+            val state = load()?.takeIf { it.key == key }
+            when {
+                state == null -> true
+                state.taken -> true
+                else -> {
+                    save(state.plus(notice))
+                    false
+                }
+            }
+        }
+        if (tooLate) late.emit(notice)
+    }
+
+    /** The notices of the whole batch [key] plus [own] (the showing intent's), once: the next call gets none. */
+    suspend fun takeNotices(key: String?, own: HandoffNotice): HandoffNotice {
+        if (key == null) return own
+        return mutex.withLock {
+            val state = load()?.takeIf { it.key == key } ?: return@withLock own
+            val all = state.plus(own)
+            save(all.copy(taken = true, notFound = 0, notPaired = 0, otherServer = null, otherServerCount = 0, unreachable = 0))
+            all.notice()
+        }
+    }
+
+    /**
      * A silent member finished. When nothing claims the batch for [SETTLE_MS] after the last touch (no intent carried
      * an `INITIAL_*`), the library opens instead, so a batch without an item to open is still shown.
      */
     fun silentFinished(key: String) {
         scope.launch {
             delay(SETTLE_MS)
-            val show = mutex.withLock {
+            val show: HandoffNotice? = mutex.withLock {
                 val state = load()
                 val open = state != null && state.key == key && !state.claimed && !state.shown
                 if (state != null && open && clock() - state.touched >= SETTLE_MS - SLACK_MS) {
-                    save(state.copy(shown = true))
-                    true
+                    save(state.copy(shown = true, taken = true))
+                    state.notice()
                 } else {
-                    false
+                    null
                 }
             }
-            if (show) library.emit(Unit)
+            if (show != null) library.emit(show)
         }
     }
 
     companion object {
+        private fun Int?.orZero() = this ?: 0
+
         private const val KEY = "handoff.batch"
 
         /** How long after its last intent a batch stays open for more. */
@@ -111,4 +180,9 @@ class HandoffBatches(
         fun key(senderPackage: String?, title: String?): String? =
             title?.takeIf { it.isNotBlank() }?.let { "${senderPackage.orEmpty()}\u0000$it" }
     }
+}
+
+/** What a hand-off reports besides what it opened: [notFound] items and a [ServerIssue] (ADR 0011 "Amendment W3/H"). */
+data class HandoffNotice(val notFound: Int = 0, val issue: ServerIssue? = null) {
+    val isEmpty get() = notFound == 0 && issue == null
 }

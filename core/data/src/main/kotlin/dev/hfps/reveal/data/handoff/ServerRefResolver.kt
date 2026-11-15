@@ -359,7 +359,10 @@ internal class ServerRefResolver(
     // ------------------------------------------------------------------ batches kept for later
 
     private suspend fun keepBatch(refs: ServerRefs, title: String?) {
-        val pending = PendingRefs(refs.serverId, title, refs.items.map(PendingItem::of), refs.initialItem, clock())
+        // Members of one cascade (same server and title) add to the batch that waits, they do not replace it.
+        val before = pending(KEY_PENDING)?.takeIf { title != null && it.serverId == refs.serverId && it.title == title }
+        val items = (before?.items.orEmpty() + refs.items.map(PendingItem::of)).distinctBy { it.itemId }
+        val pending = PendingRefs(refs.serverId, title, items, before?.initialItem ?: refs.initialItem, clock())
         meta.put(MetaEntity(KEY_PENDING, json.encodeToString(PendingRefs.serializer(), pending)))
     }
 

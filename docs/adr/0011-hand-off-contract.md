@@ -484,8 +484,12 @@ every intent whose key matches within 10 s of the last one joins it, so the phot
 ingests, then `finish()`es with no UI and no animation, so the cascade unwinds to the intent that opens the editor
 (library behind it, as for any multi-photo hand-off). If nothing claims the batch 5 s after its last intent, the library
 opens on "Opened from other apps" instead. A server file with no `name` takes the sender's `name` (main file), else a
-name made of its fingerprint and format. A batch without `TITLE` is not merged. The notices of a silent member (not
-found, another server) are not shown; a batch kept for a pairing still is.
+name made of its fingerprint and format. A batch without `TITLE` is not merged. The notices of **every** member
+(not-found counts, server issues: not paired, another server, unreachable), including the silent ones, are collected in
+the batch record and shown **once** by the intent that shows the batch (or by the library fallback): the not-found
+counts are summed ("N photos could not be found") and one issue sheet is shown (not paired before another server before
+unreachable, its count summed). A member that finishes after that notice was shown reports on its own. A batch kept for
+a pairing keeps every member's items (same server and title: merged, not replaced).
 
 ### Existing libraries (W3/C)
 

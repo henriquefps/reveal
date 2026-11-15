@@ -310,6 +310,17 @@ class HandoffServerRefsTest {
     }
 
     @Test
+    fun `members of one cascade keep one pending batch with every item`() = runTest {
+        server.pairing = null
+        repo.receive(request(refs(ServerItemRef(id(1)), initial = id(1)), "Trip"))
+        repo.receive(request(refs(ServerItemRef(id(2)), ServerItemRef(id(1))), "Trip"))
+        serve(item(1), item(2))
+        server.pairing = ServerPairing(SERVER, "Home NAS", "own-device")
+        repo.resumePending(SERVER)
+        assertThat(rows().map { it.name }).containsExactly("DSC00001.ARW", "DSC00002.ARW")
+    }
+
+    @Test
     fun `cancelling drops the pending batch`() = runTest {
         server.pairing = null
         repo.receive(request(refs(ServerItemRef(id(1)))))

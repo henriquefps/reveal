@@ -4,6 +4,7 @@ import android.content.Intent
 import android.net.Uri
 import android.provider.DocumentsContract
 import androidx.compose.ui.test.ExperimentalTestApi
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.junit4.v2.createEmptyComposeRule
 import androidx.compose.ui.test.onNodeWithTag
@@ -20,6 +21,7 @@ import dev.hfps.reveal.data.handoff.ServerRefs
 import dev.hfps.reveal.data.model.PhotoFilters
 import dev.hfps.reveal.data.model.PhotoQuery
 import dev.hfps.reveal.debug.DebugAccess
+import dev.hfps.reveal.debug.HandoffHostActivity
 import dev.hfps.reveal.debug.SyntheticDocumentsProvider
 import dev.hfps.reveal.editor.TestPhotos
 import dev.hfps.reveal.feature.library.HandoffServerTags
@@ -161,46 +163,127 @@ class HandoffServerRefTest {
         return id to DocumentsContract.buildDocumentUri(SyntheticDocumentsProvider.AUTHORITY, id)
     }
 
-    private fun resumedMainActivities(): Int {
-        var count = 0
-        InstrumentationRegistry.getInstrumentation().runOnMainSync {
-            count = androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry.getInstance()
-                .getActivitiesInStage(androidx.test.runner.lifecycle.Stage.RESUMED).count { it is MainActivity } +
-                androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry.getInstance()
-                    .getActivitiesInStage(androidx.test.runner.lifecycle.Stage.STARTED).count { it is MainActivity } +
-                androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry.getInstance()
-                    .getActivitiesInStage(androidx.test.runner.lifecycle.Stage.STOPPED).count { it is MainActivity }
+    /**
+     * Another app's activity starts Reveal as Hoard does: `startActivity(s)` with no `FLAG_ACTIVITY_NEW_TASK`, so
+     * Reveal's `MainActivity` lands in the sender's task and is never the task root.
+     */
+    private fun fromAnotherApp(vararg intents: Intent, block: () -> Unit) {
+        ActivityScenario.launch(HandoffHostActivity::class.java).use { host ->
+            host.onActivity { activity ->
+                if (intents.size == 1) activity.startActivity(intents[0]) else activity.startActivities(intents)
+            }
+            block()
         }
-        return count
+    }
+
+    private fun sharedIntent(photo: Pair<String, Uri>, index: Int?, initial: Boolean = false) =
+        Intent(HandoffIntents.ACTION_DEVELOP)
+            .setClass(context, MainActivity::class.java)
+            .setData(photo.second)
+            .putExtra(HandoffIntents.EXTRA_TITLE, stem)
+            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            .also {
+                if (index != null) it.putExtra(HandoffIntents.EXTRA_BATCH_INDEX, index)
+                if (initial) it.putExtra(HandoffIntents.EXTRA_INITIAL_URI, photo.second)
+            }
+
+    private fun stemPhotos() = runBlocking { access.library().photoList(PhotoQuery.FROM_APPS) }
+        .filter { it.name.contains(stem) }
+
+    private fun mainActivities(): List<MainActivity> {
+        val found = ArrayList<MainActivity>()
+        InstrumentationRegistry.getInstrumentation().runOnMainSync {
+            val registry = androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry.getInstance()
+            androidx.test.runner.lifecycle.Stage.entries.forEach { stage ->
+                found += registry.getActivitiesInStage(stage).filterIsInstance<MainActivity>()
+            }
+        }
+        return found.distinct()
+    }
+
+    /**
+     * An ordinary multi-select hand-off (Hoard's browse "Edit in Reveal"): one intent with a title, several photos and
+     * no `INITIAL_URI`, started into the sender's task. It must not be taken for a silent member of a cascade: the batch
+     * shows (the activity stays), whatever the task says.
+     */
+    @Test
+    fun anOrdinaryMultiSelectFromAnotherAppShowsTheBatch() {
+        val photos = (1..2).map { shared("$stem-$it.jpg", it) }
+        val intent = Intent(HandoffIntents.ACTION_DEVELOP)
+            .setClass(context, MainActivity::class.java)
+            .putExtra(HandoffIntents.EXTRA_TITLE, stem)
+            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        intent.clipData = android.content.ClipData.newRawUri(stem, photos[0].second)
+            .also { clip -> clip.addItem(android.content.ClipData.Item(photos[1].second)) }
+        fromAnotherApp(intent) {
+            compose.waitUntil(TIMEOUT_MS) { stemPhotos().size == 2 }
+            // Not finished, not flashing back to the sender: it stays up for a while after ingesting.
+            Thread.sleep(SETTLE_MS)
+            val mains = mainActivities()
+            assertThat(mains).hasSize(1)
+            assertThat(mains.single().isFinishing).isFalse()
+        }
+        photos.forEach { SyntheticDocumentsProvider.allow(context.filesDir, it.first) }
     }
 
     /**
      * Hoard sends a big batch as several intents with one title through `startActivities` (docs/adr/0011 "Batches over
-     * 500"): the first carries the item to open. All of them are one "Opened from other apps" batch, one stamp, one
-     * editor and no stack of `MainActivity` records.
+     * 500"), each with its `BATCH_INDEX`; the first carries the item to open. All of them are one "Opened from other
+     * apps" batch, one stamp, one editor and no stack of `MainActivity` records.
      */
     @Test
     fun startActivitiesWithOneTitleIsOneBatchAndOneActivity() {
         val photos = (1..3).map { shared("$stem-$it.jpg", it) }
-        fun intent(n: Int, initial: Boolean) = Intent(HandoffIntents.ACTION_DEVELOP)
-            .setClass(context, MainActivity::class.java)
-            .setData(photos[n].second)
-            .putExtra(HandoffIntents.EXTRA_TITLE, stem)
-            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            .also { if (initial) it.putExtra(HandoffIntents.EXTRA_INITIAL_URI, photos[n].second) }
-        context.startActivities(arrayOf(intent(0, initial = true), intent(1, false), intent(2, false)))
-        compose.waitUntil(TIMEOUT_MS) {
-            runBlocking { access.library().photoList(PhotoQuery.FROM_APPS) }.count { it.name.contains(stem) } == 3
+        fromAnotherApp(
+            sharedIntent(photos[0], 0, initial = true), sharedIntent(photos[1], 1), sharedIntent(photos[2], 2),
+        ) {
+            compose.waitUntil(TIMEOUT_MS) { stemPhotos().size == 3 }
+            val rows = stemPhotos()
+            assertThat(rows.map { it.handoffAt }.distinct()).hasSize(1)
+            assertThat(rows.map { it.handoffTitle }.distinct()).containsExactly(stem)
+            // The cascade unwound: one MainActivity record is left, the one that carries the editor.
+            compose.waitUntil(TIMEOUT_MS) { mainActivities().count { !it.isFinishing } == 1 }
         }
-        val rows = runBlocking { access.library().photoList(PhotoQuery.FROM_APPS) }.filter { it.name.contains(stem) }
-        assertThat(rows.map { it.handoffAt }.distinct()).hasSize(1)
-        assertThat(rows.map { it.handoffTitle }.distinct()).containsExactly(stem)
-        // The cascade unwound: one MainActivity record is left, the one that carries the editor.
-        compose.waitUntil(TIMEOUT_MS) { resumedMainActivities() == 1 }
         photos.forEach { SyntheticDocumentsProvider.allow(context.filesDir, it.first) }
+    }
+
+    /** The same cascade with no item to open anywhere: the first member shows the library, it is not lost. */
+    @Test
+    fun aCascadeWithoutAnInitialItemStillShowsTheBatch() {
+        val photos = (1..3).map { shared("$stem-$it.jpg", it) }
+        fromAnotherApp(sharedIntent(photos[0], 0), sharedIntent(photos[1], 1), sharedIntent(photos[2], 2)) {
+            compose.waitUntil(TIMEOUT_MS) { stemPhotos().size == 3 }
+            Thread.sleep(SETTLE_MS)
+            val mains = mainActivities().filter { !it.isFinishing }
+            assertThat(mains).hasSize(1)
+            assertThat(stemPhotos().map { it.handoffAt }.distinct()).hasSize(1)
+        }
+        photos.forEach { SyntheticDocumentsProvider.allow(context.filesDir, it.first) }
+    }
+
+    /**
+     * Every member of a cascade reports a server item the server does not have: the notice is shown once for the
+     * batch (the summed count is in `HandoffBatchesTest`), also for the members that finished silently.
+     */
+    @Test
+    fun aCascadeShowsOneNoticeForAllItsMembers() {
+        pairWithLink()
+        val serverId = checkNotNull(access.sync().account.value).serverId
+        val intents = (0..2).map { i ->
+            send(ServerRefs(serverId, listOf(item())))
+                .putExtra(HandoffIntents.EXTRA_BATCH_INDEX, i)
+                .also { it.flags = it.flags and Intent.FLAG_ACTIVITY_NEW_TASK.inv() }
+        }
+        fromAnotherApp(*intents.toTypedArray()) {
+            waitForSheet(HandoffServerTags.OK)
+            compose.onNodeWithTag(HandoffServerTags.OK).performClick()
+            Thread.sleep(SETTLE_MS)
+            compose.onAllNodes(hasTestTag(HandoffServerTags.OK)).assertCountEquals(0)
+        }
     }
 
     private companion object {
         const val TIMEOUT_MS = 30_000L
+        const val SETTLE_MS = 3_000L
     }
 }

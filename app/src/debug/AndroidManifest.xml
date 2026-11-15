@@ -9,6 +9,12 @@
             android:label="@string/debug_pipeline_label"
             android:theme="@style/Theme.Reveal" />
 
+        <!-- Debug builds only: the sending app of the hand-off tests (starts MainActivity without a new task). -->
+        <activity
+            android:name=".debug.HandoffHostActivity"
+            android:exported="false"
+            android:theme="@style/Theme.Reveal" />
+
         <!-- Debug builds only: a SAF provider over generated files (files/saf-test) for the library's instrumented
              tests and measurements. Its own process, so reads cross a binder like a real provider. -->
         <provider

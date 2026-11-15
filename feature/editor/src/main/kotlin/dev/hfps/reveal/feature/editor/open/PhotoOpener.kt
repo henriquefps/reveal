@@ -17,6 +17,7 @@ import dev.hfps.image.source.CancelToken
 import dev.hfps.image.source.CancelledException
 import dev.hfps.image.source.SourceInputStream
 import dev.hfps.image.source.readRange
+import dev.hfps.reveal.data.storage.FileOpens
 import dev.hfps.reveal.data.storage.isAccessError
 import dev.hfps.reveal.pipeline.PipelineInput
 import dev.hfps.reveal.pipeline.gl.GlesRequirementException
@@ -127,7 +128,8 @@ class PhotoOpener(private val resolver: ContentResolver) {
     /** The document's descriptor; any failure here means the grant or the file is gone (`isAccessError` shapes). */
     @Suppress("TooGenericExceptionCaught")
     private fun openInput(uri: Uri, name: String): ImageInput = try {
-        ImageInput.fromUri(resolver, uri, name)
+        // A busy sender (Hoard ADR 0010, `busy:`) is waited out with the bounded backoff, never "permission lost".
+        FileOpens.retryBusy { ImageInput.fromUri(resolver, uri, name) }
     } catch (e: IllegalArgumentException) {
         // Thrown by the provider while opening: it no longer serves the URI.
         throw OpenException(OpenError.PERMISSION_LOST, e)

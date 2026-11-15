@@ -79,7 +79,7 @@ class SidecarSync(
         if (editsOnly && !writeEdits()) return SidecarOutcome.NONE
         var outcome = SidecarOutcome.NONE
         for ((sourceId, all) in photos.getAll(photoIds).groupBy { it.sourceId }) {
-            val source = db.sourceDao().get(sourceId)?.takeIf(::canWrite)
+            val source = db.sourceDao().get(sourceId)?.let { sidecarSource(it, all) }?.takeIf(::canWrite)
             // A hand-off photo has a sidecar only when its sender granted one (Reveal cannot create documents there).
             val group = when {
                 source == null -> emptyList()
@@ -93,6 +93,18 @@ class SidecarSync(
         }
         return outcome
     }
+
+    /**
+     * Where [photos] of [source] keep their sidecar: a Server photo adopted from a hand-off (ADR 0018 "W3/C") still has
+     * the sidecar its sender granted (`xmp_document_id`, a document of the hand-off source): it is written there, one
+     * open per change, through the hand-off source's tree (its opens are throttled and retried while busy).
+     */
+    private suspend fun sidecarSource(source: SourceEntity, photos: List<PhotoEntity>): SourceEntity? =
+        if (source.kind == SourceKind.SERVER && photos.any { it.xmpDocumentId != null }) {
+            db.sourceDao().handoff()
+        } else {
+            source
+        }
 
     /** Available and writable folders and hand-offs; never the Server source. */
     private fun canWrite(source: SourceEntity): Boolean =

@@ -79,9 +79,10 @@ class ServerFilesProvider : ContentProvider() {
 
     /**
      * The original: the kept whole file when there is one (a plain descriptor, ADR 0018 "W3/C"), else a proxy
-     * descriptor over the block cache. Each proxy costs an appfuse mount through vold, so they are opened in
-     * [FileOpens]' app-wide slots (held until the descriptor is released): a grid never mounts dozens per second.
-     * [keep]: the editor or the export opens it, so the rest is downloaded and kept as one file for the next open.
+     * descriptor over the block cache. Each proxy costs an appfuse mount through vold: only what the user opens asks
+     * for one (the viewer, the editor, the export, an edited thumbnail); the grid's thumbnails and the Server photos'
+     * headers come from the server without any (W3/C), so they no longer mount dozens per second. Counted in
+     * [FileOpens]. [keep]: the editor or the export opens it, so the rest is downloaded and kept as one file.
      */
     private suspend fun openOriginal(fingerprint: String, fallback: Boolean, keep: Boolean): ParcelFileDescriptor? {
         files.keptOriginal(fingerprint)?.let {
@@ -92,13 +93,8 @@ class ServerFilesProvider : ContentProvider() {
         if (remote != null) {
             if (keep) files.keep(fingerprint, remote)
             val storage = checkNotNull(context).getSystemService(StorageManager::class.java)
-            return FileOpens.gated { release ->
-                storage.openProxyFileDescriptor(
-                    ParcelFileDescriptor.MODE_READ_ONLY,
-                    RangeCallback(remote, release),
-                    handler,
-                )
-            }
+            FileOpens.count()
+            return storage.openProxyFileDescriptor(ParcelFileDescriptor.MODE_READ_ONLY, RangeCallback(remote), handler)
         }
         if (!fallback) return null
         return files.previewJpeg(fingerprint)?.let {
@@ -107,8 +103,7 @@ class ServerFilesProvider : ContentProvider() {
     }
 
     /** Reads of the proxy descriptor, answered from the block cache or by range. */
-    private class RangeCallback(private val remote: RemoteFile, private val release: () -> Unit) :
-        ProxyFileDescriptorCallback() {
+    private class RangeCallback(private val remote: RemoteFile) : ProxyFileDescriptorCallback() {
         override fun onGetSize(): Long = remote.size
 
         override fun onRead(offset: Long, size: Int, data: ByteArray): Int = try {
@@ -118,7 +113,7 @@ class ServerFilesProvider : ContentProvider() {
             throw ErrnoException("read", OsConstants.EIO)
         }
 
-        override fun onRelease() = release()
+        override fun onRelease() = Unit
     }
 
     override fun query(

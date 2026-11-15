@@ -163,10 +163,13 @@ class LibraryThumbs(
     ): Map<String, ServerThumb> {
         val now = clock()
         val rows = dao.getAll(fingerprints).associateBy { it.fingerprint }
-        val items = HashMap<String, String>()
-        for (print in fingerprints) rows[print]?.itemId?.let { items[print] = it }
-        val unknown = fingerprints.filter { it !in items }
-        if (unknown.isNotEmpty()) items += lookup(client, unknown)
+        val known = HashMap<String, String>()
+        for (print in fingerprints) rows[print]?.itemId?.let { known[print] = it }
+        val unknown = fingerprints.filter { it !in known }
+        if (unknown.isNotEmpty()) known += lookup(client, unknown)
+        // In the order asked (the prefetch asks newest shot first; the server works in the warm's order).
+        val items = LinkedHashMap<String, String>()
+        for (print in fingerprints) known[print]?.let { items[print] = it }
         val results = HashMap<String, ServerThumb>()
         val unavailable = ArrayList<ServerThumbEntity>()
         for (print in fingerprints) {
@@ -377,8 +380,12 @@ class LibraryThumbs(
     companion object {
         private const val TAG = "RevealLibraryThumbs"
 
-        /** Long edge of a stored thumbnail: the phone's 3-column cell at 1080 px is 360 px (measured, ADR 0018). */
-        const val STORED_EDGE = 320
+        /**
+         * Long edge of a stored thumbnail (ADR 0018 "W3/C", measured): grid cells are square and centre-cropped, so a
+         * 3:2 photo keeps a 256 px short edge for the phone's 360 px cells; WebP q70 averages 9.3 KB on the CC0 camera
+         * samples (16 KB scaled to Hoard's bench photos), about 200-330 MB for 21,000 photos.
+         */
+        const val STORED_EDGE = 384
 
         /** WebP quality of a stored thumbnail. */
         const val QUALITY = 70

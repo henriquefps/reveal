@@ -18,8 +18,19 @@ internal class FileUriTree : DocumentTree {
     val aliases = HashMap<String, File>()
     val refused = HashSet<String>()
 
+    /** Documents whose provider is busy (Hoard ADR 0010: `busy:`) for that many more opens. */
+    val busy = HashMap<String, Int>()
+
+    /** Every open, by document id. */
+    val opens = ArrayList<String>()
+
     private fun file(id: String): File {
         if (id in refused) throw SecurityException("no access to $id")
+        val left = busy[id] ?: 0
+        if (left > 0) {
+            busy[id] = left - 1
+            throw java.io.FileNotFoundException("busy: 8 hand-off reads in progress, retry")
+        }
         return aliases[id] ?: File(Uri.parse(id).path!!)
     }
 
@@ -28,7 +39,10 @@ internal class FileUriTree : DocumentTree {
     override fun stat(documentId: String): DocumentEntry? = runCatching { file(documentId) }.getOrNull()
         ?.takeIf { it.isFile }?.let { DocumentEntry(documentId, it.name, "", it.length(), it.lastModified()) }
 
-    override fun openInput(documentId: String, name: String): ImageInput = ImageInput.fromFile(file(documentId))
+    override fun openInput(documentId: String, name: String): ImageInput {
+        opens += documentId
+        return ImageInput.fromFile(file(documentId))
+    }
 
     override fun readBytes(documentId: String, maxBytes: Int): ByteArray = file(documentId).readBytes()
 

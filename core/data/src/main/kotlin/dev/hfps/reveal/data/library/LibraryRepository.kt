@@ -418,7 +418,7 @@ class LibraryRepository(
                 when {
                     file.onServer -> false.also { pass.skippedServer++ }
                     again && file.unreadableAt != null -> true
-                    (file.checkedAt ?: 0) > recent -> false.also { pass.skippedRecent++ }
+                    file.checkedAt != null && file.checkedAt > recent -> false.also { pass.skippedRecent++ }
                     else -> true
                 }
             }

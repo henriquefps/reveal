@@ -28,6 +28,9 @@ class FakeEdits(private val culling: FakeCulling, private val now: () -> Long) {
 
     val edits = LinkedHashMap<String, Edit>()
 
+    /** Item metadata the lookup returns (Hoard ADR 0014: `capture`, `width`, `height`, `orientation`, `sortTime`). */
+    val meta = HashMap<String, JsonObject>()
+
     /** Every PUT: version id and whether it carried an image. */
     val puts = ArrayList<Pair<String, Boolean>>()
     val deletes = ArrayList<String>()
@@ -146,6 +149,7 @@ class FakeEdits(private val culling: FakeCulling, private val now: () -> Long) {
                         add(
                             buildJsonObject {
                                 put("id", id)
+                                meta[id]?.forEach { (k, v) -> put(k, v) }
                                 put("edits", buildJsonArray { of(id).forEach { add(json(it.key, it.value)) } })
                             },
                         )

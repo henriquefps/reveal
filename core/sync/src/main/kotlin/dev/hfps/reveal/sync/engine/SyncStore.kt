@@ -929,8 +929,8 @@ class SyncStore(
      * Makes [photoIds] (hand-off photos whose main file the server holds) Server photos, in place (ADR 0018 "W3/C"):
      * the same row keeps its uuid, versions, edits, history, culling and `handoff_at` (it stays in "Opened from other
      * apps"); its files take the server's document ids, so the grid, the viewer, the editor and the export read the
-     * server's copy and never open the sending app's URI again. Files without a fingerprint (never read) and other
-     * files (a sidecar) go; the photo's sidecar link goes too (culling travels through the server, ADR 0027). Quiet:
+     * server's copy and never open the sending app's URI to show, edit or export it. Files without a fingerprint (never
+     * read) and other files go; the sidecar the sender granted stays the photo's (written on a change, ADR 0026). Quiet:
      * nothing changes for other devices. Returns how many moved. Reusable for photos handed over by server reference.
      */
     suspend fun adoptHandoffs(photoIds: List<Long>): Int {

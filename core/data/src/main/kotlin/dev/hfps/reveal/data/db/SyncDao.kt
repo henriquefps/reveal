@@ -265,8 +265,8 @@ interface SyncDao {
     )
     suspend fun adoptableHandoffs(limit: Int): List<Long>
 
-    /** Moves a photo to [sourceId] (the Server source); its sidecar link goes (a Server photo has none). */
-    @Query("UPDATE photos SET source_id = :sourceId, xmp_document_id = NULL, xmp_modified = NULL WHERE id = :photoId")
+    /** Moves a photo to [sourceId] (the Server source); its sidecar link stays (the sender's grant, `SidecarSync`). */
+    @Query("UPDATE photos SET source_id = :sourceId WHERE id = :photoId")
     suspend fun adoptPhoto(photoId: Long, sourceId: Long)
 
     /** Moves a file to the Server source under the server's document id (ADR 0018 "Server photos"). */

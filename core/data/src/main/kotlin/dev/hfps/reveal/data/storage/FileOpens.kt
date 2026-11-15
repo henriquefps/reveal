@@ -55,6 +55,10 @@ object FileOpens {
      */
     val BUSY_BACKOFF_MS = longArrayOf(250, 500, 1_000, 2_000, 4_000, 4_000, 4_000, 4_000, 4_000, 4_000)
 
+    /** The backoff [retryBusy] uses by default (instrumented tests shorten it). */
+    @Volatile
+    var busyBackoffMs: LongArray = BUSY_BACKOFF_MS
+
     private val slots = Semaphore(BACKGROUND_SLOTS, true)
     private val total = AtomicInteger()
     private val window = AtomicInteger()
@@ -103,7 +107,7 @@ object FileOpens {
      * it from an IO thread); when the provider is still busy, throws [ProviderBusyException], which is never an access
      * error, so nothing is marked unreadable.
      */
-    fun <T> retryBusy(backoff: LongArray = BUSY_BACKOFF_MS, sleep: (Long) -> Unit = Thread::sleep, open: () -> T): T {
+    fun <T> retryBusy(backoff: LongArray = busyBackoffMs, sleep: (Long) -> Unit = Thread::sleep, open: () -> T): T {
         var attempt = 0
         while (true) {
             try {

@@ -410,3 +410,117 @@ folder's backup mode (FIX/V's choice) and removes it with FIX/V's delete-from-se
 With a server that lists `culling` (hoard-server 0.7.0+), rating, flag and label no longer travel inside `photo`
 records for this device: they sync per field through the culling records, and pulled records' culling fields are
 ignored (they are still written into this device's records for older Reveals). See docs/adr/0027.
+
+## Amendment W3/C (0.9.0): a large library on the phone
+
+Context: the owner's library grew to about 21,000 photos the server indexes from the NAS (0.8.0, Galaxy S24 Ultra).
+Opening Reveal sometimes "crashed": system_server logged dozens of `#openFile/#open/#close might be slow` per second,
+the storage service (vold, StorageManagerService) blocked 75 s and the watchdog restarted system_server; Hoard's
+FileProvider logged `HoardHandoff: open <name>` for hand-off files. Re-opening a Server photo after editing it took as
+long as the first time. Reveal 0.9.0 ships with Hoard 2.0.1 (its `busy:` answer, Hoard ADR 0010).
+
+### What caused the burst
+
+Reproduced with a local hoard-server (pinned 0.9.0) whose synthetic NAS holds 21,000 JPEGs, 300 of them also handed
+over through the debug provider, on the phone (0.8.0 debug build, 60 s on the first screen after a cold start):
+
+- **Every grid thumbnail of a Server photo and every Server header was an `openProxyFileDescriptor`.** `ServerTree`
+  opened `content://<app>.sync/display/…` through the ContentResolver; `ServerFilesProvider` answered with a proxy
+  descriptor over the range cache, and each proxy is an **appfuse mount through vold** (`/mnt/appfuse/<uid>_<n>`,
+  mounted and unmounted per open). The first sync of every start (and one every 30 s in the foreground) also read 300
+  Server photos' headers this way (`readServerHeaders`, 4 at a time). Measured: 276 appfuse mounts in 60 s (peak 14/s,
+  in 42 of the 60 seconds), 1,452 system_server watchdog pauses `#openFile/#open/#close might be slow` (peak 57/s) and
+  685 range GETs of originals, with nobody touching the phone. Hoard's own SMB hand-offs go through the same appfuse
+  path on its side (Hoard ADR 0010).
+- **Hand-offs were opened in bulk on the app's own schedule.** `LibraryViewModel` re-checked every file marked
+  unreadable on every new grid query (`recheckAccess`, rate-limited to 30 s), `refresh()` at start and
+  `onResumed`/`onGalleryAccessResult` opened **every** hand-off document (`checkHandoffs`, one after the other), and
+  the grid's thumbnails of hand-offs not yet cached opened their URIs: each of those is a `HoardHandoff: open` on an
+  SMB-backed file.
+
+### Start-up I/O (FIX/C)
+
+- **Nothing reads files before the first frame.** `AppStart` (`:core:data/storage`): `MainActivity` reports its first
+  frame; the folders' walk, the access check, the sync jobs (`SyncController`) and the thumbnail prefetch wait for it
+  plus a short settle (2 s; 15 s without an activity).
+- **One app-wide throttle for other apps' files.** `FileOpens` (`:core:data/storage`): at most 4 documents of other
+  apps' providers open at once for background work (`HandoffTree` holds a slot until the input is closed; a slot
+  waited for longer than 30 s goes ahead, logged), every open counted, `REVEAL_IO` logs opens per second while any
+  happen.
+- **A busy sender is waited out, never marked unreadable** (Hoard ADR 0010): a `FileNotFoundException` whose message
+  starts exactly with `busy:` (`PROVIDER_BUSY_PREFIX`) is retried with 250 ms doubling to 4 s, giving up after about
+  30 s as a transient failure (`ProviderBusyException`); `isAccessError` is false for it, so `unreadable_at` is never
+  set by it. Any other `FileNotFoundException` keeps its meaning. `HandoffTree`, the editor's opener and the export use
+  it.
+- **The access check is one paced background pass** (`LibraryRepository.scheduleAccessCheck`, ADR 0011): after the
+  app settled, the hand-off documents and the files marked unreadable are checked one at a time (≥ 100 ms apart, in a
+  `FileOpens` slot). Skipped: files the server holds (they are shown and edited from the server's copy), files checked
+  in the last 6 h (`photo_files.checked_at`, DB v14) unless a gallery permission changed (`again`), and documents this
+  process holds an explicit read grant on (`readGrants`: persisted grants, or `checkUriPermission` for the sender's
+  temporary one: no open; Hoard's URIs are persistable since Hoard 1.10.0). Never per grid query. The "Try again"
+  action and the viewer still check the photos the user looks at, at once. Each pass logs one line: files, granted,
+  opened, unreadable, busy, skipped (server, recent), ms.
+- **Server headers come from the items** (Hoard ADR 0014): with `items`, `readServerHeaders` asks the item lookup
+  (≤ 1,000 fingerprints per request, 5,000 photos per sync) for capture time, offset, size and orientation
+  (`ServerHeaders`, `LibraryIndexer.applyServerHeaders`, untracked); no file is opened. Older servers keep the range
+  reads.
+
+### Hand-offs the server holds become Server photos
+
+A hand-off photo whose main file the server holds (`photo_files.on_server`, from the lookups) is **adopted by the
+Server source in place** (`SyncStore.adoptHandoffs`, after every sync, 100 per transaction, resumable): the same row
+keeps its uuid, versions, edits, history, culling and `handoff_at` (it stays in "Opened from other apps": the filter
+is `handoff_at IS NOT NULL` again, Server photos included); its files take the server's document ids
+(`ServerTree.documentId`, relative path `handoff/<fingerprint>/<name>`), so the grid, the viewer, the editor and the
+export read the server's copy and never open the sender's URI to show it. Quiet: nothing changes for other devices.
+A later share of the same file opens that Server photo (`HandoffRepository`: a Server photo is reusable like a folder
+photo). The sidecar the sender granted stays the photo's: a culling change or an edit is still written there (one open
+in a `FileOpens` slot per change; ADR 0026, Hoard's integration contract 12). The same call serves photos handed over
+by server reference later (W3/H).
+
+### Library thumbnails
+
+For photos the server holds (the Server source and hand-offs), the grid shows the server's thumbnail (Hoard ADR 0015)
+from **the library thumbnails** (`:core:sync/thumbs/LibraryThumbs`, `server_thumbs`, DB v14), never a range read of
+the original and never a ContentResolver round trip per cell (`ThumbnailRepository` asks the `ServerThumbs` binding;
+`ServerThumb.Image | Later | NotServed`: only "not served" falls back to reading the file):
+
+- The grid's cells are batched (40 ms): one item lookup (fingerprint -> item, ≤ 1,000), one warm request
+  (`POST /v1/items/previews`, ≤ 500, giving each ready thumb's `v`), then the immutable `…/preview?size=thumb&
+  format=webp&v=` GETs, 4 at a time; a pending thumb is asked again twice, 2 s apart.
+- Stored small: re-encoded at a long edge of 384 px, WebP quality 70 (cells are square and centre-cropped, so a 3:2
+  photo keeps a 256 px short edge for the phone's 360 px cells). On 180 crops of the CC0 camera samples: the server's
+  512 px WebP q70 thumb is 16.0 KB on average, the stored one 9.3 KB (256 px: 5.0 KB, 320 px: 7.0 KB); Hoard's bench
+  photos run about 1.7 x larger (27 KB at 512 px), so about 16 KB, **about 330 MB for 21,000 photos**.
+- Kept in `no_backup/library-thumbs` (the system never clears it), as its own `CacheArea`
+  (`StorageKind.LIBRARY_THUMBNAILS`), evicted **last** (`CacheTier.LIBRARY`; the budget now evicts by tier, then by
+  last use).
+- **The whole library** is prefetched in the background (`LibraryThumbsWorker`): unmetered network and storage not low,
+  plus charging for one request and the device idle for the other (and every 6 h while charging); newest shot first, 500
+  per round, resumable (every result is a row: ready, pending asked again after 30 min, unavailable after 7 days),
+  cancelled when a constraint ends, stopping at 90 % of the cache budget. Settings -> Storage: "Keep thumbnails of the
+  whole library" (default on; off cancels the job) with the count and size, and "Clear library thumbnails".
+- Edits: an edit made on another device (`versions.edit_device` set and not this device) shows the server's preview of
+  that version (Hoard ADR 0020, `…/preview?edit=<version uuid>`) instead of downloading the original to render it;
+  this device's edits are rendered here as before.
+
+### Keeping what was just opened or edited
+
+Why a Server photo's reopen after an edit was slow: in the lab its blocks were all still cached (24.9 MB of 24.9 MB),
+yet the reopen took 3.5 s (the first open 6.3 s) with a 1.4 s preview stage both times: every read went through the
+proxy descriptor (appfuse, a FUSE round trip per read, one block file opened per read). On the owner's phone the budget
+can also evict it (not reproduced in the lab): the 512 px thumbnails of a 21,000-photo grid (about 50 KB each, about
+1 GB) share the 2 GB cache with the originals' blocks, and the LRU drops an original opened before the last scroll.
+
+- **Kept originals** (`ServerFiles.keep`, `cache/sync-kept`, `StorageKind.ORIGINALS_KEPT`): when the editor or the
+  export opens a Server original, the rest is downloaded in the background (one at a time) and assembled into one file
+  (`RangeCache.assemble`, the blocks then dropped); the provider serves a kept original as a plain file descriptor
+  (no appfuse), and reads in progress switch to it.
+- **Pinned**: the files of the 50 photos opened most recently in the last 7 days (`photos.last_opened_at`, set when the
+  editor opens a photo) are `CacheTier.PINNED`, in the range cache and the kept originals: evicted after every ordinary
+  cache and before the library thumbnails, LRU by last open; `RangeCache.trim` drops unpinned files first.
+- Server photos' grid thumbnails no longer fill the shared thumbnail cache (they live in the library thumbnails).
+
+Settings -> Storage lists every area (library thumbnails, thumbnails, originals kept, server files, AI masks and
+fills, photos from other apps, other, library and edits) with its size, and the cache budget the owner sets (500 MB to
+10 GB).

@@ -5,6 +5,7 @@ plugins {
 
 android {
     namespace = "dev.hfps.reveal.feature.library"
+    testOptions.unitTests.isIncludeAndroidResources = true
 }
 
 dependencies {
@@ -16,4 +17,8 @@ dependencies {
     implementation(projects.feature.export)
     implementation(libs.androidx.work.runtime.ktx)
     implementation(libs.kotlinx.serialization.json)
+
+    testImplementation(libs.robolectric)
+    testImplementation(libs.androidx.test.ext.junit)
+    testImplementation(libs.androidx.work.testing)
 }

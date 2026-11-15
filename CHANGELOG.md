@@ -44,6 +44,9 @@ All notable changes to Reveal are documented here. The format follows
 - A preset batch or XMP export that Android stops in the background (not your Cancel) is resumed instead of dropped.
 - Export XMP to a chosen folder: a photo whose own sidecar is malformed now gets a fresh sidecar there (its own file
   is still left alone).
+- Export XMP: cancelling (or a failure of) the running export no longer drops the exports queued after it, and an
+  export that never ran no longer keeps its folder's access forever; a sidecar write that is cancelled or refused no
+  longer leaves an empty `.xmp` behind.
 - A large library no longer stalls the phone at start (W3/C, docs/adr/0018 "W3/C"): with about 21,000 photos on the
   server, every grid thumbnail of a server photo and every server header opened the original through a content
   provider proxy (an appfuse mount through the storage service per photo), and the photos other apps handed over were

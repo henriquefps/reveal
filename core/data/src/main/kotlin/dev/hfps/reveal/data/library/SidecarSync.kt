@@ -29,6 +29,8 @@ import java.time.OffsetDateTime
 import java.time.format.DateTimeFormatter
 import java.time.temporal.ChronoUnit
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 
 /**
  * What an XMP write did: [written] sidecars, [databaseOnly] photos whose sidecar could not be written (read-only
@@ -140,10 +142,18 @@ class SidecarSync(
                 Log.w(TAG, "Sidecar of photo ${photo.id} is malformed, a fresh one is exported", e)
                 merged(photo, null, CullingField.ALL)
             }
-            val documentId = ownDocument?.takeIf { runCatching { destination.stat(it) }.getOrNull() != null }
+            val reused = ownDocument?.takeIf { runCatching { destination.stat(it) }.getOrNull() != null }
+            val documentId = reused
                 ?: destination.create(folderId, "${stemOf(photo)}${SidecarNames.SUFFIX}", SIDECAR_MIME).documentId
-                    .also { onCreated(it) }
-            destination.writeBytes(documentId, bytes)
+            if (reused == null) {
+                // A document created here and not filled (a Cancel, a provider failure) is deleted again.
+                fillingCreated(destination, documentId) {
+                    onCreated(documentId)
+                    destination.writeBytes(documentId, bytes)
+                }
+            } else {
+                destination.writeBytes(documentId, bytes)
+            }
             FolderWrite(SidecarOutcome(1, 0), documentId)
         } catch (e: CancellationException) {
             throw e
@@ -262,16 +272,52 @@ class SidecarSync(
             val stem = ImageFormats.stem(main?.name ?: photo.name)
             val created = try {
                 tree.create(photo.folderDocumentId, "$stem${SidecarNames.SUFFIX}", SIDECAR_MIME)
-                    // Recorded before any byte is written: a write interrupted here and run again overwrites this
-                    // document instead of creating a `(1)` copy next to it.
-                    .also { photos.setSidecar(photo.id, it.documentId, null) }
             } catch (e: IOException) {
                 hidden ?: throw e
             }
-            tree.writeBytes(created.documentId, bytes)
+            if (created === hidden) {
+                tree.writeBytes(created.documentId, bytes)
+            } else {
+                // A write cancelled or refused after the create leaves no empty `<stem>.xmp`: the document is deleted
+                // and the photo's record put back as it was.
+                val restore: suspend () -> Unit = {
+                    photos.setSidecar(photo.id, photo.xmpDocumentId, photo.xmpModified)
+                }
+                fillingCreated(tree, created.documentId, restore) {
+                    // Recorded before any byte is written: a write killed here and run again overwrites this
+                    // document instead of creating a `(1)` copy next to it.
+                    photos.setSidecar(photo.id, created.documentId, null)
+                    tree.writeBytes(created.documentId, bytes)
+                }
+            }
             created.documentId
         }
         return documentId
+    }
+
+    /**
+     * Runs [fill] on [documentId], a document just created in [tree]; when it fails or is cancelled the document is
+     * deleted (never left empty) and [restore] puts back what [fill] recorded, then the failure goes on. A document the
+     * provider would not delete keeps the record, so the next write fills it instead of creating a `(1)` copy.
+     */
+    private suspend fun fillingCreated(
+        tree: DocumentTree,
+        documentId: String,
+        restore: suspend () -> Unit = {},
+        fill: suspend () -> Unit,
+    ) {
+        try {
+            fill()
+        } catch (@Suppress("TooGenericExceptionCaught") e: Throwable) {
+            withContext(NonCancellable) {
+                if (runCatching { tree.delete(documentId) }.getOrDefault(false)) {
+                    runCatching { restore() }
+                } else {
+                    Log.w(TAG, "Unfinished sidecar $documentId could not be deleted")
+                }
+            }
+            throw e
+        }
     }
 
     /**

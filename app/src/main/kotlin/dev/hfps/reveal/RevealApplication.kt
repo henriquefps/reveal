@@ -1,15 +1,21 @@
 package dev.hfps.reveal
 
 import android.app.Application
+import android.util.Log
 import dagger.hilt.android.HiltAndroidApp
 import dev.hfps.reveal.data.storage.HealFillCacheArea
 import dev.hfps.reveal.feature.export.destination.ShareCache
+import dev.hfps.reveal.feature.library.xmpexport.XmpExportWorker
 import dev.hfps.reveal.ml.inpaint.InpaintRemoveMethod
 import dev.hfps.reveal.ml.inpaint.InpaintService
 import dev.hfps.reveal.pipeline.heal.RemoveFills
 import dev.hfps.reveal.sync.work.SyncController
 import javax.inject.Inject
 import kotlin.concurrent.thread
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 
 @HiltAndroidApp
 class RevealApplication : Application() {
@@ -30,6 +36,12 @@ class RevealApplication : Application() {
         // provider) must never run a second sync.
         if (getProcessName() == packageName) {
             sync.start()
+            // Export XMP jobs whose work is gone (cancelled or failed while queued, a kill before the work was
+            // enqueued): their files are deleted and their folder grants released.
+            CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
+                runCatching { XmpExportWorker.sweep(this@RevealApplication) }
+                    .onFailure { Log.w(XmpExportWorker.TAG, "xmp export sweep failed", it) }
+            }
         }
         // Exports shared to other apps whose share sheet never returned (the app was killed meanwhile): sweep them.
         thread(name = "reveal-share-sweep") { ShareCache.clear(this) }

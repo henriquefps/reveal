@@ -202,12 +202,7 @@ class LibraryViewModel @Inject constructor(
                     return@launch
                 }
             }
-            val trees = when (destination) {
-                is XmpDestination.Folder -> listOf(destination.treeUri)
-                is XmpDestination.NextToPhotos -> destination.oneOff.values.toList()
-            }
-            trees.forEach(xmpGrants::take)
-            XmpExportWorker.enqueue(app, sheet.photoIds, destination)
+            XmpExportWorker.enqueue(app, sheet.photoIds, destination) { xmpGrants.take(it) }
             _state.update { it.copy(xmpExport = null, selected = emptySet()) }
             messages.send(LibraryMessage.XmpQueued(sheet.photoIds.size))
         }

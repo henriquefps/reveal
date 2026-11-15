@@ -225,12 +225,22 @@ Reading and importing sidecars is unchanged.
   records its new sidecar (`photos.xmp_document_id`) before writing it, and an empty document (a write interrupted
   after the create) is no merge base. Only the user's Cancel ends a job early. `PresetBatchWorker` keeps its job on a
   system stop the same way.
+- Queue (fix round 2): each job is its own unique work (`xmp-export-<job>`, tags `xmp-export` + `xmp-job:<job>`,
+  `ExistingWorkPolicy.KEEP`), never a chain: with `APPEND_OR_REPLACE` a Cancel or failure of the running job cancelled
+  or failed the queued ones without running them, so their grants and job files were never released. Jobs run one at a
+  time through a process-wide lock in the worker. Enqueue (grants taken, job file, work), a job's end and the sweep
+  share one lock. The sweep (`XmpExportWorker.sweep`, at app start and at each job's end) deletes the files of jobs
+  with no unfinished work (cancelled or failed while queued, a kill between the files and the work) and releases their
+  trees unless a live job uses them.
+- A sidecar document created by a write that then fails or is cancelled (next to the photos or into a chosen folder)
+  is deleted again (`DocumentTree.delete`) and the photo's sidecar record restored; only a kill leaves the empty
+  document, which the next run fills.
 - `sources.writable` is true only when a WRITE grant really is persisted for the tree, or for the debug build's
   synthetic provider (named explicitly, `LibraryRepository.grantFreeAuthorities`).
 - Tests: `XmpExportTest` (no write through the library's rating/flag, an edit, a hand-off's label, folder-first and
   merge paths, recorded at the tree; next to, chosen folder, a taken name, malformed kept / fresh copy, reruns without
   copies, server-only and hand-off refused for "next to", the one-off tree, preference removal), `XmpGrantsTest`,
-  `XmpExportJobsTest`, `XmpExportPickerTest` (rotation while picking), `ReadOnlyGrantsTest`, `LibraryIndexerTest`
+  `XmpExportJobsTest`, `XmpExportQueueTest` (cancel keeps the queue, orphan sweep), `XmpExportPickerTest` (rotation while picking), `ReadOnlyGrantsTest`, `LibraryIndexerTest`
   (first read), `XmpSidecarFlowTest` (instrumented).
 
 ### First read of a sidecar (shared with Hoard app 2.2.1 and hoard-server 0.10.1)

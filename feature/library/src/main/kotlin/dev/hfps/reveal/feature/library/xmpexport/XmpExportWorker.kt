@@ -14,6 +14,7 @@ import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkInfo
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
+import androidx.work.await
 import androidx.work.workDataOf
 import dagger.hilt.EntryPoint
 import dagger.hilt.InstallIn
@@ -29,6 +30,8 @@ import java.util.UUID
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -132,6 +135,31 @@ class XmpExportJobs(private val dir: File) {
     fun delete(id: String) {
         File(dir, "$id.json").delete()
         File(dir, "$id.log").delete()
+        File(dir, "$id.tmp").delete()
+    }
+
+    /** The ids of every job with a file on disk (its job, its log or a job being written). */
+    fun ids(): Set<String> = dir.listFiles().orEmpty()
+        .filter { it.extension in JOB_FILES }
+        .mapTo(HashSet()) { it.nameWithoutExtension }
+
+    /**
+     * Deletes the files of every job but the [live] ones (a job whose work is gone: cancelled or failed while queued,
+     * or a kill between its files and its work) and releases their trees unless a live job still uses one. Returns
+     * the ids swept.
+     */
+    suspend fun sweep(live: Set<String>, release: suspend (tree: String, inUse: Set<String>) -> Unit): Set<String> {
+        val orphans = ids() - live
+        if (orphans.isEmpty()) return orphans
+        val trees = orphans.mapNotNull(::read).flatMapTo(HashSet()) { it.trees }
+        orphans.forEach(::delete)
+        val inUse = live.mapNotNull(::read).flatMapTo(HashSet()) { it.trees }
+        for (tree in trees) release(tree, inUse)
+        return orphans
+    }
+
+    private companion object {
+        val JOB_FILES = setOf("json", "log", "tmp")
     }
 
     private fun append(id: String, line: String) {
@@ -161,33 +189,37 @@ class XmpExportWorker(context: Context, params: WorkerParameters) : CoroutineWor
         val log = jobs.log(jobId)
         var done = log.done.size
         var outcome = log.outcome
-        runCatching { setForeground(foreground(done, total)) }
         try {
-            val session = export.open(job.destination())
-            for (photoId in job.photoIds.filterNot { it in log.done }) {
-                if (isStopped) break
-                val result = export.exportOne(session, photoId, log.created[photoId]) { documentId ->
-                    jobs.created(jobId, photoId, documentId)
+            // Jobs are independent works (a Cancel or a failure of one never touches the others) that run one at a
+            // time: a job waits here for the one before it.
+            RUN_LOCK.withLock {
+                runCatching { setForeground(foreground(done, total)) }
+                val session = export.open(job.destination())
+                for (photoId in job.photoIds.filterNot { it in log.done }) {
+                    if (isStopped) break
+                    val result = export.exportOne(session, photoId, log.created[photoId]) { documentId ->
+                        jobs.created(jobId, photoId, documentId)
+                    }
+                    jobs.done(jobId, photoId, result.outcome)
+                    outcome += result.outcome
+                    done++
+                    setProgress(workDataOf(KEY_DONE to done, KEY_TOTAL to total))
+                    notifications.progress(id, done, total)
                 }
-                jobs.done(jobId, photoId, result.outcome)
-                outcome += result.outcome
-                done++
-                setProgress(workDataOf(KEY_DONE to done, KEY_TOTAL to total))
-                notifications.progress(id, done, total)
             }
         } catch (e: CancellationException) {
-            withContext(NonCancellable) { stopped(jobId, job, graph, done, outcome) }
+            withContext(NonCancellable) { stopped(jobId, job, done, outcome) }
             throw e
         } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
             Log.w(TAG, "xmp export $jobId failed after $done/$total photos", e)
-            end(jobId, job, graph, done, outcome, cancelled = true)
+            end(jobId, job, done, outcome, cancelled = true)
             return Result.failure()
         }
         if (isStopped) {
-            stopped(jobId, job, graph, done, outcome)
+            stopped(jobId, job, done, outcome)
             return Result.retry()
         }
-        end(jobId, job, graph, done, outcome, cancelled = false)
+        end(jobId, job, done, outcome, cancelled = false)
         return Result.success(
             workDataOf(
                 KEY_WRITTEN to outcome.written,
@@ -198,32 +230,20 @@ class XmpExportWorker(context: Context, params: WorkerParameters) : CoroutineWor
     }
 
     /** Stopped: the user's Cancel ends the job; anything else keeps it for WorkManager's next run. */
-    private suspend fun stopped(
-        jobId: String,
-        job: XmpExportJob,
-        graph: XmpExportEntryPoint,
-        done: Int,
-        outcome: SidecarOutcome,
-    ) {
+    private suspend fun stopped(jobId: String, job: XmpExportJob, done: Int, outcome: SidecarOutcome) {
         if (cancelledByUser()) {
-            end(jobId, job, graph, done, outcome, cancelled = true)
+            end(jobId, job, done, outcome, cancelled = true)
         } else {
             Log.i(TAG, "xmp export $jobId stopped by the system at $done/${job.photoIds.size}: kept")
         }
     }
 
-    /** The job's end (done, cancelled or failed): its files go, its grants are released unless another job uses one. */
-    private suspend fun end(
-        jobId: String,
-        job: XmpExportJob,
-        graph: XmpExportEntryPoint,
-        done: Int,
-        outcome: SidecarOutcome,
-        cancelled: Boolean,
-    ) {
-        jobs.delete(jobId)
-        val inUse = jobs.others(jobId).flatMapTo(HashSet()) { it.trees }
-        for (tree in job.trees) graph.xmpGrants().release(tree, inUse)
+    /**
+     * The job's end (done, cancelled or failed): its files go, its grants are released unless another job uses one,
+     * and the files of jobs whose work is gone are swept ([sweep]).
+     */
+    private suspend fun end(jobId: String, job: XmpExportJob, done: Int, outcome: SidecarOutcome, cancelled: Boolean) {
+        sweep(applicationContext, ended = jobId to job)
         Log.i(TAG, "xmp export $jobId: $done/${job.photoIds.size} photos, $outcome")
         notifications.finished(outcome, cancelled)
     }
@@ -258,26 +278,86 @@ class XmpExportWorker(context: Context, params: WorkerParameters) : CoroutineWor
         const val KEY_WRITTEN: String = "written"
         const val KEY_UNWRITABLE: String = "unwritable"
         const val KEY_MALFORMED: String = "malformed"
-        const val UNIQUE_NAME: String = "xmp-export"
+
+        /** Every Export XMP work carries this tag, and [jobTag] for its job. */
+        const val WORK_TAG: String = "xmp-export"
+        private const val JOB_TAG_PREFIX = "xmp-job:"
+
+        /** One job at a time. */
+        private val RUN_LOCK = Mutex()
+
+        /** Job files, grants and works change together: enqueues, job ends and sweeps never interleave. */
+        private val JOBS_LOCK = Mutex()
+
+        fun workName(jobId: String): String = "$WORK_TAG-$jobId"
+
+        fun jobTag(jobId: String): String = "$JOB_TAG_PREFIX$jobId"
 
         /**
-         * Enqueues the export of [photoIds] to [destination]; runs one after another. The trees it names must already
-         * be granted ([XmpGrants.take]); the job releases them when it ends. Returns the work id.
+         * Enqueues the export of [photoIds] to [destination] as its own unique work (run after the jobs already
+         * queued; a Cancel or failure of one of them does not touch it). [take] grants the trees it names (for
+         * [XmpGrants.take]) under the jobs' lock, so a job ending meanwhile never releases them; the job releases them
+         * when it ends. Returns the work id.
          */
-        fun enqueue(context: Context, photoIds: List<Long>, destination: XmpDestination): UUID {
+        suspend fun enqueue(
+            context: Context,
+            photoIds: List<Long>,
+            destination: XmpDestination,
+            take: (String) -> Unit,
+        ): UUID {
             val jobId = UUID.randomUUID().toString()
             val job = when (destination) {
                 is XmpDestination.Folder -> XmpExportJob(photoIds, folderUri = destination.treeUri)
                 is XmpDestination.NextToPhotos -> XmpExportJob(photoIds, oneOff = destination.oneOff)
             }
-            XmpExportJobs(context).write(jobId, job)
             val request = OneTimeWorkRequestBuilder<XmpExportWorker>()
                 .setInputData(workDataOf(KEY_JOB to jobId))
-                .addTag(UNIQUE_NAME)
+                .addTag(WORK_TAG)
+                .addTag(jobTag(jobId))
                 .build()
-            WorkManager.getInstance(context)
-                .enqueueUniqueWork(UNIQUE_NAME, ExistingWorkPolicy.APPEND_OR_REPLACE, request)
+            JOBS_LOCK.withLock {
+                job.trees.forEach(take)
+                XmpExportJobs(context).write(jobId, job)
+                WorkManager.getInstance(context)
+                    .enqueueUniqueWork(workName(jobId), ExistingWorkPolicy.KEEP, request)
+                    .await()
+            }
             return request.id
+        }
+
+        /** The jobs whose work is still queued or running. */
+        suspend fun liveJobs(context: Context): Set<String> =
+            WorkManager.getInstance(context).getWorkInfosByTagFlow(WORK_TAG).first()
+                .filterNot { it.state.isFinished }
+                .flatMap { it.tags }
+                .filter { it.startsWith(JOB_TAG_PREFIX) }
+                .mapTo(HashSet()) { it.removePrefix(JOB_TAG_PREFIX) }
+
+        /**
+         * Deletes the files of jobs whose work is gone (cancelled or failed while queued, a kill between the files and
+         * the work) and releases their grants unless a live job uses them; [ended] = a job that just ended, also
+         * deleted and released. Run at app start and at each job's end. [release] defaults to [XmpGrants.release].
+         */
+        suspend fun sweep(
+            context: Context,
+            ended: Pair<String, XmpExportJob>? = null,
+            release: (suspend (String, Set<String>) -> Unit)? = null,
+        ) {
+            val grants = release ?: EntryPointAccessors.fromApplication(
+                context.applicationContext,
+                XmpExportEntryPoint::class.java,
+            ).xmpGrants()::release
+            val jobs = XmpExportJobs(context)
+            JOBS_LOCK.withLock {
+                val live = liveJobs(context) - setOfNotNull(ended?.first)
+                ended?.let { (jobId, job) ->
+                    jobs.delete(jobId)
+                    val inUse = live.mapNotNull(jobs::read).flatMapTo(HashSet()) { it.trees }
+                    for (tree in job.trees) grants(tree, inUse)
+                }
+                val swept = jobs.sweep(live, grants)
+                if (swept.isNotEmpty()) Log.i(TAG, "xmp export: swept ${swept.size} orphan job(s)")
+            }
         }
     }
 }

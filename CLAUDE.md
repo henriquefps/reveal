@@ -266,7 +266,9 @@ and hand-offs get READ grants only; an older rw grant is kept): the only writer 
 entry points: selection menu, Manage folders ⋯, top bar ⋯; "next to" only for folder photos under a write grant, one
 folder without one can be picked for a one-off write (`XmpGrants.covers` the folder); server-only photos and hand-offs
 only into a chosen folder; picked trees get a persisted READ|WRITE grant released by the job's end, `XmpGrants`; the job
-logs each photo in `files/xmp-jobs/<id>.log` and only the user's Cancel ends it, a system stop resumes). Reading:
+logs each photo in `files/xmp-jobs/<id>.log` and only the user's Cancel ends it, a system stop resumes; each job is
+its own unique work run one at a time, `XmpExportWorker.sweep` at app start and job end deletes jobs without work and
+releases their grants). Reading:
 `LibraryIndexer` parses each changed sidecar once (culling: `SidecarImport`, a **first read** fills only fields
 without a value, ADR 0026 "First read"; a vanished sidecar forgets its `sidecar_culling` row), then after the headers `SidecarEdits.reconcile` (import step
 `HistoryAction.XMP_IMPORT`, sidecar behind -> `IndexReport.sidecarsBehind` (informational), diverged ->

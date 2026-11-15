@@ -507,6 +507,33 @@ class RevealDatabaseMigrationTest {
     }
 
     @Test
+    fun `13 to 15 runs both steps and keeps the photos`() {
+        val name = "migration-13-15.db"
+        helper.createDatabase(name, 13).use { db ->
+            db.execSQL(
+                "INSERT INTO sources (id, tree_uri, root_document_id, display_name, state, writable, added_at, kind, " +
+                    "backup) VALUES (1, 'content://t', 'r', 'DCIM', 'AVAILABLE', 1, 0, 'FOLDER', 1)",
+            )
+            db.execSQL(
+                "INSERT INTO photos (id, uuid, source_id, folder, folder_document_id, stem_key, name, format, " +
+                    "has_raw, sort_time, orientation, rating, flag, has_edit, metadata_state, added_at, hidden) " +
+                    "VALUES (1, 'u1', 1, '', '', 'a', 'A.ARW', 'RAW', 1, 5, 1, 0, 'NONE', 0, 'READ', 0, 0)",
+            )
+        }
+        helper.runMigrationsAndValidate(name, 15, true, *RevealDatabase.MIGRATIONS).use { db ->
+            db.query("SELECT sort_time, camera_make, lens FROM photos WHERE id = 1").use { c ->
+                assertThat(c.moveToFirst()).isTrue()
+                assertThat(c.getLong(0)).isEqualTo(5L)
+                assertThat(c.isNull(1)).isTrue()
+                assertThat(c.isNull(2)).isTrue()
+            }
+            db.query("SELECT COUNT(*) FROM server_thumbs").use { c ->
+                assertThat(c.moveToFirst()).isTrue()
+            }
+        }
+    }
+
+    @Test
     fun `every exported schema up to the current version exists`() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val folder = "dev.hfps.reveal.data.db.RevealDatabase"

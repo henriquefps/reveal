@@ -102,6 +102,7 @@ class HealFlowTest {
                 compose.waitUntil(TIMEOUT_MS) { committed.heals.last().type == HealKind.CLONE }
 
                 // Delete, then undo it.
+                assertSpotButtonsFit()
                 click(HealTags.DELETE)
                 compose.waitUntil(TIMEOUT_MS) { committed.heals.size == 1 }
                 assertThat(fields()).contains(HistoryField.HEAL_DELETE)
@@ -316,6 +317,25 @@ class HealFlowTest {
         Thread.sleep(WRITE_MS)
     }
 
+    /**
+     * FIX/D: the selected spot's New source and Delete keep their full size inside the controls (in the landscape
+     * column a squeezed Row once left them 3 px and 0 px wide, so Delete could not be tapped).
+     */
+    private fun assertSpotButtonsFit() {
+        val controls = compose.onNodeWithTag(
+            HealTags.CONTROLS,
+            useUnmergedTree = true,
+        ).fetchSemanticsNode().boundsInRoot
+        val minSize =
+            MIN_BUTTON_DP * InstrumentationRegistry.getInstrumentation().targetContext.resources.displayMetrics.density
+        for (tag in listOf(HealTags.NEW_SOURCE, HealTags.DELETE)) {
+            val bounds = compose.onNodeWithTag(tag, useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
+            assertThat(bounds.width).isAtLeast(minSize)
+            assertThat(bounds.height).isAtLeast(minSize)
+            assertThat(bounds.right).isAtMost(controls.right)
+        }
+    }
+
     private fun enterHeal() {
         click(EditorTags.tool(ToolId.HEAL))
         compose.waitUntilAtLeastOneExists(hasTestTag(HealTags.CONTROLS), TIMEOUT_MS)
@@ -373,6 +393,7 @@ class HealFlowTest {
 
     private companion object {
         const val TAG = "REVEAL_HEAL_TEST"
+        const val MIN_BUTTON_DP = 40f
         const val TIMEOUT_MS = 30_000L
         const val REMOVE_TIMEOUT_MS = 120_000L
         const val WRITE_MS = 500L

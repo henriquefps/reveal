@@ -36,6 +36,9 @@ All notable changes to Reveal are documented here. The format follows
   app id (with the build variant: `reveal`, `reveal-debug`, `reveal-bench`), manufacturer and model.
 
 ### Fixed
+- Heal mode (FIX/D): in the landscape and tablet controls column the selected spot's New source and Delete were squeezed
+  to nothing by the row they share with Visualise spots and the spot count (Delete could not be tapped); the row now
+  wraps. `HealFlowTest` checks that both keep their size.
 - XMP sidecars (docs/adr/0027): writing an edit no longer rewrites the rating, pick and label in the sidecar, and a
   rating or pick writes only that; a reject read from a sidecar (`xmp:Rating="-1"`) keeps the photo's stars; a changed
   sidecar re-applies only the fields that changed in it (a label changed in Lightroom no longer brings back an old

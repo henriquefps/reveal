@@ -72,11 +72,15 @@ fun HealControls(host: ModeHost, modifier: Modifier = Modifier) {
             listOf(state.setting)
         }
         for (setting in shown) SettingSlider(setting, settings, actions)
-        Row(
+        // A flow, not a row: in the narrow landscape column the chip, the count and the buttons do not fit on one
+        // line, and a Row squeezed New source and Delete to nothing (FIX/D).
+        @OptIn(ExperimentalLayoutApi::class)
+        FlowRow(
             Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(0.dp),
+            itemVerticalAlignment = Alignment.CenterVertically,
         ) {
             RevealChip(
                 label = stringResource(R.string.heal_visualise),

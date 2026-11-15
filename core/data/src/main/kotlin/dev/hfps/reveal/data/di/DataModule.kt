@@ -23,6 +23,7 @@ import dev.hfps.reveal.data.handoff.HandoffBatches
 import dev.hfps.reveal.data.handoff.HandoffPreviewer
 import dev.hfps.reveal.data.handoff.HandoffRepository
 import dev.hfps.reveal.data.handoff.HandoffTree
+import dev.hfps.reveal.data.handoff.LocalOriginals
 import dev.hfps.reveal.data.handoff.LocalPreviews
 import dev.hfps.reveal.data.handoff.ServerItems
 import dev.hfps.reveal.data.index.LibraryIndexer
@@ -117,6 +118,12 @@ object DataModule {
     fun provideLocalPreviews(@ApplicationContext context: Context): LocalPreviews =
         LocalPreviews(File(context.noBackupFilesDir, "handoff-previews"))
 
+    /** Originals of hand-offs that only a temporary grant covers (ADR 0011 "Amendment W4"): kept, never evicted. */
+    @Provides
+    @Singleton
+    fun provideLocalOriginals(@ApplicationContext context: Context): LocalOriginals =
+        LocalOriginals(File(context.noBackupFilesDir, "handoff-originals"))
+
     @Provides
     @Singleton
     fun provideHandoffPreviewer(
@@ -137,11 +144,13 @@ object DataModule {
         database: RevealDatabase,
         previewer: HandoffPreviewer,
         server: ServerItems,
+        originals: LocalOriginals,
     ): HandoffRepository = HandoffRepository(
         context.contentResolver,
         database,
         LibraryIndexer(database),
         previewer = previewer,
+        originals = originals,
         server = server,
     )
 
@@ -200,6 +209,7 @@ object DataModule {
         @DataScope scope: CoroutineScope,
         previews: LocalPreviews,
         xmp: XmpPreferences,
+        originals: LocalOriginals,
     ): LibraryRepository = LibraryRepository(
         context.contentResolver,
         database,
@@ -213,6 +223,7 @@ object DataModule {
         grants = readGrants(context),
         // The debug build's synthetic documents provider (app/src/debug) needs no grant; absent in release.
         grantFreeAuthorities = setOf("${context.packageName}.synthetic"),
+        originals = originals,
     )
 
     @Provides
@@ -385,6 +396,7 @@ object DataModule {
         database: RevealDatabase,
         budget: CacheBudget,
         previews: LocalPreviews,
+        originals: LocalOriginals,
         // The areas register when they are made: make sure the thumbnails, the masks and the fills are.
         @Suppress("UNUSED_PARAMETER") thumbnails: ThumbnailRepository,
         @Suppress("UNUSED_PARAMETER") masks: MaskCacheArea,
@@ -394,6 +406,7 @@ object DataModule {
         db = database,
         budget = budget,
         previews = previews,
+        originals = originals,
         cacheDir = context.cacheDir,
         uploadsDir = File(context.noBackupFilesDir, "sync-previews"),
         database = {

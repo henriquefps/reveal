@@ -650,6 +650,25 @@ class PhoneLibraryScreenshotTest : LibraryScreenshotBase("phone") {
         composeRule.onRoot().captureRoboImage("src/test/screenshots/library/$file.png")
     }
 
+    /** With limited ("selected photos") access the offer explains what stays openable (ADR 0011 "Amendment W4"). */
+    @Test fun galleryAccessPartial() {
+        composeRule.setContent {
+            RevealTheme(darkTheme = false) {
+                Box(Modifier.fillMaxSize().background(RevealTheme.colors.background), Alignment.BottomCenter) {
+                    Surface(color = RevealTheme.colors.card, shape = RevealTheme.shapes.sheet) {
+                        GalleryAccessContent(
+                            onAllow = {},
+                            onDecline = {},
+                            modifier = Modifier.padding(top = 24.dp),
+                            partial = true,
+                        )
+                    }
+                }
+            }
+        }
+        composeRule.onRoot().captureRoboImage("src/test/screenshots/library/phone_gallery_access_partial_light.png")
+    }
+
     /** The once-only gallery access offer (ADR 0011 "Gallery access"). */
     @Test fun galleryAccess() {
         composeRule.setContent {

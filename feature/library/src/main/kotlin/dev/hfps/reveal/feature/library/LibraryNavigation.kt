@@ -200,8 +200,10 @@ fun LibraryScreen(
         viewModel.onGalleryAccessResult()
     }
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { viewModel.onResumed() }
+    val galleryPartial by viewModel.galleryPartial.collectAsStateWithLifecycle()
     if (galleryOffer) {
         GalleryAccessSheet(
+            partial = galleryPartial,
             onAllow = { galleryPermission.launch(GalleryAccess.permissions()) },
             onDecline = viewModel::declineGalleryAccess,
         )

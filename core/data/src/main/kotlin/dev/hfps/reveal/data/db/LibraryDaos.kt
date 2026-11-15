@@ -527,6 +527,27 @@ interface PhotoDao {
     )
     fun observeUnreadableHandoffs(): Flow<List<String>>
 
+    /** Whether any hand-off photo has a MediaStore file (the gallery access offer on receipt, W4). */
+    @Query(
+        "SELECT EXISTS (SELECT 1 FROM photo_files f JOIN sources s ON s.id = f.source_id JOIN photos p ON " +
+            "p.id = f.photo_id WHERE s.kind = 'HANDOFF' AND p.hidden = 0 AND f.document_id LIKE 'content://media/%')",
+    )
+    fun observeMediaHandoffs(): Flow<Boolean>
+
+    /** Points a file row at another document (a hand-off's local copy of its original, W4). */
+    @Query(
+        "UPDATE photo_files SET document_id = :to, relative_path = :to " +
+            "WHERE document_id = :from AND source_id = :sourceId",
+    )
+    suspend fun repointFile(sourceId: Long, from: String, to: String)
+
+    /** How many photos the newest hand-off batch holds (it is never pruned, however big). */
+    @Query(
+        "SELECT COUNT(*) FROM photos WHERE handoff_at IS NOT NULL AND " +
+            "handoff_at = (SELECT MAX(handoff_at) FROM photos WHERE handoff_at IS NOT NULL)",
+    )
+    suspend fun newestBatchSize(): Int
+
     // ---- one photo across sources (ADR 0011 "One photo across sources")
 
     /**

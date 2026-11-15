@@ -35,6 +35,9 @@ enum class StorageKind {
     /** Previews of photos other apps handed over (`no_backup/handoff-previews`): some are a photo's only copy. */
     HANDOFF_PREVIEWS,
 
+    /** Originals Reveal keeps of photos other apps handed over (`no_backup/handoff-originals`): never cleared. */
+    HANDOFF_ORIGINALS,
+
     /** Everything else in the cache (exports being written, shared files, downloads) and previews being uploaded. */
     OTHER,
 

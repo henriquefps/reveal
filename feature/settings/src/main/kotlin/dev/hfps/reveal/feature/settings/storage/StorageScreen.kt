@@ -338,6 +338,7 @@ private val KINDS = listOf(
     StorageKind.SERVER_FILES,
     StorageKind.MASKS,
     StorageKind.HANDOFF_PREVIEWS,
+    StorageKind.HANDOFF_ORIGINALS,
     StorageKind.OTHER,
     StorageKind.LIBRARY,
 )
@@ -349,6 +350,7 @@ private fun StorageKind.title(): Int = when (this) {
     StorageKind.SERVER_FILES -> R.string.storage_server_files
     StorageKind.MASKS -> R.string.storage_masks
     StorageKind.HANDOFF_PREVIEWS -> R.string.storage_handoff_previews
+    StorageKind.HANDOFF_ORIGINALS -> R.string.storage_handoff_originals
     StorageKind.OTHER -> R.string.storage_other
     StorageKind.LIBRARY -> R.string.storage_library
 }
@@ -360,6 +362,7 @@ private fun StorageKind.icon() = when (this) {
     StorageKind.SERVER_FILES -> PhosphorRegular.Cloud
     StorageKind.MASKS -> PhosphorRegular.Sparkle
     StorageKind.HANDOFF_PREVIEWS -> PhosphorRegular.ArrowSquareIn
+    StorageKind.HANDOFF_ORIGINALS -> PhosphorRegular.PushPin
     StorageKind.OTHER -> PhosphorRegular.Package
     StorageKind.LIBRARY -> PhosphorRegular.Database
 }
@@ -381,6 +384,8 @@ private fun subtitle(kind: StorageKind, usage: StorageUsage?, context: Context):
     } else {
         stringResource(R.string.storage_handoff_previews_note)
     }
+
+    StorageKind.HANDOFF_ORIGINALS -> stringResource(R.string.storage_handoff_originals_note)
 
     StorageKind.OTHER -> stringResource(R.string.storage_other_note)
 

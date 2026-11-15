@@ -24,6 +24,7 @@ import dev.hfps.reveal.data.handoff.Fallback
 import dev.hfps.reveal.data.handoff.HandoffBackup
 import dev.hfps.reveal.data.handoff.HandoffFallbacks
 import dev.hfps.reveal.data.handoff.HandoffMerge
+import dev.hfps.reveal.data.handoff.LocalOriginals
 import dev.hfps.reveal.data.handoff.LocalPreviews
 import dev.hfps.reveal.data.handoff.MergeReport
 import dev.hfps.reveal.data.index.IndexProgress
@@ -228,6 +229,8 @@ class LibraryRepository(
      * named explicitly, never inferred from a missing grant row.
      */
     private val grantFreeAuthorities: Set<String> = emptySet(),
+    /** The originals Reveal keeps of hand-offs whose grant ended (MediaStore Downloads, W4); null in tests. */
+    private val originals: LocalOriginals? = null,
 ) {
     private val sourceDao = db.sourceDao()
     private val photoDao = db.photoDao()
@@ -260,6 +263,9 @@ class LibraryRepository(
             )
         }
     }
+
+    /** Whether the hand-offs hold MediaStore photos (the gallery access offer on receipt, ADR 0011 W4). */
+    fun hasMediaHandoffs(): Flow<Boolean> = photoDao.observeMediaHandoffs().distinctUntilChanged()
 
     /** Hand-off documents Reveal cannot read now (the gallery access offer, ADR 0011). */
     fun unreadableHandoffs(): Flow<List<String>> = photoDao.observeUnreadableHandoffs()
@@ -483,7 +489,9 @@ class LibraryRepository(
         val handoff = sourceDao.handoff()?.id
         val (gone, hide) = photoDao.getAll(photoIds).partition { it.sourceId == handoff }
         gone.map { it.id }.chunked(SQL_ARGS).forEach { ids ->
-            previews?.delete(photoDao.filesOf(ids).mapNotNull { it.fingerprint })
+            val files = photoDao.filesOf(ids)
+            previews?.delete(files.mapNotNull { it.fingerprint })
+            originals?.delete(files.filter { originals.isLocal(it.documentId) }.mapNotNull { it.fingerprint })
             photoDao.deletePhotos(ids)
         }
         hide.map { it.id }.chunked(SQL_ARGS).forEach { photoDao.setHidden(it, true) }
@@ -692,6 +700,7 @@ class LibraryRepository(
         if (report.merged > 0) {
             Log.i(TAG, "Merged ${report.merged} hand-off photos into source $sourceId")
             previews?.delete(report.fingerprints)
+            originals?.delete(report.fingerprints)
         }
         report
     }

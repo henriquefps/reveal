@@ -81,6 +81,8 @@ class HandoffRepository(
     private val tree: DocumentTree = HandoffTree(resolver),
     /** Keeps a local preview of each hand-off while its grant is alive (ADR 0011 "Unreadable hand-offs"). */
     private val previewer: HandoffPreviewer? = null,
+    /** Keeps the originals the sender's grant covers only while it lives (MediaStore Downloads, W4); null in tests. */
+    private val originals: LocalOriginals? = null,
     /** The paired server, to resolve server references (ADR 0011 "Amendment W3/H"); never paired by default. */
     private val server: ServerItems = ServerItems.None,
     private val clock: () -> Long = System::currentTimeMillis,
@@ -211,6 +213,7 @@ class HandoffRepository(
                 }
             }
         }
+        keepOriginals(source.id, shots)
         schedulePreviews(stored, initial, persisted)
         val served = batch?.photos.orEmpty()
         val total = stored.size + served.size
@@ -234,6 +237,30 @@ class HandoffRepository(
                 notFound,
                 issue,
             )
+        }
+    }
+
+    /**
+     * Copies the files the sender's temporary grant covers only (MediaStore Downloads, W4) into [originals] while the
+     * grant is valid, and files them under the copy. The copy goes through the tree's [FileOpens] slot (`busy:` is
+     * retried); a failure keeps the URI, and the photo falls back to its preview as for any unreadable hand-off.
+     */
+    private suspend fun keepOriginals(sourceId: Long, shots: List<Shot>) {
+        val store = originals ?: return
+        for (shot in shots) {
+            for ((item, _) in shot.files) {
+                val print = item.fingerprint
+                if (print == null || !LocalOriginals.isDownloads(item.uri)) continue
+                val copy = try {
+                    store.copyIn(tree.openInput(item.uri.toString(), item.name), print, item.name)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
+                    Log.w(TAG, "Could not keep the original of a Downloads hand-off: ${e.javaClass.simpleName}")
+                    null
+                }
+                if (copy != null) photos.repointFile(sourceId, item.uri.toString(), store.documentId(copy))
+            }
         }
     }
 
@@ -671,13 +698,16 @@ class HandoffRepository(
      * previews. Folder photos beyond them only leave "Opened from other apps".
      */
     private suspend fun prune(sourceId: Long) {
-        photos.clearStaleFolderHandoffs(MAX_PHOTOS)
-        val stale = photos.staleHandoffs(sourceId, MAX_PHOTOS)
+        // The newest batch is never cut, however big (Hoard copies whole shoots, W4).
+        val keep = maxOf(MAX_PHOTOS, photos.newestBatchSize())
+        photos.clearStaleFolderHandoffs(keep)
+        val stale = photos.staleHandoffs(sourceId, keep)
         if (stale.isEmpty()) return
         val files = stale.chunked(SQL_ARGS).flatMap { photos.filesOf(it) }
         stale.chunked(SQL_ARGS).forEach { photos.deletePhotos(it) }
         files.forEach { release(it.documentId.toUri()) }
         previewer?.previews?.delete(files.mapNotNull { it.fingerprint })
+        originals?.delete(files.filter { originals.isLocal(it.documentId) }.mapNotNull { it.fingerprint })
     }
 
     /**
@@ -687,7 +717,8 @@ class HandoffRepository(
     @Suppress("ReturnCount")
     private fun persist(uri: Uri, persistable: Boolean): Boolean {
         if (uri.scheme == "file") return true
-        if (!persistable || uri.scheme != "content") return false
+        // A MediaStore URI is never persisted: the photo permission (or, for Downloads, a local copy) covers it.
+        if (!persistable || uri.scheme != "content" || uri.authority == "media") return false
         return runCatching { resolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
             .onFailure { Log.i(TAG, "No persistable grant for a hand-off: ${it.javaClass.simpleName}") }
             .isSuccess
@@ -768,10 +799,15 @@ class HandoffRepository(
          * (FileProvider paths, a MediaStore collection: a batch from one collection pairs by stem).
          */
         fun parentKey(uri: Uri): String {
+            // MediaStore (W4): Hoard's RAW can sit in Downloads and its JPEG in Images, so every MediaStore URI of a
+            // request shares one parent and pairs by stem.
             val segment = uri.lastPathSegment.orEmpty()
-            if ('/' in segment) return "${uri.authority}:${segment.substringBeforeLast('/')}"
             val text = uri.toString()
-            return text.substring(0, text.lastIndexOf('/').coerceAtLeast(0))
+            return when {
+                uri.authority == "media" -> "media:"
+                '/' in segment -> "${uri.authority}:${segment.substringBeforeLast('/')}"
+                else -> text.substring(0, text.lastIndexOf('/').coerceAtLeast(0))
+            }
         }
     }
 }

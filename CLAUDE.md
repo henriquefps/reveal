@@ -341,6 +341,21 @@ REVEAL_HANDOFF_DIR=$D REVEAL_HANDOFF_LINKS=$(for i in 1 2; do scripts/sync/local
 adb -s <serial> shell am instrument -w -e class dev.hfps.reveal.handoff.HandoffServerRefTest [-e syncLink "'$(scripts/sync/local-server.sh pair <work dir>)'"] dev.hfps.reveal.debug.test/androidx.test.runner.AndroidJUnitRunner
 ```
 
+W4 local copies (ADR 0011 "Amendment W4"): Hoard 2.2.0 copies non-server photos into MediaStore (`Pictures/Hoard/<batch>`,
+and `Download/Hoard/<batch>` for what Images refuses, e.g. CR3) and hands over `content://media/...` URIs with a read grant
+only (no persistable grant, no write, no sidecar; chunks of 200 with `BATCH_INDEX/COUNT` like server items; SMB streaming
+links are legacy). `GalleryAccess.shouldOfferForMedia` (`PhotoDao.observeMediaHandoffs`) = the once-only offer on receipt
+(`GalleryAccessContent(partial)`); media URIs are never persisted (`HandoffRepository.persist`), all share one parent key
+so RAW (Downloads) and JPEG (Images) pair (`parentKey`); `handoff/LocalOriginals` copies a Downloads file while the grant
+lives into `noBackupFilesDir/handoff-originals/<fingerprint>.<ext>` and `PhotoDao.repointFile` files it under the `file:`
+copy (never evicted, `StorageKind.HANDOFF_ORIGINALS`, deleted by `forget`/retention/merge only); `SyncDao.adoptableHandoffs`
+skips readable `content://media/` files; the retention keeps the newest batch whole (`newestBatchSize`).
+```sh
+./gradlew :core:data:testDebugUnitTest --tests '*HandoffMediaTest*' --tests '*HandoffServerRefsTest*' --tests '*ReadOnlyGrantsTest*' && ./gradlew :core:sync:testDebugUnitTest --tests '*HandoffAdoptionTest*'
+adb -s <serial> shell pm grant dev.hfps.reveal.debug android.permission.READ_MEDIA_IMAGES   # FULL; `pm revoke` = NONE (kills the app)
+adb -s <serial> shell am instrument -w -e class dev.hfps.reveal.handoff.HandoffMediaTest dev.hfps.reveal.debug.test/androidx.test.runner.AndroidJUnitRunner   # run in FULL and in NONE
+```
+
 One photo across sources (ADR 0011, 0.5.1): a hand-off and a folder file of the same fingerprint are the folder's photo.
 Folder first: `HandoffRepository.store` opens it (`foreign`), sets `handoff_at`, applies the culling values
 (`applyFolderCulling`) and writes the folder sidecar (`SidecarSync`). Hand-off first: `LibraryRepository.mergeHandoffs`

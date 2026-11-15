@@ -51,6 +51,12 @@ class GalleryAccess(private val context: Context) {
         askedState.value = true
     }
 
+    /** Forgets that the offer was answered (instrumented tests only). */
+    fun resetAskedForTests() {
+        preferences.edit { putBoolean(KEY_ASKED, false) }
+        askedState.value = false
+    }
+
     private fun read(): GalleryAccessState = stateOf(Build.VERSION.SDK_INT) {
         ContextCompat.checkSelfPermission(context, it) == PackageManager.PERMISSION_GRANTED
     }
@@ -97,5 +103,14 @@ class GalleryAccess(private val context: Context) {
          */
         fun shouldOffer(unreadable: List<String>, state: GalleryAccessState, asked: Boolean): Boolean =
             !asked && state == GalleryAccessState.NONE && unreadable.any(::isMediaStore)
+
+        /**
+         * Whether the library offers the permission on receipt of a hand-off that holds MediaStore photos (ADR 0011
+         * "Amendment W4": Hoard hands over `content://media/...` URIs): once, while access is not FULL. With
+         * [GalleryAccessState.PARTIAL] the sheet explains that only the selected photos stay openable. The answer
+         * is remembered ([GalleryAccess.setAsked]); Settings changes it later.
+         */
+        fun shouldOfferForMedia(mediaHandoffs: Boolean, state: GalleryAccessState, asked: Boolean): Boolean =
+            !asked && mediaHandoffs && state != GalleryAccessState.FULL
     }
 }

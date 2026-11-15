@@ -102,6 +102,8 @@
     <string name="storage_server_files_note">Parts of originals and previews from your server, kept while you view them</string>
     <string name="storage_handoff_previews">Photos from other apps</string>
     <string name="storage_handoff_previews_note">Previews of photos other apps shared with Reveal</string>
+    <string name="storage_handoff_originals">Originals from other apps</string>
+    <string name="storage_handoff_originals_note">Files other apps handed over for Reveal to keep (such as CR3 photos). They are the only copy Reveal can read, so Clear cache leaves them; removing the photo deletes them.</string>
     <string name="storage_handoff_previews_kept">%1$s of them are a photo\'s only copy and stay</string>
     <string name="storage_masks">AI masks and fills</string>
     <string name="storage_masks_note">Masks and Remove fills, made again when needed</string>

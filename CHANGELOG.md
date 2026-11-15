@@ -29,6 +29,11 @@ All notable changes to Reveal are documented here. The format follows
   folder or one above it.
 
 ### Changed
+- Photos handed over by Hoard as copies in your gallery (MediaStore) now work like any other photo: Reveal asks once
+  for access to all your photos so they stay openable later, keeps its own copy of the files the gallery cannot share
+  (such as CR3, in Settings → Storage → "Originals from other apps", never cleared automatically), pairs a RAW in
+  Downloads with its JPEG in Pictures, and no longer moves a readable local copy to the server's. Big batches (split
+  in chunks of 200) arrive as one entry and are never cut by the 400-photo retention.
 - Reveal no longer writes `.xmp` sidecars on its own, anywhere (edits, ratings, flags, labels, hand-offs): they travel
   through the server, and Export XMP writes sidecars when you ask. The "Write edits to XMP sidecars" setting is gone.
   New folders and hand-offs are granted read access only; reading existing sidecars is unchanged.

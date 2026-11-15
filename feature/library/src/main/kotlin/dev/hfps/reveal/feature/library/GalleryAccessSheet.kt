@@ -32,14 +32,19 @@ object GalleryAccessTags {
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-internal fun GalleryAccessSheet(onAllow: () -> Unit, onDecline: () -> Unit) {
+internal fun GalleryAccessSheet(partial: Boolean, onAllow: () -> Unit, onDecline: () -> Unit) {
     RevealBottomSheet(onDismissRequest = onDecline) {
-        GalleryAccessContent(onAllow, onDecline)
+        GalleryAccessContent(onAllow, onDecline, partial = partial)
     }
 }
 
 @Composable
-fun GalleryAccessContent(onAllow: () -> Unit, onDecline: () -> Unit, modifier: Modifier = Modifier) {
+fun GalleryAccessContent(
+    onAllow: () -> Unit,
+    onDecline: () -> Unit,
+    modifier: Modifier = Modifier,
+    partial: Boolean = false,
+) {
     Column(
         modifier = modifier.fillMaxWidth().padding(
             horizontal = 20.dp,
@@ -53,7 +58,9 @@ fun GalleryAccessContent(onAllow: () -> Unit, onDecline: () -> Unit, modifier: M
             color = RevealTheme.colors.foreground,
         )
         Text(
-            stringResource(R.string.library_gallery_access_body),
+            stringResource(
+                if (partial) R.string.library_gallery_access_body_partial else R.string.library_gallery_access_body,
+            ),
             style = RevealTheme.typography.body,
             color = RevealTheme.colors.mutedForeground,
         )

@@ -15,6 +15,7 @@ import dev.hfps.reveal.data.edit.EditRepository
 import dev.hfps.reveal.data.edit.HistoryWriter
 import dev.hfps.reveal.data.edit.VersionRepository
 import dev.hfps.reveal.data.handoff.GalleryAccess
+import dev.hfps.reveal.data.handoff.GalleryAccessState
 import dev.hfps.reveal.data.library.AddSourceResult
 import dev.hfps.reveal.data.library.LibraryRepository
 import dev.hfps.reveal.data.library.XmpDestination
@@ -131,8 +132,19 @@ class LibraryViewModel @Inject constructor(
      * longer be read, Reveal has no gallery access, and the offer was never answered.
      */
     val galleryOffer: StateFlow<Boolean> =
-        combine(library.unreadableHandoffs(), gallery.state, gallery.asked, GalleryAccess::shouldOffer)
-            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT), false)
+        combine(library.unreadableHandoffs(), library.hasMediaHandoffs(), gallery.state, gallery.asked) {
+                unreadable,
+                media,
+                state,
+                asked,
+            ->
+            GalleryAccess.shouldOffer(unreadable, state, asked) ||
+                GalleryAccess.shouldOfferForMedia(media, state, asked)
+        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT), false)
+
+    /** The offer explains that only the selected photos stay readable (Android 14+ "Allow limited access"). */
+    val galleryPartial: StateFlow<Boolean> = gallery.state.map { it == GalleryAccessState.PARTIAL }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT), false)
 
     /** "Not now": remembered, never offered again (Settings can turn it on). */
     fun declineGalleryAccess() = gallery.setAsked()

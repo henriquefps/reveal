@@ -536,3 +536,56 @@ Item limit 500; the tiebreak is the ordinal `deviceId`; Hoard learns Reveal's pa
   the same file opens it (a Server photo is reusable like a folder photo). Its sidecar link goes (no sidecar for server
   items, "Amendment W3/H"). Only the files the server holds move, and the photo never becomes deletable by the
   server's records or the NAS feed (docs/adr/0018 "Hand-offs the server holds become Server photos").
+
+## Amendment W4: local copies (0.9.0)
+
+**Sender rule (Hoard 2.2.0).** A server-held photo still comes as a server reference (W3/H, unchanged). A photo already
+on the phone comes as its `content://media/...` URI. Every other photo (SMB not on the server, USB/SD/SAF) is copied
+by Hoard into MediaStore and handed over as a `content://media/...` URI in the usual DEVELOP intent (ClipData, `TITLE`,
+`INITIAL_URI`, `CULLING` v2 keyed by those URIs, `BATCH_INDEX`/`BATCH_COUNT` when split): RAW and JPEG into
+`Pictures/Hoard/<batch>/` (`MediaStore.Images`), and the formats Images refuses (CR3) into `Download/Hoard/<batch>/`
+(`MediaStore.Downloads`, `application/octet-stream`, the real name kept), never sidecars. Only
+`FLAG_GRANT_READ_URI_PERMISSION`: no persistable grant, no write grant, no sidecar items. Hoard's SMB streaming links
+(`content://dev.hfps.hoard.stream/...`) are the **legacy** path: not used for new hand-offs, but the links already in
+existing libraries keep working (`busy:` handling stays).
+
+**Reveal.**
+1. *Gallery access on receipt.* When a hand-off holds `content://media` photos and `GalleryAccess` is not FULL, the
+   library offers the permission once in a sheet ("To open photos from Hoard, Reveal needs access to all your
+   photos"): `GalleryAccess.shouldOfferForMedia`, driven by `PhotoDao.observeMediaHandoffs` (any hand-off file under
+   `content://media/`). The batch opens meanwhile from the temporary grant. PARTIAL gets a variant that says only the
+   selected photos stay openable (what the grant allows opens; later reads that fail fall back to previews,
+   `HandoffPreviewer`). NONE/declined behaves as before. The answer is remembered (`asked`); Settings → Gallery access
+   changes it. A single-photo hand-off opens the editor, so the sheet shows when the library is next visited.
+2. *Media URIs are stable references* under FULL (and for the selected photos under PARTIAL): re-openable without
+   grants. The access check (`recheckAccess`, `checkHandoffs`, the background pass) simply opens them through
+   `FileOpens`: readable stays readable, only a real refusal (`isAccessError`) marks a file unreadable, `busy:` never
+   does. `takePersistableUriPermission` is never tried on them (`persist` skips authority `media`).
+3. *Downloads originals are kept locally.* `READ_MEDIA_IMAGES` does not cover `MediaStore.Downloads`, so a hand-off
+   file at `content://media/<volume>/downloads/<id>` (detected by URI, confirmed by its name and magic bytes, never by
+   MIME) is copied, while the intent's grant is valid, into `noBackupFilesDir/handoff-originals/<fingerprint>.<ext>`
+   (`LocalOriginals`, through the tree's `FileOpens` slot, `busy:` retried) and the file row is repointed at the copy
+   (`file:` URI). It is read from there from then on, never marked unreadable when the grant ends, and uploaded from
+   there; identity stays by fingerprint. It is *not* a cache: the budget never evicts it (a copy may be the only
+   readable one), it has its own row in Settings → Storage (`StorageKind.HANDOFF_ORIGINALS`, not part of "Clear
+   cache"), and only forgetting the photo, the retention, or merging it into a folder photo that has the file deletes it.
+4. *Identity* is the v1 fingerprint as before: a Hoard copy, the NAS/server original and an earlier hand-off of the
+   same content are one photo (`HandoffMerge`, folder-first and hand-off-first paths).
+5. *Pairing* across collections: a CR3 in Downloads and its JPEG in Images arrive in one intent with different parents,
+   so every MediaStore URI of a request shares one parent key (`HandoffRepository.parentKey`) and pairs by stem.
+6. *Adoption (W3/C) leaves local copies alone:* `SyncDao.adoptableHandoffs` skips a main file that is a readable
+   `content://media/` file; an unreadable one is adopted as before.
+7. No write grants are asked on these URIs and no sidecar is written for them (ADR 0026 "Amendment W4").
+8. *Chunks.* Media-URI items split at 200 per intent use the same `BATCH_INDEX`/`BATCH_COUNT` scheme as server items;
+   `HandoffIntents`, `HandoffBatches` and `MainActivity` treat URI-only, server-only and mixed chunks alike: index > 0
+   ingests silently inside its own activity (its temporary grant, including the Downloads copy, is used before that
+   activity finishes), one shared stamp and title (one entry in "Opened from other apps"), notices shown once,
+   culling applied per chunk, the initial photo opens from index 0 only. The hand-off retention (400 photos) never cuts
+   the newest batch, however big.
+
+Tests: `HandoffMediaTest` (JVM: offer state machine, no persistable grant, cross-collection pairing, kept original +
+revoked grant + restart + forget, access check, identity incl. a Server photo, URI chunks, retention),
+`HandoffServerRefsTest` (URI/server/mixed chunks), `HandoffAdoptionTest`, `ReadOnlyGrantsTest`; instrumented
+`HandoffMediaTest` (real MediaStore Images/Downloads, read grant only through `HandoffHostActivity`, 450 URIs in
+3 chunks).
+

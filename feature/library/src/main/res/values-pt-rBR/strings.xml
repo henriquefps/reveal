@@ -83,7 +83,6 @@
     <string name="library_action_preset">Aplicar predefinição</string>
     <string name="library_action_export">Exportar</string>
     <string name="library_rating_none">Sem estrelas</string>
-    <string name="library_saved_database_only">Salvo só no Reveal: a pasta é somente leitura, então nenhum arquivo XMP foi gravado.</string>
     <plurals name="library_removed">
         <item quantity="one">%1$d foto removida da biblioteca. O arquivo continua no aparelho.</item>
         <item quantity="many">%1$d fotos removidas da biblioteca. Os arquivos continuam no aparelho.</item>
@@ -372,4 +371,41 @@
         <item quantity="many">%1$d fotos não foram encontradas no servidor.</item>
         <item quantity="other">%1$d fotos não foram encontradas no servidor.</item>
     </plurals>
+    <!-- Export XMP (W4, ADR 0026): the only way sidecars are written -->
+    <string name="library_action_export_xmp">Exportar XMP…</string>
+    <string name="library_folder_export_xmp">Exportar XMP desta pasta</string>
+    <plurals name="library_menu_export_xmp">
+        <item quantity="one">Exportar XMP desta %d foto</item>
+        <item quantity="many">Exportar XMP destas %d fotos</item>
+        <item quantity="other">Exportar XMP destas %d fotos</item>
+    </plurals>
+    <string name="xmp_export_title">Exportar XMP</string>
+    <plurals name="xmp_export_for">
+        <item quantity="one">Gravar o arquivo .xmp de %d foto</item>
+        <item quantity="many">Gravar os arquivos .xmp de %d fotos</item>
+        <item quantity="other">Gravar os arquivos .xmp de %d fotos</item>
+    </plurals>
+    <string name="xmp_export_next">Ao lado das fotos</string>
+    <string name="xmp_export_next_note">Um .xmp junto de cada arquivo, na pasta em que ele está.</string>
+    <string name="xmp_export_next_pick">Ao lado das fotos: escolha “%1$s”</string>
+    <string name="xmp_export_next_pick_note">O Reveal ainda não pode gravar nesta pasta. Escolha-a uma vez para gravar nela; o Reveal não guarda esse acesso.</string>
+    <string name="xmp_export_choose">Escolher uma pasta…</string>
+    <string name="xmp_export_choose_note">Arquivos .xmp soltos, com o nome de cada foto, numa pasta que você escolher.</string>
+    <string name="xmp_export_choose_only_note">Arquivos .xmp soltos, com o nome de cada foto, numa pasta que você escolher. As fotos que só o servidor tem, ou que outros apps enviaram, vão por aqui.</string>
+    <string name="xmp_export_what">Notas, rótulos, marcações e a edição. Um arquivo que não é um XMP válido nunca é sobrescrito.</string>
+    <string name="xmp_export_cancel">Cancelar</string>
+    <string name="xmp_export_channel">Exportação de XMP</string>
+    <plurals name="xmp_export_progress">
+        <item quantity="one">Exportando XMP: %1$d de %2$d foto</item>
+        <item quantity="many">Exportando XMP: %1$d de %2$d fotos</item>
+        <item quantity="other">Exportando XMP: %1$d de %2$d fotos</item>
+    </plurals>
+    <plurals name="xmp_export_queued">
+        <item quantity="one">Exportando XMP de %d foto…</item>
+        <item quantity="many">Exportando XMP de %d fotos…</item>
+        <item quantity="other">Exportando XMP de %d fotos…</item>
+    </plurals>
+    <string name="xmp_export_done">XMP exportado. Gravados: %1$d</string>
+    <string name="xmp_export_cancelled">Exportação de XMP interrompida. Gravados: %1$d</string>
+    <string name="xmp_export_skipped">Ignorados. XMP malformado: %1$d. Sem poder gravar: %2$d.</string>
 </resources>

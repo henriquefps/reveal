@@ -139,7 +139,7 @@ class SidecarSyncTest {
         LibraryIndexer(db).index(sourceId, FileDocumentTree(root))
         val id = db.photoDao().rows(PhotoQuerySql.toQuery(PhotoQuery())).single().id
         db.photoDao().setRating(listOf(id), 5)
-        assertThat(sync().write(listOf(id))).isEqualTo(SidecarOutcome(0, 1))
+        assertThat(sync().write(listOf(id))).isEqualTo(SidecarOutcome(0, 0, 1))
         assertThat(File(root, "A.xmp").readText()).isEqualTo("<x:xmpmeta broken")
     }
 

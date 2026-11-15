@@ -184,3 +184,33 @@ Fixtures in `core/data/src/test/resources/xmp/` are hand-written in each app's l
 
 An edit-only write no longer touches `xmp:Rating`, `digiKam:PickLabel` or `xmp:Label`, and a sidecar it creates has
 none of them; a sidecar import applies only the culling fields that changed in the file since it was last read.
+
+## Amendment W4: automatic writes removed, Export XMP (0.9.0)
+
+Reveal no longer writes sidecars on its own, anywhere: not for an edit (`EditSidecars` is gone, and with it `meta`
+`xmp.editsWritten`), not for a rating, flag or label change (library, viewer, editor, hand-off culling, merges), not to
+catch a sidecar up (`IndexReport.sidecarsBehind` is informational), not into a hand-off's writable `.xmp` item (those
+are read for import only). Culling and edits travel between apps through hoard-server (ADR 0027, edited previews).
+Reading and importing sidecars is unchanged.
+
+- Settings: the "Write edits to XMP sidecars" switch is gone and its stored `writeEdits` value is removed on first
+  run; "Apply edits from XMP sidecars" stays, with a note that sidecars are written only by Export XMP.
+- Grants: `addSource` and hand-offs take a persistable READ grant only. Grants that already include write are kept
+  (they cannot be taken again once released) and serve Export XMP's "Next to the photos". New folders therefore have
+  `sources.writable = false` unless the provider needs no grant.
+- **Export XMP** (`XmpExport`, `XmpExportWorker`, `XmpExportSheet`) is the only caller of `SidecarSync.write` /
+  `writeInto`. Entry points: the library selection menu, a folder's ⋯ in Manage folders (the whole folder) and the top
+  bar ⋯ ("Export XMP for these N photos": the current filter's results). A sheet asks where:
+  - **Next to the photos** (`<stem>.xmp`, merged into the existing sidecar): offered when every photo is a folder file
+    of an available source Reveal holds a write grant for. When exactly one folder lacks the grant the sheet offers to
+    pick that folder with `ACTION_OPEN_DOCUMENT_TREE` for a one-off write (the grant is not persisted; `XmpDestination
+    .NextToPhotos.oneOff`). Server-only photos and hand-offs never get "next to".
+  - **Choose a folder…**: flat `<stem>.xmp` files in a folder the user picks, for any photo. The photo's own sidecar
+    (read only) is the merge base; a taken name is de-duplicated by the provider, as in the image export.
+  Content and merge rules are what the automatic writer had: the culling fields and the master version's edit
+  (`reveal:` block + Camera Raw overlap), only fields Reveal knows, never a newer app's `reveal:` block, never a
+  malformed sidecar overwritten. It runs as a WorkManager job (25 photos per step, notification with Cancel, job file
+  `files/xmp-jobs`); the result names `SidecarOutcome(written, databaseOnly = unwritable, malformed)`.
+- Tests: `XmpExportTest` (no automatic write, next to, chosen folder, malformed kept, unknown fields kept, server-only
+  and hand-off refused for "next to", the one-off tree, preference removal), `XmpSidecarFlowTest` (instrumented).
+

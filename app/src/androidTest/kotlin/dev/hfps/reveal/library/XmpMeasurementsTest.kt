@@ -6,6 +6,7 @@ import androidx.test.platform.app.InstrumentationRegistry
 import com.google.common.truth.Truth.assertThat
 import dagger.hilt.android.EntryPointAccessors
 import dev.hfps.reveal.data.db.PhotoQuerySql
+import dev.hfps.reveal.data.library.XmpDestination
 import dev.hfps.reveal.data.model.PhotoFilters
 import dev.hfps.reveal.data.model.PhotoQuery
 import dev.hfps.reveal.debug.DebugAccess
@@ -43,7 +44,6 @@ class XmpMeasurementsTest {
 
     @Test
     fun thousandPhotos() = runBlocking {
-        folder.xmp.setWriteEdits(true)
         folder.xmp.setReadEdits(true)
         val preview = folder.gradientJpeg(0, 160, 120, 70)
         repeat(PHOTOS) { folder.pair("DSC%05d".format(it), it, preview) }
@@ -61,14 +61,14 @@ class XmpMeasurementsTest {
             )
         }
         var t = System.nanoTime()
-        val created = folder.editSidecars.flush()
+        val created = folder.xmpExport.run(photos.map { it.id }.distinct(), XmpDestination.NextToPhotos()).written
         val createMs = ms(t)
         log("created $created sidecars in $createMs ms (${"%.2f".format(createMs.toDouble() / PHOTOS)} ms per photo)")
 
         // 2. Merged: a second edit rewrites every sidecar.
         folder.edits.applyEach(versions, HistoryAction.PASTE) { it.copy(colour = Colour(vibrance = 15f)) }
         t = System.nanoTime()
-        val merged = folder.editSidecars.flush()
+        val merged = folder.xmpExport.run(photos.map { it.id }.distinct(), XmpDestination.NextToPhotos()).written
         val mergeMs = ms(t)
         log("merged $merged sidecars in $mergeMs ms (${"%.2f".format(mergeMs.toDouble() / PHOTOS)} ms per photo)")
         val bytes = folder.dir.listFiles()!!.filter { it.name.endsWith(".xmp") }.map { it.length() }

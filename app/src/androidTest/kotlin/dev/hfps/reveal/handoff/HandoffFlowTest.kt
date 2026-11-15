@@ -190,14 +190,10 @@ class HandoffFlowTest {
     }
 
     @Test
-    fun aRatingGoesBackToTheSidecarTheSenderHandedOver() {
+    fun aRatingIsNeverWrittenToTheSidecarTheSenderHandedOver() {
         val raw = raw("$stem.ARW")
-        val sidecar = TestPhotos.insert(
-            "$stem.xmp",
-            "application/octet-stream",
-            SyntheticShoot.sidecar(rating = 2).toByteArray(),
-        )
-            .also(inserted::add)
+        val original = SyntheticShoot.sidecar(rating = 2).toByteArray()
+        val sidecar = TestPhotos.insert("$stem.xmp", "application/octet-stream", original).also(inserted::add)
         val intent = Intent(HandoffIntents.ACTION_DEVELOP).setType("image/*")
         intent.clipData = clip(raw, sidecar)
         intent.addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
@@ -205,12 +201,12 @@ class HandoffFlowTest {
             compose.waitUntil(TIMEOUT_MS) { photos().isNotEmpty() }
             val photo = photos().single()
             assertThat(photo.rating).isEqualTo(2)
-            val outcome = runBlocking { access.library().setRating(listOf(photo.id), 5) }
-            assertThat(outcome.written).isEqualTo(1)
+            runBlocking { access.library().setRating(listOf(photo.id), 5) }
+            assertThat(photos().single().rating).isEqualTo(5)
+            // 0.9.0: no automatic writes, not even into a sidecar the sender made writable.
             val text = context.contentResolver.openInputStream(sidecar)!!.use { it.readBytes() }
-            assertThat(XmpReader.read(text).rating).isEqualTo(5)
-            // A Hoard sidecar means "picked"; the write keeps it, now as an explicit digiKam pick label.
-            assertThat(XmpReader.read(text).flag).isEqualTo(PickFlag.PICK)
+            assertThat(text).isEqualTo(original)
+            assertThat(XmpReader.read(text).rating).isEqualTo(2)
         }
     }
 
@@ -267,8 +263,7 @@ class HandoffFlowTest {
         launch(intent).use {
             compose.waitUntil(TIMEOUT_MS) { photos().isNotEmpty() }
             val photo = photos().single()
-            val outcome = runBlocking { access.library().setRating(listOf(photo.id), 3) }
-            assertThat(outcome.databaseOnly).isEqualTo(1)
+            runBlocking { access.library().setRating(listOf(photo.id), 3) }
             assertThat(photos().single().rating).isEqualTo(3)
         }
     }

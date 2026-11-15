@@ -39,6 +39,7 @@ import dev.hfps.reveal.data.handoff.ServerIssue
 import dev.hfps.reveal.data.index.IndexPhase
 import dev.hfps.reveal.data.index.IndexProgress
 import dev.hfps.reveal.data.library.SourceItem
+import dev.hfps.reveal.data.library.XmpExportScope
 import dev.hfps.reveal.data.model.CameraFilter
 import dev.hfps.reveal.data.model.CullingFilter
 import dev.hfps.reveal.data.model.DateFilter
@@ -76,6 +77,7 @@ import dev.hfps.reveal.feature.library.rememberDateLabels
 import dev.hfps.reveal.feature.library.viewer.VersionsActions
 import dev.hfps.reveal.feature.library.viewer.VersionsContent
 import dev.hfps.reveal.feature.library.viewer.VersionsUi
+import dev.hfps.reveal.feature.library.xmpexport.XmpExportContent
 import dev.hfps.reveal.pipeline.recipe.Colour
 import dev.hfps.reveal.pipeline.recipe.Geometry
 import dev.hfps.reveal.pipeline.recipe.Light
@@ -624,6 +626,30 @@ class PhoneLibraryScreenshotTest : LibraryScreenshotBase("phone") {
         state = LibrarySamples.fromApps(),
     )
 
+    /** Export XMP (ADR 0026 "Amendment W4"): next to the photos, a folder to pick once, a chosen folder only. */
+    @Test fun exportXmp() = xmpSheet("phone_export_xmp_dark", XmpExportScope(24, true, emptyList()))
+
+    @Test fun exportXmpPickFolder() =
+        xmpSheet("phone_export_xmp_pick_light", XmpExportScope(8, false, listOf(3L to "Shoot 2026")), dark = false)
+
+    @Test fun exportXmpChooseOnly() = xmpSheet(
+        "phone_export_xmp_choose_only_dark",
+        XmpExportScope(5, false, emptyList()),
+    )
+
+    private fun xmpSheet(file: String, scope: XmpExportScope, dark: Boolean = true) {
+        composeRule.setContent {
+            RevealTheme(darkTheme = dark) {
+                Box(Modifier.fillMaxSize().background(RevealTheme.colors.background), Alignment.BottomCenter) {
+                    Surface(color = RevealTheme.colors.card, shape = RevealTheme.shapes.sheet) {
+                        XmpExportContent(scope, {}, {}, {}, {}, Modifier.padding(top = 24.dp))
+                    }
+                }
+            }
+        }
+        composeRule.onRoot().captureRoboImage("src/test/screenshots/library/$file.png")
+    }
+
     /** The once-only gallery access offer (ADR 0011 "Gallery access"). */
     @Test fun galleryAccess() {
         composeRule.setContent {
@@ -817,6 +843,31 @@ class TabletS9LibraryScreenshotTest : LibraryScreenshotBase("tablet_s9") {
         state = LibrarySamples.grid(LibrarySamples.combined, paired = true),
         fontScale = 2f,
     )
+
+    /** Export XMP's sheet is a centred dialog on a tablet (ADR 0026 "Amendment W4"). */
+    @Test fun exportXmpSheet() {
+        composeRule.setContent {
+            RevealTheme(darkTheme = true) {
+                Box(Modifier.fillMaxSize().background(RevealTheme.colors.background), Alignment.Center) {
+                    Surface(
+                        color = RevealTheme.colors.card,
+                        shape = RevealTheme.shapes.sheet,
+                        modifier = Modifier.widthIn(max = 560.dp),
+                    ) {
+                        XmpExportContent(
+                            XmpExportScope(24, false, listOf(3L to "Shoot 2026")),
+                            {},
+                            {},
+                            {},
+                            {},
+                            Modifier.padding(vertical = 24.dp),
+                        )
+                    }
+                }
+            }
+        }
+        composeRule.onRoot().captureRoboImage("src/test/screenshots/library/tablet_s9_export_xmp_dark.png")
+    }
 }
 
 /** Tablet portrait (934 dp wide). */

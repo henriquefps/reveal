@@ -95,6 +95,7 @@ fun ManageFoldersContent(
                     onClick = { actions.onShowFolder(source.id) },
                     onRescan = { actions.onRescan(source.id) },
                     onBackup = { everything -> actions.onFolderBackup(source.id, everything) },
+                    onExportXmp = { actions.onExportXmp(XmpExportRequest.Folder(source.id)) },
                     onRemove = { actions.onRemoveSource(source.id) },
                 )
             }
@@ -117,6 +118,7 @@ private fun SourceRow(
     onClick: () -> Unit,
     onRescan: () -> Unit,
     onBackup: (everything: Boolean) -> Unit,
+    onExportXmp: () -> Unit,
     onRemove: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -162,7 +164,7 @@ private fun SourceRow(
                             strokeWidth = 2.dp,
                         )
                     }
-                    SourceMenu(source, paired, onClick, onRescan, onBackup, onRemove)
+                    SourceMenu(source, paired, onClick, onRescan, onBackup, onExportXmp, onRemove)
                 }
             },
         )
@@ -182,6 +184,7 @@ private fun SourceMenu(
     onShow: () -> Unit,
     onRescan: () -> Unit,
     onBackup: (everything: Boolean) -> Unit,
+    onExportXmp: () -> Unit,
     onRemove: () -> Unit,
 ) {
     var open by remember { mutableStateOf(false) }
@@ -207,6 +210,12 @@ private fun SourceMenu(
             MenuItem(PhosphorRegular.ArrowsClockwise, stringResource(R.string.library_source_rescan)) {
                 open = false
                 onRescan()
+            }
+            Box(Modifier.testTag(LibraryTags.FOLDER_EXPORT_XMP)) {
+                MenuItem(PhosphorRegular.Export, stringResource(R.string.library_folder_export_xmp)) {
+                    open = false
+                    onExportXmp()
+                }
             }
             if (paired) {
                 BackupItems(source.backup) { everything ->

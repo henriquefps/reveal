@@ -17,7 +17,6 @@ import dev.hfps.reveal.data.db.SourceEntity
 import dev.hfps.reveal.data.db.VersionEntity
 import dev.hfps.reveal.data.index.LibraryIndexer
 import dev.hfps.reveal.data.library.SidecarImport
-import dev.hfps.reveal.data.library.SidecarSync
 import dev.hfps.reveal.data.model.CullingField
 import dev.hfps.reveal.data.model.FileRole
 import dev.hfps.reveal.data.model.SourceKind
@@ -80,8 +79,6 @@ class HandoffRepository(
     private val db: RevealDatabase,
     private val indexer: LibraryIndexer,
     private val tree: DocumentTree = HandoffTree(resolver),
-    /** Writes a folder photo's sidecar when a hand-off's culling values change it (null in tests without one). */
-    private val sidecars: SidecarSync? = null,
     /** Keeps a local preview of each hand-off while its grant is alive (ADR 0011 "Unreadable hand-offs"). */
     private val previewer: HandoffPreviewer? = null,
     /** The paired server, to resolve server references (ADR 0011 "Amendment W3/H"); never paired by default. */
@@ -471,12 +468,11 @@ class HandoffRepository(
      * sidecar's apply, as the folder indexer does (only the fields it changed since it was last read, ADR 0027). With
      * values, they win unless the shot's sidecar was modified after the photo's previous hand-off (someone rated it
      * since the sender last said what it holds): then the sidecar wins. Fields the sender left out keep the sidecar's
-     * (or the photo's) value. Nothing is written back: the values live in Reveal's database, and the sender's files
-     * stay as they are. A sender's value that the sync server already holds for the shot is not pushed back to it
-     * (Hoard sends its cached server values, ADR 0027 "Hand-offs").
+     * (or the photo's) value. Nothing is written back (no sidecar is written automatically, W4): the values live in
+     * Reveal's database, and the sender's files stay as they are. A sender's value that the sync server already holds
+     * for the shot is not pushed back to it (Hoard sends its cached server values, ADR 0027 "Hand-offs").
      */
     private suspend fun applyRatings(stored: List<Pair<Shot, StoredShot>>, culling: Map<Uri, HandoffCulling>) {
-        val folderChanged = HashMap<Long, Set<CullingField>>()
         val valued = ArrayList<Long>()
         for ((shot, ids) in stored) {
             // Per field, a dated value (CULLING_VERSION 2) wins only as the last writer; undated ones keep version 1's
@@ -486,8 +482,7 @@ class HandoffRepository(
                 applyRatings(shot, ids, sent)
             } else {
                 sent?.let { byLastWriter(ids.photoId, it) }?.takeUnless { it.isEmpty }?.also {
-                    val changed = applyFolderCulling(ids, it)
-                    if (changed.isNotEmpty()) folderChanged[ids.photoId] = changed
+                    applyFolderCulling(ids, it)
                 }
             }
             if (values != null) {
@@ -496,13 +491,6 @@ class HandoffRepository(
             }
         }
         settle(valued)
-        // A folder photo's culling lives in its folder's sidecar: written like any rating change made in Reveal, only
-        // the fields that changed.
-        for ((fields, ids) in folderChanged.entries.groupBy({
-            it.value
-        }, { it.key })) {
-            sidecars?.write(ids, fields = fields)
-        }
     }
 
     /** [values] with each dated field kept only when it beats what Reveal holds for it (per-field last writer). */
@@ -693,15 +681,13 @@ class HandoffRepository(
     }
 
     /**
-     * Takes a persistable grant (read + write, else read) when the sender offered one; never throws. True when Reveal
-     * keeps access after this activity (a persisted grant, or a `file:` URI).
+     * Takes a persistable grant (READ only: Reveal never asks for write on a hand-off, W4) when the sender offered
+     * one; never throws. True when Reveal keeps access after this activity (a persisted grant, or a `file:` URI).
      */
     @Suppress("ReturnCount")
     private fun persist(uri: Uri, persistable: Boolean): Boolean {
         if (uri.scheme == "file") return true
         if (!persistable || uri.scheme != "content") return false
-        val rw = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
-        if (runCatching { resolver.takePersistableUriPermission(uri, rw) }.isSuccess) return true
         return runCatching { resolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
             .onFailure { Log.i(TAG, "No persistable grant for a hand-off: ${it.javaClass.simpleName}") }
             .isSuccess

@@ -323,6 +323,16 @@ private fun OverflowMenu(state: LibraryUiState, actions: LibraryActions, wide: B
                 open = false
                 actions.onAddFolder()
             }
+            if (state.photoIds.isNotEmpty()) {
+                TaggedMenuItem(
+                    PhosphorRegular.Export,
+                    pluralStringResource(R.plurals.library_menu_export_xmp, state.photoIds.size, state.photoIds.size),
+                    LibraryTags.MENU_EXPORT_XMP,
+                ) {
+                    open = false
+                    actions.onExportXmp(XmpExportRequest.Results)
+                }
+            }
             MenuItem(PhosphorRegular.Image, stringResource(R.string.library_menu_open_photo)) {
                 open = false
                 actions.onOpenPhoto()
@@ -595,6 +605,14 @@ private fun SelectionOverflow(state: LibraryUiState, actions: LibraryActions, wi
             ) {
                 open = false
                 actions.onApplyPreset()
+            }
+            TaggedMenuItem(
+                PhosphorRegular.Export,
+                stringResource(R.string.library_action_export_xmp),
+                LibraryTags.EXPORT_XMP,
+            ) {
+                open = false
+                actions.onExportXmp(XmpExportRequest.Selection)
             }
             if (!wide) {
                 TaggedMenuItem(

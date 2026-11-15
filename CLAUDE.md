@@ -160,8 +160,8 @@ REVEAL_COLOUR_SHEET_DIR=$PWD/build/calibration REVEAL_RENDER_OUT=$PWD/docs/scree
 
 Room `RevealDatabase` v15 (sources, photos, photo_files, versions, recipes, history, history_cursor, cache_entries; sync tables v6; preset tables v7, ADR 0019; `photo_files.unreadable_at` v8, ADR 0011; `photo_cloud.preview_format` v9; `photo_files.on_server` + `sync_deletes` v10, ADR 0018 FIX/V; `versions.edit_device/edited_at` + data fixes v11, FIX/W; `snapshots` + `export_presets` v12, ADR 0025; culling sync tables v13, ADR 0027; `server_thumbs` + `photo_files.checked_at` v14, ADR 0018 W3/C; camera/lens columns v15, W3/D);
 schema change = new version + migration (or `AutoMigration`) + exported `core/data/schemas/*.json`, tested by
-`RevealDatabaseMigrationTest`. `LibraryRepository` (sources, SAF grants, volumes, indexing, ratings/flags with XMP
-write-back), `LibraryIndexer` (walk → diff → sidecars → headers → sidecar edits), `XmpReader`/`XmpWriter` (merge, never
+`RevealDatabaseMigrationTest`. `LibraryRepository` (sources, SAF grants, volumes, indexing, ratings/flags, database only since W4; sidecars
+written only by Export XMP), `LibraryIndexer` (walk → diff → sidecars → headers → sidecar edits), `XmpReader`/`XmpWriter` (merge, never
 overwrite a malformed sidecar; `reveal:` = the edit, see "XMP sidecars"), `ThumbnailRepository` (embedded preview / JPEG, edited thumb
 via `GpuEditedThumbnails`), `PhotoImages` (viewer display + region decoder), `EditRepository` (recipes, undo/redo
 history for the editor). The editor route is `EditorRoute(versionId = …)` from the library or `EditorRoute(uri = …)`
@@ -258,11 +258,15 @@ The sidecar carries the master version's edit next to the culling fields (ADR 00
 block: `Schema`, `RecipeVersion`, `Edited`, `Device`, `Ancestors` (digests), `Recipe` = compact ADR 0003 JSON or
 `RecipeDeflate`; `SidecarRecipe.encode/digest`), `CameraRaw` (the `crs:` table: one `Field` per Camera Raw property,
 group, Lightroom default, get/set; a new mappable recipe field = one entry there + a case in `CameraRawTest`),
-`CameraRawGeometry` (crop corners in the stored image, `CropAngle`, `tiff:Orientation`). Writing: `SidecarSync.write`
-(culling always; the edit while `XmpPreferences.writeEdits`), triggered for edits by `EditSidecars` (observes
-`MAX(recipes.updated_at)`, 2 s debounce, `meta` `xmp.editsWritten`; started by `RevealApplication`). Reading:
+`CameraRawGeometry` (crop corners in the stored image, `CropAngle`, `tiff:Orientation`). Writing (W4: **nothing writes
+a sidecar automatically**; no `EditSidecars`, no `writeEdits` setting, no write on rating/flag/edit/hand-off/merge, folders
+and hand-offs get READ grants only; an older rw grant is kept): the only writer is **Export XMP**
+(`library/XmpExport` + `SidecarSync.write` next to the photos / `writeInto` a chosen folder; `XmpDestination`,
+`XmpExportScope` for the sheet; `feature/library/xmpexport/` = `XmpExportSheet`, `XmpExportWorker` with its job file;
+entry points: selection menu, Manage folders ⋯, top bar ⋯; "next to" only for folder photos under a write grant, one
+folder without one can be picked for a one-off write; server-only photos and hand-offs only into a chosen folder). Reading:
 `LibraryIndexer` parses each changed sidecar once, then after the headers `SidecarEdits.reconcile` (import step
-`HistoryAction.XMP_IMPORT`, sidecar behind -> `IndexReport.sidecarsBehind` rewritten by `LibraryRepository`, diverged ->
+`HistoryAction.XMP_IMPORT`, sidecar behind -> `IndexReport.sidecarsBehind` (informational), diverged ->
 conflict copy; Lightroom's defaults never imported; `XmpPreferences.readEdits`). Never write darktable history, never
 create a sidecar for an unedited photo, never overwrite a newer app's `reveal:` block or a malformed sidecar.
 Fixtures: `core/data/src/test/resources/xmp/` (hand-written Lightroom Classic/mobile, darktable, Hoard).
@@ -288,8 +292,8 @@ ClipData + `EXTRA_STREAM`) -> `HandoffRepository.receive` (pairs by stem and par
 Identity (ADR 0006 "Identity", DB v4): a file is its content fingerprint (`FileFingerprint` in `:core:image/source`,
 `photo_files.fingerprint`); hand-offs find their photo by fingerprint (any source, URI+size+mtime only for rows without
 one), never by name; folders fill fingerprints in the background after a walk (`LibraryIndexer.fillFingerprints`).
-The filter "Opened from other apps" (`SourceFilter.FromApps`) alone lists newest hand-off first, header per batch. Sidecars are only written
-when the sender included a writable `.xmp` item. Culling values (ADR 0011 "Culling"): `HandoffIntents.EXTRA_CULLING`
+The filter "Opened from other apps" (`SourceFilter.FromApps`) alone lists newest hand-off first, header per batch. Sidecars are never written (W4); they are only read
+(a sender's `.xmp` item is imported, never written). Culling values (ADR 0011 "Culling"): `HandoffIntents.EXTRA_CULLING`
 (`Bundle` keyed by item URI string -> `Bundle` `rating`/`flag`/`label`, `CULLING_VERSION` 1, `cullingExtra()` builds it)
 -> `HandoffRequest.culling` -> `HandoffRepository.applyRatings` (values win unless the sidecar is newer than the photo's
 previous hand-off; never written back). Sidecar names (normal before hidden `.<stem>.xmp`) live in `xmp/SidecarNames`.

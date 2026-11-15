@@ -26,6 +26,7 @@ import androidx.navigation.NavGraphBuilder
 import androidx.navigation.compose.composable
 import dev.hfps.reveal.data.db.PhotoRow
 import dev.hfps.reveal.data.handoff.GalleryAccess
+import dev.hfps.reveal.data.library.XmpDestination
 import dev.hfps.reveal.data.model.PhotoListCodec
 import dev.hfps.reveal.data.thumb.ThumbnailRepository
 import dev.hfps.reveal.feature.export.ui.ExportRequest
@@ -33,6 +34,7 @@ import dev.hfps.reveal.feature.export.ui.ExportSheetHost
 import dev.hfps.reveal.feature.library.presets.ApplyPresetSheet
 import dev.hfps.reveal.feature.library.viewer.DeleteCopiesDialog
 import dev.hfps.reveal.feature.library.viewer.ViewerScreen
+import dev.hfps.reveal.feature.library.xmpexport.XmpExportSheet
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
@@ -117,6 +119,7 @@ fun LibraryScreen(
     val folderPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         if (uri != null) viewModel.addFolder(uri)
     }
+    val context = LocalContext.current
     val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) onOpenFile(uri)
     }
@@ -126,7 +129,6 @@ fun LibraryScreen(
     var exportRequest by remember { mutableStateOf<ExportRequest?>(null) }
     var choosingPreset by remember { mutableStateOf(false) }
     val presetLibrary by viewModel.presetLibrary.collectAsStateWithLifecycle()
-    val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val actions = remember(viewModel) {
         LibraryActions(
@@ -169,6 +171,7 @@ fun LibraryScreen(
                 }
             },
             onApplyPreset = { choosingPreset = true },
+            onExportXmp = viewModel::openXmpExport,
             onOpenUnavailable = viewModel::explain,
             onOpenConflict = viewModel::openConflict,
             onKeepConflict = viewModel::keepConflict,
@@ -234,6 +237,11 @@ fun LibraryScreen(
         )
     }
     ServerViewDialogs(state, actions)
+    XmpExportHost(
+        state.xmpExport,
+        onRun = { viewModel.runXmpExport(context, it) },
+        onDismiss = viewModel::dismissXmpExport,
+    )
     if (choosingPreset) {
         ApplyPresetSheet(
             library = presetLibrary,
@@ -258,6 +266,41 @@ fun LibraryScreen(
     )
 }
 
+/** Export XMP's destination sheet and the folder pickers it launches (ADR 0026 "Amendment W4"). */
+@Composable
+private fun XmpExportHost(sheet: XmpExportSheetState?, onRun: (XmpDestination) -> Unit, onDismiss: () -> Unit) {
+    // The picker in flight: a folder to write the sidecars into (null), or the one folder to write next to (its id).
+    var pickSource by remember { mutableStateOf<Long?>(null) }
+    val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+        val source = pickSource
+        pickSource = null
+        if (uri != null) {
+            onRun(
+                if (source == null) {
+                    XmpDestination.Folder(uri.toString())
+                } else {
+                    XmpDestination.NextToPhotos(mapOf(source to uri.toString()))
+                },
+            )
+        }
+    }
+    sheet?.let {
+        XmpExportSheet(
+            scope = it.scope,
+            onNextToPhotos = { onRun(XmpDestination.NextToPhotos()) },
+            onPickFolderToWrite = { sourceId ->
+                pickSource = sourceId
+                picker.launch(null)
+            },
+            onChooseFolder = {
+                pickSource = null
+                picker.launch(null)
+            },
+            onDismiss = onDismiss,
+        )
+    }
+}
+
 /** Shows the ViewModel's one-off messages in the snackbar. */
 @Suppress("LongMethod")
 @Composable
@@ -266,8 +309,6 @@ private fun LibraryMessages(events: Flow<LibraryMessage>, snackbar: SnackbarHost
     LaunchedEffect(events, resources) {
         events.collect { message ->
             val text = when (message) {
-                LibraryMessage.DatabaseOnly -> resources.getString(R.string.library_saved_database_only)
-
                 is LibraryMessage.Removed -> resources.getQuantityString(
                     R.plurals.library_removed,
                     message.count,
@@ -282,6 +323,12 @@ private fun LibraryMessages(events: Flow<LibraryMessage>, snackbar: SnackbarHost
 
                 is LibraryMessage.Reset -> resources.getQuantityString(
                     R.plurals.library_edits_reset,
+                    message.count,
+                    message.count,
+                )
+
+                is LibraryMessage.XmpQueued -> resources.getQuantityString(
+                    R.plurals.xmp_export_queued,
                     message.count,
                     message.count,
                 )

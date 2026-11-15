@@ -28,7 +28,6 @@ import dev.hfps.reveal.data.handoff.MergeReport
 import dev.hfps.reveal.data.index.IndexProgress
 import dev.hfps.reveal.data.index.IndexReport
 import dev.hfps.reveal.data.index.LibraryIndexer
-import dev.hfps.reveal.data.model.CullingField
 import dev.hfps.reveal.data.model.FileRole
 import dev.hfps.reveal.data.model.PhotoAvailability
 import dev.hfps.reveal.data.model.PhotoFilters
@@ -488,10 +487,9 @@ class LibraryRepository(
     // ------------------------------------------------------------------ sources
 
     /**
-     * Adds the folder of an `ACTION_OPEN_DOCUMENT_TREE` result: persists the grant (read + write when offered, so
-     * sidecars can be written), records the volume, then indexes it in the background. Nothing is copied. [backup]: the
-     * originals backup of every photo the server lacks ("Everything"); the default backs up only edited photos (FIX/V,
-     * ADR 0018 "Originals backup").
+     * Adds the folder of an `ACTION_OPEN_DOCUMENT_TREE` result: persists the grant (read only, W4), records the volume,
+     * then indexes it in the background. Nothing is copied. [backup]: the originals backup of every photo the server
+     * lacks ("Everything"); the default backs up only edited photos (FIX/V, ADR 0018 "Originals backup").
      */
     suspend fun addSource(treeUri: Uri, backup: Boolean = false): AddSourceResult = withContext(Dispatchers.IO) {
         sourceDao.byTree(treeUri.toString())?.let { return@withContext AddSourceResult.AlreadyAdded(it.id) }
@@ -519,13 +517,14 @@ class LibraryRepository(
         AddSourceResult.Added(id)
     }
 
-    /** Takes the persistable grant; true when it includes write. A provider without persistable grants is fine. */
+    /**
+     * Takes the persistable grant, READ only (W4: Reveal never asks for write; sidecars are written only by Export XMP,
+     * through a grant the user gives then or one an earlier version took). True when the grant includes write, which
+     * only happens for a provider that needs no grant (our own debug provider) or one already held. A provider
+     * without persistable grants is fine.
+     */
     private fun persist(treeUri: Uri): Boolean {
-        val rw = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
-        val readWrite = runCatching { resolver.takePersistableUriPermission(treeUri, rw) }.isSuccess
-        if (!readWrite) {
-            runCatching { resolver.takePersistableUriPermission(treeUri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
-        }
+        runCatching { resolver.takePersistableUriPermission(treeUri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
         val persisted = resolver.persistedUriPermissions.firstOrNull { it.uri == treeUri }
         // No persisted row at all: a provider of our own process (debug test provider) that needs no grant.
         return persisted?.isWritePermission ?: true
@@ -622,9 +621,9 @@ class LibraryRepository(
                 sourceDao.setIndexed(sourceId, clock())
                 reports.update { it + (sourceId to report) }
                 Log.i(TAG, "Indexed source $sourceId: $report")
-                // Edits read from sidecars (ADR 0026): an open editor reloads; sidecars older than the photo catch up.
+                // Edits read from sidecars (ADR 0026): an open editor reloads. Sidecars are never written back
+                // automatically (W4): `report.sidecarsBehind` is informational, Export XMP brings them up to date.
                 if (report.editedVersions.isNotEmpty()) RemoteEdits.announce(report.editedVersions)
-                if (report.sidecarsBehind.isNotEmpty()) sidecars.write(report.sidecarsBehind, editsOnly = true)
                 fingerprint(source)
             } catch (e: CancellationException) {
                 throw e
@@ -682,12 +681,10 @@ class LibraryRepository(
         val server = merge.mergeServerPhotosInto(sourceId)
         if (server.merged > 0) {
             Log.i(TAG, "Merged ${server.merged} server photos into source $sourceId")
-            if (server.cullingChanged.isNotEmpty()) sidecars.write(server.cullingChanged)
         }
         val report = merge.mergeInto(sourceId)
         if (report.merged > 0) {
             Log.i(TAG, "Merged ${report.merged} hand-off photos into source $sourceId")
-            if (report.cullingChanged.isNotEmpty()) sidecars.write(report.cullingChanged)
             previews?.delete(report.fingerprints)
         }
         report
@@ -716,14 +713,13 @@ class LibraryRepository(
 
     // ------------------------------------------------------------------ photos
 
-    suspend fun setRating(photoIds: List<Long>, rating: Int): SidecarOutcome = withContext(Dispatchers.IO) {
+    /** Rating and flag live in the database (and the sync server); sidecars only change with Export XMP (W4). */
+    suspend fun setRating(photoIds: List<Long>, rating: Int) = withContext(Dispatchers.IO) {
         photoIds.chunked(SQL_ARGS).forEach { photoDao.setRating(it, rating.coerceIn(0, MAX_RATING)) }
-        sidecars.write(photoIds, fields = setOf(CullingField.RATING))
     }
 
-    suspend fun setFlag(photoIds: List<Long>, flag: PickFlag): SidecarOutcome = withContext(Dispatchers.IO) {
+    suspend fun setFlag(photoIds: List<Long>, flag: PickFlag) = withContext(Dispatchers.IO) {
         photoIds.chunked(SQL_ARGS).forEach { photoDao.setFlag(it, flag) }
-        sidecars.write(photoIds, fields = setOf(CullingField.FLAG))
     }
 
     /** The per-folder switch of the originals backup (ADR 0018). */

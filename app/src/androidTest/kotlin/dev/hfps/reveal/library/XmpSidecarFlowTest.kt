@@ -5,6 +5,7 @@ import androidx.test.platform.app.InstrumentationRegistry
 import com.google.common.truth.Truth.assertThat
 import dagger.hilt.android.EntryPointAccessors
 import dev.hfps.reveal.data.db.PhotoQuerySql
+import dev.hfps.reveal.data.library.XmpDestination
 import dev.hfps.reveal.data.model.PhotoFilters
 import dev.hfps.reveal.data.model.PhotoQuery
 import dev.hfps.reveal.data.xmp.DevelopState
@@ -31,8 +32,9 @@ import org.junit.runner.RunWith
 /**
  * ADR 0026 through the real app over SAF (the debug documents provider, its own process): a folder whose sidecar has
  * Lightroom's develop settings is added (the edit comes in as one "Imported from XMP" step, the rating too); an edit
- * reaches the sidecar through the app's own debounced writer (`EditSidecars`, started by the application); the next
- * walk does not read it back; a newer edit written by "another device" into the sidecar comes in on the next index.
+ * does NOT reach the sidecar on its own (0.9.0: no automatic writes) but does with Export XMP, next to the photos and
+ * into a chosen folder; the next walk does not read the export back; a newer edit written by "another device" into
+ * the sidecar comes in on the next index.
  */
 @RunWith(AndroidJUnit4::class)
 class XmpSidecarFlowTest {
@@ -42,7 +44,6 @@ class XmpSidecarFlowTest {
 
     @After
     fun tearDown() {
-        folder.xmp.setWriteEdits(true)
         folder.xmp.setReadEdits(true)
         folder.delete()
     }
@@ -62,8 +63,8 @@ class XmpSidecarFlowTest {
     }
 
     @Test
-    fun lightroomEditComesInAndRevealEditsGoOut() = runBlocking {
-        folder.xmp.setWriteEdits(true)
+    @Suppress("LongMethod")
+    fun lightroomEditComesInAndExportXmpWritesRevealEdits() = runBlocking {
         folder.xmp.setReadEdits(true)
         folder.pair("DSC00001", 1)
         val sidecar = File(folder.dir, "DSC00001.xmp")
@@ -82,23 +83,43 @@ class XmpSidecarFlowTest {
         assertThat(folder.edits.history(versionId).steps.single().label.action).isEqualTo(HistoryAction.XMP_IMPORT)
         assertThat(db.photoDao().get(photo.id)!!.rating).isEqualTo(4)
 
-        // An edit in Reveal reaches the sidecar through the app's writer, merged into Lightroom's file.
+        // An edit and a rating in Reveal reach no sidecar on their own (no automatic writes since 0.9.0).
+        val before = sidecar.readText()
         val edit = imported.copy(light = imported.light.copy(contrast = 25f))
         folder.edits.commit(versionId, edit, RecipeDiff.between(imported, edit))
-        waitFor(TIMEOUT_MS, "the sidecar write") {
-            runCatching {
-                XmpDevelop.read(sidecar.readBytes()).reveal?.recipe == edit
-            }.getOrDefault(false)
-        }
-        // The write is recorded (its mtime), so the next walk will not read it back.
-        waitFor(TIMEOUT_MS, "the recorded write") {
-            runBlocking { db.photoDao().get(photo.id)!!.xmpModified } == sidecar.lastModified()
-        }
+        folder.library.setRating(listOf(photo.id), 2)
+        Thread.sleep(SETTLE_MS)
+        assertThat(sidecar.readText()).isEqualTo(before)
+
+        // Export XMP "next to the photos" merges both into Lightroom's file.
+        val scope = folder.xmpExport.analyse(listOf(photo.id))
+        assertThat(scope.nextToPhotos).isTrue()
+        val outcome = folder.xmpExport.run(listOf(photo.id), XmpDestination.NextToPhotos())
+        assertThat(outcome.written).isEqualTo(1)
+        assertThat(XmpDevelop.read(sidecar.readBytes()).reveal?.recipe).isEqualTo(edit)
         val text = sidecar.readText()
         assertThat(text).contains("crs:Contrast2012=\"+25\"")
         assertThat(text).contains("crs:CameraProfile=\"Adobe Color\"")
-        assertThat(XmpReader.read(sidecar.readBytes()).rating).isEqualTo(4)
+        assertThat(XmpReader.read(sidecar.readBytes()).rating).isEqualTo(2)
+        // The export is recorded (its mtime), so the next walk will not read it back.
+        waitFor(TIMEOUT_MS, "the recorded write") {
+            runBlocking { db.photoDao().get(photo.id)!!.xmpModified } == sidecar.lastModified()
+        }
         assertThat(reindex(sourceId).sidecarsRead).isEqualTo(0)
+
+        // Export XMP into a chosen folder: a flat copy, the photo's own sidecar stays as it is.
+        val target = SyntheticFolder("xmp-flow-out")
+        try {
+            val stays = sidecar.readText()
+            val flat = folder.xmpExport.run(listOf(photo.id), XmpDestination.Folder(target.treeUri.toString()))
+            assertThat(flat.written).isEqualTo(1)
+            assertThat(File(target.dir, "DSC00001.xmp").exists()).isTrue()
+            assertThat(XmpDevelop.read(File(target.dir, "DSC00001.xmp").readBytes()).reveal?.recipe).isEqualTo(edit)
+            assertThat(sidecar.readText()).isEqualTo(stays)
+        } finally {
+            // Not target.delete(): that forgets every folder of the library, including the one still under test.
+            target.dir.deleteRecursively()
+        }
 
         // Another device (no sync) edits the same folder: its newer edit comes in on the next walk.
         val theirs = edit.copy(colour = Colour(vibrance = 20f, saturation = -30f))
@@ -127,8 +148,7 @@ class XmpSidecarFlowTest {
     }
 
     @Test
-    fun switchedOffNothingTravelsButRatings() = runBlocking {
-        folder.xmp.setWriteEdits(false)
+    fun switchedOffNothingIsReadAndNothingIsWritten() = runBlocking {
         folder.xmp.setReadEdits(false)
         folder.pair("DSC00002", 2)
         val sidecar = File(folder.dir, "DSC00002.xmp")
@@ -146,10 +166,9 @@ class XmpSidecarFlowTest {
             Recipe(light = Light(exposureEv = 1f)),
             RecipeDiff.between(Recipe(), Recipe(light = Light(exposureEv = 1f))),
         )
+        folder.library.setRating(listOf(photo.id), 2)
         Thread.sleep(SETTLE_MS)
         assertThat(sidecar.readText()).isEqualTo(before)
-        folder.library.setRating(listOf(photo.id), 2)
-        assertThat(XmpReader.read(sidecar.readBytes()).rating).isEqualTo(2)
         assertThat(sidecar.readText()).doesNotContain("reveal:")
     }
 

@@ -21,7 +21,15 @@ All notable changes to Reveal are documented here. The format follows
   date range picker), **Camera** (make and model, with counts) and **Lens**. They combine with the other filters as
   before (OR within a group, AND across).
 
+- **Export XMP** (W4, docs/adr/0026 "Amendment W4"): write `.xmp` sidecars (ratings, labels, flags and the edit) on
+  demand, for the selected photos, a whole folder (Manage folders ⋯) or everything the current filter shows (⋯ menu),
+  next to the photos or into a folder you choose. It runs in the background with a notification and tells you how many
+  were written and how many were skipped.
+
 ### Changed
+- Reveal no longer writes `.xmp` sidecars on its own, anywhere (edits, ratings, flags, labels, hand-offs): they travel
+  through the server, and Export XMP writes sidecars when you ask. The "Write edits to XMP sidecars" setting is gone.
+  New folders and hand-offs are granted read access only; reading existing sidecars is unchanged.
 - The database is at version 15: photos keep their camera make, model and lens. Photos indexed before read them again
   in the background (folders after their walk, hand-offs on start, Server photos within each sync's header budget),
   without marking anything for sync.

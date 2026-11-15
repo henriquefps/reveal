@@ -8,31 +8,31 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
 /**
- * The XMP switches of Settings (ADR 0026 "Settings"): [writeEdits] puts each photo's edit into its sidecar (the recipe
- * and the Camera Raw overlap), [readEdits] applies edits found in sidecars (another device's recipe, Lightroom's
- * values). Both on by default. Ratings, labels and flags always travel (ADR 0006), whatever these say.
+ * The XMP switch of Settings (ADR 0026 "Settings"): [readEdits] applies edits found in sidecars (another device's
+ * recipe, Lightroom's values). On by default. Sidecars are never written automatically (0.9.0, ADR 0026 "Automatic
+ * writes removed"): the `writeEdits` switch of earlier versions is gone, its stored value is removed on first run;
+ * Export XMP is the only writer.
  */
 class XmpPreferences(context: Context) {
     private val prefs: SharedPreferences = context.getSharedPreferences(FILE, Context.MODE_PRIVATE)
-    private val _writeEdits = MutableStateFlow(prefs.getBoolean(KEY_WRITE, true))
     private val _readEdits = MutableStateFlow(prefs.getBoolean(KEY_READ, true))
 
-    val writeEdits: StateFlow<Boolean> = _writeEdits.asStateFlow()
-    val readEdits: StateFlow<Boolean> = _readEdits.asStateFlow()
-
-    fun setWriteEdits(on: Boolean) {
-        prefs.edit { putBoolean(KEY_WRITE, on) }
-        _writeEdits.value = on
+    init {
+        if (prefs.contains(KEY_WRITE_REMOVED)) prefs.edit { remove(KEY_WRITE_REMOVED) }
     }
+
+    val readEdits: StateFlow<Boolean> = _readEdits.asStateFlow()
 
     fun setReadEdits(on: Boolean) {
         prefs.edit { putBoolean(KEY_READ, on) }
         _readEdits.value = on
     }
 
-    private companion object {
+    companion object {
         const val FILE = "xmp"
-        const val KEY_WRITE = "writeEdits"
         const val KEY_READ = "readEdits"
+
+        /** The key of the removed "write edits to sidecars" switch (0.8 and earlier). */
+        const val KEY_WRITE_REMOVED = "writeEdits"
     }
 }

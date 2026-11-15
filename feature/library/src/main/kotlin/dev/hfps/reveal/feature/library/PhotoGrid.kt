@@ -126,6 +126,13 @@ object LibraryTags {
     const val ADD_FOLDER = "library-add-folder"
     const val EXPORT = "library-export"
     const val APPLY_PRESET = "library-apply-preset"
+    const val EXPORT_XMP = "library-export-xmp"
+    const val MENU_EXPORT_XMP = "library-menu-export-xmp"
+    const val FOLDER_EXPORT_XMP = "library-folder-export-xmp"
+    const val XMP_SHEET = "library-xmp-sheet"
+    const val XMP_NEXT = "library-xmp-next"
+    const val XMP_NEXT_PICK = "library-xmp-next-pick"
+    const val XMP_CHOOSE = "library-xmp-choose"
     const val PRESET_STRENGTH = "library-preset-strength"
     const val PRESET_APPLY_CONFIRM = "library-preset-apply"
 

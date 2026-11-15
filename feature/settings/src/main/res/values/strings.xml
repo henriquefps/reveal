@@ -11,9 +11,8 @@
     <string name="settings_sync_off">Not paired</string>
     <string name="settings_section_photos">Photos</string>
     <string name="settings_section_xmp">XMP sidecars</string>
-    <string name="settings_xmp_write">Write edits to XMP sidecars</string>
-    <string name="settings_xmp_write_note">Next to each edited photo, in folders Reveal can write to. Lightroom and darktable read the basic settings.</string>
     <string name="settings_xmp_read">Apply edits from XMP sidecars</string>
+    <string name="settings_xmp_note">Reveal never writes .xmp files on its own. To write sidecars for your photos, use Export XMP in the library: from the selection menu, a folder’s menu or the filter’s menu.</string>
     <string name="settings_xmp_read_note">An edit from another device or from Lightroom becomes one step you can undo.</string>
     <string name="settings_gallery">Gallery access</string>
     <string name="settings_gallery_full">Allowed: photos shared from the gallery stay readable</string>

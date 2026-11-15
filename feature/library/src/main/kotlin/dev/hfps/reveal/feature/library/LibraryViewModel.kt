@@ -17,7 +17,8 @@ import dev.hfps.reveal.data.edit.VersionRepository
 import dev.hfps.reveal.data.handoff.GalleryAccess
 import dev.hfps.reveal.data.library.AddSourceResult
 import dev.hfps.reveal.data.library.LibraryRepository
-import dev.hfps.reveal.data.library.SidecarOutcome
+import dev.hfps.reveal.data.library.XmpDestination
+import dev.hfps.reveal.data.library.XmpExport
 import dev.hfps.reveal.data.model.LibraryScope
 import dev.hfps.reveal.data.model.PhotoFilters
 import dev.hfps.reveal.data.model.PhotoListCodec
@@ -30,6 +31,7 @@ import dev.hfps.reveal.data.storage.AppStart
 import dev.hfps.reveal.data.storage.StorageVolumes
 import dev.hfps.reveal.data.thumb.ThumbnailRepository
 import dev.hfps.reveal.feature.library.presets.PresetBatchWorker
+import dev.hfps.reveal.feature.library.xmpexport.XmpExportWorker
 import dev.hfps.reveal.pipeline.recipe.HistoryAction
 import dev.hfps.reveal.pipeline.recipe.Recipe
 import dev.hfps.reveal.pipeline.recipe.RecipeGroup
@@ -59,7 +61,6 @@ import kotlinx.coroutines.launch
 
 /** One-off messages for the snackbar. */
 sealed interface LibraryMessage {
-    data object DatabaseOnly : LibraryMessage
 
     data class Removed(val count: Int) : LibraryMessage
 
@@ -83,6 +84,9 @@ sealed interface LibraryMessage {
 
     /** A preset is being applied to [count] photos in the background. */
     data class PresetQueued(val name: String, val count: Int) : LibraryMessage
+
+    /** Export XMP was queued for [count] photos (ADR 0026). */
+    data class XmpQueued(val count: Int) : LibraryMessage
 
     /** [count] photos deleted from the sync server ("Delete from server"). */
     data class DeletedFromServer(val count: Int) : LibraryMessage
@@ -114,6 +118,7 @@ class LibraryViewModel @Inject constructor(
     private val gallery: GalleryAccess,
     private val unavailable: UnavailableHelper,
     private val versions: VersionRepository,
+    private val xmpExport: XmpExport,
 ) : ViewModel() {
     /**
      * Offer the "Photos and videos" permission now (ADR 0011 "Gallery access"): a photo the gallery shared can no
@@ -152,6 +157,32 @@ class LibraryViewModel @Inject constructor(
             messages.send(LibraryMessage.PresetQueued(name, versions.size))
             setSelected(emptySet())
         }
+    }
+
+    /** Opens the Export XMP sheet for [request] (ADR 0026 "Export XMP"); nothing opens for an empty set. */
+    fun openXmpExport(request: XmpExportRequest) {
+        viewModelScope.launch {
+            val ids = when (request) {
+                XmpExportRequest.Selection -> _state.value.selectedPhotoIds
+
+                XmpExportRequest.Results -> _state.value.photoIds
+
+                is XmpExportRequest.Folder ->
+                    library.photoList(PhotoQuery.ofSource(request.sourceId)).map { it.id }.distinct()
+            }
+            if (ids.isEmpty()) return@launch
+            _state.update { it.copy(xmpExport = XmpExportSheetState(ids, xmpExport.analyse(ids))) }
+        }
+    }
+
+    fun dismissXmpExport() = _state.update { it.copy(xmpExport = null) }
+
+    /** Queues the export of the open sheet's photos to [destination]; the notification reports the result. */
+    fun runXmpExport(context: android.content.Context, destination: XmpDestination) {
+        val sheet = _state.value.xmpExport ?: return
+        XmpExportWorker.enqueue(context.applicationContext, sheet.photoIds, destination)
+        _state.update { it.copy(xmpExport = null, selected = emptySet()) }
+        viewModelScope.launch { messages.send(LibraryMessage.XmpQueued(sheet.photoIds.size)) }
     }
 
     /** True when the route asked to open on "Opened from other apps" (a hand-off of several photos, ADR 0011). */
@@ -617,11 +648,10 @@ class LibraryViewModel @Inject constructor(
         }
     }
 
-    private fun act(ids: List<Long> = _state.value.selectedPhotoIds, block: suspend (List<Long>) -> SidecarOutcome) {
+    private fun act(ids: List<Long> = _state.value.selectedPhotoIds, block: suspend (List<Long>) -> Unit) {
         if (ids.isEmpty()) return
         viewModelScope.launch {
-            val outcome = block(ids)
-            if (outcome.databaseOnly > 0) messages.send(LibraryMessage.DatabaseOnly)
+            block(ids)
         }
     }
 

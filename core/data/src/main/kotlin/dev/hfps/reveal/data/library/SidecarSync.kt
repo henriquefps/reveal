@@ -18,6 +18,7 @@ import dev.hfps.reveal.data.xmp.PhotoFrame
 import dev.hfps.reveal.data.xmp.SidecarNames
 import dev.hfps.reveal.data.xmp.SidecarRecipe
 import dev.hfps.reveal.data.xmp.XmpDevelop
+import dev.hfps.reveal.data.xmp.XmpException
 import dev.hfps.reveal.data.xmp.XmpFields
 import dev.hfps.reveal.data.xmp.XmpReader
 import dev.hfps.reveal.data.xmp.XmpWriter
@@ -29,10 +30,14 @@ import java.time.format.DateTimeFormatter
 import java.time.temporal.ChronoUnit
 import kotlinx.coroutines.CancellationException
 
-/** How many photos got their change into an XMP sidecar, and how many kept it in the database only. */
-data class SidecarOutcome(val written: Int, val databaseOnly: Int) {
+/**
+ * What an XMP write did: [written] sidecars, [databaseOnly] photos whose sidecar could not be written (read-only
+ * folder, hand-off or Server photo, a provider that refused), [malformed] photos whose existing sidecar is not
+ * well-formed XMP and was left exactly as it was.
+ */
+data class SidecarOutcome(val written: Int, val databaseOnly: Int, val malformed: Int = 0) {
     operator fun plus(other: SidecarOutcome) =
-        SidecarOutcome(written + other.written, databaseOnly + other.databaseOnly)
+        SidecarOutcome(written + other.written, databaseOnly + other.databaseOnly, malformed + other.malformed)
 
     companion object {
         val NONE = SidecarOutcome(0, 0)
@@ -40,12 +45,15 @@ data class SidecarOutcome(val written: Int, val databaseOnly: Int) {
 }
 
 /**
- * Writes the library fields (rating, label, pick flag) of photos to their XMP sidecars (ADR 0006, "XMP") and, while
+ * Writes the library fields (rating, label, pick flag) of photos to XMP sidecars (ADR 0006, "XMP") and, while
  * [writeEdits] is on, the master version's edit (ADR 0026: the `reveal:` recipe, the Camera Raw overlap and the
  * orientation, [XmpDevelop]): the existing sidecar is merged ([XmpWriter]), else `<stem>.xmp` is created next to the
- * RAW (one sidecar per pair, as Lightroom and Hoard expect). Only for sources that are available and writable;
- * otherwise, or when the provider refuses, the change stays in the database ("database only", the UI says so). A
- * hand-off photo is written only through a sidecar its sender granted; Server photos never.
+ * RAW (one sidecar per pair, as Lightroom and Hoard expect).
+ *
+ * Since 0.9.0 nothing calls this on its own (ADR 0026 "Automatic writes removed"): the only caller is Export XMP
+ * (`XmpExport`), an explicit user action. [write] goes next to the photos: only for folder photos whose source is
+ * available and has a write grant (or the one-off tree passed for it); hand-off and Server photos never, a malformed
+ * sidecar is left alone. [writeInto] puts flat `<stem>.xmp` files into a folder the user chose.
  *
  * Only the culling fields the user changed are written (ADR 0027): an edit-only write leaves `xmp:Rating`,
  * `digiKam:PickLabel` and `xmp:Label` as the sidecar has them, so a value another device or Lightroom put there is not
@@ -67,36 +75,85 @@ class SidecarSync(
     private val culling = db.cullingDao()
 
     /**
-     * Writes the sidecars of [photoIds]. [editsOnly]: called because an edit changed (`EditSidecars`), not a rating:
-     * photos that cannot take a sidecar are skipped silently, and nothing is written when there is no edit to write.
-     * [fields]: the culling fields that changed (a rating tap: [CullingField.RATING]); ignored when [editsOnly].
+     * Writes the sidecars of [photoIds] next to the photos. [editsOnly]: nothing is written for photos without an
+     * edit to write. [fields]: the culling fields to write; ignored when [editsOnly]. [oneOff]: trees to use for
+     * sources without a write grant of their own (source id -> a tree the user just picked, never persisted).
      */
     suspend fun write(
         photoIds: List<Long>,
         editsOnly: Boolean = false,
         fields: Set<CullingField> = CullingField.ALL,
+        oneOff: Map<Long, DocumentTree> = emptyMap(),
     ): SidecarOutcome {
         if (editsOnly && !writeEdits()) return SidecarOutcome.NONE
         var outcome = SidecarOutcome.NONE
         for ((sourceId, all) in photos.getAll(photoIds).groupBy { it.sourceId }) {
-            val source = db.sourceDao().get(sourceId)?.takeIf(::canWrite)
-            // A hand-off photo has a sidecar only when its sender granted one (Reveal cannot create documents there).
-            val group = when {
-                source == null -> emptyList()
-                editsOnly && source.kind == SourceKind.HANDOFF -> all.filter { it.xmpDocumentId != null }
-                else -> all
-            }
-            if (source == null && !editsOnly) outcome += SidecarOutcome(0, all.size)
-            if (source != null && group.isNotEmpty()) {
-                outcome += writeGroup(trees.open(source), group, fields.takeUnless { editsOnly })
+            val source = db.sourceDao().get(sourceId)
+            val tree = source?.takeIf { canWrite(it, sourceId in oneOff) }?.let { oneOff[sourceId] ?: trees.open(it) }
+            if (tree == null) {
+                if (!editsOnly) outcome += SidecarOutcome(0, all.size)
+            } else {
+                outcome += writeGroup(tree, all, fields.takeUnless { editsOnly })
             }
         }
         return outcome
     }
 
-    /** Available and writable folders and hand-offs; never the Server source. */
-    private fun canWrite(source: SourceEntity): Boolean =
-        source.writable && source.state == SourceState.AVAILABLE && source.kind != SourceKind.SERVER
+    /** Available folders with a write grant (or a one-off tree); never a hand-off or the Server source. */
+    private fun canWrite(source: SourceEntity, oneOff: Boolean): Boolean =
+        (source.writable || oneOff) && source.state == SourceState.AVAILABLE && source.kind == SourceKind.FOLDER
+
+    /**
+     * Writes one flat `<stem>.xmp` per photo of [photoIds] into [folderId] of [destination] (a folder the user picked):
+     * the photo's own sidecar, when it can be read, is the base that is merged (it stays as it was); the provider
+     * de-duplicates a name that is taken, as the image export's. Works for every kind of photo.
+     */
+    suspend fun writeInto(photoIds: List<Long>, destination: DocumentTree, folderId: String): SidecarOutcome {
+        var outcome = SidecarOutcome.NONE
+        for (photo in photos.getAll(photoIds)) {
+            outcome += try {
+                val bytes = merged(photo, readOwn(photo), CullingField.ALL)
+                val created = destination.create(folderId, "${stemOf(photo)}${SidecarNames.SUFFIX}", SIDECAR_MIME)
+                destination.writeBytes(created.documentId, bytes)
+                SidecarOutcome(1, 0)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: XmpException) {
+                Log.w(TAG, "Sidecar of photo ${photo.id} is malformed, nothing exported", e)
+                SidecarOutcome(0, 0, 1)
+            } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
+                Log.w(TAG, "No sidecar exported for photo ${photo.id}", e)
+                SidecarOutcome(0, 1)
+            }
+        }
+        return outcome
+    }
+
+    /** The photo's own sidecar's bytes (read only), or null when it has none or cannot be reached. */
+    private suspend fun readOwn(photo: PhotoEntity): ByteArray? {
+        val id = photo.xmpDocumentId
+        val source = db.sourceDao().get(photo.sourceId)?.takeIf { it.state == SourceState.AVAILABLE }
+        if (id == null || source == null) return null
+        return runCatching {
+            val tree = trees.open(source)
+            tree.stat(id)?.let { tree.readBytes(it.documentId, LibraryIndexer.MAX_SIDECAR_BYTES) }
+        }.getOrNull()
+    }
+
+    private suspend fun stemOf(photo: PhotoEntity): String {
+        val files = photos.files(photo.id)
+        val main = files.firstOrNull { it.role == FileRole.RAW } ?: files.firstOrNull { it.role == FileRole.RENDERED }
+        return ImageFormats.stem(main?.name ?: photo.name)
+    }
+
+    /** [existing] merged with the photo's fields and edit. Throws [XmpException] when [existing] is malformed. */
+    private suspend fun merged(photo: PhotoEntity, existing: ByteArray?, changed: Set<CullingField>): ByteArray {
+        val fields =
+            XmpFields(rating = photo.rating.coerceIn(0, XmpFields.MAX_RATING), label = photo.label, flag = photo.flag)
+        val date = now().truncatedTo(ChronoUnit.SECONDS).format(DateTimeFormatter.ISO_OFFSET_DATE_TIME)
+        val develop = if (writeEdits()) developState(photo) else null
+        return XmpWriter.update(existing, fields, creatorTool, date, listOf(XmpDevelop.extension(develop)), changed)
+    }
 
     /** [fields] null = an edit-only write. */
     private suspend fun writeGroup(
@@ -106,19 +163,22 @@ class SidecarSync(
     ): SidecarOutcome {
         var outcome = SidecarOutcome.NONE
         for (photo in group) {
-            val ok = try {
-                writeOne(tree, photo, fields)
+            outcome += try {
+                when (writeOne(tree, photo, fields)) {
+                    true -> SidecarOutcome(1, 0)
+                    false -> SidecarOutcome(0, 1)
+                    null -> SidecarOutcome.NONE
+                }
             } catch (e: CancellationException) {
                 throw e
+            } catch (e: XmpException) {
+                // A sidecar that is not well-formed XMP is never rewritten.
+                Log.w(TAG, "Sidecar of photo ${photo.id} is malformed, left as it is", e)
+                SidecarOutcome(0, 0, 1)
             } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
-                // Any provider failure (read-only document, vanished folder, malformed sidecar): database only.
+                // Any provider failure (read-only document, vanished folder): not written.
                 Log.w(TAG, "No sidecar for photo ${photo.id}", e)
-                false
-            }
-            outcome += when (ok) {
-                true -> SidecarOutcome(1, 0)
-                false -> SidecarOutcome(0, 1)
-                null -> SidecarOutcome.NONE
+                SidecarOutcome(0, 1)
             }
         }
         return outcome

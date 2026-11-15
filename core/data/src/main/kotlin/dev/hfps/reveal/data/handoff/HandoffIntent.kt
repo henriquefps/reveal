@@ -105,8 +105,8 @@ object HandoffIntents {
     const val EXTRA_BATCH_INDEX = "dev.hfps.reveal.extra.BATCH_INDEX"
 
     /**
-     * Optional `Int`: how many intents the batch has, on every intent of it (with [EXTRA_BATCH_INDEX]); Reveal knows the
-     * batch is complete once that many arrived ([HandoffBatches.Join.complete]), and keeps its 10 s window as the
+     * Optional `Int`: how many intents the batch has, on every intent of it (with [EXTRA_BATCH_INDEX]). Reveal knows
+     * the batch is complete once that many arrived ([HandoffBatches.Join.complete]) and keeps its 10 s window as the
      * fallback for an incomplete one.
      */
     const val EXTRA_BATCH_COUNT = "dev.hfps.reveal.extra.BATCH_COUNT"

@@ -15,6 +15,7 @@ import dev.hfps.reveal.data.di.DataScope
 import dev.hfps.reveal.data.export.Authorship
 import dev.hfps.reveal.data.export.ExportPreferences
 import dev.hfps.reveal.data.handoff.LocalPreviews
+import dev.hfps.reveal.data.handoff.ServerItems
 import dev.hfps.reveal.data.library.DocumentTreeFactory
 import dev.hfps.reveal.data.storage.CacheBudget
 import dev.hfps.reveal.data.storage.LibraryThumbsPreferences
@@ -35,6 +36,7 @@ import dev.hfps.reveal.sync.engine.SyncEngine
 import dev.hfps.reveal.sync.engine.SyncStore
 import dev.hfps.reveal.sync.engine.SyncedSetting
 import dev.hfps.reveal.sync.files.ServerFiles
+import dev.hfps.reveal.sync.handoff.SyncServerItems
 import dev.hfps.reveal.sync.thumbs.LibraryThumbs
 import dev.hfps.reveal.sync.work.SyncController
 import java.io.ByteArrayOutputStream
@@ -214,6 +216,11 @@ object SyncModule {
     }
 
     private val JPEG_QUALITIES = listOf(90, 80, 70)
+
+    /** What the hand-off needs of the server (ADR 0011 "Amendment W3/H"). */
+    @Provides
+    @Singleton
+    fun provideServerItems(sync: SyncRepository): ServerItems = SyncServerItems(sync)
 
     @Provides
     @Singleton

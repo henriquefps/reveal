@@ -44,10 +44,21 @@ sealed interface HandoffOutcome {
      * Open [versionId] in the editor. [closeOnBack]: it is the only photo, so back returns to the calling app.
      * [libraryBehind]: it was picked among several, so "Opened from other apps" sits behind the editor.
      */
-    data class OpenEditor(val versionId: Long, val closeOnBack: Boolean, val libraryBehind: Boolean) : HandoffOutcome
+    data class OpenEditor(
+        val versionId: Long,
+        val closeOnBack: Boolean,
+        val libraryBehind: Boolean,
+        /** Server items that do not exist on the server (skipped; ADR 0011 "Amendment W3/H"). */
+        val notFound: Int = 0,
+        val issue: ServerIssue? = null,
+    ) : HandoffOutcome
 
     /** Several shots: show them in "Opened from other apps". */
-    data class OpenLibrary(val photoIds: List<Long>) : HandoffOutcome
+    data class OpenLibrary(val photoIds: List<Long>, val notFound: Int = 0, val issue: ServerIssue? = null) :
+        HandoffOutcome
+
+    /** Only server references and none opened: [issue] (pair, another server, unreachable) and/or [notFound]. */
+    data class ServerRefs(val issue: ServerIssue?, val notFound: Int = 0) : HandoffOutcome
 
     /** One document that is not a recognised image name: the editor opens it by URI and reports what is wrong. */
     data class OpenUri(val uri: Uri) : HandoffOutcome
@@ -73,9 +84,12 @@ class HandoffRepository(
     private val sidecars: SidecarSync? = null,
     /** Keeps a local preview of each hand-off while its grant is alive (ADR 0011 "Unreadable hand-offs"). */
     private val previewer: HandoffPreviewer? = null,
+    /** The paired server, to resolve server references (ADR 0011 "Amendment W3/H"); never paired by default. */
+    private val server: ServerItems = ServerItems.None,
     private val clock: () -> Long = System::currentTimeMillis,
 ) {
     private val photos = db.photoDao()
+    private val refs = ServerRefResolver(db, server, clock)
 
     /** One resolved document of the request; [fingerprint] is its content fingerprint (null: unreadable). */
     private class Item(val uri: Uri, val entry: DocumentEntry) {
@@ -90,6 +104,70 @@ class HandoffRepository(
     }
 
     suspend fun receive(request: HandoffRequest): HandoffOutcome = withContext(Dispatchers.IO) {
+        // Server references first: they never touch the sender, so they resolve whatever the URIs do.
+        val batch = request.server?.let { refs.resolve(it, request.title, at = request.batchAt) }
+        if (request.uris.isEmpty()) return@withContext serverOutcome(batch)
+        receiveUris(request, batch)
+    }
+
+    /**
+     * The photos kept for [HandoffOutcome.ServerRefs] when Reveal was not paired: after pairing with the sender's
+     * server ([serverId]) the batch resolves as if it had just arrived, and opens. Null when nothing waits for it.
+     */
+    suspend fun resumePending(serverId: String): HandoffOutcome? = withContext(Dispatchers.IO) {
+        // An atomic take: with two live activities (Reveal's own task and the sender's) only one resolves it.
+        val groups = refs.takePending(serverId).takeIf { it.isNotEmpty() } ?: return@withContext null
+        val at = clock()
+        serverOutcome(
+            groups.map { refs.resolve(refs.refsOf(it), it.title, at = at) }.reduce(ServerBatch::plus),
+        )
+    }
+
+    /** True when a batch waits for a pairing. */
+    suspend fun hasPending(): Boolean = refs.pendingGroups().isNotEmpty()
+
+    /** The server id the pending batch waits for, if any. */
+    suspend fun pendingServerId(): String? = refs.pendingGroups().firstOrNull()?.serverId
+
+    /** The pending batch is not wanted any more (the sheet was cancelled). */
+    suspend fun dropPending() = refs.clearPending()
+
+    /**
+     * Fills the photos that opened from what Reveal had while the server was unreachable; true when none is left
+     * unreachable. Each batch keeps the time it was handed over, so its photos stay under their header.
+     */
+    suspend fun retryUnreachable(): Boolean = withContext(Dispatchers.IO) {
+        val paired = server.pairing()?.serverId
+        val groups = refs.retryGroups().filter { it.serverId == paired }
+        if (groups.isEmpty()) return@withContext false
+        groups.map { refs.resolve(refs.refsOf(it), it.title, refresh = true, at = it.at) }
+            .all { it.issue !is ServerIssue.Unreachable }
+    }
+
+    private fun serverOutcome(batch: ServerBatch?): HandoffOutcome {
+        batch ?: return HandoffOutcome.Nothing
+        val shown = batch.photos
+        return when {
+            shown.isEmpty() -> if (batch.issue != null || batch.notFound > 0) {
+                HandoffOutcome.ServerRefs(batch.issue, batch.notFound)
+            } else {
+                HandoffOutcome.Nothing
+            }
+
+            batch.initialVersionId != null || shown.size == 1 -> HandoffOutcome.OpenEditor(
+                batch.initialVersionId ?: shown.first().versionId,
+                closeOnBack = shown.size == 1,
+                libraryBehind = shown.size > 1,
+                notFound = batch.notFound,
+                issue = batch.issue,
+            )
+
+            else -> HandoffOutcome.OpenLibrary(shown.map { it.photoId }, batch.notFound, batch.issue)
+        }
+    }
+
+    @Suppress("LongMethod", "CyclomaticComplexMethod")
+    private suspend fun receiveUris(request: HandoffRequest, batch: ServerBatch?): HandoffOutcome {
         val persisted = HashSet<Uri>()
         val items = request.uris.mapNotNull { uri ->
             if (persist(uri, request.persistable)) persisted += uri
@@ -105,7 +183,10 @@ class HandoffRepository(
         if (displayable.isEmpty()) {
             // Keep M0's behaviour for a single unrecognised name: the editor opens it by URI and explains.
             val single = imageItems.singleOrNull()
-            return@withContext if (single != null && request.uris.size == 1) {
+            val serverHasSay = batch != null && (batch.photos.isNotEmpty() || batch.issue != null)
+            return if (serverHasSay || (batch != null && batch.notFound > 0)) {
+                serverOutcome(batch)
+            } else if (single != null && request.uris.size == 1) {
                 HandoffOutcome.OpenUri(single.uri)
             } else {
                 HandoffOutcome.Nothing
@@ -114,7 +195,7 @@ class HandoffRepository(
         val shots = pair(displayable, sidecarItems)
         val source = ensureSource()
         fingerprint(source.id, displayable)
-        val now = clock()
+        val now = request.batchAt ?: clock()
         val stored = ArrayList<Pair<Shot, StoredShot>>()
         db.withTransaction {
             for (shot in shots) stored += shot to store(source.id, shot, now, request.title)
@@ -134,18 +215,28 @@ class HandoffRepository(
             }
         }
         schedulePreviews(stored, initial, persisted)
+        val served = batch?.photos.orEmpty()
+        val total = stored.size + served.size
         val first = initial ?: stored.firstOrNull()
-        when {
-            first == null -> HandoffOutcome.Nothing
+        val notFound = batch?.notFound ?: 0
+        val issue = batch?.issue
+        return when {
+            // An item to open at once wins over a URI one (ADR 0011 "Amendment W3/H").
+            batch?.initialVersionId != null ->
+                HandoffOutcome.OpenEditor(batch.initialVersionId, total == 1, total > 1, notFound, issue)
 
-            initial != null || stored.size == 1 ->
-                HandoffOutcome.OpenEditor(
-                    first.second.versionId,
-                    closeOnBack = stored.size == 1,
-                    libraryBehind = stored.size > 1,
-                )
+            first == null -> serverOutcome(batch)
 
-            else -> HandoffOutcome.OpenLibrary(stored.map { it.second.photoId })
+            initial != null || total == 1 ->
+                HandoffOutcome.OpenEditor(first.second.versionId, total == 1, total > 1, notFound, issue)
+
+            else -> HandoffOutcome.OpenLibrary(
+                stored.map {
+                    it.second.photoId
+                } + served.map { it.photoId },
+                notFound,
+                issue,
+            )
         }
     }
 
@@ -388,15 +479,21 @@ class HandoffRepository(
         val folderChanged = HashMap<Long, Set<CullingField>>()
         val valued = ArrayList<Long>()
         for ((shot, ids) in stored) {
-            val values = cullingFor(shot, culling)
-            if (values != null) valued += ids.photoId
-            if (!ids.foreign) {
-                applyRatings(shot, ids, values)
-            } else if (values != null) {
-                val changed = applyFolderCulling(ids, values)
-                if (changed.isNotEmpty()) folderChanged[ids.photoId] = changed
+            // Per field, a dated value (CULLING_VERSION 2) wins only as the last writer; undated ones keep version 1's
+            // precedence. The values that were judged and applied come back (null: none).
+            val sent = cullingFor(shot, culling)
+            val values = if (!ids.foreign) {
+                applyRatings(shot, ids, sent)
+            } else {
+                sent?.let { byLastWriter(ids.photoId, it) }?.takeUnless { it.isEmpty }?.also {
+                    val changed = applyFolderCulling(ids, it)
+                    if (changed.isNotEmpty()) folderChanged[ids.photoId] = changed
+                }
             }
-            if (values != null) dateValues(ids.photoId, values)
+            if (values != null) {
+                valued += ids.photoId
+                dateValues(ids.photoId, values)
+            }
         }
         settle(valued)
         // A folder photo's culling lives in its folder's sidecar: written like any rating change made in Reveal, only
@@ -407,6 +504,55 @@ class HandoffRepository(
             sidecars?.write(ids, fields = fields)
         }
     }
+
+    /** [values] with each dated field kept only when it beats what Reveal holds for it (per-field last writer). */
+    private suspend fun byLastWriter(photoId: Long, values: HandoffCulling): HandoffCulling {
+        suspend fun wins(field: CullingField, at: Long?, device: String?): Boolean {
+            val mine = if (at == null) null else held(photoId, field)
+            return at == null || mine == null || CullingStamp(at, device).beats(mine)
+        }
+        val rating = wins(CullingField.RATING, values.ratingAt, values.ratingDevice)
+        val flag = wins(CullingField.FLAG, values.flagAt, values.flagDevice)
+        val label = wins(CullingField.LABEL, values.labelAt, values.labelDevice)
+        return values.copy(
+            rating = values.rating.takeIf { rating },
+            ratingAt = values.ratingAt.takeIf { rating },
+            ratingDevice = values.ratingDevice.takeIf { rating },
+            flag = values.flag.takeIf { flag },
+            flagAt = values.flagAt.takeIf { flag },
+            flagDevice = values.flagDevice.takeIf { flag },
+            label = values.label.takeIf { label },
+            labelAt = values.labelAt.takeIf { label },
+            labelDevice = values.labelDevice.takeIf { label },
+        )
+    }
+
+    /**
+     * Who last decided [field] of [photoId], as far as Reveal knows: its own change not pushed yet (this device), the
+     * server's record as last seen (its time; the author is not kept, so an equal-time tie goes to the sender and
+     * the server's own rule settles it at the push), or the sidecar's mtime. The newest of them; null = never decided.
+     */
+    private suspend fun held(photoId: Long, field: CullingField): CullingStamp? {
+        val dao = db.cullingDao()
+        val pending = dao.pendingOf(photoId).firstOrNull { it.field == field.key }
+            ?.let { CullingStamp(it.modifiedAt, server.pairing()?.deviceId) }
+        val record = dao.recordOf(photoId)?.let {
+            when (field) {
+                CullingField.RATING -> it.ratingAt
+                CullingField.FLAG -> it.flagAt
+                CullingField.LABEL -> it.labelAt
+            }
+        }?.takeIf { it > 0 }?.let { CullingStamp(it) }
+        val photo = photos.get(photoId)
+        val sidecar = photo?.xmpModified?.takeIf { photo.xmpDocumentId != null }?.let { CullingStamp(it) }
+        return listOfNotNull(pending, record, sidecar).maxWithOrNull(CullingStamp::compare)
+    }
+
+    private fun HandoffCulling.datedOnly() = copy(
+        rating = rating.takeIf { ratingAt != null },
+        flag = flag.takeIf { flagAt != null },
+        label = label.takeIf { labelAt != null },
+    )
 
     /** The sender's decision times (when it sent them) date the queued changes instead of now. */
     private suspend fun dateValues(photoId: Long, values: HandoffCulling) {
@@ -437,8 +583,10 @@ class HandoffRepository(
         val current = XmpFields(photo.rating.coerceIn(0, XmpFields.MAX_RATING), photo.label, photo.flag)
         val previous = ids.previousHandoff
         val sidecarTime = photo.xmpModified.takeIf { photo.xmpDocumentId != null }
-        if (previous != null && sidecarTime != null && sidecarTime > previous) return emptySet()
-        val result = merge(values, current)
+        val sidecarNewer = previous != null && sidecarTime != null && sidecarTime > previous
+        val applied = if (sidecarNewer) values.datedOnly() else values
+        if (applied.isEmpty) return emptySet()
+        val result = merge(applied, current)
         if (result == current) return emptySet()
         photos.setCulling(photo.id, result.rating, result.label, result.flag)
         return buildSet {
@@ -448,9 +596,9 @@ class HandoffRepository(
         }
     }
 
-    private suspend fun applyRatings(shot: Shot, ids: StoredShot, values: HandoffCulling?) {
+    private suspend fun applyRatings(shot: Shot, ids: StoredShot, sent: HandoffCulling?): HandoffCulling? {
         val sidecar = shot.sidecar
-        if (sidecar == null && values == null) return
+        if (sidecar == null && sent == null) return null
         val read = sidecar?.let(::readSidecar)
         val sidecarId = sidecar?.uri?.toString()
         val sidecarTime = sidecar?.entry?.modified
@@ -463,11 +611,16 @@ class HandoffRepository(
             // Unreadable sidecar: remember it so it is not read again until it changes.
             sidecar != null -> photos.setSidecar(ids.photoId, sidecarId, sidecarTime)
         }
-        if (values != null && !sidecarNewer) {
+        // The dated values are judged against what the sidecar just set (its mtime counts), as the last writer; a newer
+        // sidecar beats the undated ones (version 1).
+        val values = sent?.let { byLastWriter(ids.photoId, it) }?.takeUnless { it.isEmpty }
+        val applied = if (sidecarNewer) values?.datedOnly() else values
+        if (applied != null && !applied.isEmpty) {
             val base = storedFields(ids.photoId)
-            val result = merge(values, base)
+            val result = merge(applied, base)
             if (result != base) photos.setCulling(ids.photoId, result.rating, result.label, result.flag)
         }
+        return values
     }
 
     private fun readSidecar(item: Item): SidecarCulling? = runCatching {
@@ -494,6 +647,9 @@ class HandoffRepository(
                 ratingAt = rating?.ratingAt,
                 flagAt = flag?.flagAt,
                 labelAt = label?.labelAt,
+                ratingDevice = rating?.ratingDevice,
+                flagDevice = flag?.flagDevice,
+                labelDevice = label?.labelDevice,
             )
         }
     }

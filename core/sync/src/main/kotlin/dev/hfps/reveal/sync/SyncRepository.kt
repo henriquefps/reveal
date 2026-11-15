@@ -143,6 +143,9 @@ class SyncRepository(
     fun dismissCandidates() = candidates.update { emptyList() }
 
     private val mutex = Mutex()
+
+    /** A hand-off asked for the culling pull while a run held [mutex]: pulled right after that run. */
+    private val cullingWanted = java.util.concurrent.atomic.AtomicBoolean(false)
     private val runtime = MutableStateFlow(SyncStatus())
 
     val account: StateFlow<SyncAccount?> = accounts.account
@@ -299,43 +302,74 @@ class SyncRepository(
         candidates = view.candidates,
     )
 
+    /**
+     * Pulls the culling records and applies them (a hand-off's server references, ADR 0011 "Amendment W3/H"), unless
+     * the server does not sync culling. While a sync run is going the pull is left to follow that run (it may have
+     * passed its own culling step already): [syncMetadata] does it as soon as the run ends.
+     */
+    suspend fun pullCulling() = withContext(Dispatchers.IO) {
+        val api = api() ?: return@withContext
+        if (!mutex.tryLock()) {
+            cullingWanted.set(true)
+            return@withContext
+        }
+        try {
+            val info = api.server()
+            if (info.has("culling")) engine.culling.run(api, info)
+        } finally {
+            mutex.unlock()
+        }
+    }
+
     /** One metadata sync; null when not paired. Problems end up in [status] (and are rethrown when worth a retry). */
     suspend fun syncMetadata(): SyncReport? = withContext(Dispatchers.IO) {
         val account = accounts.account.value ?: return@withContext null
         val api =
             api() ?: return@withContext null.also { runtime.update { it.copy(problem = SyncProblem.UNAUTHORIZED) } }
-        mutex.withLock {
-            // Unpaired (or paired again) while this run waited: its key and server are gone, do nothing.
-            if (accounts.account.value != account) return@withLock null
-            runtime.update { it.copy(running = true) }
-            try {
-                // Previews no longer needed stop being named before the push, so the blob run can drop them.
-                uploader.markDrops()
-                val report = engine.sync(api, account.serverId)
-                // After the push: the server keeps an original while a live record names it.
-                val deleted = uploader.deleteOriginals(api)
-                if (deleted > 0) Log.i(TAG, "deleted $deleted originals from the server")
-                // Neither of these may fail the sync (they are housekeeping after it): each guards itself.
-                val adopted = adoptHandoffs()
-                if (adopted > 0) Log.i(TAG, "$adopted hand-offs the server holds are Server photos now")
-                val headers = readServerHeaders(api)
-                Log.i(TAG, "sync: $report, $headers server headers")
-                runtime.update { it.copy(running = false, problem = null, lastSyncAt = engine.lastSync()) }
-                report
-            } catch (@Suppress("SwallowedException") e: ServerChangedException) {
-                Log.w(TAG, "The paired address answers as another server")
-                runtime.update { it.copy(running = false, problem = SyncProblem.SERVER_CHANGED) }
-                null
-            } catch (e: SyncHttpException) {
-                runtime.update { it.copy(running = false, problem = problemOf(e)) }
-                if (e.transient) throw e
-                null
-            } catch (e: IOException) {
-                runtime.update { it.copy(running = false, problem = SyncProblem.OFFLINE) }
-                throw e
-            } finally {
-                runtime.update { it.copy(running = false) }
+        try {
+            runLocked(account, api)
+        } finally {
+            if (cullingWanted.getAndSet(false)) {
+                try {
+                    pullCulling()
+                } catch (e: IOException) {
+                    Log.i(TAG, "culling pull after the sync failed: ${e.javaClass.simpleName}")
+                }
             }
+        }
+    }
+
+    private suspend fun runLocked(account: SyncAccount, api: SyncApi): SyncReport? = mutex.withLock {
+        // Unpaired (or paired again) while this run waited: its key and server are gone, do nothing.
+        if (accounts.account.value != account) return@withLock null
+        runtime.update { it.copy(running = true) }
+        try {
+            // Previews no longer needed stop being named before the push, so the blob run can drop them.
+            uploader.markDrops()
+            val report = engine.sync(api, account.serverId)
+            // After the push: the server keeps an original while a live record names it.
+            val deleted = uploader.deleteOriginals(api)
+            if (deleted > 0) Log.i(TAG, "deleted $deleted originals from the server")
+            // Neither of these may fail the sync (they are housekeeping after it): each guards itself.
+            val adopted = adoptHandoffs()
+            if (adopted > 0) Log.i(TAG, "$adopted hand-offs the server holds are Server photos now")
+            val headers = readServerHeaders(api)
+            Log.i(TAG, "sync: $report, $headers server headers")
+            runtime.update { it.copy(running = false, problem = null, lastSyncAt = engine.lastSync()) }
+            report
+        } catch (@Suppress("SwallowedException") e: ServerChangedException) {
+            Log.w(TAG, "The paired address answers as another server")
+            runtime.update { it.copy(running = false, problem = SyncProblem.SERVER_CHANGED) }
+            null
+        } catch (e: SyncHttpException) {
+            runtime.update { it.copy(running = false, problem = problemOf(e)) }
+            if (e.transient) throw e
+            null
+        } catch (e: IOException) {
+            runtime.update { it.copy(running = false, problem = SyncProblem.OFFLINE) }
+            throw e
+        } finally {
+            runtime.update { it.copy(running = false) }
         }
     }
 

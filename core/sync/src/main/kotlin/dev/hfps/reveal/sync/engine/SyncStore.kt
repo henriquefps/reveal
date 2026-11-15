@@ -1064,7 +1064,7 @@ class SyncStore(
         const val ADOPTED_PREFIX = "handoff/"
 
         /** `sources.tree_uri` of the Server source (unique, never a real URI). */
-        const val SERVER_TREE = "reveal-sync:server"
+        const val SERVER_TREE = dev.hfps.reveal.data.sync.ServerTree.SOURCE_TREE
         private const val MAX_RATING = 5
         private const val MAX_ORIENTATION = 8
         private const val FP_SUFFIX = 12

@@ -38,6 +38,9 @@ class ServerTree(private val resolver: ContentResolver, private val authority: S
     override fun uri(documentId: String): Uri = uri(authority, ORIGINAL, documentId)
 
     companion object {
+        /** `sources.tree_uri` of the Server source (unique, never a real URI). */
+        const val SOURCE_TREE = "reveal-sync:server"
+
         const val ORIGINAL = "original"
         const val DISPLAY = "display"
         const val SMART = "smart"

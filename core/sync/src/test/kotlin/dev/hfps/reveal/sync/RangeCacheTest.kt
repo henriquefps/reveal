@@ -2,11 +2,15 @@ package dev.hfps.reveal.sync
 
 import com.google.common.truth.Truth.assertThat
 import dev.hfps.reveal.sync.files.RangeCache
-import java.nio.file.Files
 import kotlin.random.Random
+import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.TemporaryFolder
 
 class RangeCacheTest {
+    @get:Rule
+    val temp = TemporaryFolder()
+
     private val size = 40 * RangeCache.BLOCK.toInt() + 123
     private val data = Random(1).nextBytes(size)
     private val requests = ArrayList<Int>()
@@ -17,7 +21,7 @@ class RangeCacheTest {
 
     @Test
     fun `a header read costs one block, a forward read grows its read-ahead, and bytes are exact`() {
-        val cache = RangeCache(Files.createTempDirectory("ranges").toFile())
+        val cache = RangeCache(temp.newFolder())
         val buffer = ByteArray(64 * 1024)
         val n = cache.read("a", size.toLong(), 0, buffer.size, buffer, fetch)
         assertThat(buffer.copyOf(n)).isEqualTo(data.copyOf(n))
@@ -41,7 +45,7 @@ class RangeCacheTest {
 
     @Test
     fun `a complete file assembles into one exact copy, an incomplete one does not`() {
-        val dir = Files.createTempDirectory("ranges").toFile()
+        val dir = temp.newFolder()
         val cache = RangeCache(dir)
         val buffer = ByteArray(1_000_000)
         cache.read("a", size.toLong(), 0, buffer.size, buffer, fetch)
@@ -59,7 +63,7 @@ class RangeCacheTest {
 
     @Test
     fun `the trim drops files that are not pinned first`() {
-        val dir = Files.createTempDirectory("ranges").toFile()
+        val dir = temp.newFolder()
         var cap = Long.MAX_VALUE
         val cache = RangeCache(dir) { cap }
         val buffer = ByteArray(RangeCache.BLOCK.toInt())

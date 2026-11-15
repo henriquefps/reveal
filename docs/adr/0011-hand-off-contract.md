@@ -476,7 +476,7 @@ flushes its culling pushes for those items before sending (best effort); Reveal 
 
 A bigger batch is several `DEVELOP` intents with the same `TITLE`, sent by `Activity.startActivities(intents)`; the
 first carries `INITIAL_ITEM` (or `INITIAL_URI`) and any URI items. Each intent carries **`BATCH_INDEX`**
-(`dev.hfps.reveal.extra.BATCH_INDEX`, `Int`, 0 for the first, the one lowest in the stack). `MainActivity` is
+(`dev.hfps.reveal.extra.BATCH_INDEX`, `Int`, 0 for the first, the one lowest in the stack; **pending Hoard agreement**: a contract addition until the coordinator confirms it). `MainActivity` is
 `standard`, so every intent gets its own record (the last intent's is created first, the others as each one above
 finishes). Reveal ingests them as **one** batch: a process-wide `HandoffBatches` keeps one record in `meta` (the
 sender package + `TITLE`, a shared `handoff_at`, the last touch, the notices so far) and every intent whose key matches

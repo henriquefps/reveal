@@ -122,6 +122,7 @@ class SyncStore(
         sync.deleteServerSource()
         for (setting in settings) meta.delete(settingKey(setting.key))
         meta.delete(KEY_REPAIR_CHECKS)
+        meta.delete(KEY_HELD_VERSIONS)
     }
 
     // ------------------------------------------------------------------ push
@@ -180,8 +181,14 @@ class SyncStore(
         }
         when {
             first == PhotoFirst.NO_ROOM -> return false
+
             first == PhotoFirst.HELD -> hold(record)
-            change == null -> sync.clean(record.kind, record.recordId, record.modifiedAt)
+
+            change == null -> {
+                sync.clean(record.kind, record.recordId, record.modifiedAt)
+                if (record.kind == Kinds.VERSION) unhold(record.recordId)
+            }
+
             else -> out += Outgoing(change, record.modifiedAt)
         }
         return true
@@ -240,16 +247,63 @@ class SyncStore(
     suspend fun refused(change: PushChange, stamp: Long) {
         if (change.kind == Kinds.PHOTO) refusedPhotos += change.id
         sync.clean(change.kind, change.id, stamp)
+        if (change.kind == Kinds.VERSION) unhold(change.id)
     }
 
-    /** A version waiting for its photo's record ([SyncRecordEntity.HELD_REV]): released by [releaseHeld]. */
+    /**
+     * A version waiting for its photo's record (ADR 0018 "W5"): not dirty, so it is not offered again, and listed in
+     * `meta` [KEY_HELD_VERSIONS]; its [SyncRecordEntity.rev] stays the server's (a version the server has already, e.g.
+     * one 0.8 pushed without its photo, goes up on top of its real revision once released: never as a create, which
+     * the server would lose to its own state and keep as a conflict copy). Released by [releaseHeld].
+     */
     private suspend fun hold(record: SyncRecordEntity) {
-        sync.putRecord(record.copy(rev = SyncRecordEntity.HELD_REV, dirty = false))
+        sync.putRecord(record.copy(dirty = false))
+        val held = heldVersions()
+        if (record.recordId !in held) putHeld(held + record.recordId)
     }
 
-    /** The photo [photoUuid]'s record is on the server now: its held versions go up with the next push. */
+    /** The versions [hold] keeps back (version uuids). */
+    private suspend fun heldVersions(): Set<String> =
+        meta.get(KEY_HELD_VERSIONS)?.split(',')?.filterTo(LinkedHashSet()) { it.isNotEmpty() }.orEmpty()
+
+    private suspend fun putHeld(held: Set<String>) = when {
+        held.isEmpty() -> meta.delete(KEY_HELD_VERSIONS)
+        else -> meta.put(MetaEntity(KEY_HELD_VERSIONS, held.joinToString(",")))
+    }
+
+    /** [versionUuid] went up (or needs nothing on the server): no longer held. */
+    private suspend fun unhold(versionUuid: String) {
+        val held = heldVersions()
+        if (versionUuid in held) putHeld(held - versionUuid)
+    }
+
+    /** True when [versionUuid] is held back by [hold]: local work the pull must not overwrite. */
+    private suspend fun isHeld(versionUuid: String): Boolean = versionUuid in heldVersions()
+
+    /**
+     * The photo [photoUuid] (its id, or an alias of it) is known to the server now: its held versions are marked to go
+     * up with the next push, at the revision they have (their edit time kept).
+     */
     private suspend fun releaseHeld(photoUuid: String) {
+        // Holds of an earlier W5 build (rev -1): pushed as creates, as that build did.
         sync.releaseHeldVersions(photoUuid)
+        val held = heldVersions()
+        if (held.isEmpty()) return
+        val photoId = sync.photoByUuid(photoUuid)?.id ?: sync.alias(photoUuid) ?: return
+        val left = LinkedHashSet<String>()
+        for (uuid in held) {
+            val version = sync.versionByUuid(uuid)
+            val record = sync.record(Kinds.VERSION, uuid)
+            when {
+                // Gone (deleted, or its photo forgotten): nothing to hold any more.
+                version == null || record == null -> Unit
+
+                version.photoId == photoId -> sync.putRecord(record.copy(dirty = true))
+
+                else -> left += uuid
+            }
+        }
+        if (left.size != held.size) putHeld(left)
     }
 
     private suspend fun photoChange(record: SyncRecordEntity): PushChange? {
@@ -375,6 +429,7 @@ class SyncStore(
             }
             return@withTransaction
         }
+        if (change.kind == Kinds.VERSION) unhold(change.id)
         if (result.status == STATUS_APPLIED || result.winner == WINNER_INCOMING) {
             sync.pushed(change.kind, change.id, result.rev, outgoing.stamp)
             if (change.kind == Kinds.PHOTO && !change.deleted) releaseHeld(change.id)
@@ -447,8 +502,9 @@ class SyncStore(
             }
 
             // Unpushed local work: the next push carries the old baseRev and the server decides (ADR 0017); the
-            // server's state waits in the inbox and applies after that push if it is still the newest.
-            local != null && local.dirty -> false
+            // server's state waits in the inbox and applies after that push if it is still the newest. A held version
+            // ([hold]) is unpushed work too.
+            local != null && (local.dirty || (record.kind == Kinds.VERSION && isHeld(record.id))) -> false
 
             // Already applied, or older than what the push left (our state won). A live record whose photo or version
             // is gone from this device (its folder was removed before 0.5.3, a forgotten hand-off) is placed again:
@@ -763,7 +819,11 @@ class SyncStore(
         val data = decode(record.data, VersionData.serializer()) ?: return true
         val photo = sync.photoByUuid(data.photoId) ?: sync.alias(data.photoId)?.let { photos.get(it) }
             ?: existing?.let { photos.get(it.photoId) }
-            ?: data.photoFingerprint?.let { photoByFingerprint(data.photoId, it) }
+            ?: data.photoFingerprint?.let { fingerprint ->
+                // Found by its main file: the server knows the photo under [data.photoId] (it took that id, or the id
+                // is an alias of it now), so this device's held versions of it go up without waiting for its record.
+                photoByFingerprint(data.photoId, fingerprint)?.also { releaseHeld(data.photoId) }
+            }
             ?: return false
         val copyDevice = record.copyOf?.let { deviceName(record.deviceId) ?: record.deviceId.take(DEVICE_SHORT) }
         val target = existing ?: placeVersion(photo.id, record.id, data, record.copyOf)
@@ -1360,6 +1420,9 @@ class SyncStore(
         private val DEFAULT_RECIPE = dev.hfps.reveal.pipeline.recipe.Recipe()
 
         private fun settingKey(key: String) = "sync.setting.$key"
+
+        /** `meta`: versions held back until their photo is on the server ([hold]): version uuids, `,` joined. */
+        const val KEY_HELD_VERSIONS = "sync.heldVersions"
 
         /** `meta`: versions the W5 repair left to check on the next run ([checkRepairs]): `uuid@rev`, `,` joined. */
         const val KEY_REPAIR_CHECKS = "sync.versionPhotos.checks"

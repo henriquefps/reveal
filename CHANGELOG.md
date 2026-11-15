@@ -58,7 +58,12 @@ All notable changes to Reveal are documented here. The format follows
   device, its place next to Hoard on the same phone and everything it had synced. When the old device was removed
   from the server, the new one keeps the sync state and rejoins Hoard's phone. A re-pair or a pairing after unpairing
   no longer turns every edited photo into a conflict copy. Reveal sends its device key only to the server it is
-  paired with (a pairing code naming no server, or another one, never receives it).
+  paired with (a pairing code naming no server, or another one, never receives it), and on its own only to an https,
+  Tailscale or home-network address: elsewhere it first asks "Same server at <host>?" ("New device" pairs again
+  without sending the key). Settings → Sync has "Pair with a new code" for a server that moved.
+- An edit of a photo whose file Reveal had not finished reading, already on the server from an earlier version, no
+  longer becomes a conflict copy when it goes up again; and it goes up as soon as another device's edit names that
+  photo.
 - Photos from Hoard (W4): a camera's `IMG_0001.JPG` no longer pairs with a Hoard `IMG_0001.CR3` of the same name; a
   RAW and its JPEG that arrive in different parts of a big batch still become one photo; the originals Reveal keeps
   for Hoard's Downloads copies are no longer left behind (backups of photos the server holds, a failed re-copy, a

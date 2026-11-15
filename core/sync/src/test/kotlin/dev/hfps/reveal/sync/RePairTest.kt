@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.google.common.truth.Truth.assertThat
+import com.google.common.truth.Truth.assertWithMessage
 import dev.hfps.image.source.FileFingerprint
 import dev.hfps.reveal.data.db.MetaEntity
 import dev.hfps.reveal.data.db.SyncRecordEntity
@@ -222,6 +223,38 @@ class RePairTest {
         } finally {
             other.shutdown()
         }
+    }
+
+    @Test
+    fun `a public http address asks first and a declined key reuse pairs a new device keeping the sync state`() {
+        val app = install()
+        val photo = pairedWithAnEdit(app, hoardOnPixel())
+        val old = app.repository.account.value!!.deviceId
+        val versionUuid = app.device.versions(photo).single().uuid
+        val rev = server.record("version", versionUuid)!!.rev
+        val rows = records(app.device)
+
+        // The same server named at a public http address: the question names its host; at https, Tailscale, a LAN, the
+        // address already in use or for another server there is none.
+        assertThat(runBlocking { app.repository.keyReuseHost(link("http://203.0.113.7:3471")) })
+            .isEqualTo("203.0.113.7")
+        for (quiet in listOf("https://203.0.113.7", "http://100.87.163.92:3471", "http://192.168.1.4:3471", url)) {
+            assertWithMessage(quiet).that(runBlocking { app.repository.keyReuseHost(link(quiet)) }).isNull()
+        }
+        assertThat(runBlocking { app.repository.keyReuseHost(link("http://203.0.113.7", serverId = null)) }).isNull()
+
+        // "New device": a normal pairing, the key never sent; the library's sync state stays, nothing is copied.
+        val oldKey = server.devices.entries.single { it.value == old }.key
+        val known = server.authorizations.size
+        val after = runBlocking { app.repository.pair(link(otherUrl), SyncRepository.KeyReuse.DECLINED) }
+        assertThat(server.authorizations.drop(known).filter { oldKey in it }).isEmpty()
+        assertThat(after.deviceId).isNotEqualTo(old)
+        assertThat(after.url).isEqualTo(otherUrl)
+        assertThat(records(app.device)).isEqualTo(rows)
+        runBlocking { app.repository.syncMetadata() }
+        assertThat(server.record("version", versionUuid)!!.rev).isEqualTo(rev)
+        assertThat(server.copies()).isEmpty()
+        assertThat(app.device.pending()).isEqualTo(0)
     }
 
     @Test

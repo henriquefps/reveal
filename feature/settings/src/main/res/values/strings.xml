@@ -31,6 +31,12 @@
     <string name="sync_pair">Pair with link</string>
     <string name="sync_pairing">Pairing…</string>
     <string name="sync_cancel">Cancel</string>
+    <string name="sync_pair_again">Pair with a new code</string>
+    <string name="sync_pair_again_hint">The same server at a new address? Scan or paste its new pairing code: this device keeps its history and its edits.</string>
+    <string name="sync_key_reuse_title">Same server at %1$s?</string>
+    <string name="sync_key_reuse_body">Reveal will reuse this device\'s key, so it stays the same device. If you don\'t recognise this address, choose New device: Reveal pairs again without sending the key.</string>
+    <string name="sync_key_reuse_yes">Same server</string>
+    <string name="sync_key_reuse_no">New device</string>
     <string name="sync_pair_invalid_link">This is not a Reveal pairing link. Copy it again from the server\'s setup page.</string>
     <string name="sync_pair_invalid_token">The pairing code was already used or has expired (codes last 10 minutes). Show a new one on the server.</string>
     <string name="sync_pair_other_server">The link answers as a different server than the one in the code. Check the server address.</string>

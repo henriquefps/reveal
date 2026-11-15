@@ -1089,8 +1089,9 @@ cap it at `budget::cap`, and add its directory to `AppStorage.AREA_DIRS`.
 
 Photo before version (W5, 0.9.0, ADR 0018 "Amendment W5"): NAS photos and quietly filed hand-offs have random
 uuids and no `photo` record, so `SyncStore.readOutgoing` puts a version's photo change ahead of it when the photo has
-no accepted record (`photoFirst`); a photo without a fingerprint yet holds its versions (`sync_records.rev = -1` =
-`SyncRecordEntity.HELD_REV`, released by `SyncDao.releaseHeldVersions` when the photo's record is accepted or pulled);
+no accepted record (`photoFirst`); a photo without a fingerprint yet holds its versions (not dirty, rev kept, listed in `meta` `sync.heldVersions`;
+`SyncStore.releaseHeld` when the photo's record is accepted or pulled, or a pulled version finds it by fingerprint;
+never overload `rev` for it: a release must push on the real `baseRev`);
 the batch stays within the server's `maxPushChanges` counting the added photos (`FakeSyncServer` refuses more, as
 hoard-server does). An adopting photo keeps its old id as an alias.
 `VersionData.photoFingerprint` (main file) lets `applyVersion` find the photo by fingerprint (oldest non-hidden when
@@ -1102,7 +1103,9 @@ original `modifiedAt`; versions of unknown author only via `checkRepairs` on the
 current key at the link's address only when its `server=` is the account's (`sameDevice`: same device, only the
 URL changes); a refused key pairs a new device
 but keeps the sync state (`SyncEngine.forgetDevice`) and claims the previous physical device when offered; no
-self-revoke exists in `/v1`. `SyncStore.sameEdit` avoids conflict copies on a first sync (and re-pushes a record naming a stale photo id). Test: `RePairTest`.
+self-revoke exists in `/v1`. The key goes on its own only to https/private addresses
+(`account/ServerAddresses.keySafe`); elsewhere the Sync screen asks "Same server at <host>?" (`keyReuseHost`,
+`KeyReuse.CONFIRMED/DECLINED`). `SyncStore.sameEdit` avoids conflict copies on a first sync (and re-pushes a record naming a stale photo id). Test: `RePairTest`.
 
 Culling with hoard-server (R0.8, ADR 0027, DB v13; only when `/v1/server` lists `culling`, else culling stays in
 `photo` records): `engine/CullingSync` (seed once per server, push `POST /v1/culling` per field by main fingerprint,

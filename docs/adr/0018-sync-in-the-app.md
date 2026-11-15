@@ -605,9 +605,15 @@ Decisions:
   (`localPhoto`: adopts the id when its own never went up, else an alias) and the version applies. An adopting photo
   keeps its old id as an alias, so records that named it (a version pushed before the adoption) still find it; the
   alias of an adoption is never a "survivor" of a photo tombstone (only ids with a live record are). A photo whose main
-  file has no fingerprint yet cannot be described: its version is **held** (`sync_records.rev = -1`,
-  `SyncRecordEntity.HELD_REV`, not dirty) and `SyncDao.releaseHeldVersions` marks it again (rev 0, its edit time kept)
-  once the photo's record is accepted (a push, or a pulled record placed on it). **The batch stays within the server's
+  file has no fingerprint yet cannot be described: its version is **held** (not dirty, its uuid listed in
+  `meta` `sync.heldVersions` = `SyncStore.KEY_HELD_VERSIONS`; **its `rev` stays the server's**) and `releaseHeld`
+  marks it dirty again (same revision, same edit time) once the photo is known to the server: its record accepted (a
+  push), a pulled photo record placed on it, or a pulled version that found it by its main file (`applyVersion` ->
+  `photoByFingerprint`, by the id it took or the alias it got). Keeping the revision matters for a version the server
+  has already (one 0.8 pushed without its photo, re-marked by the repair): released as a create (`baseRev` 0) with the
+  same `modifiedAt` and device, the server's state would win and keep ours as a conflict copy. A held version counts as
+  unpushed work for the pull (its server record is parked, as for a dirty one). The first fix round overloaded `rev`
+  with -1 (`SyncRecordEntity.HELD_REV`); `SyncDao.releaseHeldVersions` still releases such rows (rev 0). **The batch stays within the server's
   `maxPushChanges`** (500; hoard-server refuses a longer push as a whole with `422 invalid_change` and no index, which
   no retry can get past): settings, records and the photos added ahead of their versions all count; a version whose
   photo does not fit with it stays dirty and its photo (marked dirty) leads the next round. A photo record that is a tombstone
@@ -667,6 +673,15 @@ Decisions (`SyncRepository.pair`):
   to ask an address which server it is: `/v1/health` names none and `/v1/server` needs a key); the same `serverId`
   and `deviceId` -> only the address changes (`SyncAccount.url`). Device id, key, physical device (Hoard's grouping),
   cursors and records stay; the pairing token is left unused. This is the owner's case from now on.
+  Hardening (fix round 2): even with a matching `server=` the key goes **on its own** only to an address only a
+  private network or TLS reaches (`account/ServerAddresses.keySafe`: `https`, loopback, Tailscale `100.64.0.0/10` and
+  `*.ts.net`, LAN `10/8`, `172.16/12`, `192.168/16`, `fd00::/8`, link-local `169.254/16`, `fe80::/10`; literal
+  addresses only, never a DNS lookup), or to the address the account already uses. Elsewhere (a public `http`
+  address, a plain name) the Sync screen asks first, naming the host (`SyncRepository.keyReuseHost` ->
+  `PairingState.ConfirmKeyReuse`, "Same server at <host>? Reveal will reuse this device's key"): "Same server" =
+  `pair(link, KeyReuse.CONFIRMED)`, "New device" = `KeyReuse.DECLINED`, a normal pairing (a new device keeping the
+  sync state, as for a refused key). A paired Sync screen has "Pair with a new code" for this (goldens
+  `phone_paired_*`, `phone_key_reuse_dark`).
 - **Same server, key refused** (`401`: revoked or lost): pair a new device but **keep the library's sync state**
   (records, revisions, cursors, aliases, inbox, culling, Server source); only the device report and the stored
   physical id are forgotten (`SyncEngine.forgetDevice`), so the new device declares `culling` on its next sync. When
@@ -690,10 +705,12 @@ Tests: `RePairTest` (a new address with a valid key keeps the device and its pho
 `server=` or naming another server never receives the key (a second fake server records `Authorization`); unpair +
 pair after an adoption re-pushes the version naming the current id and fingerprint; a revoked key -> a
 new device that keeps the records, rejoins Hoard's phone, reports itself, and still gets the W5 repair; an old device
-still live -> no forced claim; unpair + pair -> no conflict copy), `SyncApiTest` (a used token is refused once
+still live -> no forced claim; unpair + pair -> no conflict copy; a public http address asks, a declined reuse
+never sends the key and keeps the sync state), `ServerAddressesTest` (the classification), `SyncApiTest` (a used token is refused once
 unpaired).
 
 Tests: `VersionPhotoSyncTest` (FakeSyncServer, two devices: an unculled NAS photo, a hand-off never culled against the
 other device's folder photo, the exact production sequence, the repair of a photo the server never had, a version
-before its photo record, the ambiguity, a held version, a tombstoned photo), `RealServerVersionPhotoTest` (the pinned
+before its photo record, the ambiguity, a held version, a held version the server already has (real `baseRev`, no conflict copy), a pulled
+version releasing its photo's held versions, a tombstoned photo), `RealServerVersionPhotoTest` (the pinned
 hoard-server: the NAS case and the production sequence; `REVEAL_VERSION_DIR`, `REVEAL_VERSION_LINKS`).

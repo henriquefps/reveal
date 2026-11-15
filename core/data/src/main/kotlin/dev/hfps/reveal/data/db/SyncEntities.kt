@@ -29,8 +29,9 @@ data class SyncRecordEntity(
         const val KIND_VERSION = "version"
 
         /**
-         * `rev` of a version record held back until its photo's record is on the server (ADR 0018 "W5"): not dirty,
-         * never pushed; [SyncDao.releaseHeldVersions] marks it again (rev 0) once the photo's record is accepted.
+         * `rev` an earlier W5 build gave a version record held back until its photo's record was on the server (ADR
+         * 0018 "W5"); [SyncDao.releaseHeldVersions] still releases those (rev 0). Holds now keep the real revision and
+         * are listed in `meta` (`SyncStore.KEY_HELD_VERSIONS`): never write this value.
          */
         const val HELD_REV = -1L
     }

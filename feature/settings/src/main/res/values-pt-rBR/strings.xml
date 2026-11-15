@@ -31,6 +31,12 @@
     <string name="sync_pair">Parear com o link</string>
     <string name="sync_pairing">Pareando…</string>
     <string name="sync_cancel">Cancelar</string>
+    <string name="sync_pair_again">Parear com um novo código</string>
+    <string name="sync_pair_again_hint">O mesmo servidor num novo endereço? Escaneie ou cole o novo código de pareamento: este dispositivo mantém o histórico e as edições.</string>
+    <string name="sync_key_reuse_title">Mesmo servidor em %1$s?</string>
+    <string name="sync_key_reuse_body">O Reveal vai reutilizar a chave deste dispositivo, que continua sendo o mesmo dispositivo. Se não reconhece este endereço, escolha Novo dispositivo: o Reveal pareia de novo sem enviar a chave.</string>
+    <string name="sync_key_reuse_yes">Mesmo servidor</string>
+    <string name="sync_key_reuse_no">Novo dispositivo</string>
     <string name="sync_pair_invalid_link">Este não é um link de pareamento do Reveal. Copie de novo na página de configuração do servidor.</string>
     <string name="sync_pair_invalid_token">O código de pareamento já foi usado ou expirou (vale 10 minutos). Mostre um novo no servidor.</string>
     <string name="sync_pair_other_server">O endereço responde como outro servidor, diferente do código. Confira o endereço do servidor.</string>

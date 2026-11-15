@@ -7,6 +7,7 @@ import dev.hfps.reveal.data.index.LibraryIndexer
 import dev.hfps.reveal.data.library.DocumentTreeFactory
 import dev.hfps.reveal.sync.account.ClientDevice
 import dev.hfps.reveal.sync.account.PairingLink
+import dev.hfps.reveal.sync.account.ServerAddresses
 import dev.hfps.reveal.sync.account.SyncAccount
 import dev.hfps.reveal.sync.account.SyncAccountStore
 import dev.hfps.reveal.sync.account.SyncOptions
@@ -184,8 +185,8 @@ class SyncRepository(
      * keeps the library's sync state (records, cursors, culling) and joins the physical device the previous one was in
      * when the server offers it.
      */
-    suspend fun pair(link: PairingLink): SyncAccount = withContext(Dispatchers.IO) {
-        sameDevice(link)?.let { return@withContext it }
+    suspend fun pair(link: PairingLink, keyReuse: KeyReuse = KeyReuse.AUTO): SyncAccount = withContext(Dispatchers.IO) {
+        sameDevice(link, keyReuse)?.let { return@withContext it }
         val response = try {
             newApi(link.url, null).pair(
                 PairRequest(
@@ -254,12 +255,17 @@ class SyncRepository(
      * The key is a secret of the paired server: it is only ever sent to an address the link proves to be that server,
      * i.e. a link whose `server=` (hoard-server prints it in every pairing code) is the account's server id. A link
      * without one, or naming another server, pairs normally and never sees the key (`/v1` has no unauthenticated way to
-     * ask an address which server it is: `/v1/health` names none, and `/v1/server` needs a key).
+     * ask an address which server it is: `/v1/health` names none, and `/v1/server` needs a key). Even then it goes on
+     * its own only to an https or private address ([ServerAddresses.keySafe]); elsewhere only when the user
+     * confirmed it ([keyReuseHost], [KeyReuse.CONFIRMED]), and never after a [KeyReuse.DECLINED].
      */
     @Suppress("ReturnCount")
-    private suspend fun sameDevice(link: PairingLink): SyncAccount? {
+    private suspend fun sameDevice(link: PairingLink, keyReuse: KeyReuse): SyncAccount? {
         val account = accounts.account.value ?: return null
         if (link.serverId == null || link.serverId != account.serverId) return null
+        // An address that is neither https nor private goes only after the user said it is the same server.
+        if (keyReuse == KeyReuse.DECLINED) return null
+        if (keyReuse == KeyReuse.AUTO && !keySafe(link, account)) return null
         val key = accounts.apiKey() ?: return null
         val info = try {
             newApi(link.url, key).server()
@@ -279,6 +285,36 @@ class SyncRepository(
             runtime.update { SyncStatus() }
             moved
         }
+    }
+
+    /**
+     * The host to name in "Same server at <host>?" before [pair]ing with [link] (ADR 0018 "W5 (f)"), or null when no
+     * question is needed: the link is for another server (or names none), there is no key, or the key may go to its
+     * address without asking ([ServerAddresses.keySafe], or the address the account already uses). The answer is
+     * passed to [pair] as [KeyReuse.CONFIRMED] or [KeyReuse.DECLINED].
+     */
+    suspend fun keyReuseHost(link: PairingLink): String? = withContext(Dispatchers.IO) {
+        val account = accounts.account.value
+        when {
+            account == null || link.serverId == null || link.serverId != account.serverId -> null
+            keySafe(link, account) || accounts.apiKey() == null -> null
+            else -> ServerAddresses.host(link.url) ?: link.url
+        }
+    }
+
+    private fun keySafe(link: PairingLink, account: SyncAccount): Boolean =
+        link.url.trimEnd('/') == account.url.trimEnd('/') || ServerAddresses.keySafe(link.url)
+
+    /** Whether [pair] may try this installation's key at a new address of the same server (ADR 0018 "W5 (f)"). */
+    enum class KeyReuse {
+        /** Only at an https, loopback, Tailscale or private LAN address ([ServerAddresses.keySafe]). */
+        AUTO,
+
+        /** The user confirmed the address is the same server: any address. */
+        CONFIRMED,
+
+        /** The user said no: a normal pairing (a new device keeping the library's sync state). */
+        DECLINED,
     }
 
     /** Forgets the server: the key, the cursors, the Server source and the cached server files. Local photos stay. */

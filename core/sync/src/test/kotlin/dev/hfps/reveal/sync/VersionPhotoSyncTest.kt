@@ -57,6 +57,10 @@ class VersionPhotoSyncTest {
 
     private fun TestDevice.record(kind: String, id: String) = runBlocking { db.syncDao().record(kind, id) }
 
+    private fun TestDevice.held(): List<String> = runBlocking {
+        db.metaDao().get(SyncStore.KEY_HELD_VERSIONS)?.split(',')?.filter { it.isNotEmpty() }.orEmpty()
+    }
+
     private fun TestDevice.exposure(photoId: Long) = recipe(version(photoId)).light.exposureEv
 
     private fun TestDevice.editExposure(photoId: Long, ev: Float) =
@@ -279,7 +283,8 @@ class VersionPhotoSyncTest {
         phone.sync()
         val version = phone.versions(photo).single()
         assertThat(server.versionRecords()).isEmpty()
-        assertThat(phone.record("version", version.uuid)!!.rev).isEqualTo(SyncRecordEntity.HELD_REV)
+        assertThat(phone.record("version", version.uuid)!!.rev).isEqualTo(0L)
+        assertThat(phone.held()).containsExactly(version.uuid)
         assertThat(phone.pending()).isEqualTo(0)
 
         // The indexer fills the fingerprint in: the photo goes up, then the held version in the same run.
@@ -295,6 +300,117 @@ class VersionPhotoSyncTest {
         val onTablet = tablet.addPhoto("DSC7", raw)
         tablet.sync()
         assertThat(tablet.exposure(onTablet)).isEqualTo(0.2f)
+    }
+
+    @Test
+    fun `a held version the server has already goes up on its real revision without a conflict copy`() {
+        val phone = device("Phone")
+        val tablet = device("Tablet")
+        phone.sync()
+        val raw = bytes(12)
+        val photo = phone.addPhoto("DSC12", raw)
+        val sql = phone.db.openHelper.writableDatabase
+        sql.execSQL("UPDATE photo_files SET fingerprint = NULL WHERE photo_id = ?", arrayOf<Any>(photo))
+        phone.editExposure(photo, 0.6f)
+        // What 0.8 left: the version on the server (rev > 0) naming the photo without a fingerprint, no photo record.
+        val version = phone.versions(photo).single()
+        val local = phone.record("version", version.uuid)!!
+        val data = VersionData(
+            photoId = phone.photo(photo).uuid,
+            recipe = SyncApi.json.parseToJsonElement(RecipeCodec.Default.encode(phone.recipe(version.id))),
+        )
+        val pushed = phone.api.push(
+            listOf(
+                PushChange(
+                    "version",
+                    version.uuid,
+                    0,
+                    local.modifiedAt,
+                    data = SyncApi.json.encodeToJsonElement(VersionData.serializer(), data),
+                ),
+            ),
+        ).results.single()
+        runBlocking { phone.db.syncDao().putRecord(local.copy(rev = pushed.rev, dirty = false)) }
+        // The W5 repair marks it again (same edit time, same device) while the photo still has no fingerprint: held.
+        runBlocking { phone.db.syncDao().putRecord(local.copy(rev = pushed.rev, dirty = true)) }
+        phone.sync()
+        assertThat(phone.record("version", version.uuid)!!.rev).isEqualTo(pushed.rev)
+        assertThat(phone.held()).containsExactly(version.uuid)
+        assertThat(phone.pending()).isEqualTo(0)
+
+        // The fingerprint arrives: the photo goes up, then the version on top of the server's revision.
+        sql.execSQL(
+            "UPDATE photo_files SET fingerprint = ? WHERE photo_id = ?",
+            arrayOf<Any>(FileFingerprint.of(raw), photo),
+        )
+        phone.sync()
+        val record = server.record("version", version.uuid)!!
+        assertThat(record.rev).isGreaterThan(pushed.rev)
+        assertThat(
+            record.data!!.jsonObject["photoFingerprint"]!!.jsonPrimitive.content,
+        ).isEqualTo(FileFingerprint.of(raw))
+        assertThat(server.copies()).isEmpty()
+        assertThat(phone.held()).isEmpty()
+        assertThat(phone.pending()).isEqualTo(0)
+
+        val onTablet = tablet.addPhoto("DSC12", raw)
+        tablet.sync()
+        assertThat(tablet.exposure(onTablet)).isEqualTo(0.6f)
+        assertThat(tablet.versions(onTablet)).hasSize(1)
+    }
+
+    @Test
+    fun `a pulled version that finds a photo by its fingerprint releases that photo's held versions`() {
+        val phone = device("Phone")
+        val tablet = device("Tablet")
+        phone.sync()
+        val raw = bytes(13)
+        val photo = phone.addPhoto("DSC13", raw)
+        val sql = phone.db.openHelper.writableDatabase
+        sql.execSQL("UPDATE photo_files SET fingerprint = NULL WHERE photo_id = ?", arrayOf<Any>(photo))
+        phone.editExposure(photo, 0.3f)
+        phone.sync()
+        val held = phone.versions(photo).single()
+        assertThat(phone.held()).containsExactly(held.uuid)
+        // The fingerprint is filled in but the photo's own record is not pushed this time (e.g. still to be marked).
+        sql.execSQL(
+            "UPDATE photo_files SET fingerprint = ? WHERE photo_id = ?",
+            arrayOf<Any>(FileFingerprint.of(raw), photo),
+        )
+        val uuid = phone.photo(photo).uuid
+        runBlocking { phone.db.syncDao().deleteRecord("photo", uuid) }
+
+        // Another device's version names the photo by an id unknown here and by its main file.
+        val photoId = "6b1f0000-0000-4000-8000-00000000d013"
+        val onTablet = tablet.addPhoto("DSC13", raw)
+        tablet.api.push(
+            listOf(
+                PushChange(
+                    "version",
+                    "7c2e0000-0000-4000-8000-00000000d013",
+                    0,
+                    tablet.now,
+                    data = SyncApi.json.encodeToJsonElement(
+                        VersionData.serializer(),
+                        VersionData(
+                            photoId = photoId,
+                            recipe = exposureRecipe(tablet, onTablet, 0.9f),
+                            photoFingerprint = FileFingerprint.of(raw),
+                        ),
+                    ),
+                ),
+            ),
+        )
+        phone.sync()
+        // The photo took the id the version names; its held version is released at once, not on its photo's record.
+        assertThat(phone.photo(photo).uuid).isEqualTo(photoId)
+        assertThat(phone.held()).isEmpty()
+        phone.sync()
+        val record = server.record("version", held.uuid)!!
+        assertThat(record.data!!.jsonObject["photoId"]!!.jsonPrimitive.content).isEqualTo(photoId)
+        assertThat(server.record("photo", photoId)).isNotNull()
+        assertThat(phone.pending()).isEqualTo(0)
+        assertThat(server.copies()).isEmpty()
     }
 
     @Test

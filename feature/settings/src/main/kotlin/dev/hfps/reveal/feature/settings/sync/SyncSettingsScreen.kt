@@ -86,6 +86,12 @@ sealed interface PairingState {
     data object Working : PairingState
 
     data class Failed(val problem: PairProblem) : PairingState
+
+    /**
+     * The link is for the paired server at an address that is neither https nor private (ADR 0018 "W5 (f)"): reuse
+     * this device's key there only if the user says it is the same server.
+     */
+    data class ConfirmKeyReuse(val host: String) : PairingState
 }
 
 /** Everything the Sync screen shows. */
@@ -118,6 +124,9 @@ data class SyncActions(
     val onThisDevice: () -> Unit = {},
     val onSamePhone: (String) -> Unit = {},
     val onNotSamePhone: () -> Unit = {},
+    /** The answer to [PairingState.ConfirmKeyReuse]: true = same server, false = pair as a new device. */
+    val onKeyReuse: (Boolean) -> Unit = {},
+    val onKeyReuseCancel: () -> Unit = {},
 )
 
 /** Test tags of the Sync screen. */
@@ -143,6 +152,10 @@ object SyncTags {
     const val SAME_PHONE = "sync_same_phone"
     const val SAME_PHONE_YES = "sync_same_phone_yes"
     const val SAME_PHONE_NO = "sync_same_phone_no"
+    const val PAIR_AGAIN = "sync_pair_again"
+    const val KEY_REUSE = "sync_key_reuse"
+    const val KEY_REUSE_YES = "sync_key_reuse_yes"
+    const val KEY_REUSE_NO = "sync_key_reuse_no"
 
     fun folder(id: Long) = "sync_folder_$id"
 }
@@ -178,7 +191,13 @@ class SyncSettingsViewModel @Inject constructor(
 
     fun cancelScan() = pairing.update { PairingState.Idle }
 
-    /** Pairs with the link of a scanned QR or a pasted text. */
+    /** The link waiting for the answer to [PairingState.ConfirmKeyReuse]. */
+    private var confirming: PairingLink? = null
+
+    /**
+     * Pairs with the link of a scanned QR or a pasted text; a link for the paired server at an address that is neither
+     * https nor private asks first whether it is the same server ([PairingState.ConfirmKeyReuse]).
+     */
     fun pair(text: String) {
         val link = PairingLink.parse(text)
         if (link == null) {
@@ -187,13 +206,38 @@ class SyncSettingsViewModel @Inject constructor(
         }
         pairing.update { PairingState.Working }
         viewModelScope.launch {
-            try {
-                sync.pair(link)
-                pairing.update { PairingState.Idle }
-                SyncScheduler.now(context)
-            } catch (e: PairException) {
-                pairing.update { PairingState.Failed(e.problem) }
+            val host = sync.keyReuseHost(link)
+            if (host != null) {
+                confirming = link
+                pairing.update { PairingState.ConfirmKeyReuse(host) }
+            } else {
+                pair(link, SyncRepository.KeyReuse.AUTO)
             }
+        }
+    }
+
+    /** The user's answer: the same server (reuse the key) or not (a normal pairing as a new device). */
+    fun answerKeyReuse(same: Boolean) {
+        val link = confirming ?: return
+        confirming = null
+        pairing.update { PairingState.Working }
+        viewModelScope.launch {
+            pair(link, if (same) SyncRepository.KeyReuse.CONFIRMED else SyncRepository.KeyReuse.DECLINED)
+        }
+    }
+
+    fun cancelKeyReuse() {
+        confirming = null
+        pairing.update { PairingState.Idle }
+    }
+
+    private suspend fun pair(link: PairingLink, keyReuse: SyncRepository.KeyReuse) {
+        try {
+            sync.pair(link, keyReuse)
+            pairing.update { PairingState.Idle }
+            SyncScheduler.now(context)
+        } catch (e: PairException) {
+            pairing.update { PairingState.Failed(e.problem) }
         }
     }
 
@@ -267,6 +311,8 @@ fun SyncSettingsScreen(
             onThisDevice = onThisDevice,
             onSamePhone = viewModel::samePhone,
             onNotSamePhone = viewModel::notSamePhone,
+            onKeyReuse = viewModel::answerKeyReuse,
+            onKeyReuseCancel = viewModel::cancelKeyReuse,
         ),
         modifier = modifier,
     )
@@ -304,12 +350,15 @@ fun SyncSettingsContent(
         if (state.account != null) {
             SamePhoneDialog(state.samePhone, onJoin = actions.onSamePhone, onDismiss = actions.onNotSamePhone)
         }
+        val pairing = state.pairing
+        if (pairing is PairingState.ConfirmKeyReuse) {
+            KeyReuseDialog(pairing.host, onAnswer = actions.onKeyReuse, onDismiss = actions.onKeyReuseCancel)
+        }
     }
 }
 
 @Composable
 private fun Unpaired(pairing: PairingState, actions: SyncActions, modifier: Modifier = Modifier) {
-    var link by rememberSaveable { mutableStateOf("") }
     Column(modifier, verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Eyebrow(stringResource(R.string.sync_section_pair))
@@ -324,6 +373,37 @@ private fun Unpaired(pairing: PairingState, actions: SyncActions, modifier: Modi
                 color = RevealTheme.colors.mutedForeground,
             )
         }
+        PairControls(pairing, actions)
+    }
+}
+
+/** "Pair with a new code" while paired (the same server at a new address, ADR 0018 "W5 (f)"). */
+@Composable
+private fun PairAgain(open: Boolean, onOpen: () -> Unit, pairing: PairingState, actions: SyncActions) {
+    if (open || pairing != PairingState.Idle) {
+        Text(
+            stringResource(R.string.sync_pair_again_hint),
+            style = RevealTheme.typography.ui,
+            color = RevealTheme.colors.mutedForeground,
+            modifier = Modifier.padding(horizontal = 16.dp),
+        )
+        PairControls(pairing, actions)
+    } else {
+        GhostButton(
+            text = stringResource(R.string.sync_pair_again),
+            onClick = onOpen,
+            icon = PhosphorRegular.QrCode,
+            modifier = Modifier.padding(horizontal = 16.dp).testTag(SyncTags.PAIR_AGAIN),
+        )
+    }
+}
+
+/** Scan or paste a pairing link (unpaired, or pairing again with a new code). */
+@Composable
+private fun PairControls(pairing: PairingState, actions: SyncActions) {
+    var link by rememberSaveable { mutableStateOf("") }
+    val busy = pairing == PairingState.Working || pairing is PairingState.ConfirmKeyReuse
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         if (pairing == PairingState.Scanning) {
             PairingScanner(onLink = actions.onScanned, onClose = actions.onCancelScan)
         } else {
@@ -332,23 +412,15 @@ private fun Unpaired(pairing: PairingState, actions: SyncActions, modifier: Modi
                     text = stringResource(R.string.sync_scan),
                     onClick = actions.onScan,
                     icon = PhosphorRegular.QrCode,
-                    enabled = pairing != PairingState.Working,
+                    enabled = !busy,
                     modifier = Modifier.fillMaxWidth().testTag(SyncTags.SCAN),
                 )
                 LinkField(link, { link = it.take(MAX_LINK) })
                 SecondaryButton(
-                    text = stringResource(
-                        if (pairing ==
-                            PairingState.Working
-                        ) {
-                            R.string.sync_pairing
-                        } else {
-                            R.string.sync_pair
-                        },
-                    ),
+                    text = stringResource(if (busy) R.string.sync_pairing else R.string.sync_pair),
                     onClick = { actions.onPaste(link) },
                     icon = PhosphorRegular.LinkSimple,
-                    enabled = link.isNotBlank() && pairing != PairingState.Working,
+                    enabled = link.isNotBlank() && !busy,
                     modifier = Modifier.fillMaxWidth().testTag(SyncTags.PAIR),
                 )
                 if (pairing is PairingState.Failed) {
@@ -401,6 +473,8 @@ private fun Paired(
     val context = LocalContext.current
     val status = state.status
     var confirmUnpair by rememberSaveable { mutableStateOf(false) }
+    // "Pair with a new code" (the same server at a new address, ADR 0018 "W5 (f)"): closes once the account changes.
+    var pairAgain by rememberSaveable(account.url, account.deviceId) { mutableStateOf(false) }
     Column(modifier, verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Eyebrow(stringResource(R.string.sync_section_server), Modifier.padding(horizontal = 16.dp))
         RevealListRow(
@@ -417,6 +491,7 @@ private fun Paired(
                 modifier = Modifier.padding(horizontal = 16.dp),
             )
         }
+        PairAgain(open = pairAgain, onOpen = { pairAgain = true }, pairing = state.pairing, actions = actions)
         RevealListRow(
             title = stringResource(R.string.device_title),
             subtitle = stringResource(R.string.device_row_subtitle),
@@ -667,3 +742,36 @@ private fun host(url: String): String = runCatching {
 private fun size(context: Context, bytes: Long): String = Formatter.formatShortFileSize(context, bytes)
 
 private const val MAX_LINK = 2000
+
+/** "Same server at <host>?": reuse this device's key at a new address that is neither https nor private. */
+@Composable
+private fun KeyReuseDialog(host: String, onAnswer: (Boolean) -> Unit, onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = RevealTheme.colors.card,
+        shape = RevealTheme.shapes.card,
+        modifier = Modifier.testTag(SyncTags.KEY_REUSE),
+        title = { Text(stringResource(R.string.sync_key_reuse_title, host), style = RevealTheme.typography.title) },
+        text = {
+            Text(
+                stringResource(R.string.sync_key_reuse_body),
+                style = RevealTheme.typography.body,
+                color = RevealTheme.colors.mutedForeground,
+            )
+        },
+        confirmButton = {
+            PrimaryButton(
+                text = stringResource(R.string.sync_key_reuse_yes),
+                onClick = { onAnswer(true) },
+                modifier = Modifier.testTag(SyncTags.KEY_REUSE_YES),
+            )
+        },
+        dismissButton = {
+            GhostButton(
+                text = stringResource(R.string.sync_key_reuse_no),
+                onClick = { onAnswer(false) },
+                modifier = Modifier.testTag(SyncTags.KEY_REUSE_NO),
+            )
+        },
+    )
+}

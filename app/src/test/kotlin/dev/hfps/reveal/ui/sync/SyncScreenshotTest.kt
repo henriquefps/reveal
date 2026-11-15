@@ -84,6 +84,16 @@ class SyncScreenshotTest {
         }
     }
 
+    @Test fun keyReuseDark() = shoot("phone_key_reuse_dark") {
+        RevealTheme(darkTheme = true) {
+            SyncSettingsContent(
+                paired.copy(pairing = PairingState.ConfirmKeyReuse("203.0.113.7")),
+                SyncActions(),
+                now = now,
+            )
+        }
+    }
+
     @Test fun serverGrid() = shoot("phone_library_server_light") {
         val rows: List<PhotoRow> = LibrarySamples.rows.take(9).mapIndexed { i, row ->
             row.copy(remote = true, cloudOriginal = i % 3 != 2, cloudPreview = true)

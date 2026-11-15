@@ -102,8 +102,8 @@ interface SyncDao {
     suspend fun deleteRecord(kind: String, id: String)
 
     /**
-     * The versions of the photo [photoUuid] held back until its record was on the server ([SyncRecordEntity.HELD_REV],
-     * ADR 0018 "W5"): marked to push (rev 0, their edit time kept). Returns how many.
+     * The versions of the photo [photoUuid] an earlier W5 build held back with [SyncRecordEntity.HELD_REV] (ADR 0018
+     * "W5"): marked to push (rev 0, their edit time kept). Returns how many. Current holds keep their revision.
      */
     @Query(
         "UPDATE sync_records SET dirty = 1, rev = 0 WHERE kind = 'version' AND rev = -1 AND record_id IN " +

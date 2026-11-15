@@ -474,22 +474,39 @@ flushes its culling pushes for those items before sending (best effort); Reveal 
 
 ### Batches over 500
 
-A bigger batch is several `DEVELOP` intents with the same `TITLE`, sent by `Activity.startActivities(intents)` or a
-`startActivity` loop; the first carries `INITIAL_ITEM` (or `INITIAL_URI`) and any URI items. `MainActivity` is
+A bigger batch is several `DEVELOP` intents with the same `TITLE`, sent by `Activity.startActivities(intents)`; the
+first carries `INITIAL_ITEM` (or `INITIAL_URI`) and any URI items. Each intent carries **`BATCH_INDEX`**
+(`dev.hfps.reveal.extra.BATCH_INDEX`, `Int`, 0 for the first, the one lowest in the stack). `MainActivity` is
 `standard`, so every intent gets its own record (the last intent's is created first, the others as each one above
 finishes). Reveal ingests them as **one** batch: a process-wide `HandoffBatches` keeps one record in `meta` (the
-sender package + `TITLE`, a shared `handoff_at`, the last touch, whether an intent that opens something claimed it) and
-every intent whose key matches within 10 s of the last one joins it, so the photos share one stamp and one header in
-"Opened from other apps". An activity that is above others and carries neither `INITIAL_ITEM` nor `INITIAL_URI`
-ingests, then `finish()`es with no UI and no animation, so the cascade unwinds to the intent that opens the editor
-(library behind it, as for any multi-photo hand-off). If nothing claims the batch 5 s after its last intent, the library
-opens on "Opened from other apps" instead. A server file with no `name` takes the sender's `name` (main file), else a
-name made of its fingerprint and format. A batch without `TITLE` is not merged. The notices of **every** member
-(not-found counts, server issues: not paired, another server, unreachable), including the silent ones, are collected in
-the batch record and shown **once** by the intent that shows the batch (or by the library fallback): the not-found
-counts are summed ("N photos could not be found") and one issue sheet is shown (not paired before another server before
-unreachable, its count summed). A member that finishes after that notice was shown reports on its own. A batch kept for
-a pairing keeps every member's items (same server and title: merged, not replaced).
+sender package + `TITLE`, a shared `handoff_at`, the last touch, the notices so far) and every intent whose key matches
+within 10 s of the last one joins it, so the photos share one stamp and one header in "Opened from other apps". An
+intent with `BATCH_INDEX` > 0 ingests, reports its notices to the batch and `finish()`es with no UI and no animation,
+so the cascade unwinds to the first intent, which shows the batch: the editor when it carries an `INITIAL_*` (library
+behind it, as for any multi-photo hand-off), else "Opened from other apps".
+
+Whether an activity is silent is decided **only** by `BATCH_INDEX`, never by the task or by the absence of an
+`INITIAL_*`: Hoard starts Reveal with `startActivity(intent)` and no `FLAG_ACTIVITY_NEW_TASK`, so Reveal's activity
+lands in the sender's task and is never its root, and an ordinary multi-select hand-off (one intent, `TITLE`, several
+photos, no `INITIAL_URI`) is indistinguishable from a trailing chunk by its content. A sender that does not send
+`BATCH_INDEX` gets one visible activity per intent (nothing is lost; the cascade is just not collapsed). A single
+intent is never a batch member. A server file with no `name` takes the sender's `name` (main file), else a name made
+of its fingerprint and format. A batch without `TITLE` and without `BATCH_INDEX` is not merged.
+
+The notices of **every** member (not-found counts, server issues: not paired, another server, unreachable), including
+the silent ones, are collected in the batch record and shown **once** by the intent that shows the batch: the not-found
+counts are summed ("N photos could not be found") and one issue sheet is shown (not paired before another server
+before unreachable, its count summed). A member that finishes after that notice was shown reports on its own. Batches
+kept for a pairing (`handoff.pendingServerRefs`) and photos waiting for the server (`handoff.retryServerRefs`) are lists
+of groups, one per server and `TITLE`: the members of a cascade add their items to the group instead of replacing it,
+a hand-off that resolves fully removes only its own items from the waiting list, and a retry keeps the batch's
+`handoff_at`. Resuming a pending batch takes it atomically (two live activities resolve it once).
+
+Resolution notes (review of W3/H): the sender's fingerprint alone never picks a local photo (a stale one would open the
+wrong photo): the item's members (known from sync, else read from the server) decide, and only when the server cannot
+answer does the sender's fingerprint stand in. A server answer that is not the server's JSON (a captive portal, a
+proxy) counts as "unreachable", never as a crash. The culling pull a hand-off asks for while a sync run holds the lock
+follows that run.
 
 ### Existing libraries (W3/C)
 

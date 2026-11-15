@@ -293,9 +293,19 @@ the one comparator) against what Reveal holds (`HandoffRepository.held`: own pen
 sidecar mtime); undated fields keep version 1's precedence. The record's author is not stored, so an equal-time tie
 with a pulled server value goes to the sender and the server's rule settles it at the push.
 
+Batches (ADR 0011 "Batches over 500"): `startActivities` intents carry `HandoffIntents.EXTRA_BATCH_INDEX`; only an index
+above 0 is a silent member (`HandoffRequest.silentMember`, never `isTaskRoot`: Hoard starts Reveal without
+`NEW_TASK`). `HandoffBatches` (`:core:data/handoff`) = shared stamp, `report`/`takeNotices` (the notices of every member
+shown once, `HandoffNotice`), `lateNotices`. The instrumented tests start Reveal from `HandoffHostActivity` (debug) like
+Hoard does.
+
 ```sh
-./gradlew :core:data:testDebugUnitTest --tests '*ServerRefIntentsTest*' --tests '*HandoffServerRefsTest*' --tests '*CullingStampTest*'
+./gradlew :core:data:testDebugUnitTest --tests '*ServerRefIntentsTest*' --tests '*HandoffServerRefsTest*' --tests '*CullingStampTest*' --tests '*HandoffBatchesTest*'
 ./gradlew :core:sync:testDebugUnitTest --tests '*SyncServerItemsTest*'
+# against the real server: a NAS item, a backed-up item, a replacedBy item, culling pulled on receipt (needs docker; loopback)
+D=$(mktemp -d) && scripts/sync/local-server.sh start $D 3474 app/src/androidTest/assets/faces/studio-trio.jpg
+REVEAL_HANDOFF_DIR=$D REVEAL_HANDOFF_LINKS=$(for i in 1 2; do scripts/sync/local-server.sh pair $D; done | paste -sd,) \
+  ./gradlew --no-configuration-cache :core:sync:testDebugUnitTest --tests '*RealServerHandoffTest*'; scripts/sync/local-server.sh stop $D
 adb -s <serial> shell am instrument -w -e class dev.hfps.reveal.handoff.HandoffServerRefTest [-e syncLink "'$(scripts/sync/local-server.sh pair <work dir>)'"] dev.hfps.reveal.debug.test/androidx.test.runner.AndroidJUnitRunner
 ```
 

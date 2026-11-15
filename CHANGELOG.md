@@ -6,6 +6,11 @@ All notable changes to Reveal are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+- Hand-off contract (W3/H, docs/adr/0011 "Amendment W3/H"): photos the sender's paired server holds are handed over as
+  server references (`SERVER_ITEMS`) instead of content URIs, and `CULLING_VERSION` 2 adds per-field dates and authors
+  for URI items (last writer wins, equal times broken by the ordinal device id).
+
 ## [0.8.0] - 2026-11-15
 
 ### Added

@@ -183,7 +183,11 @@ class PhotoOpener(
                 // Very large: regions on demand (as the library viewer), the document stays open; another app's is
                 // copied first and closed (its descriptor never outlives the read).
                 val (dir, own) = copies ?: (null to "")
-                val read = if (dir != null && LocalCopies.isForeign(uri, own)) LocalCopies.copy(image, dir) else image
+                val read = if (dir != null && LocalCopies.isForeign(uri, own)) {
+                    LocalCopies.copy(image, dir, reopen = { openInput(uri, displayName(uri)) })
+                } else {
+                    image
+                }
                 return RegionTileSource(read.descriptor, orientation) { read.close() }
             }
             // A JPEG region decode re-reads everything above the region (about 250 ms per tile at 12 MP on the

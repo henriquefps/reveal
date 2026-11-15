@@ -5,6 +5,7 @@ import android.os.ParcelFileDescriptor
 import dev.hfps.image.ImageInput
 import java.io.File
 import java.io.FileInputStream
+import java.io.IOException
 import java.util.UUID
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -24,19 +25,52 @@ object LocalCopies {
         uri.scheme == "content" && uri.authority?.startsWith(ownPackage) != true
 
     /**
-     * [input] copied into a new file of [dir] and closed; the returned input reads the copy and deletes it when closed.
-     * On failure [input] is closed and the error thrown.
+     * Whether [error] says Hoard's proxy descriptor is gone (Hoard 2.0.2: idle too long, parked, or its slot lost): `EIO`.
+     * Never "unreadable": close the descriptor and open the URI again ([copy]'s [reopen]).
      */
-    fun copy(input: ImageInput, dir: File): ImageInput {
+    fun isDescriptorGone(error: Throwable): Boolean {
+        var e: Throwable? = error
+        var depth = 0
+        while (e != null && depth++ < MAX_CAUSES) {
+            if (e is android.system.ErrnoException && e.errno == android.system.OsConstants.EIO) return true
+            val message = e.message.orEmpty()
+            if (e is IOException && (message.contains("EIO") || message.contains("I/O error"))) return true
+            e = e.cause
+        }
+        return false
+    }
+
+    /**
+     * [input] copied into a new file of [dir] and closed; the returned input reads the copy and deletes it when closed.
+     * An `EIO` while copying (a Hoard descriptor that gave its slot back, [isDescriptorGone]) closes [input], opens the
+     * document again through [reopen] (which goes through [FileOpens], bounded like `busy:`) and copies again, up to
+     * [EIO_RETRIES] times. On failure [input] is closed and the error thrown.
+     */
+    fun copy(
+        input: ImageInput,
+        dir: File,
+        reopen: (() -> ImageInput)? = null,
+        copier: (ImageInput, File) -> Unit = ::copyTo,
+    ): ImageInput {
         dir.mkdirs()
         val file = File(dir, UUID.randomUUID().toString())
-        try {
-            input.use { source -> copyTo(source, file) }
-        } catch (@Suppress("TooGenericExceptionCaught") e: Throwable) {
-            file.delete()
-            throw e
+        var current = input
+        var attempt = 0
+        while (true) {
+            try {
+                current.use { source -> copier(source, file) }
+                break
+            } catch (@Suppress("TooGenericExceptionCaught") e: Throwable) {
+                if (reopen == null || attempt >= EIO_RETRIES || !isDescriptorGone(e)) {
+                    file.delete()
+                    throw e
+                }
+                attempt++
+                file.delete()
+                current = reopen()
+            }
         }
-        return ImageInput(input.name, ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)) {
+        return ImageInput(current.name, ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)) {
             file.delete()
         }
     }
@@ -72,6 +106,9 @@ object LocalCopies {
             sweep(dir, started)
         }
     }
+
+    private const val EIO_RETRIES = 3
+    private const val MAX_CAUSES = 8
 
     private object Channels {
         fun copy(from: java.nio.channels.FileChannel, to: java.nio.channels.FileChannel) {

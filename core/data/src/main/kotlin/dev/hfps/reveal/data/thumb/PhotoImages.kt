@@ -281,7 +281,9 @@ class PhotoImages(
             val input = opened.tree.openInput(file.documentId, file.name)
             val dir = copiesDir
             // A hand-off's document is copied and closed at once (open, copy, close), never held by the decoder.
-            openRegion(if (dir != null && source?.kind == SourceKind.HANDOFF) LocalCopies.copy(input, dir) else input)
+            val reopen = { opened.tree.openInput(file.documentId, file.name) }
+            val handoff = dir != null && source?.kind == SourceKind.HANDOFF
+            openRegion(if (handoff) LocalCopies.copy(input, checkNotNull(dir), reopen) else input)
         }.getOrNull()
     }
 

@@ -46,6 +46,11 @@ import dev.hfps.reveal.designsystem.icons.PhosphorRegular
 import dev.hfps.reveal.designsystem.theme.RevealTheme
 import dev.hfps.reveal.feature.settings.R
 import dev.hfps.reveal.sync.files.ServerFiles
+import dev.hfps.reveal.sync.thumbs.LibraryThumbs
+import dev.hfps.reveal.sync.work.SyncScheduler
+import dev.hfps.reveal.data.storage.LibraryThumbsPreferences
+import dev.hfps.reveal.feature.settings.sync.SwitchRow
+import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -61,6 +66,11 @@ data class StorageUiState(
     val clearing: Boolean = false,
     /** Bytes the last "Clear cache" freed; null before any. */
     val freed: Long? = null,
+    /** "Keep thumbnails of the whole library" (ADR 0018 "W3/C"). */
+    val keepLibraryThumbs: Boolean = true,
+    /** Library thumbnails stored, and how many photos the server holds that could have one (null while measuring). */
+    val libraryThumbs: Int? = null,
+    val libraryPhotos: Int? = null,
 )
 
 /** Test tags of the Storage screen. */
@@ -69,6 +79,8 @@ object StorageTags {
     const val CLEAR = "storage_clear"
     const val CLEAR_CONFIRM = "storage_clear_confirm"
     const val FREED = "storage_freed"
+    const val KEEP_LIBRARY_THUMBS = "storage_keep_library_thumbs"
+    const val CLEAR_LIBRARY_THUMBS = "storage_clear_library_thumbs"
 
     fun kind(kind: StorageKind) = "storage_kind_${kind.name.lowercase()}"
 
@@ -80,16 +92,36 @@ object StorageTags {
 class StorageViewModel @Inject constructor(
     private val storage: AppStorage,
     private val budget: CacheBudget,
-    // Made here so its caches are registered with the budget before they are measured or trimmed.
+    // Made here so their caches are registered with the budget before they are measured or trimmed.
     @Suppress("unused") private val serverFiles: ServerFiles,
+    private val libraryThumbs: LibraryThumbs,
+    private val thumbsPreferences: LibraryThumbsPreferences,
+    @ApplicationContext private val context: Context,
 ) : ViewModel() {
-    private val _state = MutableStateFlow(StorageUiState(maxBytes = budget.maxBytes.value))
+    private val _state = MutableStateFlow(
+        StorageUiState(maxBytes = budget.maxBytes.value, keepLibraryThumbs = thumbsPreferences.keepAll.value),
+    )
     val state: StateFlow<StorageUiState> = _state.asStateFlow()
 
     fun refresh() {
         viewModelScope.launch {
             val usage = storage.usage()
-            _state.update { it.copy(usage = usage) }
+            val stats = libraryThumbs.stats()
+            _state.update { it.copy(usage = usage, libraryThumbs = stats.stored, libraryPhotos = stats.photos) }
+        }
+    }
+
+    /** The switch: on starts the background prefetch (its own constraints), off cancels it. */
+    fun setKeepLibraryThumbs(on: Boolean) {
+        thumbsPreferences.setKeepAll(on)
+        _state.update { it.copy(keepLibraryThumbs = on) }
+        if (on) SyncScheduler.libraryThumbs(context) else SyncScheduler.cancelLibraryThumbs(context)
+    }
+
+    fun clearLibraryThumbs() {
+        viewModelScope.launch {
+            libraryThumbs.clear()
+            refresh()
         }
     }
 
@@ -120,6 +152,8 @@ fun StorageScreen(onBack: () -> Unit, modifier: Modifier = Modifier, viewModel: 
         onBack = onBack,
         onMaxBytes = viewModel::setMaxBytes,
         onClear = viewModel::clearCache,
+        onKeepLibraryThumbs = viewModel::setKeepLibraryThumbs,
+        onClearLibraryThumbs = viewModel::clearLibraryThumbs,
         modifier = modifier,
     )
 }
@@ -134,6 +168,8 @@ fun StorageContent(
     onMaxBytes: (Long) -> Unit,
     onClear: () -> Unit,
     modifier: Modifier = Modifier,
+    onKeepLibraryThumbs: (Boolean) -> Unit = {},
+    onClearLibraryThumbs: () -> Unit = {},
 ) {
     val context = LocalContext.current
     val colors = RevealTheme.colors
@@ -187,6 +223,27 @@ fun StorageContent(
                             color = colors.foreground,
                         )
                     },
+                )
+            }
+            RevealRowDivider()
+
+            Eyebrow(
+                stringResource(R.string.storage_section_library_thumbs),
+                Modifier.padding(start = 16.dp, end = 16.dp, top = 8.dp),
+            )
+            SwitchRow(
+                title = stringResource(R.string.storage_keep_library_thumbs),
+                subtitle = libraryThumbsNote(state, usage, context),
+                checked = state.keepLibraryThumbs,
+                onChange = onKeepLibraryThumbs,
+                tag = StorageTags.KEEP_LIBRARY_THUMBS,
+            )
+            Column(Modifier.padding(horizontal = 16.dp)) {
+                GhostButton(
+                    text = stringResource(R.string.storage_clear_library_thumbs),
+                    onClick = onClearLibraryThumbs,
+                    icon = PhosphorRegular.Trash,
+                    modifier = Modifier.testTag(StorageTags.CLEAR_LIBRARY_THUMBS),
                 )
             }
             RevealRowDivider()
@@ -274,7 +331,9 @@ fun StorageContent(
 }
 
 private val KINDS = listOf(
+    StorageKind.LIBRARY_THUMBNAILS,
     StorageKind.THUMBNAILS,
+    StorageKind.ORIGINALS_KEPT,
     StorageKind.SERVER_FILES,
     StorageKind.MASKS,
     StorageKind.HANDOFF_PREVIEWS,
@@ -284,6 +343,8 @@ private val KINDS = listOf(
 
 private fun StorageKind.title(): Int = when (this) {
     StorageKind.THUMBNAILS -> R.string.storage_thumbnails
+    StorageKind.LIBRARY_THUMBNAILS -> R.string.storage_library_thumbs
+    StorageKind.ORIGINALS_KEPT -> R.string.storage_originals_kept
     StorageKind.SERVER_FILES -> R.string.storage_server_files
     StorageKind.MASKS -> R.string.storage_masks
     StorageKind.HANDOFF_PREVIEWS -> R.string.storage_handoff_previews
@@ -293,6 +354,8 @@ private fun StorageKind.title(): Int = when (this) {
 
 private fun StorageKind.icon() = when (this) {
     StorageKind.THUMBNAILS -> PhosphorRegular.SquaresFour
+    StorageKind.LIBRARY_THUMBNAILS -> PhosphorRegular.Images
+    StorageKind.ORIGINALS_KEPT -> PhosphorRegular.PushPin
     StorageKind.SERVER_FILES -> PhosphorRegular.Cloud
     StorageKind.MASKS -> PhosphorRegular.Sparkle
     StorageKind.HANDOFF_PREVIEWS -> PhosphorRegular.ArrowSquareIn
@@ -303,6 +366,10 @@ private fun StorageKind.icon() = when (this) {
 @Composable
 private fun subtitle(kind: StorageKind, usage: StorageUsage?, context: Context): String = when (kind) {
     StorageKind.THUMBNAILS -> stringResource(R.string.storage_thumbnails_note)
+
+    StorageKind.LIBRARY_THUMBNAILS -> stringResource(R.string.storage_library_thumbs_note)
+
+    StorageKind.ORIGINALS_KEPT -> stringResource(R.string.storage_originals_kept_note)
 
     StorageKind.SERVER_FILES -> stringResource(R.string.storage_server_files_note)
 
@@ -317,6 +384,22 @@ private fun subtitle(kind: StorageKind, usage: StorageUsage?, context: Context):
     StorageKind.OTHER -> stringResource(R.string.storage_other_note)
 
     StorageKind.LIBRARY -> stringResource(R.string.storage_library_note)
+}
+
+@Composable
+private fun libraryThumbsNote(state: StorageUiState, usage: StorageUsage?, context: Context): String {
+    val stored = state.libraryThumbs
+    val photos = state.libraryPhotos
+    return if (stored == null || photos == null || usage == null) {
+        stringResource(R.string.storage_keep_library_thumbs_note)
+    } else {
+        stringResource(
+            R.string.storage_keep_library_thumbs_count,
+            stored,
+            maxOf(stored, photos),
+            size(context, usage[StorageKind.LIBRARY_THUMBNAILS]),
+        )
+    }
 }
 
 private fun size(context: Context, bytes: Long): String = Formatter.formatShortFileSize(context, bytes)

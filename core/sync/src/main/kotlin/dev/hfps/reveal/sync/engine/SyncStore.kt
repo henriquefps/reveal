@@ -923,6 +923,47 @@ class SyncStore(
         sync.putCloud(cloud.copy(originalOnServer = source != null, originalSource = source, checkedAt = clock()))
     }
 
+    // ------------------------------------------------------------------ hand-offs the server holds
+
+    /**
+     * Makes [photoIds] (hand-off photos whose main file the server holds) Server photos, in place (ADR 0018 "W3/C"):
+     * the same row keeps its uuid, versions, edits, history, culling and `handoff_at` (it stays in "Opened from other
+     * apps"); its files take the server's document ids, so the grid, the viewer, the editor and the export read the
+     * server's copy and never open the sending app's URI again. Files without a fingerprint (never read) and other
+     * files (a sidecar) go; the photo's sidecar link goes too (culling travels through the server, ADR 0027). Quiet:
+     * nothing changes for other devices. Returns how many moved. Reusable for photos handed over by server reference.
+     */
+    suspend fun adoptHandoffs(photoIds: List<Long>): Int {
+        if (photoIds.isEmpty()) return 0
+        var moved = 0
+        quietly {
+            val source = serverSource()
+            for (photoId in photoIds) {
+                val files = photos.files(photoId)
+                val keep = files.filter { it.fingerprint != null && it.role != FileRole.OTHER }
+                if (keep.isEmpty()) continue
+                val drop = files - keep.toSet()
+                if (drop.isNotEmpty()) photos.deleteFiles(drop.map { it.id })
+                for (file in keep) {
+                    val print = checkNotNull(file.fingerprint)
+                    sync.adoptFile(
+                        file.id,
+                        source.id,
+                        "$ADOPTED_PREFIX$print/${file.name}",
+                        ServerTree.documentId(print, file.name),
+                    )
+                }
+                sync.adoptPhoto(photoId, source.id)
+                markOriginal(photoId, sync.cloud(photoId)?.originalSource ?: SOURCE_NAS)
+                moved++
+            }
+        }
+        return moved
+    }
+
+    /** One batch of [adoptHandoffs] over what is adoptable now; returns how many moved (0 = none left). */
+    suspend fun adoptHandoffs(limit: Int = ADOPT_BATCH): Int = adoptHandoffs(sync.adoptableHandoffs(limit))
+
     // ------------------------------------------------------------------ the Server source
 
     /** The single Server source (created on first use). */
@@ -972,6 +1013,13 @@ class SyncStore(
 
         /** Records applied per transaction (a few milliseconds each on a phone). */
         const val APPLY_CHUNK = 50
+
+        /** Hand-off photos made Server photos per transaction ([adoptHandoffs]). */
+        const val ADOPT_BATCH = 100
+
+        /** Relative path prefix of adopted hand-off files (unique next to the NAS feed's `nas/<folder>/<path>`). */
+        const val ADOPTED_PREFIX = "handoff/"
+
 
         /** `sources.tree_uri` of the Server source (unique, never a real URI). */
         const val SERVER_TREE = "reveal-sync:server"

@@ -21,6 +21,7 @@ import dagger.hilt.InstallIn
 import dagger.hilt.android.EntryPointAccessors
 import dagger.hilt.components.SingletonComponent
 import dev.hfps.image.format.ImageFormats
+import dev.hfps.reveal.data.storage.FileOpens
 import dev.hfps.reveal.data.sync.ServerTree
 import java.io.FileNotFoundException
 import java.io.IOException
@@ -60,9 +61,9 @@ class ServerFilesProvider : ContentProvider() {
         return try {
             runBlocking {
                 when (kind) {
-                    ServerTree.ORIGINAL -> openOriginal(fingerprint, fallback = false)
+                    ServerTree.ORIGINAL -> openOriginal(fingerprint, fallback = false, keep = true)
 
-                    ServerTree.DISPLAY -> openOriginal(fingerprint, fallback = true)
+                    ServerTree.DISPLAY -> openOriginal(fingerprint, fallback = true, keep = false)
 
                     ServerTree.SMART -> files.smartPreview(fingerprint)
                         ?.let { ParcelFileDescriptor.open(it, ParcelFileDescriptor.MODE_READ_ONLY) }
@@ -76,11 +77,28 @@ class ServerFilesProvider : ContentProvider() {
         }
     }
 
-    private suspend fun openOriginal(fingerprint: String, fallback: Boolean): ParcelFileDescriptor? {
+    /**
+     * The original: the kept whole file when there is one (a plain descriptor, ADR 0018 "W3/C"), else a proxy
+     * descriptor over the block cache. Each proxy costs an appfuse mount through vold, so they are opened in
+     * [FileOpens]' app-wide slots (held until the descriptor is released): a grid never mounts dozens per second.
+     * [keep]: the editor or the export opens it, so the rest is downloaded and kept as one file for the next open.
+     */
+    private suspend fun openOriginal(fingerprint: String, fallback: Boolean, keep: Boolean): ParcelFileDescriptor? {
+        files.keptOriginal(fingerprint)?.let {
+            FileOpens.count()
+            return ParcelFileDescriptor.open(it, ParcelFileDescriptor.MODE_READ_ONLY)
+        }
         val remote = files.original(fingerprint)
         if (remote != null) {
+            if (keep) files.keep(fingerprint, remote)
             val storage = checkNotNull(context).getSystemService(StorageManager::class.java)
-            return storage.openProxyFileDescriptor(ParcelFileDescriptor.MODE_READ_ONLY, RangeCallback(remote), handler)
+            return FileOpens.gated { release ->
+                storage.openProxyFileDescriptor(
+                    ParcelFileDescriptor.MODE_READ_ONLY,
+                    RangeCallback(remote, release),
+                    handler,
+                )
+            }
         }
         if (!fallback) return null
         return files.previewJpeg(fingerprint)?.let {
@@ -89,7 +107,8 @@ class ServerFilesProvider : ContentProvider() {
     }
 
     /** Reads of the proxy descriptor, answered from the block cache or by range. */
-    private class RangeCallback(private val remote: RemoteFile) : ProxyFileDescriptorCallback() {
+    private class RangeCallback(private val remote: RemoteFile, private val release: () -> Unit) :
+        ProxyFileDescriptorCallback() {
         override fun onGetSize(): Long = remote.size
 
         override fun onRead(offset: Long, size: Int, data: ByteArray): Int = try {
@@ -99,7 +118,7 @@ class ServerFilesProvider : ContentProvider() {
             throw ErrnoException("read", OsConstants.EIO)
         }
 
-        override fun onRelease() = Unit
+        override fun onRelease() = release()
     }
 
     override fun query(

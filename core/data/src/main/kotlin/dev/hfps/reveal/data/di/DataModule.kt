@@ -42,10 +42,15 @@ import dev.hfps.reveal.data.storage.MaskCacheArea
 import dev.hfps.reveal.data.storage.SafDocumentTree
 import dev.hfps.reveal.data.storage.StorageVolumes
 import dev.hfps.reveal.data.sync.ServerTree
+import dev.hfps.reveal.data.storage.LibraryThumbsPreferences
+import dev.hfps.reveal.data.storage.readGrants
 import dev.hfps.reveal.data.thumb.EditedThumbnails
 import dev.hfps.reveal.data.thumb.GpuEditedThumbnails
 import dev.hfps.reveal.data.thumb.PhotoImages
+import dev.hfps.reveal.data.thumb.ServerThumbs
 import dev.hfps.reveal.data.thumb.ThumbnailRepository
+import java.util.Optional
+import javax.inject.Provider
 import dev.hfps.reveal.data.xmp.XmpPreferences
 import dev.hfps.reveal.ml.MaskModels
 import dev.hfps.reveal.ml.inpaint.FillDiskCache
@@ -188,6 +193,7 @@ object DataModule {
         serverAuthority = ServerTree.authority(context.packageName),
         previews = previews,
         readEdits = { xmp.readEdits.value },
+        grants = readGrants(context),
     )
 
     @Provides
@@ -262,6 +268,7 @@ object DataModule {
         previews: LocalPreviews,
         budget: CacheBudget,
         aiMasks: AiMasks,
+        serverThumbs: Optional<Provider<ServerThumbs>>,
     ): ThumbnailRepository = ThumbnailRepository(
         db = database,
         trees = trees,
@@ -274,6 +281,7 @@ object DataModule {
         serverAuthority = ServerTree.authority(context.packageName),
         onTrimmed = budget::requestTrim,
         aiMasks = aiMasks,
+        serverThumbs = { serverThumbs.orElse(null)?.get() },
     ).also(budget::register)
 
     /** Settings -> Storage's maximum cache size and the LRU across caches (ADR 0018 FIX/W). */
@@ -281,6 +289,12 @@ object DataModule {
     @Singleton
     fun provideCacheBudget(@ApplicationContext context: Context, @DataScope scope: CoroutineScope): CacheBudget =
         CacheBudget(context.getSharedPreferences(STORAGE_PREFS, Context.MODE_PRIVATE), scope)
+
+    /** Settings -> Storage -> "Keep thumbnails of the whole library" (ADR 0018 "W3/C"). */
+    @Provides
+    @Singleton
+    fun provideLibraryThumbsPreferences(@ApplicationContext context: Context): LibraryThumbsPreferences =
+        LibraryThumbsPreferences(context.getSharedPreferences(STORAGE_PREFS, Context.MODE_PRIVATE))
 
     /** The AI masks' disk cache (docs/adr/0021 "M4/C"), one of the budget's areas. */
     @Provides
@@ -389,4 +403,12 @@ object DataModule {
         resolver = context.contentResolver,
         serverAuthority = ServerTree.authority(context.packageName),
     )
+}
+
+/** Bindings `:core:sync` may provide (ADR 0018 "W3/C"): absent in a build or test without sync. */
+@dagger.Module
+@dagger.hilt.InstallIn(dagger.hilt.components.SingletonComponent::class)
+abstract class OptionalDataBindings {
+    @dagger.BindsOptionalOf
+    abstract fun serverThumbs(): ServerThumbs
 }

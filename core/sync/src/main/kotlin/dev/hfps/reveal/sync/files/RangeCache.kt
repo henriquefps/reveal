@@ -73,9 +73,13 @@ class RangeCache(private val dir: File, private val maxBytes: () -> Long = { DEF
     /** Total bytes cached. */
     fun bytes(): Long = dir.listFiles()?.sumOf { folder -> folder.listFiles()?.sumOf { it.length() } ?: 0L } ?: 0L
 
-    /** Drops whole files, least recently read first, until the cache is under its cap. */
-    fun trim() {
-        val folders = dir.listFiles()?.filter { it.isDirectory }?.sortedBy { it.lastModified() } ?: return
+    /**
+     * Drops whole files until the cache is under its cap: those not in [pinned] first (originals opened lately, ADR 0018
+     * "W3/C"), least recently read first.
+     */
+    fun trim(pinned: Set<String> = emptySet()) {
+        val folders = dir.listFiles()?.filter { it.isDirectory }
+            ?.sortedWith(compareBy({ it.name in pinned }, { it.lastModified() })) ?: return
         var total = folders.sumOf { folder -> folder.listFiles()?.sumOf { it.length() } ?: 0L }
         val cap = maxBytes()
         for (folder in folders) {
@@ -95,6 +99,36 @@ class RangeCache(private val dir: File, private val maxBytes: () -> Long = { DEF
     fun files(): List<Triple<String, Long, Long>> = dir.listFiles()?.filter { it.isDirectory }?.map { folder ->
         Triple(folder.name, folder.listFiles()?.sumOf { it.length() } ?: 0L, folder.lastModified())
     }.orEmpty()
+
+    /** Whether every block of [key] (a file of [size] bytes) is cached. */
+    fun complete(key: String, size: Long): Boolean {
+        val folder = File(dir, key)
+        if (size <= 0) return false
+        val last = (size - 1) / BLOCK
+        return (0..last).all { File(folder, it.toString()).isFile }
+    }
+
+    /**
+     * Writes the cached blocks of [key] (complete, [size] bytes) in order into [target]; false (and [target] deleted)
+     * when a block is missing or the length does not add up.
+     */
+    fun assemble(key: String, size: Long, target: File): Boolean {
+        val folder = File(dir, key)
+        val last = (size - 1) / BLOCK
+        var written = 0L
+        target.outputStream().use { out ->
+            for (index in 0..last) {
+                val block = File(folder, index.toString())
+                if (!block.isFile) break
+                block.inputStream().use { written += it.copyTo(out) }
+            }
+        }
+        if (written != size) {
+            target.delete()
+            return false
+        }
+        return true
+    }
 
     /** Drops the cached blocks of [keys]. */
     fun evict(keys: Collection<String>) {

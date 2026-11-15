@@ -8,6 +8,8 @@ import androidx.core.net.toUri
 import dev.hfps.image.ImageInput
 import dev.hfps.reveal.data.storage.DocumentEntry
 import dev.hfps.reveal.data.storage.DocumentTree
+import dev.hfps.reveal.data.storage.FileOpens
+import dev.hfps.reveal.data.storage.PROVIDER_BUSY_PREFIX
 import dev.hfps.reveal.data.storage.readNBytesCompat
 import java.io.FileNotFoundException
 import java.io.IOException
@@ -52,11 +54,27 @@ class HandoffTree(private val resolver: ContentResolver) : DocumentTree {
             }
         }.getOrNull()
 
-    override fun openInput(documentId: String, name: String): ImageInput =
-        ImageInput.fromUri(resolver, documentId.toUri(), name)
+    /**
+     * Opens the document in one of [FileOpens]' app-wide slots (held until the input is closed), retrying while its
+     * provider is busy ([PROVIDER_BUSY_PREFIX], Hoard ADR 0010): a sender never sees a burst of opens from Reveal.
+     */
+    override fun openInput(documentId: String, name: String): ImageInput = FileOpens.gated { release ->
+        val input = FileOpens.retryBusy { ImageInput.fromUri(resolver, documentId.toUri(), name) }
+        ImageInput(input.name, input.descriptor, release)
+    }
 
-    override fun readBytes(documentId: String, maxBytes: Int): ByteArray {
-        val stream = resolver.openInputStream(documentId.toUri()) ?: throw FileNotFoundException(documentId)
+    override fun readBytes(documentId: String, maxBytes: Int): ByteArray = FileOpens.gated { release ->
+        try {
+            readBytesNow(documentId, maxBytes)
+        } finally {
+            release()
+        }
+    }
+
+    private fun readBytesNow(documentId: String, maxBytes: Int): ByteArray {
+        val stream = FileOpens.retryBusy {
+            resolver.openInputStream(documentId.toUri()) ?: throw FileNotFoundException(documentId)
+        }
         return stream.use { input ->
             val bytes = input.readNBytesCompat(maxBytes + 1)
             if (bytes.size > maxBytes) throw IOException("Document $documentId is larger than $maxBytes bytes")

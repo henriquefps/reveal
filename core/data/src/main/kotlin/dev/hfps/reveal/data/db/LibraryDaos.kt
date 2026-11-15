@@ -404,6 +404,20 @@ interface PhotoDao {
     )
     suspend fun setUnreadable(documentId: String, time: Long): Int
 
+    /**
+     * The file fingerprints of the [limit] photos opened most recently since [since] (ADR 0018 "W3/C"): their server
+     * originals stay on this device (pinned) while the cache budget allows.
+     */
+    @Query(
+        "SELECT f.fingerprint FROM photo_files f WHERE f.fingerprint IS NOT NULL AND f.photo_id IN " +
+            "(SELECT id FROM photos WHERE last_opened_at > :since ORDER BY last_opened_at DESC LIMIT :limit)",
+    )
+    suspend fun recentlyOpenedFingerprints(since: Long, limit: Int): List<String>
+
+    /** When the access check last looked at [documentId] (ADR 0018 "W3/C"). */
+    @Query("UPDATE photo_files SET checked_at = :time WHERE document_id = :documentId")
+    suspend fun setChecked(documentId: String, time: Long): Int
+
     /** Clears the mark of [documentId]: it was read again. */
     @Query("UPDATE photo_files SET unreadable_at = NULL WHERE document_id = :documentId AND unreadable_at IS NOT NULL")
     suspend fun setReadable(documentId: String): Int

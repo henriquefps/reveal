@@ -171,6 +171,44 @@ class LibraryIndexer(
         return readHeaders(sourceId, tree, only = readable, untracked = true) {}
     }
 
+    /** A Server photo's header as the server's item describes it (Hoard ADR 0014; ADR 0018 "W3/C"). */
+    data class ServerHeader(
+        /** Camera wall clock as UTC milliseconds (Reveal's capture time convention); null = unknown. */
+        val captureTime: Long?,
+        val offsetMinutes: Int?,
+        val width: Int?,
+        val height: Int?,
+        val orientation: Int?,
+    )
+
+    /**
+     * Writes the Server photos' headers the server described ([headers] by photo id; null = the server has no item for
+     * it: `FAILED`, like an unreadable header), without marking them for sync and without opening any file (ADR 0018
+     * "W3/C": the old range reads mounted an appfuse proxy per photo, 300 per sync).
+     */
+    suspend fun applyServerHeaders(headers: Map<Long, ServerHeader?>) {
+        if (headers.isEmpty()) return
+        db.withTransaction {
+            db.metaDao().put(MetaEntity(SyncTriggers.APPLYING, "1"))
+            for ((photoId, header) in headers) {
+                if (header == null) {
+                    photos.setMetadata(photoId, null, null, null, null, 1, MetadataState.FAILED)
+                } else {
+                    photos.setMetadata(
+                        id = photoId,
+                        captureTime = header.captureTime,
+                        offset = header.offsetMinutes,
+                        width = header.width,
+                        height = header.height,
+                        orientation = (header.orientation ?: 1).coerceIn(1, MAX_ORIENTATION),
+                        state = MetadataState.READ,
+                    )
+                }
+            }
+            db.metaDao().delete(SyncTriggers.APPLYING)
+        }
+    }
+
     /**
      * Computes the content fingerprint (ADR 0006 "Identity") of every file of [sourceId] that has none yet: new or
      * changed files after a walk. Runs after indexing, in the background, [FINGERPRINT_PARALLELISM] at a time and

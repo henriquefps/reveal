@@ -18,7 +18,14 @@ import java.io.FileNotFoundException
  * file). The descriptor is read in place with positional reads: the original is never copied. The caller owns the
  * [descriptor] and closes it (or closes this object, which closes it).
  */
-class ImageInput(val name: String, val descriptor: ParcelFileDescriptor) : AutoCloseable {
+class ImageInput(
+    val name: String,
+    val descriptor: ParcelFileDescriptor,
+    /** Runs once after [close] (a caller's open throttle releases its slot). */
+    private val onClose: (() -> Unit)? = null,
+) : AutoCloseable {
+    private val closed = java.util.concurrent.atomic.AtomicBoolean()
+
 
     /** Type from the extension and the first bytes (magic wins on disagreement). */
     val type: ImageType by lazy {
@@ -31,7 +38,13 @@ class ImageInput(val name: String, val descriptor: ParcelFileDescriptor) : AutoC
     /** Runs [block] on a source over a duplicate of the descriptor (closed afterwards; this input stays open). */
     fun <T> withSource(block: (DescriptorSource) -> T): T = DescriptorSource(descriptor.dup()).use(block)
 
-    override fun close() = descriptor.close()
+    override fun close() {
+        try {
+            descriptor.close()
+        } finally {
+            if (closed.compareAndSet(false, true)) onClose?.invoke()
+        }
+    }
 
     companion object {
         private const val HEAD_BYTES = 64

@@ -22,6 +22,7 @@ import dev.hfps.reveal.sync.engine.ConflictPair
 import dev.hfps.reveal.sync.engine.EditPreviews
 import dev.hfps.reveal.sync.engine.ServerChangedException
 import dev.hfps.reveal.sync.engine.ServerLibrary
+import dev.hfps.reveal.sync.engine.ServerHeaders
 import dev.hfps.reveal.sync.engine.SyncEngine
 import dev.hfps.reveal.sync.engine.SyncReport
 import dev.hfps.reveal.sync.engine.SyncStore
@@ -116,6 +117,8 @@ class SyncRepository(
     private val newApi: (url: String, key: String?) -> SyncApi = { url, key -> SyncApi(url, key) },
     /** Edited previews for the server's gallery (Hoard ADR 0020); null = never (tests, no renderer). */
     private val editPreviews: EditPreviews? = null,
+    /** The library thumbnails (ADR 0018 "W3/C"): forgotten with the server. */
+    private val libraryThumbs: dev.hfps.reveal.sync.thumbs.LibraryThumbs? = null,
 ) {
     /**
      * The device's name, platform and app version, sent when pairing, and how it describes itself to a server with
@@ -230,6 +233,7 @@ class SyncRepository(
         editPreviews?.forget()
         engine.resetCursors()
         files.clear()
+        libraryThumbs?.clear()
     }
 
     fun setOptions(options: SyncOptions) = accounts.setOptions(options)
@@ -311,7 +315,9 @@ class SyncRepository(
                 // After the push: the server keeps an original while a live record names it.
                 val deleted = uploader.deleteOriginals(api)
                 if (deleted > 0) Log.i(TAG, "deleted $deleted originals from the server")
-                val headers = readServerHeaders()
+                val adopted = adoptHandoffs()
+                if (adopted > 0) Log.i(TAG, "$adopted hand-offs the server holds are Server photos now")
+                val headers = readServerHeaders(api)
                 Log.i(TAG, "sync: $report, $headers server headers")
                 runtime.update { it.copy(running = false, problem = null, lastSyncAt = engine.lastSync()) }
                 report
@@ -378,16 +384,37 @@ class SyncRepository(
     }
 
     /**
-     * Capture times of the Server source's photos (NAS files, other devices' photos without one): their headers read by
-     * range, [HEADERS_PER_RUN] per sync, so they sort like local photos (ADR 0018 "Server photos").
+     * Capture times of the Server source's photos (NAS files, other devices' photos without one), so they sort like
+     * local photos (ADR 0018 "Server photos"). A server with items (Hoard ADR 0014) describes them: one lookup per
+     * [ITEM_HEADERS_PER_RUN] photos, no file opened (ADR 0018 "W3/C"); an older server's headers are read by range,
+     * [HEADERS_PER_RUN] per sync.
      */
     @Suppress("ReturnCount")
-    private suspend fun readServerHeaders(): Int {
-        val factory = trees ?: return 0
+    private suspend fun readServerHeaders(api: SyncApi): Int {
         val source = db.syncDao().serverSource() ?: return 0
+        val items = runCatching { api.server().has(SyncEngine.FEATURE_ITEMS) }.getOrDefault(false)
+        if (items) {
+            return runCatching { ServerHeaders.read(db, api, source.id, ITEM_HEADERS_PER_RUN) }
+                .onFailure { Log.w(TAG, "server headers: ${it.javaClass.simpleName}") }.getOrDefault(0)
+        }
+        val factory = trees ?: return 0
         return runCatching {
             LibraryIndexer(db).readServerMetadata(source.id, factory.open(source), HEADERS_PER_RUN)
         }.onFailure { Log.w(TAG, "server headers: ${it.javaClass.simpleName}") }.getOrDefault(0)
+    }
+
+    /**
+     * Hand-off photos whose file the server holds become Server photos (ADR 0018 "W3/C"), [SyncStore.ADOPT_BATCH] per
+     * transaction until none is left: a one-off pass over an existing library (resumable: each batch is committed) and,
+     * after every sync's lookups, the new hand-offs whose file the server turned out to hold.
+     */
+    private suspend fun adoptHandoffs(): Int {
+        var total = 0
+        while (true) {
+            val moved = store.adoptHandoffs()
+            total += moved
+            if (moved == 0) return total
+        }
     }
 
     /** How many photos of folder [sourceId] have an edit (the removal dialog's default for "Also delete"). */
@@ -443,6 +470,7 @@ class SyncRepository(
         /** Edited previews rendered per blob run (each a develop render at 2560 px). */
         const val EDITS_PER_RUN = 5
         const val HEADERS_PER_RUN = 300
+        const val ITEM_HEADERS_PER_RUN = 5_000
         const val HTTP_CONFLICT = 409
         const val HTTP_NOT_FOUND = 404
     }

@@ -253,6 +253,29 @@ interface SyncDao {
     )
     suspend fun serverHeaderCandidates(sourceId: Long, limit: Int): List<Long>
 
+    /**
+     * Hand-off photos whose main file (the RAW of a pair, else the rendering) the server holds (ADR 0018 "W3/C"): they
+     * become Server photos ([adoptFile], [adoptPhoto]) so nothing opens the sender's URI to show or edit them.
+     */
+    @Query(
+        "SELECT p.id FROM photos p JOIN sources s ON s.id = p.source_id WHERE s.kind = 'HANDOFF' AND EXISTS " +
+            "(SELECT 1 FROM photo_files f WHERE f.photo_id = p.id AND f.on_server = 1 AND f.fingerprint IS NOT NULL " +
+            "AND f.id = (SELECT m.id FROM photo_files m WHERE m.photo_id = p.id AND m.role IN ('RAW', 'RENDERED') " +
+            "ORDER BY CASE m.role WHEN 'RAW' THEN 0 ELSE 1 END, m.id LIMIT 1)) ORDER BY p.id LIMIT :limit",
+    )
+    suspend fun adoptableHandoffs(limit: Int): List<Long>
+
+    /** Moves a photo to [sourceId] (the Server source); its sidecar link goes (a Server photo has none). */
+    @Query("UPDATE photos SET source_id = :sourceId, xmp_document_id = NULL, xmp_modified = NULL WHERE id = :photoId")
+    suspend fun adoptPhoto(photoId: Long, sourceId: Long)
+
+    /** Moves a file to the Server source under the server's document id (ADR 0018 "Server photos"). */
+    @Query(
+        "UPDATE photo_files SET source_id = :sourceId, relative_path = :path, document_id = :documentId, " +
+            "unreadable_at = NULL, checked_at = NULL WHERE id = :fileId",
+    )
+    suspend fun adoptFile(fileId: Long, sourceId: Long, path: String, documentId: String)
+
     // ---- cloud state
 
     @Query("SELECT * FROM photo_cloud WHERE photo_id = :photoId")

@@ -90,6 +90,15 @@
     <string name="storage_section_used">O que o Reveal guarda</string>
     <string name="storage_thumbnails">Miniaturas</string>
     <string name="storage_thumbnails_note">Imagens da grade e da tira de fotos, refeitas quando preciso</string>
+    <string name="storage_library_thumbs">Miniaturas da biblioteca</string>
+    <string name="storage_library_thumbs_note">Imagens pequenas de todas as fotos do seu servidor, para a grade funcionar offline</string>
+    <string name="storage_originals_kept">Originais guardados</string>
+    <string name="storage_originals_kept_note">Originais do servidor que você abriu ou editou há pouco, para abrirem de novo na hora</string>
+    <string name="storage_section_library_thumbs">Miniaturas da biblioteca</string>
+    <string name="storage_keep_library_thumbs">Guardar miniaturas da biblioteca inteira</string>
+    <string name="storage_keep_library_thumbs_note">Baixadas do seu servidor no Wi-Fi enquanto o aparelho carrega ou está ocioso; a grade passa a rolar offline. São as últimas a sair quando o cache enche.</string>
+    <string name="storage_keep_library_thumbs_count">%1$d de %2$d fotos, %3$s. Baixadas no Wi-Fi enquanto o aparelho carrega ou está ocioso.</string>
+    <string name="storage_clear_library_thumbs">Apagar miniaturas da biblioteca</string>
     <string name="storage_server_files">Arquivos do servidor</string>
     <string name="storage_server_files_note">Partes de originais e prévias do seu servidor, guardadas enquanto você as vê</string>
     <string name="storage_handoff_previews">Fotos de outros apps</string>

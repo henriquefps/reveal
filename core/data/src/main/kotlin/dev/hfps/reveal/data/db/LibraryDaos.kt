@@ -95,6 +95,8 @@ data class FingerprintMatch(
     @ColumnInfo(name = "source_kind") val sourceKind: SourceKind,
     @ColumnInfo(name = "source_state") val sourceState: SourceState,
     @ColumnInfo(name = "photo_hidden") val photoHidden: Boolean,
+    /** The photo was opened from another app (an adopted hand-off is one) or has an edit: the one to keep. */
+    @ColumnInfo(name = "photo_kept") val photoKept: Boolean = false,
 )
 
 /** What the incremental walk compares a listed shot with. */
@@ -341,7 +343,7 @@ interface PhotoDao {
     // ---- content fingerprints (ADR 0006 "Identity")
 
     @Query(
-        "SELECT f.*, s.kind AS source_kind, s.state AS source_state, p.hidden AS photo_hidden FROM photo_files f " +
+        "SELECT f.*, s.kind AS source_kind, s.state AS source_state, p.hidden AS photo_hidden, (p.handoff_at IS NOT NULL OR p.has_edit = 1) AS photo_kept FROM photo_files f " +
             "JOIN photos p ON p.id = f.photo_id JOIN sources s ON s.id = f.source_id " +
             "WHERE f.fingerprint IN (:fingerprints) ORDER BY f.id",
     )

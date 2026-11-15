@@ -243,7 +243,10 @@ class HandoffRepository(
                     sameFile(it, item.entry)
             }
         return handoff?.let { Match(it, handoff = true) }
-            ?: samePrint.firstOrNull(::reusableFolderFile)?.let { Match(it.file, handoff = false) }
+            ?: samePrint.filter(::reusableFolderFile).let { reusable ->
+                // A NAS-feed Server photo of the same file must not win over the adopted or edited one (lost edits).
+                reusable.firstOrNull { it.photoKept } ?: reusable.firstOrNull()
+            }?.let { Match(it.file, handoff = false) }
     }
 
     /**

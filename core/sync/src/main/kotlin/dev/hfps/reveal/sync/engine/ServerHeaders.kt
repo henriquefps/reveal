@@ -20,9 +20,15 @@ object ServerHeaders {
     /** Photos per lookup: a RAW + JPEG pair has two fingerprints, and the query stays under SQLite's 999 arguments. */
     const val PHOTO_BATCH = 400
 
-    /** Fills up to [limit] photos of [sourceId]; returns how many were written. */
-    suspend fun read(db: RevealDatabase, api: SyncApi, sourceId: Long, limit: Int): Int {
-        val photos = db.syncDao().serverHeaderCandidates(sourceId, limit)
+    /** Fills up to [limit] photos of [sourceId]; returns how many were written (a missed photo waits, `PENDING`). */
+    suspend fun read(
+        db: RevealDatabase,
+        api: SyncApi,
+        sourceId: Long,
+        limit: Int,
+        now: Long = System.currentTimeMillis(),
+    ): Int {
+        val photos = db.syncDao().serverHeaderCandidates(sourceId, limit, now - LibraryIndexer.MISS_BACKOFF_MS)
         if (photos.isEmpty()) return 0
         val indexer = LibraryIndexer(db)
         var written = 0
@@ -39,8 +45,8 @@ object ServerHeaders {
                 byPhoto[photoId].orEmpty().firstNotNullOfOrNull { f -> itemOf[f.fingerprint]?.let(items::get) }
                     ?.let(::headerOf)
             }
-            indexer.applyServerHeaders(headers)
-            written += headers.size
+            indexer.applyServerHeaders(headers, now)
+            written += headers.values.count { it != null }
         }
         return written
     }

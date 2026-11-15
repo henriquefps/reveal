@@ -315,6 +315,7 @@ class SyncRepository(
                 // After the push: the server keeps an original while a live record names it.
                 val deleted = uploader.deleteOriginals(api)
                 if (deleted > 0) Log.i(TAG, "deleted $deleted originals from the server")
+                // Neither of these may fail the sync (they are housekeeping after it): each guards itself.
                 val adopted = adoptHandoffs()
                 if (adopted > 0) Log.i(TAG, "$adopted hand-offs the server holds are Server photos now")
                 val headers = readServerHeaders(api)
@@ -410,10 +411,18 @@ class SyncRepository(
      */
     private suspend fun adoptHandoffs(): Int {
         var total = 0
-        while (true) {
-            val moved = store.adoptHandoffs()
-            total += moved
-            if (moved == 0) return total
+        try {
+            while (true) {
+                val batch = store.adoptNext()
+                total += batch.moved
+                // Failed photos are marked and skipped next time, so the loop ends: nothing tried = nothing left.
+                if (batch.moved + batch.failed == 0) return total
+            }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
+            Log.w(TAG, "adopting hand-offs: ${e.javaClass.simpleName}")
+            return total
         }
     }
 

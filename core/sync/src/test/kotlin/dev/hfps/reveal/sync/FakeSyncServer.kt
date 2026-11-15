@@ -687,6 +687,18 @@ class FakeSyncServer : Dispatcher() {
         nasBytes[fingerprint] = bytes
     }
 
+    /** The NAS feed reports [path] of [folderId] as removed. */
+    fun removeNasFile(folderId: String, path: String) {
+        nasFiles += buildJsonObject {
+            put("folderId", folderId)
+            put("folderName", "NAS")
+            put("path", path)
+            put("size", 0)
+            put("modifiedAt", 1_700_000_000_000L)
+            put("removed", true)
+        }
+    }
+
     fun record(kind: String, id: String): Record? = records[kind to id]
 
     /** Stores [bytes] as an uploaded original (as a device's backup would). */

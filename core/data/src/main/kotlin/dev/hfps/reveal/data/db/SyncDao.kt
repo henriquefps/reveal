@@ -9,6 +9,12 @@ import androidx.room.Update
 import dev.hfps.reveal.data.model.PickFlag
 import kotlinx.coroutines.flow.Flow
 
+/** `meta` key prefix (+ photo id, value = time) of a Server photo the item lookup missed: asked again later. */
+const val HEADER_MISS_PREFIX = "sync.headerMiss."
+
+/** `meta` key prefix (+ photo id, value = time) of a hand-off whose adoption failed: skipped until it is retried. */
+const val ADOPT_FAILED_PREFIX = "sync.adoptFailed."
+
 /** A file's fingerprint and whether the server holds it (or its photo's original). */
 data class PrintedFile(val fingerprint: String, @ColumnInfo(name = "on_server") val onServer: Boolean)
 
@@ -233,7 +239,7 @@ interface SyncDao {
      * device described (it has a sync record) stays: its record decides.
      */
     @Query(
-        "DELETE FROM photos WHERE source_id = :sourceId AND has_edit = 0 AND id NOT IN " +
+        "DELETE FROM photos WHERE source_id = :sourceId AND has_edit = 0 AND handoff_at IS NULL AND id NOT IN " +
             "(SELECT photo_id FROM photo_files) AND uuid NOT IN " +
             "(SELECT record_id FROM sync_records WHERE kind = 'photo')",
     )
@@ -246,12 +252,19 @@ interface SyncDao {
     @Query("SELECT * FROM photo_files WHERE source_id = :sourceId AND relative_path = :path")
     suspend fun serverFileByPath(sourceId: Long, path: String): PhotoFileEntity?
 
-    /** Server-source photos still `PENDING` whose original the server serves: the next header reads, newest first. */
+    /**
+     * Server-source photos still `PENDING` whose original the server serves: the next header reads, newest first.
+     * A photo the server's lookup missed ([HEADER_MISS_PREFIX] in `meta`, stamped with the time) waits until that stamp
+     * is not after [missedSince] (a miss is "not yet", never a failed header: a photo with a wrong orientation and no
+     * capture time would sort and stretch wrongly for good); [Long.MAX_VALUE] ignores the stamps.
+     */
     @Query(
         "SELECT p.id FROM photos p JOIN photo_cloud c ON c.photo_id = p.id WHERE p.source_id = :sourceId AND " +
-            "p.metadata_state = 'PENDING' AND c.original_on_server = 1 ORDER BY p.sort_time DESC LIMIT :limit",
+            "p.metadata_state = 'PENDING' AND c.original_on_server = 1 AND NOT EXISTS (SELECT 1 FROM meta m WHERE " +
+            "m.`key` = '$HEADER_MISS_PREFIX' || p.id AND CAST(m.value AS INTEGER) > :missedSince) " +
+            "ORDER BY p.sort_time DESC LIMIT :limit",
     )
-    suspend fun serverHeaderCandidates(sourceId: Long, limit: Int): List<Long>
+    suspend fun serverHeaderCandidates(sourceId: Long, limit: Int, missedSince: Long): List<Long>
 
     /**
      * Hand-off photos whose main file (the RAW of a pair, else the rendering) the server holds (ADR 0018 "W3/C"): they
@@ -261,9 +274,11 @@ interface SyncDao {
         "SELECT p.id FROM photos p JOIN sources s ON s.id = p.source_id WHERE s.kind = 'HANDOFF' AND EXISTS " +
             "(SELECT 1 FROM photo_files f WHERE f.photo_id = p.id AND f.on_server = 1 AND f.fingerprint IS NOT NULL " +
             "AND f.id = (SELECT m.id FROM photo_files m WHERE m.photo_id = p.id AND m.role IN ('RAW', 'RENDERED') " +
-            "ORDER BY CASE m.role WHEN 'RAW' THEN 0 ELSE 1 END, m.id LIMIT 1)) ORDER BY p.id LIMIT :limit",
+            "ORDER BY CASE m.role WHEN 'RAW' THEN 0 ELSE 1 END, m.id LIMIT 1)) AND NOT EXISTS (SELECT 1 FROM meta x " +
+            "WHERE x.`key` = '$ADOPT_FAILED_PREFIX' || p.id AND CAST(x.value AS INTEGER) > :failedSince) " +
+            "ORDER BY p.id LIMIT :limit",
     )
-    suspend fun adoptableHandoffs(limit: Int): List<Long>
+    suspend fun adoptableHandoffs(limit: Int, failedSince: Long): List<Long>
 
     /**
      * Moves a photo to [sourceId] (the Server source); its sidecar link goes: a Server photo's culling rides the server

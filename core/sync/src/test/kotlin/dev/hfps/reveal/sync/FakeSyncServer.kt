@@ -37,8 +37,7 @@ import mockwebserver3.RecordedRequest
  * kept as a copy), fingerprint lookups, chunked resumable uploads, ranges and the NAS feed. Hooks let a test break an
  * upload half-way.
  */
-class FakeSyncServer : Dispatcher() {
-    val serverId = "858e1b9d-0000-4000-8000-000000000001"
+class FakeSyncServer(val serverId: String = "858e1b9d-0000-4000-8000-000000000001") : Dispatcher() {
     private val json = Json { ignoreUnknownKeys = true }
 
     class Record(
@@ -91,6 +90,12 @@ class FakeSyncServer : Dispatcher() {
     var rateLimitNext = 0
 
     private val server = MockWebServer().also { it.dispatcher = this }
+
+    /** `limits.maxPushChanges` of `/v1/server`, enforced like hoard-server (a longer push is `422 invalid_change`). */
+    var maxPushChanges = 500
+
+    /** Every `Authorization` header this server received, in order (a key must never reach the wrong server). */
+    val authorizations: MutableList<String> = java.util.Collections.synchronizedList(ArrayList())
 
     /** `features` of `/v1/server`: empty = a server before hoard-server 0.7.0 (no culling, no device identity). */
     val features = ArrayList<String>()
@@ -161,6 +166,7 @@ class FakeSyncServer : Dispatcher() {
                 },
             )
         }
+        request.headers["Authorization"]?.let { authorizations += it }
         val device = request.headers["Authorization"]?.removePrefix("Bearer ")?.let { devices[it] }
             ?: return error(401, "unauthorized")
         if (rateLimitNext > 0) {
@@ -179,7 +185,7 @@ class FakeSyncServer : Dispatcher() {
                     put(
                         "limits",
                         buildJsonObject {
-                            put("maxPushChanges", 500)
+                            put("maxPushChanges", maxPushChanges)
                             put("maxPullLimit", 500)
                             put("chunkSize", chunkSize)
                         },
@@ -416,6 +422,8 @@ class FakeSyncServer : Dispatcher() {
 
     private fun push(device: String, request: RecordedRequest): MockResponse {
         val changes = json.parseToJsonElement(request.body!!.utf8()).jsonObject["changes"]!!.jsonArray
+        // hoard-server: too many changes is one invalid_change for the whole request, without an index.
+        if (changes.size > maxPushChanges) return error(422, "invalid_change")
         changes.forEachIndexed { index, c ->
             val o = c.jsonObject
             val deleted = o["deleted"]?.jsonPrimitive?.booleanOrNull ?: false

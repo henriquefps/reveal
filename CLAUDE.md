@@ -1090,15 +1090,19 @@ cap it at `budget::cap`, and add its directory to `AppStorage.AREA_DIRS`.
 Photo before version (W5, 0.9.0, ADR 0018 "Amendment W5"): NAS photos and quietly filed hand-offs have random
 uuids and no `photo` record, so `SyncStore.readOutgoing` puts a version's photo change ahead of it when the photo has
 no accepted record (`photoFirst`); a photo without a fingerprint yet holds its versions (`sync_records.rev = -1` =
-`SyncRecordEntity.HELD_REV`, released by `SyncDao.releaseHeldVersions` when the photo's record is accepted or pulled).
+`SyncRecordEntity.HELD_REV`, released by `SyncDao.releaseHeldVersions` when the photo's record is accepted or pulled);
+the batch stays within the server's `maxPushChanges` counting the added photos (`FakeSyncServer` refuses more, as
+hoard-server does). An adopting photo keeps its old id as an alias.
 `VersionData.photoFingerprint` (main file) lets `applyVersion` find the photo by fingerprint (oldest non-hidden when
 ambiguous) and alias the record's photo id. One-off `repairVersionPhotos` (meta `sync.versionPhotos`, after the pull,
 skipped on a first sync): edited versions of photos the server never had + this device's edited versions again (their
-original `modifiedAt`). Tests: `VersionPhotoSyncTest`, `RealServerVersionPhotoTest` (`REVEAL_VERSION_DIR`,
+original `modifiedAt`; versions of unknown author only via `checkRepairs` on the next run, meta
+`sync.versionPhotos.checks`). Tests: `VersionPhotoSyncTest`, `RealServerVersionPhotoTest` (`REVEAL_VERSION_DIR`,
 `REVEAL_VERSION_LINKS`, two links). Re-pair with the same server (W5 (f)): `SyncRepository.pair` first tries the
-current key at the link's address (`sameDevice`: same device, only the URL changes); a refused key pairs a new device
+current key at the link's address only when its `server=` is the account's (`sameDevice`: same device, only the
+URL changes); a refused key pairs a new device
 but keeps the sync state (`SyncEngine.forgetDevice`) and claims the previous physical device when offered; no
-self-revoke exists in `/v1`. `SyncStore.unmarkSameEdit` avoids conflict copies on a first sync. Test: `RePairTest`.
+self-revoke exists in `/v1`. `SyncStore.sameEdit` avoids conflict copies on a first sync (and re-pushes a record naming a stale photo id). Test: `RePairTest`.
 
 Culling with hoard-server (R0.8, ADR 0027, DB v13; only when `/v1/server` lists `culling`, else culling stays in
 `photo` records): `engine/CullingSync` (seed once per server, push `POST /v1/culling` per field by main fingerprint,

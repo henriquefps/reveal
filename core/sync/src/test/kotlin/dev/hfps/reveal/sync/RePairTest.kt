@@ -4,16 +4,23 @@ import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.google.common.truth.Truth.assertThat
+import dev.hfps.image.source.FileFingerprint
+import dev.hfps.reveal.data.db.MetaEntity
+import dev.hfps.reveal.data.db.SyncRecordEntity
+import dev.hfps.reveal.data.edit.EditRepository
 import dev.hfps.reveal.data.library.DocumentTreeFactory
 import dev.hfps.reveal.pipeline.preview.SmartPreviewMaker
+import dev.hfps.reveal.pipeline.recipe.RecipeCodec
 import dev.hfps.reveal.sync.account.ClientDevice
 import dev.hfps.reveal.sync.account.MemorySecretStore
 import dev.hfps.reveal.sync.account.PairingLink
 import dev.hfps.reveal.sync.account.SyncAccountStore
 import dev.hfps.reveal.sync.api.PairRequest
+import dev.hfps.reveal.sync.api.PushChange
 import dev.hfps.reveal.sync.api.SyncApi
 import dev.hfps.reveal.sync.blobs.BlobUploader
 import dev.hfps.reveal.sync.engine.SyncEngine
+import dev.hfps.reveal.sync.engine.VersionData
 import dev.hfps.reveal.sync.files.ServerFiles
 import java.io.File
 import java.net.URLEncoder
@@ -57,9 +64,12 @@ class RePairTest {
             url.replace("127.0.0.1", "localhost")
         }
 
-    private fun link(at: String = url) = PairingLink.parse(
-        "revealsync://pair?v=1&url=${URLEncoder.encode(at, "UTF-8")}&token=${server.pairingToken()}",
-    )!!
+    /** A pairing code as hoard-server prints it (with `server=`); [serverId] null = an older code without it. */
+    private fun link(at: String = url, token: String = server.pairingToken(), serverId: String? = server.serverId) =
+        PairingLink.parse(
+            "revealsync://pair?v=1&url=${URLEncoder.encode(at, "UTF-8")}&token=$token" +
+                (serverId?.let { "&server=$it" } ?: ""),
+        )!!
 
     /** An installation: its library ([TestDevice]) and the app's sync repository over the same database. */
     private class Install(val device: TestDevice, val repository: SyncRepository)
@@ -192,5 +202,91 @@ class RePairTest {
         runBlocking { app.repository.syncMetadata() }
         assertThat(server.copies()).isEmpty()
         assertThat(app.device.pending()).isEqualTo(0)
+    }
+
+    @Test
+    fun `the key never goes to an address the link does not prove to be the paired server`() {
+        val app = install()
+        pairedWithAnEdit(app, hoardOnPixel())
+        val other = FakeSyncServer("858e1b9d-0000-4000-8000-0000000000ff")
+        try {
+            val otherUrl = other.start()
+            // An older code without `server=`, then one naming another server: both pair normally with that server.
+            runBlocking { app.repository.pair(link(otherUrl, other.pairingToken(), serverId = null)) }
+            assertThat(other.authorizations).isEmpty()
+            runBlocking { app.repository.unpair() }
+            runBlocking { app.repository.pair(link(url)) }
+            runBlocking { app.repository.pair(link(otherUrl, other.pairingToken(), serverId = other.serverId)) }
+            assertThat(other.authorizations).isEmpty()
+            assertThat(app.repository.account.value!!.serverId).isEqualTo(other.serverId)
+        } finally {
+            other.shutdown()
+        }
+    }
+
+    @Test
+    fun `unpairing then pairing again after the photo adopted another device's id pushes the version naming it`() {
+        val app = install()
+        runBlocking { app.repository.pair(link()) }
+        runBlocking { app.repository.syncMetadata() }
+        val raw = Random(9).nextBytes(4096)
+        val fingerprint = FileFingerprint.of(raw)
+        // A folder photo whose record never went up (as a quietly filed hand-off leaves it).
+        val photo = app.device.addPhoto("DSC9", raw)
+        val oldUuid = app.device.photo(photo).uuid
+        runBlocking { app.device.db.syncDao().deleteRecord("photo", oldUuid) }
+        app.device.edit(app.device.version(photo)) { it.copy(light = it.light.copy(exposureEv = 0.7f)) }
+        // What 0.8 pushed: the version alone, naming this device's id for the photo, without its fingerprint.
+        val versionUuid = legacyPush(app, photo)
+        // Another device's record of the same photo goes up under its own id; this one adopts it on its next pull.
+        val tablet = TestDevice("Tablet", url, server.addDevice("Tablet"), server.serverId).also { devices += it }
+        val onTablet = tablet.photo(tablet.addPhoto("DSC9", raw))
+        tablet.sync()
+        // The repair ran before the adoption (as on a device updated earlier).
+        runBlocking {
+            app.device.db.metaDao().put(MetaEntity(SyncEngine.KEY_VERSION_PHOTOS, SyncEngine.VERSION_PHOTOS_VERSION))
+        }
+        runBlocking { app.repository.syncMetadata() }
+        assertThat(app.device.photo(photo).uuid).isEqualTo(onTablet.uuid)
+        assertThat(photoIdOf(versionUuid)).isEqualTo(oldUuid)
+
+        runBlocking { app.repository.unpair() }
+        runBlocking { app.repository.pair(link(otherUrl)) }
+        runBlocking { app.repository.syncMetadata() }
+
+        val record = server.record("version", versionUuid)!!.data!!.jsonObject
+        assertThat(record["photoId"]!!.jsonPrimitive.content).isEqualTo(onTablet.uuid)
+        assertThat(record["photoFingerprint"]!!.jsonPrimitive.content).isEqualTo(fingerprint)
+        assertThat(server.copies()).isEmpty()
+        assertThat(app.device.pending()).isEqualTo(0)
+        // This device's history and authorship stay its own.
+        val version = app.device.versions(photo).single()
+        assertThat(version.editDevice).isEqualTo(EditRepository.THIS_DEVICE)
+        assertThat(app.device.recipe(version.id).light.exposureEv).isEqualTo(0.7f)
+    }
+
+    private fun photoIdOf(versionUuid: String) =
+        server.record("version", versionUuid)!!.data!!.jsonObject["photoId"]!!.jsonPrimitive.content
+
+    private fun legacyPush(app: Install, photo: Long): String = runBlocking {
+        val version = app.device.versions(photo).first()
+        val data = VersionData(
+            photoId = app.device.photo(photo).uuid,
+            recipe = SyncApi.json.parseToJsonElement(RecipeCodec.Default.encode(app.device.recipe(version.id))),
+        )
+        val local = checkNotNull(app.device.db.syncDao().record("version", version.uuid))
+        val result = checkNotNull(app.repository.api()).push(
+            listOf(
+                PushChange(
+                    "version",
+                    version.uuid,
+                    0,
+                    local.modifiedAt,
+                    data = SyncApi.json.encodeToJsonElement(VersionData.serializer(), data),
+                ),
+            ),
+        ).results.single()
+        app.device.db.syncDao().putRecord(local.copy(rev = result.rev, dirty = false))
+        version.uuid
     }
 }

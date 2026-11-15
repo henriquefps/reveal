@@ -125,6 +125,8 @@ class SyncEngine(
         // never turns a newer edit of another device into a conflict copy): edited versions whose photo the server
         // never heard of go up with their photo, and this device's edited versions go up again naming their photo's
         // current id and main-file fingerprint. A first sync with a server needs none: everything just went up.
+        // The repair's versions of unknown author, checked one run later (after this run's pull): pushed if unchanged.
+        if (store.checkRepairs() > 0) count += push(api, info).first
         if (meta.get(KEY_VERSION_PHOTOS) != VERSION_PHOTOS_VERSION) {
             val marked = if (first) 0 else store.repairVersionPhotos()
             if (marked > 0) count += push(api, info).first

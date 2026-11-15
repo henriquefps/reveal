@@ -249,12 +249,17 @@ class SyncRepository(
 
     /**
      * The current device again, at [link]'s address, when this installation is paired with that server and its key
-     * still works there (`GET /v1/server` answers with the same server id); null otherwise.
+     * still works there (`GET /v1/server` answers with the same server and device ids); null otherwise.
+     *
+     * The key is a secret of the paired server: it is only ever sent to an address the link proves to be that server,
+     * i.e. a link whose `server=` (hoard-server prints it in every pairing code) is the account's server id. A link
+     * without one, or naming another server, pairs normally and never sees the key (`/v1` has no unauthenticated way to
+     * ask an address which server it is: `/v1/health` names none, and `/v1/server` needs a key).
      */
     @Suppress("ReturnCount")
     private suspend fun sameDevice(link: PairingLink): SyncAccount? {
         val account = accounts.account.value ?: return null
-        if (link.serverId != null && link.serverId != account.serverId) return null
+        if (link.serverId == null || link.serverId != account.serverId) return null
         val key = accounts.apiKey() ?: return null
         val info = try {
             newApi(link.url, key).server()

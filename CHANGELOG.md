@@ -52,11 +52,13 @@ All notable changes to Reveal are documented here. The format follows
 - Sync (W5, docs/adr/0018 "Amendment W5"): an edit of a photo from the server's NAS folders (or of a photo opened
   from another app) that nobody had rated, flagged or labelled never reached the other devices. The photo now goes to
   the server before its edit, an edit finds its photo on the other device by the file itself, and the first sync after
-  updating sends such edits again (they then show up on the other devices).
+  updating sends such edits again (they then show up on the other devices). Applying a preset to hundreds of such
+  photos no longer stops sync for good (the push stays within the server's limit of 500 changes).
 - Pairing again with the same server (a new address, a new QR) no longer registers a new device: Reveal keeps its
   device, its place next to Hoard on the same phone and everything it had synced. When the old device was removed
   from the server, the new one keeps the sync state and rejoins Hoard's phone. A re-pair or a pairing after unpairing
-  no longer turns every edited photo into a conflict copy.
+  no longer turns every edited photo into a conflict copy. Reveal sends its device key only to the server it is
+  paired with (a pairing code naming no server, or another one, never receives it).
 - Photos from Hoard (W4): a camera's `IMG_0001.JPG` no longer pairs with a Hoard `IMG_0001.CR3` of the same name; a
   RAW and its JPEG that arrive in different parts of a big batch still become one photo; the originals Reveal keeps
   for Hoard's Downloads copies are no longer left behind (backups of photos the server holds, a failed re-copy, a

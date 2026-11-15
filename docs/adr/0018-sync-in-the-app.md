@@ -602,17 +602,23 @@ Decisions:
 - **The photo goes up before its version.** When the push batch is read, a version change whose photo has no `photo`
   record the server accepted (`rev > 0`) brings that photo's change into the same batch, ahead of it (`photoFirst`;
   the record is made dirty, or created, even for a photo made quietly). Another device maps the photo by fingerprint
-  (`localPhoto`: adopts the id when its own never went up, else an alias) and the version applies. A photo whose main
+  (`localPhoto`: adopts the id when its own never went up, else an alias) and the version applies. An adopting photo
+  keeps its old id as an alias, so records that named it (a version pushed before the adoption) still find it; the
+  alias of an adoption is never a "survivor" of a photo tombstone (only ids with a live record are). A photo whose main
   file has no fingerprint yet cannot be described: its version is **held** (`sync_records.rev = -1`,
   `SyncRecordEntity.HELD_REV`, not dirty) and `SyncDao.releaseHeldVersions` marks it again (rev 0, its edit time kept)
-  once the photo's record is accepted (a push, or a pulled record placed on it). A photo record that is a tombstone
+  once the photo's record is accepted (a push, or a pulled record placed on it). **The batch stays within the server's
+  `maxPushChanges`** (500; hoard-server refuses a longer push as a whole with `422 invalid_change` and no index, which
+  no retry can get past): settings, records and the photos added ahead of their versions all count; a version whose
+  photo does not fit with it stays dirty and its photo (marked dirty) leads the next round. A photo record that is a tombstone
   (deleted from the server on purpose) is never brought back this way; one the server refuses (`invalid_change`) is
   not offered again by this process (the version then goes up alone, as before).
 - **A version finds its photo by fingerprint** (additive, `/v1` unchanged): `version.data.photoFingerprint` = the
   photo's main-file fingerprint (older apps ignore it; records without it apply as before). `applyVersion`, and so the
   inbox retry: uuid → alias → the version's own local photo (a version already here) → the photo whose main file has
-  that fingerprint (`SyncDao.photosWithMainFile`), then an alias from the record's photo id to it, so later records map
-  directly. Several local photos with that main file (the same file in two folders): the oldest one that is not hidden,
+  that fingerprint (`SyncDao.photosWithMainFile`), by the same rule as a photo record (one helper,
+  `photoByFingerprint`): the photo takes the record's photo id when its own never went up (no record, or rev 0),
+  else that id becomes an alias, so later records map directly. Several local photos with that main file (the same file in two folders): the oldest one that is not hidden,
   logged (`RevealSync`).
 - **One-off repair** (`SyncStore.repairVersionPhotos`, meta `sync.versionPhotos` = 1): in the first sync after the
   update, **after its pull** (every local revision is then the server's latest, so pushing a version again cannot make
@@ -625,7 +631,12 @@ Decisions:
     and fingerprint. Reveal never stored which photo id a version went up with, and an adoption leaves no trace, so
     every such version goes again (a few hundred records at most, once); the server compares the data bytes, so the
     new `photoId`/`photoFingerprint` make a new revision. On the other devices the newer revision applies and the
-    parked older one is dropped by the inbox retry (`applied()`: a higher local revision).
+    parked older one is dropped by the inbox retry (`applied()`: a higher local revision). Only versions this device
+    is known to have edited go at once: `edit_device` "" (0.5.4+), or null (older than 0.5.4) with a history of steps
+    committed here (more than one step time: a pulled record writes its whole history at one time). The others (null,
+    perhaps another device's edit pulled before 0.5.4) are listed (meta `sync.versionPhotos.checks`, `uuid@rev`) and
+    `SyncStore.checkRepairs` marks them on the next run, after its pull, only if still at that revision and clean: a
+    version another device changed meanwhile is left alone (its new record names the photo itself).
   A first sync with a server (pairing) marks the repair done without running it: everything just went up.
 - **App version on the server:** hoard-server's `PATCH /v1/device` accepts `app`, `manufacturer`, `model` and
   `features` only (Hoard ADR 0013 "Physical devices", ADR 0017 "Client calls" 2; `server/internal/server/
@@ -650,7 +661,10 @@ step, until the old device is revoked on the admin page. Nothing changes on the 
 Decisions (`SyncRepository.pair`):
 
 - **Same server, key still valid: no new device.** Before calling `/v1/pair`, when this installation is paired and
-  the link names no other server, `GET /v1/server` at the link's address with the current key; the same `serverId`
+  the link's `server=` is the account's server id (hoard-server prints it in every pairing code), `GET /v1/server` at
+  the link's address with the current key. The key is never sent to an address the link does not prove to be the
+  paired server: a link without `server=`, or naming another server, pairs normally (`/v1` has no unauthenticated way
+  to ask an address which server it is: `/v1/health` names none and `/v1/server` needs a key); the same `serverId`
   and `deviceId` -> only the address changes (`SyncAccount.url`). Device id, key, physical device (Hoard's grouping),
   cursors and records stay; the pairing token is left unused. This is the owner's case from now on.
 - **Same server, key refused** (`401`: revoked or lost): pair a new device but **keep the library's sync state**
@@ -661,14 +675,20 @@ Decisions (`SyncRepository.pair`):
   the usual model-match question is offered.
 - **First sync after an unpair** (the state is gone on purpose): a pulled version whose local record is rev 0 and dirty
   (marked by `startTracking`) and whose edit equals the server's (recipe, name, position, snapshot ids) is not a
-  change: it is unmarked and the server's record applies (`SyncStore.unmarkSameEdit`) instead of a conflict copy.
+  conflict (`SyncStore.sameEdit`): the local record takes the server's revision and the record is **not applied**
+  (this device's history and author stay; the record was this installation's own, under its previous device). It goes
+  up again on top of that revision unless the server's record also names the photo by its current id and main-file
+  fingerprint: the W5 repair skips first syncs, so a 0.8 record, or one naming the id the photo had before an
+  adoption, would otherwise never be repaired.
 - Another server: as before (everything forgotten).
 
 The production state (both devices re-paired as new devices, old ones live in the Hoard groups): revoke the two old
 Reveal devices on the admin page, then Settings -> Sync -> This device offers Hoard's phone again (claim). The conflict
 copies the re-pair made are resolved with the conflict chooser (FIX/W).
 
-Tests: `RePairTest` (a new address with a valid key keeps the device and its phone, no token used; a revoked key -> a
+Tests: `RePairTest` (a new address with a valid key keeps the device and its phone, no token used; a link without
+`server=` or naming another server never receives the key (a second fake server records `Authorization`); unpair +
+pair after an adoption re-pushes the version naming the current id and fingerprint; a revoked key -> a
 new device that keeps the records, rejoins Hoard's phone, reports itself, and still gets the W5 repair; an old device
 still live -> no forced claim; unpair + pair -> no conflict copy), `SyncApiTest` (a used token is refused once
 unpaired).

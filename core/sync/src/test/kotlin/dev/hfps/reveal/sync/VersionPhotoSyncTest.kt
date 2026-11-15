@@ -8,6 +8,7 @@ import dev.hfps.reveal.pipeline.recipe.RecipeCodec
 import dev.hfps.reveal.sync.api.PushChange
 import dev.hfps.reveal.sync.api.SyncApi
 import dev.hfps.reveal.sync.engine.SyncEngine
+import dev.hfps.reveal.sync.engine.SyncStore
 import dev.hfps.reveal.sync.engine.VersionData
 import kotlin.random.Random
 import kotlinx.coroutines.runBlocking
@@ -297,21 +298,194 @@ class VersionPhotoSyncTest {
     }
 
     @Test
-    fun `a photo deleted from the server is not brought back by a later edit`() {
+    fun `a photo tombstone the server never had is not brought back by a later edit`() {
         val phone = device("Phone")
         val raw = bytes(8)
         val photo = phone.addPhoto("DSC8", raw)
         phone.sync()
         val uuid = phone.photo(photo).uuid
-        // As ServerLibrary.deleteFromServer leaves it: the photo's record a tombstone (pushed).
+        // A tombstone this device keeps for an id the server holds no record of (rev 0, nothing left to push).
         runBlocking {
-            val record = phone.db.syncDao().record("photo", uuid)!!
-            phone.db.syncDao().putRecord(record.copy(deleted = true, dirty = true, modifiedAt = phone.now + 1))
+            server.records.remove("photo" to uuid)
+            phone.db.syncDao().putRecord(
+                SyncRecordEntity("photo", uuid, 0, dirty = false, deleted = true, modifiedAt = 1),
+            )
         }
-        phone.sync()
-        assertThat(server.record("photo", uuid)!!.deleted).isTrue()
         phone.editExposure(photo, 0.1f)
         phone.sync()
+        assertThat(server.record("photo", uuid)).isNull()
         assertThat(phone.record("photo", uuid)!!.deleted).isTrue()
+        assertThat(server.versionRecords()).hasSize(1)
     }
+
+    @Test
+    fun `a preset applied to 300 unculled NAS photos goes up within the server's push limit`() {
+        val phone = device("Phone")
+        val fingerprints = (1..300).map { nas("DSC${1000 + it}.ARW", 1000 + it) }
+        phone.sync()
+        val photos = fingerprints.map { phone.photoByFingerprint(it)!!.id }
+        for (photo in photos) phone.editExposure(photo, 0.3f)
+        // Each version brings its photo: 600 changes, more than one push of 500 (hoard-server refuses the whole push).
+        phone.sync()
+        assertThat(phone.pending()).isEqualTo(0)
+        assertThat(server.versionRecords()).hasSize(300)
+        for (photo in photos) assertThat(server.record("photo", phone.photo(photo).uuid)).isNotNull()
+        assertThat(server.copies()).isEmpty()
+    }
+
+    @Test
+    fun `a record naming a photo's id from before it adopted another device's still finds it`() {
+        val phone = device("Phone")
+        val tablet = device("Tablet")
+        val fingerprint = nas("DSC10.ARW", 10)
+        phone.sync()
+        tablet.sync()
+        val onPhone = phone.photoByFingerprint(fingerprint)!!
+        val onTablet = tablet.photoByFingerprint(fingerprint)!!
+        tablet.rate(onTablet.id, 2)
+        tablet.sync()
+        phone.sync()
+        // The phone's photo took the tablet's id; its old id stays an alias.
+        assertThat(phone.photo(onPhone.id).uuid).isEqualTo(onTablet.uuid)
+        assertThat(runBlocking { phone.db.syncDao().alias(onPhone.uuid) }).isEqualTo(onPhone.id)
+
+        // A version naming the old id, without a fingerprint (what 0.8 pushed), applies on the phone.
+        val versionUuid = "7c2e0000-0000-4000-8000-00000000c143"
+        tablet.api.push(
+            listOf(
+                PushChange(
+                    "version",
+                    versionUuid,
+                    0,
+                    tablet.now,
+                    data = SyncApi.json.encodeToJsonElement(
+                        VersionData.serializer(),
+                        VersionData(photoId = onPhone.uuid, recipe = exposureRecipe(phone, onPhone.id, 0.6f)),
+                    ),
+                ),
+            ),
+        )
+        phone.sync()
+        assertThat(phone.versions(onPhone.id).map { it.uuid }).contains(versionUuid)
+        assertThat(phone.inbox()).isEmpty()
+    }
+
+    @Test
+    fun `a version naming a photo the server never had gives its id to the matching photo`() {
+        val phone = device("Phone")
+        val tablet = device("Tablet")
+        val fingerprint = nas("DSC11.ARW", 11)
+        phone.sync()
+        tablet.sync()
+        val onPhone = phone.photoByFingerprint(fingerprint)!!
+        val onTablet = tablet.photoByFingerprint(fingerprint)!!
+        // A version naming the phone's id and the main file, the phone's photo never pushed (no record anywhere).
+        val versionUuid = "7c2e0000-0000-4000-8000-00000000c144"
+        phone.api.push(
+            listOf(
+                PushChange(
+                    "version",
+                    versionUuid,
+                    0,
+                    phone.now,
+                    data = SyncApi.json.encodeToJsonElement(
+                        VersionData.serializer(),
+                        VersionData(
+                            photoId = onPhone.uuid,
+                            recipe = exposureRecipe(phone, onPhone.id, 0.4f),
+                            photoFingerprint = fingerprint,
+                        ),
+                    ),
+                ),
+            ),
+        )
+        tablet.sync()
+        // The tablet's photo had no record: it takes the id the version names (both devices name it the same).
+        assertThat(tablet.photo(onTablet.id).uuid).isEqualTo(onPhone.uuid)
+        assertThat(runBlocking { tablet.db.syncDao().alias(onTablet.uuid) }).isEqualTo(onTablet.id)
+        assertThat(tablet.exposure(onTablet.id)).isEqualTo(0.4f)
+        assertThat(tablet.inbox()).isEmpty()
+    }
+
+    @Test
+    fun `the repair pushes an edit of unknown author only after a pull showed nobody changed it`() {
+        val phone = device("Phone")
+        val tablet = device("Tablet")
+        val raw = bytes(12)
+        val photo = phone.addPhoto("DSC12", raw)
+        phone.editExposure(photo, 0.5f)
+        phone.sync()
+        val version = phone.versions(photo).single()
+        forgetFingerprint(version.uuid)
+        val rev = server.record("version", version.uuid)!!.rev
+        // As 0.5.3 and older left a version (author unknown, one history step as a pull writes it).
+        phone.db.openHelper.writableDatabase.execSQL(
+            "UPDATE versions SET edit_device = NULL WHERE id = ?",
+            arrayOf<Any>(version.id),
+        )
+        runBlocking { phone.db.metaDao().delete(SyncEngine.KEY_VERSION_PHOTOS) }
+        phone.sync()
+        // Not pushed blindly: listed for a check after the next pull.
+        assertThat(server.record("version", version.uuid)!!.rev).isEqualTo(rev)
+        assertThat(runBlocking { phone.db.metaDao().get(SyncStore.KEY_REPAIR_CHECKS) }).isNotNull()
+        phone.sync()
+        assertThat(server.record("version", version.uuid)!!.rev).isGreaterThan(rev)
+        assertThat(fingerprintOf(version.uuid)).isEqualTo(FileFingerprint.of(raw))
+        assertThat(runBlocking { phone.db.metaDao().get(SyncStore.KEY_REPAIR_CHECKS) }).isNull()
+        assertThat(server.copies()).isEmpty()
+
+        // Another device changes such a version between the repair and the check: it is left alone.
+        val onTablet = tablet.addPhoto("DSC12", raw)
+        tablet.sync()
+        phone.db.openHelper.writableDatabase.execSQL(
+            "UPDATE versions SET edit_device = NULL WHERE id = ?",
+            arrayOf<Any>(version.id),
+        )
+        runBlocking { phone.db.metaDao().delete(SyncEngine.KEY_VERSION_PHOTOS) }
+        phone.sync()
+        tablet.now += 1_000
+        tablet.editExposure(onTablet, 0.9f)
+        tablet.sync()
+        val tabletRev = server.record("version", version.uuid)!!.rev
+        phone.sync()
+        assertThat(server.record("version", version.uuid)!!.rev).isEqualTo(tabletRev)
+        assertThat(phone.exposure(photo)).isEqualTo(0.9f)
+        assertThat(server.copies()).isEmpty()
+    }
+
+    @Test
+    fun `the repair pushes at once an edit of unknown author whose history was made here`() {
+        val phone = device("Phone")
+        val photo = phone.addPhoto("DSC13", bytes(13))
+        phone.editExposure(photo, 0.2f)
+        phone.now += 5_000
+        phone.editExposure(photo, 0.4f)
+        phone.sync()
+        val version = phone.versions(photo).single()
+        forgetFingerprint(version.uuid)
+        val rev = server.record("version", version.uuid)!!.rev
+        phone.db.openHelper.writableDatabase.execSQL(
+            "UPDATE versions SET edit_device = NULL WHERE id = ?",
+            arrayOf<Any>(version.id),
+        )
+        runBlocking { phone.db.metaDao().delete(SyncEngine.KEY_VERSION_PHOTOS) }
+        phone.sync()
+        assertThat(server.record("version", version.uuid)!!.rev).isGreaterThan(rev)
+        assertThat(fingerprintOf(version.uuid)).isNotNull()
+    }
+
+    /** The server's record of [versionUuid] as 0.8 left it: without the photo's main-file fingerprint. */
+    private fun forgetFingerprint(versionUuid: String) {
+        val record = server.record("version", versionUuid)!!
+        record.data = kotlinx.serialization.json.JsonObject(record.data!!.jsonObject - "photoFingerprint")
+    }
+
+    private fun fingerprintOf(versionUuid: String) =
+        server.record("version", versionUuid)!!.data!!.jsonObject["photoFingerprint"]?.jsonPrimitive?.content
+
+    private fun exposureRecipe(device: TestDevice, photoId: Long, ev: Float) = SyncApi.json.parseToJsonElement(
+        RecipeCodec.Default.encode(
+            device.recipe(device.version(photoId)).let { it.copy(light = it.light.copy(exposureEv = ev)) },
+        ),
+    )
 }

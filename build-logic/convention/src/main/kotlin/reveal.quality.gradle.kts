@@ -16,6 +16,7 @@ extensions.configure<DetektExtension> {
         "src/test/kotlin",
         "src/androidTest/kotlin",
         "src/bench/kotlin",
+        "src/synthetic/kotlin",
         "src/main/java",
     )
 }

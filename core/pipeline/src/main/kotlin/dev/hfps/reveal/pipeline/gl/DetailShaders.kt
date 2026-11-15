@@ -23,7 +23,13 @@ uniform sampler2D uSrc;
 uniform ivec2 uOrigin;     // image position of texel (0, 0) of every texture of this region
 uniform ivec2 uImage;      // image size: taps clamp to it
 uniform ivec2 uSize;       // region size: the textures' valid texels
+uniform int uCoarse;       // 1 = the preview's half-resolution Detail: texel p covers proxy pixels 2p .. 2p + 1
 out vec4 outColor;
+
+// The proxy (masks' coverage, Effects grid) pixel of region texel p: the block's first pixel in a coarse run.
+ivec2 fine(ivec2 p) {
+    return p << uCoarse;
+}
 
 ivec2 tap(ivec2 p) {
     return clamp(clamp(uOrigin + p, ivec2(0), uImage - 1) - uOrigin, ivec2(0), uSize - 1);
@@ -99,7 +105,7 @@ float noiseScale(ivec2 p, out bool none) {
     }
     vec4 e0;
     vec4 e1;
-    if (localDetailSum(p, e0, e1) && e1.x != 0.0) {
+    if (localDetailSum(fine(p), e0, e1) && e1.x != 0.0) {
         float total = clamp(maskGlobal[2].y + e1.x, 0.0, 100.0);
         none = total == 0.0;
         return totalNoiseScale(total);
@@ -393,7 +399,7 @@ vec3 finalAt(ivec2 p, vec2 sUp, vec2 dUp) {
     if (local) {
         vec4 e0;
         vec4 e1;
-        if (localDetailSum(p, e0, e1)) {
+        if (localDetailSum(fine(p), e0, e1)) {
             if (e0.w != 0.0) {
                 float total = maskGlobal[2].x + e0.w;
                 sharpenGain = totalSharpenGain(total, maskGlobal[2].z);
@@ -444,7 +450,7 @@ vec3 finalAt(ivec2 p, vec2 sUp, vec2 dUp) {
     vec4 coef = vec4(0.0);
     bool grid = (uFlags & ($FLAG_CLARITY | $FLAG_DEHAZE)) != 0;
     if (grid) {
-        coef = effectsCoef(p + uOrigin, lnr);
+        coef = effectsCoef(fine(p + uOrigin), lnr);
         if ((uFlags & $FLAG_CLARITY) != 0 && (!local || clarityGain != 0.0)) {
             l = clarityWith(l, coef.x * lnr + coef.y, clarityGain);
         }

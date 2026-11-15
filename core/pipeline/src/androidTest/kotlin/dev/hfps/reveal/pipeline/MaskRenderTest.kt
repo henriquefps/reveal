@@ -178,6 +178,56 @@ class MaskRenderTest {
         assertThat(worst).isEqualTo(0f)
     }
 
+    /**
+     * The same at the fit view with Detail at half resolution (docs/adr/0012 "W2/P"): a stroke in progress redraws
+     * the half-resolution copy and every coarse pass in its rectangle only, and the last frame equals a fresh
+     * renderer's frame of the finished stroke bit for bit.
+     */
+    @Test
+    fun halfResolutionPartialUpdatesEqualAFreshRender() = runBlocking {
+        val points = MaskFixtures.scribble(300)
+        val base = MaskFixtures.fiveMasks().copy(
+            detail = Detail(nrLuminance = 15f, nrColour = 20f, sharpenAmount = 30f),
+            effects = Effects(texture = 10f, clarity = 20f, dehaze = 10f),
+        )
+        fun withStroke(n: Int) = base.copy(
+            masks = base.masks + Mask(
+                "stroke",
+                adjustments = LocalAdjustments(exposure = 0.6f, noise = 30f, sharpness = 40f),
+                components = listOf(
+                    MaskComponent.Brush(strokes = listOf(BrushStroke.raw(points.take(n), size = 0.05f))),
+                ),
+            ),
+        )
+        val view = ViewTransform(FIT, image.width / 2f, image.height / 2f)
+        val w = (image.width * FIT).toInt()
+        val h = (image.height * FIT).toInt()
+        val settings = OutputSettings(dither = false)
+        val before = renderer.partialUpdates
+        val counts = (10..points.size step 20).toList()
+        var incremental = ByteArray(0)
+        for (n in counts) {
+            renderer.setRecipe(withStroke(n))
+            incremental = renderer.renderView(view, w, h, settings, halfStage = true)
+        }
+        val partial = renderer.partialUpdates - before
+        val fresh = GpuDevelopRenderer.create()
+        val reference = try {
+            fresh.upload(image)
+            fresh.setMaskSource(MaskFixtures.source, "fixture")
+            fresh.setRecipe(withStroke(counts.last()))
+            fresh.renderView(view, w, h, settings, halfStage = true)
+        } finally {
+            fresh.close()
+        }
+        val worst = reference.indices.maxOf {
+            abs((reference[it].toInt() and 0xFF) - (incremental[it].toInt() and 0xFF))
+        }
+        Log.i(TAG, "half-resolution partial updates: $partial, max |incremental - fresh| $worst levels")
+        assertThat(partial).isAtLeast(counts.size - 2)
+        assertThat(worst).isEqualTo(0)
+    }
+
     @Test
     fun anAiMaskThatArrivesLaterRenders() = runBlocking {
         val ready = AtomicReference<AiMask?>(null)
@@ -285,6 +335,7 @@ class MaskRenderTest {
 
     private companion object {
         const val TAG = "REVEAL_MASKS"
+        const val FIT = 0.4f
 
         /** Float16 storage of the coverage, fp32 transcendental differences. */
         const val COVERAGE_TOLERANCE = 2e-3f

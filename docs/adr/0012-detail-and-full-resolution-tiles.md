@@ -456,6 +456,76 @@ drags re-run the shrinkage and both blurs, three full-resolution passes. Next le
 the fit view (the final pass then reads them per 2 x 2 block: changes the sharpening of the fit view only, needs a
 display-only parity argument), and a single 2D blur pass for small radii.
 
+## W2/P: Detail at half resolution at the fit view
+
+M2/P left the fit view's luminance drags at 5.4-7.2 ms pipelined and the serialised latency of the luminance, colour
+and blur drags at 10-28 ms: the shrinkage, both blurs and the final pass's 2 x 2 blocks still ran over every proxy
+pixel although the view shows a quarter of them. The owner approved running **all** of Detail and the local Effects at
+half resolution whenever the view reads level 1 or coarser (the same condition as `halfViewOnly`: axis-aligned, 50 %
+or less, no tiles, loupe, sharpening mask or crop plane).
+
+### How
+
+- The develop output (OkLab, RGBA16F) is reduced to its 2 x 2 means (`DetailPasses.downsample`, `DOWN_FRAG`; the last
+  row / column repeated at an odd edge, as `FLAG_HALF` did): the **coarse copy**, `(W + 1) / 2 x (H + 1) / 2`.
+- Detail and Effects are resolved at **twice the proxy's pixel scale** (`UploadedImage.coarseParams` =
+  `DevelopParams.withLocal(input, recipe, 2 * pixelScale)`), exactly as the proxy itself approximates 100 % (section
+  "Scale"): level steps and blur radii halve, levels finer than 0.75 rendered px are skipped, the masking gradient is
+  per full-resolution pixel, the attenuations follow. Every pass then runs on the coarse copy (`detailCoarse`, a
+  sibling `DetailPasses` sharing the compiled programs, with its own caches and targets), and the final pass writes
+  the working texture's **level 1** directly, one fragment per texel (no `FLAG_HALF` blocks).
+- What stays at the proxy's size is read at the block's first pixel (`uCoarse`, GLSL `fine(p) = p << uCoarse`): the
+  masks' coverage (and so every per-pixel threshold and total) and the Effects grid (built once from the full develop
+  output, shared with the full-resolution path, so dehaze's atmospheric light is the same at every zoom).
+- Partial updates (a brush stroke in progress, a mask's slider) redraw the coarse copy and every coarse pass in the
+  changed rectangle only (`dirty / 2`, grown by the coarse reach); the other resolution's caches are dropped
+  (`invalidateCoarse` / `detail.invalidate()`), and a partial update needs the same mode as the last render
+  (`developedMode`: full, M2/P half-write, coarse).
+- 100 %, zoom tiles, export, the CPU reference and every parity test are unchanged: the coarse path exists only in the
+  preview's stage 1 at the fit view. Above 50 % the next frame renders level 0 with the full-resolution passes (as
+  M2/P's `ensureStageLevel0`), so crossing 50 % changes the fine detail's rendering, never the export.
+
+M2/P had rejected "a half-resolution Detail render during a drag" for its pop when the drag ends. That pop came from
+switching resolutions between the drag and the settled frame. Here the fit view is always coarse, while dragging and
+at rest, so nothing switches while the photo stays at the fit view.
+
+### What it shows (tablet, Adreno 740)
+
+`PreviewPassesTest#theHalfResolutionDetailShowsWhatTheFullRenderShows`: the noisy card at 25 % with three Detail and
+Effects recipes, coarse against the full render's mips: mean 0.68-0.90 levels, p99 4, max 7-10 (limits: mean 1.5, max
+16). M2/P's half-resolution write was within 1 level (kept as
+`theHalfResolutionWriteGivesTheFullRendersCoarserLevels`, with `coarseDetail = false`). The difference is noise left
+or removed at a scale the view cannot resolve, and sharpening of sub-display-pixel detail. A frame after a drag
+equals a fresh coarse render bit for bit (`aHalfResolutionFrameAfterADragEqualsAFreshOne`), and so does a brush
+stroke's last partial update (`MaskRenderTest#halfResolutionPartialUpdatesEqualAFreshRender`, 14 partial updates).
+
+### Measured (`PipelineBenchmark#everyToolOnSliderDrags`, every tool on, 2400 x 1600 proxy fitted to 1080 x 720)
+
+Same APK, same session, `-e coarse false` (M2/P) then the default; ms:
+
+| Drag | M2/P pipelined | GPU p50 / p95 | latency p50 | W2/P pipelined | GPU p50 / p95 | latency p50 |
+| --- | --- | --- | --- | --- | --- | --- |
+| luminance | 6.15 | 5.61 / 7.18 | 27.0 | 2.30 | 1.45 / 4.33 | 14.0 |
+| luminance detail | 6.19 | 5.62 / 6.78 | 24.8 | 2.47 | 1.42 / 4.20 | 12.3 |
+| luminance contrast | 6.21 | 5.66 / 9.47 | 20.4 | 2.41 | 1.29 / 4.21 | 11.5 |
+| colour | 3.80 | 3.33 / 5.70 | 16.1 | 1.80 | 1.18 / 3.57 | 7.9 |
+| colour detail | 3.83 | 3.33 / 5.65 | 15.5 | 1.70 | 1.18 / 3.57 | 7.8 |
+| colour smoothness | 4.07 | 3.76 / 5.59 | 16.9 | 1.90 | 1.19 / 3.57 | 8.3 |
+| sharpening amount | 3.21 | 2.71 / 5.11 | 12.6 | 1.80 | 1.18 / 3.48 | 7.5 |
+| sharpening radius | 4.67 | 4.52 / 5.54 | 18.9 | 2.00 | 1.19 / 3.58 | 7.6 |
+| sharpening detail | 3.17 | 2.70 / 5.45 | 12.1 | 1.69 | 1.18 / 3.57 | 7.4 |
+| sharpening masking | 3.15 | 2.70 / 5.18 | 12.4 | 1.77 | 1.18 / 3.57 | 7.4 |
+| texture | 3.15 | 2.70 / 5.11 | 12.3 | 1.90 | 1.18 / 3.57 | 7.3 |
+| clarity | 3.22 | 2.70 / 5.10 | 12.1 | 1.85 | 1.18 / 3.57 | 7.4 |
+| dehaze | 3.22 | 2.70 / 5.42 | 11.6 | 1.63 | 1.11 / 3.56 | 7.2 |
+| vignette | 1.50 | 1.03 / 2.12 | 4.5 | 1.49 | 1.03 / 2.11 | 4.5 |
+| grain | 1.47 | 1.04 / 2.11 | 4.5 | 1.39 | 1.03 / 2.11 | 4.4 |
+
+Detail's share of a drag frame fell from 2-5 ms of GPU to about 0.2-0.4 (the GPU per frame is now the output pass
+and the post-crop finish, as for the vignette): the 3-4 ms the brief targeted. The serialised latency halves (the
+remaining 7-14 ms is mostly the GPU waking up between `glFinish`ed frames, M2/P "Measuring on a phone"). The S24
+Ultra's Adreno 750 is faster than the tablet's 740: these are upper bounds for the phone.
+
 ## Pixel alignment at 1:1 (M2/T)
 
 `EditorZoomTest` failed on the owner's Galaxy Tab S9 Ultra (Adreno 740) with max 110 levels while it passed on the
@@ -491,6 +561,7 @@ pass on the tablet): its output pass is 1:1 on pixel centres by construction.
   (the finest wavelet level) would also cover in-camera NR differences and unknown cameras.
 - Tiles are made from 50 % up; between the proxy's scale and 50 % a 61 MP photo's proxy is magnified up to 2x.
 - A Detail drag cost 23 ms per frame on the Adreno 750 (above); M2/C and M2/P (sections above) brought every Detail
-  and Effects drag to the display rate; the serialised latency of the luminance and blur drags is still 10-14 ms.
+  and Effects drag to the display rate; W2/P runs them at half resolution at the fit view (1.4-2.5 ms pipelined on
+  the Tab S9); between 50 % and 100 % the full-resolution passes still run (the M2/P numbers apply there).
 - `GpuParityTest.outputMatchesCpuReferenceIn8Bit` fails on the Linux host GPU (NVIDIA via the emulator's translator)
   for one Light-only regression recipe on the sRGB chart (5 levels, also on `main`); it passes on the phone.

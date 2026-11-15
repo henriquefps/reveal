@@ -151,6 +151,9 @@ fill 174 ms. The GPU program cache's effect on a cold load and the hole's GPU/CP
   refusal, an `OutOfMemoryError` or a failed load or run frees what was loaded and throws
   `InpaintUnavailableException` (`lowMemory` says which): Remove then falls back to the patch fill with a message.
   PSS before / held / after release: `InpaintDeviceTest#memoryIsReturnedAfterRelease` on the phone.
+  **Owner's decision (W2/P, 1.0.0): memory first.** The model is not kept loaded between fills to save the reload
+  (the app's `DataModule` builds the service with the default `idleMs` = 0; `InpaintTest` checks that the model is
+  freed after each fill). `idleMs` stays only for the device tests.
 - **Cache** (`FillDiskCache`, `cache/inpaint`): key = model `<id>@<version>` + the crop's size and exact content
   (SHA-256 of every rgb and hole value); since ADR 0023's crop is defined on the original (the same for preview, zoom
   and export) the key is the same everywhere. The hole's pixels only, float16-rounded, deflated, files named by the

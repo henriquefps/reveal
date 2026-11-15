@@ -1,5 +1,6 @@
 package dev.hfps.reveal.feature.library
 
+import androidx.activity.compose.ReportDrawnWhen
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -629,6 +630,8 @@ private fun GridPane(
 ) {
     // The narrowed-to folder's banner; on the unfiltered home, the folder being indexed.
     val banner = state.currentSource ?: state.sources.firstOrNull { it.indexing != null }.takeIf { !state.recent }
+    // The start is drawn once the grid's first rows (or the empty state) show: Macrobenchmark's time to full display.
+    ReportDrawnWhen { state.photosLoaded }
     Column(Modifier.fillMaxSize()) {
         banner?.let { SourceBanner(it) }
         if (!state.recent) FilterBar(state, actions)

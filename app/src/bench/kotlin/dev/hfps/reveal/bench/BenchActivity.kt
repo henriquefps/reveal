@@ -16,6 +16,8 @@ import dagger.hilt.android.AndroidEntryPoint
 import dev.hfps.image.ImageInput
 import dev.hfps.image.proxy.ProxyBuilder
 import dev.hfps.reveal.MainActivity
+import dev.hfps.reveal.data.handoff.GalleryAccess
+import dev.hfps.reveal.data.library.LibraryRepository
 import dev.hfps.reveal.data.preset.PresetRepository
 import dev.hfps.reveal.feature.editor.EditorMetrics
 import dev.hfps.reveal.feature.editor.tools.ToolId
@@ -38,10 +40,16 @@ import dev.hfps.reveal.pipeline.preset.PresetPatch
 import dev.hfps.reveal.pipeline.preset.PresetSection
 import dev.hfps.reveal.pipeline.recipe.BaseLook
 import dev.hfps.reveal.pipeline.recipe.Colour
+import dev.hfps.reveal.pipeline.recipe.Detail
 import dev.hfps.reveal.pipeline.recipe.Effects
+import dev.hfps.reveal.pipeline.recipe.Heal
 import dev.hfps.reveal.pipeline.recipe.Light
+import dev.hfps.reveal.pipeline.recipe.LocalAdjustments
+import dev.hfps.reveal.pipeline.recipe.Mask
+import dev.hfps.reveal.pipeline.recipe.MaskComponent
 import dev.hfps.reveal.pipeline.recipe.Profile
 import dev.hfps.reveal.pipeline.recipe.Recipe
+import dev.hfps.reveal.pipeline.synthetic.HealScenes
 import java.io.File
 import java.util.Locale
 import javax.inject.Inject
@@ -67,6 +75,12 @@ import kotlinx.coroutines.withContext
  * - `--es mode masks`: every AI mask kind (docs/adr/0021 "M4/C") through the app's `MaskService` (Hilt, release
  *   models, R8 rules) on every sample's recipe-independent 576 px render, `--es backend cpu` for LiteRT's CPU only
  *   (emulators); per kind the model, backend, model and refinement ms and coverage. No cache: every run computes.
+ * - `--es mode library`: the 10,000-file library of `LibraryMeasurementsTest` ([BenchLibrary]) as the only source
+ *   (kept between runs); logs `library: ready`. The `:benchmark` module's library scroll and cold start use it.
+ * - `--es mode journey`: what the Baseline Profile covers beyond start and the library (docs/adr/0001 "Baseline
+ *   Profile"): the first sample opened in the editor, the Presets, Masks, Detail and Heal tools, a mask, a heal spot
+ *   and a Remove stroke (Patch), each rendered; logs the open's timings and `journey: done`.
+ * - `--es mode open`: only the open of the journey (the editor open benchmark); logs its timings and `open: done`.
  * - `--es mode init`: creates the samples folder (adb pushes into it afterwards).
  * - `--es mode cleanup`: removes the bench presets and the photo it put in Downloads.
  */
@@ -78,6 +92,13 @@ class BenchActivity : ComponentActivity() {
     @Inject
     lateinit var maskService: MaskService
 
+    @Inject
+    lateinit var library: LibraryRepository
+
+    @Inject
+    lateinit var galleryAccess: GalleryAccess
+
+    @Suppress("ReturnCount", "CyclomaticComplexMethod") // One branch per adb-driven mode.
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val app = applicationContext
@@ -109,6 +130,30 @@ class BenchActivity : ComponentActivity() {
             }
 
             "cleanup" -> scope.launch { cleanup(app) }
+
+            // In the foreground until indexed, like faces: Samsung freezes a cached process (the index would stop).
+            "library" -> {
+                window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                setContentView(View(this).apply { setBackgroundColor(Color.BLACK) })
+                // The gallery access offer (a sheet over the grid) never shows in measurements.
+                galleryAccess.setAsked()
+                scope.launch {
+                    withContext(Dispatchers.Default) {
+                        runCatching { BenchLibrary.prepare(app, library, ::log) }
+                            .onFailure { log("library: failed $it") }
+                    }
+                    finish()
+                }
+                return
+            }
+
+            "journey" -> scope.launch { runCatching { journey(app) }.onFailure { log("journey: failed $it") } }
+
+            "open" -> scope.launch {
+                runCatching {
+                    if (openFirstSample(app, "open")) log("open: done")
+                }.onFailure { log("open: failed $it") }
+            }
 
             // The app creates its samples folder itself: a folder adb creates under Android/data is not the app's.
             "init" -> log("init: ${sampleDir(app).apply { mkdirs() }.absolutePath}")
@@ -251,6 +296,70 @@ class BenchActivity : ComponentActivity() {
         delay(SETTLE_MS)
         val g = checkNotNull(EditorMetrics.presetGrid)
         log("presets: grid ${g[0]} ${g[1]} ${g[2]} ${g[3]}")
+    }
+
+    /** Opens the first sample in the editor as from another app (a fresh process: the benchmark kills the app). */
+    private suspend fun openFirstSample(context: Context, mode: String = "journey"): Boolean {
+        val file = samples(context).firstOrNull { it.name.endsWith(".arw", ignoreCase = true) }
+            ?: samples(context).firstOrNull()
+        if (file == null) {
+            log("$mode: failed, push a sample into ${sampleDir(context)}")
+            return false
+        }
+        val uri = withContext(Dispatchers.IO) { insert(context, file) }
+        EditorMetrics.renderer = null
+        context.startActivity(
+            Intent(Intent.ACTION_VIEW)
+                .setDataAndType(uri, if (file.name.endsWith(".arw", true)) "image/x-sony-arw" else "image/jpeg")
+                .setClass(context, MainActivity::class.java)
+                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK),
+        )
+        waitFor { EditorMetrics.isDeveloped || EditorMetrics.error != null }
+        log("$mode: open ${EditorMetrics.summary()}")
+        return EditorMetrics.error == null
+    }
+
+    @Suppress("MagicNumber") // Positions of the journey's mask, spot and stroke on the photo.
+    private suspend fun journey(context: Context) {
+        if (!openFirstSample(context)) return
+        val (w, h) = EditorMetrics.proxySize ?: (1 to 1)
+        delay(SETTLE_MS)
+        val renderer = checkNotNull(EditorMetrics.renderer)
+        val base = EditorMetrics.recipes?.invoke()?.first ?: Recipe()
+        suspend fun show(tool: ToolId?, recipe: Recipe?) {
+            withContext(Dispatchers.Main) {
+                tool?.let { EditorMetrics.selectTool?.invoke(it) }
+                recipe?.let { EditorMetrics.applyRecipe?.invoke(it) }
+            }
+            delay(SETTLE_MS)
+            // Wait for every fill and draw what the window shows (the heal worker, the Remove fill, the masks).
+            recipe?.let { renderer.renderLinear(it) }
+        }
+        show(ToolId.PRESETS, null)
+        show(ToolId.DETAIL, base.copy(detail = Detail(nrLuminance = 30f, sharpenAmount = 50f)))
+        val masked = base.copy(
+            masks = listOf(
+                Mask(
+                    "bench",
+                    adjustments = LocalAdjustments(exposure = 0.5f),
+                    components = listOf(MaskComponent.Radial(cx = 0.5f, cy = 0.5f, rx = 0.25f, ry = 0.2f)),
+                ),
+            ),
+        )
+        show(ToolId.MASKS, masked)
+        val spot = HealScenes.spot("bench-heal", Heal.KIND_HEAL, w, h, w * 0.3f, h * 0.4f, w * 0.01f, ox = w * 0.05f)
+        val stroke = HealScenes.stroke(
+            "bench-remove",
+            Heal.KIND_REMOVE,
+            w,
+            h,
+            listOf(w * 0.6f to h * 0.5f, w * 0.65f to h * 0.55f, w * 0.7f to h * 0.5f),
+            w * 0.02f,
+        ).copy(method = Heal.METHOD_PATCH)
+        show(ToolId.HEAL, masked.copy(heals = listOf(spot)))
+        show(null, masked.copy(heals = listOf(spot, stroke)))
+        show(ToolId.PRESETS, null)
+        log("journey: done")
     }
 
     private suspend fun cleanup(context: Context) = withContext(Dispatchers.IO) {

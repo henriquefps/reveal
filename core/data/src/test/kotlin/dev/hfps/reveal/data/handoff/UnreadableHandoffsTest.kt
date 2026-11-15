@@ -224,6 +224,34 @@ class UnreadableHandoffsTest {
     }
 
     @Test
+    fun `small grid cells get a reduced thumbnail, kept apart from the full one`() = runTest {
+        val (uri, _) = galleryFile("20261112_101850.jpg")
+        val version = receive(uri)
+        // Its thumbnail comes from the local display image (a real 64 px JPEG; the gallery file is headers only).
+        tree.refused += uri.toString()
+        val thumbnails = ThumbnailRepository(
+            db = db,
+            trees = { tree },
+            edits = EditRepository(db) { now },
+            edited = null,
+            dir = temp.newFolder("thumbs"),
+            clock = { now },
+            previews = previews,
+        )
+        val photo = rows().single()
+
+        // W2/P: a ~215 px cell (the tablet's grid) decodes the cached thumbnail at half its size.
+        val small = checkNotNull(thumbnails.thumbnail(photo.id, version, null, edge = 215))
+        val full = checkNotNull(thumbnails.thumbnail(photo.id, version, null))
+
+        assertThat(small.width).isEqualTo(full.width / 2)
+        assertThat(thumbnails.inMemory(photo.id, null, edge = 215)).isSameInstanceAs(small)
+        assertThat(thumbnails.inMemory(photo.id, null)).isSameInstanceAs(full)
+        // A phone's 480 px cell keeps the full thumbnail.
+        assertThat(thumbnails.thumbnail(photo.id, version, null, edge = 480)).isSameInstanceAs(full)
+    }
+
+    @Test
     fun `forgotten hand-offs lose their previews`() = runTest {
         val (uri, file) = galleryFile("20261112_101900.jpg")
         receive(uri)

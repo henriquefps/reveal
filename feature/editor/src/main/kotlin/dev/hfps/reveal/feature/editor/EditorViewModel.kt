@@ -330,6 +330,8 @@ class EditorViewModel @Inject constructor(
         }
         maskSession = session
         thumbnails?.useMasks(session)
+        // Prepared beside the upload: a renderer already attached gets the session here (else attach() gives it).
+        renderer()?.setMaskSource(session, MASK_PHOTO_KEY)
         viewModelScope.launch {
             session.states.collect { states ->
                 _state.update { it.copy(masks = it.masks.copy(ai = states)) }
@@ -428,19 +430,27 @@ class EditorViewModel @Inject constructor(
                 val asShot = WhiteBalanceModel.asShot(input).let {
                     AsShot(it.temperatureK.roundToInt().toFloat(), it.tint.roundToInt().toFloat())
                 }
-                val autoWb = prepareAuto(input)
-                thumbnails = withContext(Dispatchers.Default) {
+                val scale = maxOf(photo.fullWidth, photo.fullHeight).toFloat() / maxOf(input.width, input.height)
+                // The upload starts as soon as the proxy exists; Auto's analysis, the presets' small input, the optics
+                // and the masks' input are prepared beside it (W2/P: in sequence they delayed the first developed
+                // frame by about 0.3-0.5 s on a 24 MP RAW).
+                val upload = async {
+                    val renderer = gpu.await()
+                    // The renderer starts on the stored recipe (attach() pushes it).
+                    storedHistory.await()
+                    renderer.upload(input, scale)
+                    renderer
+                }
+                val auto = async { prepareAuto(input) }
+                val presetInput = async(Dispatchers.Default) {
                     val small = PreviewInput.of(input)
                     val full = maxOf(photo.fullWidth, photo.fullHeight).toFloat() / maxOf(small.width, small.height)
                     PresetThumbnails(small, full.coerceAtLeast(1f))
                 }
                 prepareOptics(input)
-                prepareMasks(input, uri, photo.name)
-                val ready = gpu.await()
-                // The renderer starts on the stored recipe (attach() pushes it).
-                storedHistory.await()
-                val scale = maxOf(photo.fullWidth, photo.fullHeight).toFloat() / maxOf(input.width, input.height)
-                ready.upload(input, scale)
+                thumbnails = presetInput.await()
+                val masks = launch { prepareMasks(input, uri, photo.name) }
+                val ready = upload.await()
                 EditorMetrics.uploaded()
                 EditorMetrics.renderer = ready
                 EditorMetrics.setControl = { id, value ->
@@ -461,14 +471,18 @@ class EditorViewModel @Inject constructor(
                         edit = it.edit.copy(
                             isRaw = input.isRaw,
                             asShot = asShot,
-                            autoWb = autoWb,
-                            autoReady = true,
                             lens = input.lens,
                         ),
                     )
                 }
                 attach(ready)
                 applyLensDefault(input)
+                // Auto (and the chip's Auto WB) once its analysis is in, usually before the first developed frame.
+                launch {
+                    val autoWb = auto.await()
+                    _state.update { it.copy(edit = it.edit.copy(autoWb = autoWb, autoReady = true)) }
+                }
+                masks.join()
                 val full = photo.fullWidth to photo.fullHeight
                 // After the full resolution, so the two never need the heap at once.
                 if (scale > 1f) {

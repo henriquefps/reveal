@@ -1,5 +1,6 @@
 package dev.hfps.reveal.library
 
+import android.app.UiAutomation
 import android.os.Handler
 import android.os.HandlerThread
 import android.os.ParcelFileDescriptor
@@ -21,7 +22,7 @@ import dev.hfps.reveal.feature.library.LibraryMetrics
 import java.util.Collections
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import org.junit.After
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -40,7 +41,7 @@ class LibraryMeasurementsTest {
     @After
     fun tearDown() = folder.delete()
 
-    @Suppress("LongMethod") // One measurement script, read top to bottom.
+    @Suppress("LongMethod", "CyclomaticComplexMethod") // One measurement script, read top to bottom.
     @Test
     fun tenThousandFiles() {
         val previews = (0 until PREVIEW_VARIANTS).map {
@@ -63,9 +64,14 @@ class LibraryMeasurementsTest {
         )
         val again = runBlocking {
             folder.library.index(sourceId).join()
-            withTimeout(60_000) { folder.library.indexReports.first { it[sourceId] !== first } }.getValue(sourceId)
+            withTimeoutOrNull(60_000) { folder.library.indexReports.first { it[sourceId] !== first } }?.get(sourceId)
         }
-        log("unchanged re-index: list ${again.listMs} ms, save ${again.saveMs} ms, total ${again.totalMs} ms")
+        // A measurement, not an assertion: a re-index the repository coalesced with the fingerprint pass reports late.
+        if (again == null) {
+            log("unchanged re-index: no new report within 60 s")
+        } else {
+            log("unchanged re-index: list ${again.listMs} ms, save ${again.saveMs} ms, total ${again.totalMs} ms")
+        }
 
         measureFilters(sourceId)
 
@@ -82,10 +88,11 @@ class LibraryMeasurementsTest {
             log("first rows ${LibraryMetrics.firstRowsMs} ms, first grid frame ${LibraryMetrics.firstGridFrameMs} ms")
             Thread.sleep(THUMBS_SETTLE_MS)
             // The grid as it looks once the first thumbnails are in (synthetic content), for the PR.
-            InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot()?.let { shot ->
-                java.io.File(InstrumentationRegistry.getInstrumentation().targetContext.filesDir, "library-10k.png")
-                    .outputStream().use { shot.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
-            }
+            InstrumentationRegistry.getInstrumentation()
+                .getUiAutomation(UiAutomation.FLAG_DONT_USE_ACCESSIBILITY).takeScreenshot()?.let { shot ->
+                    java.io.File(InstrumentationRegistry.getInstrumentation().targetContext.filesDir, "library-10k.png")
+                        .outputStream().use { shot.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
+                }
             val frames = Collections.synchronizedList(mutableListOf<Long>())
             val phases = Collections.synchronizedList(mutableListOf<LongArray>())
             val missed = java.util.concurrent.atomic.AtomicInteger()
@@ -116,7 +123,10 @@ class LibraryMeasurementsTest {
             val x = width / 2
             val low = (height * 0.75f).toInt()
             val high = (height * 0.3f).toInt()
-            val automation = InstrumentationRegistry.getInstrumentation().uiAutomation
+            // Without the accessibility connection: a connected UiAutomation makes Compose diff its semantics tree
+            // every frame (CLAUDE.md, "Frame measurements"), which a user without accessibility services never pays.
+            val automation = InstrumentationRegistry.getInstrumentation()
+                .getUiAutomation(UiAutomation.FLAG_DONT_USE_ACCESSIBILITY)
             repeat(FLINGS) { i ->
                 val (from, to) = if (i < FLINGS - 3) low to high else high to low
                 val command = automation.executeShellCommand("input touchscreen swipe $x $from $x $to $SWIPE_MS")

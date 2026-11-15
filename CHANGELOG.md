@@ -58,9 +58,16 @@ All notable changes to Reveal are documented here. The format follows
   device, its place next to Hoard on the same phone and everything it had synced. When the old device was removed
   from the server, the new one keeps the sync state and rejoins Hoard's phone. A re-pair or a pairing after unpairing
   no longer turns every edited photo into a conflict copy. Reveal sends its device key only to the server it is
-  paired with (a pairing code naming no server, or another one, never receives it), and on its own only to an https,
-  Tailscale or home-network address: elsewhere it first asks "Same server at <host>?" ("New device" pairs again
-  without sending the key). Settings → Sync has "Pair with a new code" for a server that moved.
+  paired with (a pairing code naming no server, or another one, never receives it), and on its own only when the host
+  stays the same (a new port, or https): any other host first asks "Same server at <host>?", with a warning when the
+  address is neither https nor private ("New device" pairs again without sending the key). Settings → Sync has "Pair
+  with a new code" for a server that moved.
+- "Pair with a new code" no longer unpairs silently when the code is for another server: a code naming another server
+  is refused with "Switch server" (through the usual Unpair confirmation), and a code naming none that turns out to be
+  another server asks "This code is for another server" (Cancel keeps everything; the dialog says the other server
+  already registered this device, to remove there).
+- An edit held back while its photo's file was being read now goes up on its own when the server refuses that photo,
+  instead of waiting forever.
 - An edit of a photo whose file Reveal had not finished reading, already on the server from an earlier version, no
   longer becomes a conflict copy when it goes up again; and it goes up as soon as another device's edit names that
   photo.

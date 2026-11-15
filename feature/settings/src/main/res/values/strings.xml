@@ -37,6 +37,13 @@
     <string name="sync_key_reuse_body">Reveal will reuse this device\'s key, so it stays the same device. If you don\'t recognise this address, choose New device: Reveal pairs again without sending the key.</string>
     <string name="sync_key_reuse_yes">Same server</string>
     <string name="sync_key_reuse_no">New device</string>
+    <string name="sync_key_reuse_cleartext">This address is neither https nor on a private network: the key would travel unencrypted.</string>
+    <string name="sync_pair_paired_elsewhere">This code is for another server. To use it, Reveal must unpair from this one first.</string>
+    <string name="sync_switch_server">Switch server</string>
+    <string name="sync_switch_title">This code is for another server</string>
+    <string name="sync_switch_body">Switching to %1$s forgets this device\'s sync state with %2$s: its key, and the photos only that server has. Your edits stay on this device.</string>
+    <string name="sync_switch_registered">%2$s already registered this device as “%1$s”. If you cancel, remove it from that server\'s Devices page.</string>
+    <string name="sync_switch_yes">Switch</string>
     <string name="sync_pair_invalid_link">This is not a Reveal pairing link. Copy it again from the server\'s setup page.</string>
     <string name="sync_pair_invalid_token">The pairing code was already used or has expired (codes last 10 minutes). Show a new one on the server.</string>
     <string name="sync_pair_other_server">The link answers as a different server than the one in the code. Check the server address.</string>

@@ -24,12 +24,14 @@ import dev.hfps.reveal.sync.engine.SyncEngine
 import dev.hfps.reveal.sync.engine.VersionData
 import dev.hfps.reveal.sync.files.ServerFiles
 import java.io.File
+import java.net.URI
 import java.net.URLEncoder
 import kotlin.random.Random
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.After
+import org.junit.Assert.assertThrows
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -124,7 +126,8 @@ class RePairTest {
         val known = server.devices.size
         val token = link(otherUrl)
 
-        val after = runBlocking { app.repository.pair(token) }
+        // Another host: the user confirmed it is the same server ("Same server at <host>?").
+        val after = runBlocking { app.repository.pair(token, SyncRepository.KeyReuse.CONFIRMED) }
 
         assertThat(after.deviceId).isEqualTo(before.deviceId)
         assertThat(after.url).isEqualTo(otherUrl)
@@ -148,7 +151,7 @@ class RePairTest {
         val rev = server.record("version", versionUuid)!!.rev
         server.revoke(old)
 
-        val after = runBlocking { app.repository.pair(link(otherUrl)) }
+        val after = runBlocking { app.repository.pair(link(otherUrl), SyncRepository.KeyReuse.CONFIRMED) }
 
         assertThat(after.deviceId).isNotEqualTo(old)
         // The installation's phone (with Hoard) is offered again once the old Reveal is gone from it: joined at once.
@@ -181,7 +184,7 @@ class RePairTest {
         // The key no longer works (e.g. wiped from the Keystore) but the server still lists the old device.
         server.devices.entries.removeIf { it.value == old }
 
-        val after = runBlocking { app.repository.pair(link(otherUrl)) }
+        val after = runBlocking { app.repository.pair(link(otherUrl), SyncRepository.KeyReuse.CONFIRMED) }
 
         assertThat(after.deviceId).isNotEqualTo(old)
         // hoard-server offers no phone that already has a live Reveal (same_app): the new device stays on its own.
@@ -206,27 +209,81 @@ class RePairTest {
     }
 
     @Test
-    fun `the key never goes to an address the link does not prove to be the paired server`() {
+    fun `while paired a code naming another server is refused before anything is sent`() {
         val app = install()
         pairedWithAnEdit(app, hoardOnPixel())
+        val before = app.repository.account.value!!
+        val rows = records(app.device)
         val other = FakeSyncServer("858e1b9d-0000-4000-8000-0000000000ff")
         try {
             val otherUrl = other.start()
-            // An older code without `server=`, then one naming another server: both pair normally with that server.
-            runBlocking { app.repository.pair(link(otherUrl, other.pairingToken(), serverId = null)) }
-            assertThat(other.authorizations).isEmpty()
+            val code = link(otherUrl, other.pairingToken(), serverId = other.serverId)
+            val error = assertThrows(PairException::class.java) { runBlocking { app.repository.pair(code) } }
+            assertThat(error.problem).isEqualTo(PairProblem.PAIRED_ELSEWHERE)
+            // Nothing reached the other server (its token unused), nothing changed here.
+            assertThat(other.tokens).contains(code.token)
+            assertThat(other.devices).isEmpty()
+            assertThat(app.repository.account.value).isEqualTo(before)
+            assertThat(records(app.device)).isEqualTo(rows)
+
+            // "Switch server": Unpair, then the same code pairs with the other server.
             runBlocking { app.repository.unpair() }
-            runBlocking { app.repository.pair(link(url)) }
-            runBlocking { app.repository.pair(link(otherUrl, other.pairingToken(), serverId = other.serverId)) }
-            assertThat(other.authorizations).isEmpty()
+            runBlocking { app.repository.pair(code) }
             assertThat(app.repository.account.value!!.serverId).isEqualTo(other.serverId)
+            assertThat(other.authorizations.none { key -> server.devices.keys.any { it in key } }).isTrue()
         } finally {
             other.shutdown()
         }
     }
 
     @Test
-    fun `a public http address asks first and a declined key reuse pairs a new device keeping the sync state`() {
+    fun `while paired a code without server= that turns out to be another server asks before forgetting anything`() {
+        val app = install()
+        val photo = pairedWithAnEdit(app, hoardOnPixel())
+        val before = app.repository.account.value!!
+        val rows = records(app.device)
+        val other = FakeSyncServer("858e1b9d-0000-4000-8000-0000000000ff")
+        try {
+            val otherUrl = other.start()
+            val switch = assertThrows(ServerSwitchException::class.java) {
+                runBlocking { app.repository.pair(link(otherUrl, other.pairingToken(), serverId = null)) }
+            }
+            // The other server registered a device (said in the dialog); the key never went there; nothing changed.
+            assertThat(switch.deviceName).isEqualTo("Pixel 8")
+            assertThat(other.devices).hasSize(1)
+            assertThat(other.authorizations).isEmpty()
+            assertThat(app.repository.account.value).isEqualTo(before)
+            assertThat(records(app.device)).isEqualTo(rows)
+
+            // Cancel: the paired server stays and keeps syncing; the waiting pairing is gone.
+            app.repository.cancelSwitch()
+            assertThat(runBlocking { app.repository.switchServer() }).isNull()
+            assertThat(app.repository.account.value).isEqualTo(before)
+            app.device.edit(app.device.version(photo)) {
+                it.copy(light = it.light.copy(exposureEv = 0.9f))
+            }
+            runBlocking { app.repository.syncMetadata() }
+            assertThat(app.device.pending()).isEqualTo(0)
+            assertThat(records(app.device)).isNotEmpty()
+
+            // Switch: Unpair (the sync state forgotten), then the pairing just made with the other server.
+            assertThrows(ServerSwitchException::class.java) {
+                runBlocking { app.repository.pair(link(otherUrl, other.pairingToken(), serverId = null)) }
+            }
+            val after = runBlocking { app.repository.switchServer() }!!
+            assertThat(after.serverId).isEqualTo(other.serverId)
+            assertThat(app.repository.account.value).isEqualTo(after)
+            assertThat(records(app.device)).isEmpty()
+            runBlocking { app.repository.syncMetadata() }
+            assertThat(app.device.pending()).isEqualTo(0)
+            assertThat(other.authorizations).isNotEmpty()
+        } finally {
+            other.shutdown()
+        }
+    }
+
+    @Test
+    fun `another host asks first and a declined key reuse pairs a new device keeping the sync state`() {
         val app = install()
         val photo = pairedWithAnEdit(app, hoardOnPixel())
         val old = app.repository.account.value!!.deviceId
@@ -234,21 +291,34 @@ class RePairTest {
         val rev = server.record("version", versionUuid)!!.rev
         val rows = records(app.device)
 
-        // The same server named at a public http address: the question names its host; at https, Tailscale, a LAN, the
-        // address already in use or for another server there is none.
-        assertThat(runBlocking { app.repository.keyReuseHost(link("http://203.0.113.7:3471")) })
-            .isEqualTo("203.0.113.7")
-        for (quiet in listOf("https://203.0.113.7", "http://100.87.163.92:3471", "http://192.168.1.4:3471", url)) {
-            assertWithMessage(quiet).that(runBlocking { app.repository.keyReuseHost(link(quiet)) }).isNull()
+        // The same server at another host asks, whatever the scheme (https, Tailscale and a LAN only drop the
+        // warning); the host already in use (another port or scheme) or a code for another server does not.
+        fun question(at: String, serverId: String? = server.serverId) =
+            runBlocking { app.repository.keyReuseQuestion(link(at, serverId = serverId)) }
+        assertThat(question("http://203.0.113.7:3471")).isEqualTo(KeyReuseQuestion("203.0.113.7", protected = false))
+        assertThat(question("https://203.0.113.7")).isEqualTo(KeyReuseQuestion("203.0.113.7", protected = true))
+        assertThat(question("http://100.87.163.92:3471")).isEqualTo(KeyReuseQuestion("100.87.163.92", true))
+        assertThat(question("http://192.168.1.4:3471")).isEqualTo(KeyReuseQuestion("192.168.1.4", true))
+        assertThat(question(otherUrl)).isNotNull()
+        val here = URI(url)
+        for (quiet in listOf(url, "${here.scheme}://${here.host}:1", "https://${here.host}:${here.port}")) {
+            assertWithMessage(quiet).that(question(quiet)).isNull()
         }
-        assertThat(runBlocking { app.repository.keyReuseHost(link("http://203.0.113.7", serverId = null)) }).isNull()
+        assertThat(question("http://203.0.113.7", serverId = null)).isNull()
 
-        // "New device": a normal pairing, the key never sent; the library's sync state stays, nothing is copied.
+        // Without an answer (AUTO) the key never goes to another host either.
         val oldKey = server.devices.entries.single { it.value == old }.key
         val known = server.authorizations.size
-        val after = runBlocking { app.repository.pair(link(otherUrl), SyncRepository.KeyReuse.DECLINED) }
+        val auto = runBlocking { app.repository.pair(link(otherUrl)) }
         assertThat(server.authorizations.drop(known).filter { oldKey in it }).isEmpty()
-        assertThat(after.deviceId).isNotEqualTo(old)
+        assertThat(auto.deviceId).isNotEqualTo(old)
+
+        // "New device": a normal pairing, the key never sent; the library's sync state stays, nothing is copied.
+        val newKey = server.devices.entries.single { it.value == auto.deviceId }.key
+        val sent = server.authorizations.size
+        val after = runBlocking { app.repository.pair(link(otherUrl), SyncRepository.KeyReuse.DECLINED) }
+        assertThat(server.authorizations.drop(sent).filter { newKey in it }).isEmpty()
+        assertThat(after.deviceId).isNotEqualTo(auto.deviceId)
         assertThat(after.url).isEqualTo(otherUrl)
         assertThat(records(app.device)).isEqualTo(rows)
         runBlocking { app.repository.syncMetadata() }

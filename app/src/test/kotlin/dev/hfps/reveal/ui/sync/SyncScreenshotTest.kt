@@ -87,7 +87,27 @@ class SyncScreenshotTest {
     @Test fun keyReuseDark() = shoot("phone_key_reuse_dark") {
         RevealTheme(darkTheme = true) {
             SyncSettingsContent(
-                paired.copy(pairing = PairingState.ConfirmKeyReuse("203.0.113.7")),
+                paired.copy(pairing = PairingState.ConfirmKeyReuse("203.0.113.7", protected = false)),
+                SyncActions(),
+                now = now,
+            )
+        }
+    }
+
+    @Test fun switchServerDark() = shoot("phone_switch_server_dark") {
+        RevealTheme(darkTheme = true) {
+            SyncSettingsContent(
+                paired.copy(pairing = PairingState.ConfirmSwitch("Studio NAS", "Pixel 8")),
+                SyncActions(),
+                now = now,
+            )
+        }
+    }
+
+    @Test fun pairedElsewhereLight() = shoot("phone_paired_elsewhere_light") {
+        RevealTheme(darkTheme = false) {
+            SyncSettingsContent(
+                paired.copy(pairing = PairingState.Failed(PairProblem.PAIRED_ELSEWHERE)),
                 SyncActions(),
                 now = now,
             )

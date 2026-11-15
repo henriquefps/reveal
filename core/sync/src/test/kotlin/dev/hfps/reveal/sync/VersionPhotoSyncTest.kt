@@ -599,6 +599,50 @@ class VersionPhotoSyncTest {
     private fun fingerprintOf(versionUuid: String) =
         server.record("version", versionUuid)!!.data!!.jsonObject["photoFingerprint"]?.jsonPrimitive?.content
 
+    @Test
+    fun `a refused photo record lets its held versions go up on their own`() {
+        val phone = device("Phone")
+        phone.sync()
+        val photo = phone.addPhoto("DSC21", bytes(21))
+        val sql = phone.db.openHelper.writableDatabase
+        sql.execSQL("UPDATE photo_files SET fingerprint = NULL WHERE photo_id = ?", arrayOf<Any>(photo))
+        phone.editExposure(photo, 0.4f)
+        phone.sync()
+        val version = phone.versions(photo).single()
+        assertThat(phone.held()).containsExactly(version.uuid)
+
+        // A fingerprint the server refuses (`invalid_change`): the photo record never comes, the version goes alone.
+        sql.execSQL("UPDATE photo_files SET fingerprint = 'v0:refused' WHERE photo_id = ?", arrayOf<Any>(photo))
+        phone.sync()
+        assertThat(server.record("photo", phone.photo(photo).uuid)).isNull()
+        assertThat(server.record("version", version.uuid)).isNotNull()
+        assertThat(phone.held()).isEmpty()
+        assertThat(phone.pending()).isEqualTo(0)
+    }
+
+    @Test
+    fun `held versions that no longer exist are dropped from the list when it is read`() {
+        val phone = device("Phone")
+        phone.sync()
+        val sql = phone.db.openHelper.writableDatabase
+        val first = phone.addPhoto("DSC22", bytes(22))
+        val second = phone.addPhoto("DSC23", bytes(23))
+        for (photo in listOf(first, second)) {
+            sql.execSQL("UPDATE photo_files SET fingerprint = NULL WHERE photo_id = ?", arrayOf<Any>(photo))
+            phone.editExposure(photo, 0.1f)
+        }
+        phone.sync()
+        val gone = phone.versions(first).single().uuid
+        val kept = phone.versions(second).single().uuid
+        assertThat(phone.held()).containsExactly(gone, kept)
+
+        // The first photo is forgotten (its versions with it); the next read of the list drops its version.
+        sql.execSQL("DELETE FROM photos WHERE id = ?", arrayOf<Any>(first))
+        phone.editExposure(second, 0.2f)
+        phone.sync()
+        assertThat(phone.held()).containsExactly(kept)
+    }
+
     private fun exposureRecipe(device: TestDevice, photoId: Long, ev: Float) = SyncApi.json.parseToJsonElement(
         RecipeCodec.Default.encode(
             device.recipe(device.version(photoId)).let { it.copy(light = it.light.copy(exposureEv = ev)) },

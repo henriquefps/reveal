@@ -243,11 +243,15 @@ class SyncStore(
     /** Photo records the server refused (`invalid_change`) since this process started. */
     private val refusedPhotos: MutableSet<String> = java.util.Collections.synchronizedSet(HashSet())
 
-    /** The server refused this change (`invalid_change`): it is dropped from the run, and a photo is not re-offered. */
-    suspend fun refused(change: PushChange, stamp: Long) {
+    /**
+     * The server refused this change (`invalid_change`): it is dropped from the run, and a photo is not re-offered. A
+     * refused photo's held versions go up on their own (they would otherwise wait for a record that never comes).
+     */
+    suspend fun refused(change: PushChange, stamp: Long) = db.withTransaction {
         if (change.kind == Kinds.PHOTO) refusedPhotos += change.id
         sync.clean(change.kind, change.id, stamp)
         if (change.kind == Kinds.VERSION) unhold(change.id)
+        if (change.kind == Kinds.PHOTO) releaseHeld(change.id)
     }
 
     /**
@@ -262,9 +266,14 @@ class SyncStore(
         if (record.recordId !in held) putHeld(held + record.recordId)
     }
 
-    /** The versions [hold] keeps back (version uuids). */
-    private suspend fun heldVersions(): Set<String> =
-        meta.get(KEY_HELD_VERSIONS)?.split(',')?.filterTo(LinkedHashSet()) { it.isNotEmpty() }.orEmpty()
+    /** The versions [hold] keeps back (version uuids); versions deleted since are dropped from the list on the way. */
+    private suspend fun heldVersions(): Set<String> {
+        val listed = meta.get(KEY_HELD_VERSIONS)?.split(',')?.filterTo(LinkedHashSet()) { it.isNotEmpty() }.orEmpty()
+        if (listed.isEmpty()) return listed
+        val live = listed.filterTo(LinkedHashSet()) { sync.versionByUuid(it) != null }
+        if (live.size != listed.size) putHeld(live)
+        return live
+    }
 
     private suspend fun putHeld(held: Set<String>) = when {
         held.isEmpty() -> meta.delete(KEY_HELD_VERSIONS)

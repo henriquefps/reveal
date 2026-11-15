@@ -618,7 +618,10 @@ Decisions:
   no retry can get past): settings, records and the photos added ahead of their versions all count; a version whose
   photo does not fit with it stays dirty and its photo (marked dirty) leads the next round. A photo record that is a tombstone
   (deleted from the server on purpose) is never brought back this way; one the server refuses (`invalid_change`) is
-  not offered again by this process (the version then goes up alone, as before).
+  not offered again by this process (the version then goes up alone, as before), and its held versions are released
+  at once (`SyncStore.refused` -> `releaseHeld`: dirty, so they go up alone in the same run instead of waiting for a
+  record that never comes). Every read of `sync.heldVersions` drops uuids whose version no longer exists (deleted, or
+  its photo forgotten).
 - **A version finds its photo by fingerprint** (additive, `/v1` unchanged): `version.data.photoFingerprint` = the
   photo's main-file fingerprint (older apps ignore it; records without it apply as before). `applyVersion`, and so the
   inbox retry: uuid → alias → the version's own local photo (a version already here) → the photo whose main file has
@@ -673,14 +676,16 @@ Decisions (`SyncRepository.pair`):
   to ask an address which server it is: `/v1/health` names none and `/v1/server` needs a key); the same `serverId`
   and `deviceId` -> only the address changes (`SyncAccount.url`). Device id, key, physical device (Hoard's grouping),
   cursors and records stay; the pairing token is left unused. This is the owner's case from now on.
-  Hardening (fix round 2): even with a matching `server=` the key goes **on its own** only to an address only a
-  private network or TLS reaches (`account/ServerAddresses.keySafe`: `https`, loopback, Tailscale `100.64.0.0/10` and
-  `*.ts.net`, LAN `10/8`, `172.16/12`, `192.168/16`, `fd00::/8`, link-local `169.254/16`, `fe80::/10`; literal
-  addresses only, never a DNS lookup), or to the address the account already uses. Elsewhere (a public `http`
-  address, a plain name) the Sync screen asks first, naming the host (`SyncRepository.keyReuseHost` ->
-  `PairingState.ConfirmKeyReuse`, "Same server at <host>? Reveal will reuse this device's key"): "Same server" =
-  `pair(link, KeyReuse.CONFIRMED)`, "New device" = `KeyReuse.DECLINED`, a normal pairing (a new device keeping the
-  sync state, as for a refused key). A paired Sync screen has "Pair with a new code" for this (goldens
+  Hardening (fix rounds 2 and 3): even with a matching `server=` the key goes **on its own** only to the host the
+  account already uses (a port or scheme change there: `KeyReuse.AUTO`, `SyncRepository.sameHost`, hosts compared
+  case-insensitively). Any other host asks first, whatever its scheme (a `server=` in a code is not a secret: anyone
+  shown the QR could put it in a link to their own host), naming the host (`SyncRepository.keyReuseQuestion` ->
+  `KeyReuseQuestion(host, protected)` -> `PairingState.ConfirmKeyReuse`, "Same server at <host>? Reveal will reuse
+  this device's key"). `account/ServerAddresses.keySafe` (`https`, loopback, Tailscale `100.64.0.0/10` and `*.ts.net`,
+  LAN `10/8`, `172.16/12`, `192.168/16`, `fd00::/8`, link-local `169.254/16`, `fe80::/10`; literal addresses only,
+  never a DNS lookup) now only sets the wording: an address that is neither adds "the key would travel unencrypted".
+  "Same server" = `pair(link, KeyReuse.CONFIRMED)`, "New device" = `KeyReuse.DECLINED`, a normal pairing (a new device
+  keeping the sync state, as for a refused key). A paired Sync screen has "Pair with a new code" for this (goldens
   `phone_paired_*`, `phone_key_reuse_dark`).
 - **Same server, key refused** (`401`: revoked or lost): pair a new device but **keep the library's sync state**
   (records, revisions, cursors, aliases, inbox, culling, Server source); only the device report and the stored
@@ -695,7 +700,23 @@ Decisions (`SyncRepository.pair`):
   up again on top of that revision unless the server's record also names the photo by its current id and main-file
   fingerprint: the W5 repair skips first syncs, so a 0.8 record, or one naming the id the photo had before an
   adoption, would otherwise never be repaired.
-- Another server: as before (everything forgotten).
+- **Another server while paired (W5 (g), fix round 3): never forgotten silently.** "Pair with a new code" used to
+  reach `forgetLocked()` for any code of another server, unpairing and wiping the sync state, the Server source and
+  the edits of its NAS photos without a word. Now, while paired:
+  - a code whose `server=` names another server is refused before anything is sent (`PairProblem.PAIRED_ELSEWHERE`,
+    the token unused); the message offers "Switch server", which opens the usual Unpair confirmation and, confirmed,
+    unpairs and pairs with that code (`SyncSettingsViewModel.switchServer`);
+  - a code without `server=` (older hoard-server) can only be judged after `POST /v1/pair` (`/v1` has no
+    unauthenticated way to name a server): when the answer's `serverId` is not the account's, nothing local changes;
+    the new pairing (its key) waits **in memory only** (`SyncRepository.PendingSwitch`) and `ServerSwitchException`
+    asks "This code is for another server" (`PairingState.ConfirmSwitch`, golden `phone_switch_server_dark`).
+    "Switch" = `switchServer()`: Unpair (`accounts.clear()` + `forgetLocked()`), then the pairing just made is saved
+    (its token is spent, so it is not redeemed again); refused when the account changed meanwhile. "Cancel" (or
+    dismissing, or leaving the screen: `onCleared`) = `cancelSwitch()`: the key is dropped, the paired account and its
+    state stay as they were. The other server has registered a device by then and `/v1` has no self-revoke: the
+    dialog says so ("<server> already registered this device as <name>; remove it from that server's Devices page").
+    Any later `pair()` or `unpair()` also drops a waiting switch.
+  - Unpaired, any code pairs as before (everything an earlier server knew is forgotten).
 
 The production state (both devices re-paired as new devices, old ones live in the Hoard groups): revoke the two old
 Reveal devices on the admin page, then Settings -> Sync -> This device offers Hoard's phone again (claim). The conflict
@@ -706,8 +727,12 @@ Tests: `RePairTest` (a new address with a valid key keeps the device and its pho
 pair after an adoption re-pushes the version naming the current id and fingerprint; a revoked key -> a
 new device that keeps the records, rejoins Hoard's phone, reports itself, and still gets the W5 repair; an old device
 still live -> no forced claim; unpair + pair -> no conflict copy; a public http address asks, a declined reuse
-never sends the key and keeps the sync state), `ServerAddressesTest` (the classification), `SyncApiTest` (a used token is refused once
-unpaired).
+never sends the key and keeps the sync state; fix round 3: another host asks whatever the scheme, the same host on
+another port or scheme does not, AUTO never sends the key to another host; while paired a code naming another server
+is refused unsent and "Switch server" (unpair, pair) works; a code without `server=` for another server keeps
+everything on Cancel and keeps syncing, and Switch forgets the state and keeps the new pairing),
+`ServerAddressesTest` (the classification), `SyncApiTest` (a used token is refused once unpaired),
+`VersionPhotoSyncTest` (a refused photo releases its held versions; deleted held versions leave the list).
 
 Tests: `VersionPhotoSyncTest` (FakeSyncServer, two devices: an unculled NAS photo, a hand-off never culled against the
 other device's folder photo, the exact production sequence, the repair of a photo the server never had, a version

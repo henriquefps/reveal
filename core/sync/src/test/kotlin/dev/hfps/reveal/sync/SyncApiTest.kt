@@ -119,7 +119,9 @@ class SyncApiTest {
             val other = assertThrows(PairException::class.java) {
                 runBlocking { repository.pair(PairingLink.parse(link(server.pairingToken(), "another"))!!) }
             }
-            assertThat(other.problem).isEqualTo(PairProblem.OTHER_SERVER)
+            // While paired, a code naming another server is refused before anything is sent (ADR 0018 "W5 (g)").
+            assertThat(other.problem).isEqualTo(PairProblem.PAIRED_ELSEWHERE)
+            assertThat(repository.account.value).isEqualTo(again)
 
             runBlocking { repository.unpair() }
             assertThat(accounts.account.value).isNull()

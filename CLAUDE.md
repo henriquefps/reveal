@@ -1103,9 +1103,12 @@ original `modifiedAt`; versions of unknown author only via `checkRepairs` on the
 current key at the link's address only when its `server=` is the account's (`sameDevice`: same device, only the
 URL changes); a refused key pairs a new device
 but keeps the sync state (`SyncEngine.forgetDevice`) and claims the previous physical device when offered; no
-self-revoke exists in `/v1`. The key goes on its own only to https/private addresses
-(`account/ServerAddresses.keySafe`); elsewhere the Sync screen asks "Same server at <host>?" (`keyReuseHost`,
-`KeyReuse.CONFIRMED/DECLINED`). `SyncStore.sameEdit` avoids conflict copies on a first sync (and re-pushes a record naming a stale photo id). Test: `RePairTest`.
+self-revoke exists in `/v1`. The key goes on its own only to the account's own host (a port or scheme change);
+any other host asks "Same server at <host>?" (`keyReuseQuestion`, `KeyReuse.CONFIRMED/DECLINED`;
+`ServerAddresses.keySafe` only words the warning). While paired, a code for another server never unpairs silently
+(W5 (g)): `server=` naming another one = `PairProblem.PAIRED_ELSEWHERE` ("Switch server" via Unpair); none and the
+server answers as another = `ServerSwitchException`, the new pairing kept in memory until `switchServer()` /
+`cancelSwitch()`. A refused photo record releases its held versions. `SyncStore.sameEdit` avoids conflict copies on a first sync (and re-pushes a record naming a stale photo id). Test: `RePairTest`.
 
 Culling with hoard-server (R0.8, ADR 0027, DB v13; only when `/v1/server` lists `culling`, else culling stays in
 `photo` records): `engine/CullingSync` (seed once per server, push `POST /v1/culling` per field by main fingerprint,

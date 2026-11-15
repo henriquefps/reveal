@@ -108,7 +108,7 @@ class HandoffRepository(
 
     suspend fun receive(request: HandoffRequest): HandoffOutcome = withContext(Dispatchers.IO) {
         // Server references first: they never touch the sender, so they resolve whatever the URIs do.
-        val batch = request.server?.let { refs.resolve(it, request.title) }
+        val batch = request.server?.let { refs.resolve(it, request.title, at = request.batchAt) }
         if (request.uris.isEmpty()) return@withContext serverOutcome(batch)
         receiveUris(request, batch)
     }
@@ -190,7 +190,7 @@ class HandoffRepository(
         val shots = pair(displayable, sidecarItems)
         val source = ensureSource()
         fingerprint(source.id, displayable)
-        val now = clock()
+        val now = request.batchAt ?: clock()
         val stored = ArrayList<Pair<Shot, StoredShot>>()
         db.withTransaction {
             for (shot in shots) stored += shot to store(source.id, shot, now, request.title)

@@ -472,6 +472,21 @@ flushes its culling pushes for those items before sending (best effort); Reveal 
 - **Sidecars**: none are sent or written for server items (culling rides the server, edits sync as records and edited
   previews, Hoard ADR 0020).
 
+### Batches over 500
+
+A bigger batch is several `DEVELOP` intents with the same `TITLE`, sent by `Activity.startActivities(intents)` or a
+`startActivity` loop; the first carries `INITIAL_ITEM` (or `INITIAL_URI`) and any URI items. `MainActivity` is
+`standard`, so every intent gets its own record (the last intent's is created first, the others as each one above
+finishes). Reveal ingests them as **one** batch: a process-wide `HandoffBatches` keeps one record in `meta` (the
+sender package + `TITLE`, a shared `handoff_at`, the last touch, whether an intent that opens something claimed it) and
+every intent whose key matches within 10 s of the last one joins it, so the photos share one stamp and one header in
+"Opened from other apps". An activity that is above others and carries neither `INITIAL_ITEM` nor `INITIAL_URI`
+ingests, then `finish()`es with no UI and no animation, so the cascade unwinds to the intent that opens the editor
+(library behind it, as for any multi-photo hand-off). If nothing claims the batch 5 s after its last intent, the library
+opens on "Opened from other apps" instead. A server file with no `name` takes the sender's `name` (main file), else a
+name made of its fingerprint and format. A batch without `TITLE` is not merged. The notices of a silent member (not
+found, another server) are not shown; a batch kept for a pairing still is.
+
 ### Existing libraries (W3/C)
 
 Hand-off files received earlier as URIs whose fingerprint the server holds are read from the server copy (and moved to

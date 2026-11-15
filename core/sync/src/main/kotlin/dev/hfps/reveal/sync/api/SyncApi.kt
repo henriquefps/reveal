@@ -793,7 +793,10 @@ data class ItemLocationRecord(
 data class ItemFileRecord(
     val fingerprint: String,
     val role: String = "",
+    /** Absent for uploaded originals on hoard-server 0.9.0 (the field is optional in Hoard ADR 0014). */
     val name: String = "",
+    /** Content format (`jpeg`, `heif`, `arw`, ...): the extension of a file that has no name. */
+    val format: String = "",
     val size: Long = 0,
     val locations: List<ItemLocationRecord> = emptyList(),
 )

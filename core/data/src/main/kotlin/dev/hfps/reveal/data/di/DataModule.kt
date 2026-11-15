@@ -19,6 +19,7 @@ import dev.hfps.reveal.data.editor.EditorLayoutPreferences
 import dev.hfps.reveal.data.export.ExportPreferences
 import dev.hfps.reveal.data.export.ExportPresetRepository
 import dev.hfps.reveal.data.handoff.GalleryAccess
+import dev.hfps.reveal.data.handoff.HandoffBatches
 import dev.hfps.reveal.data.handoff.HandoffPreviewer
 import dev.hfps.reveal.data.handoff.HandoffRepository
 import dev.hfps.reveal.data.handoff.HandoffTree
@@ -116,6 +117,12 @@ object DataModule {
         previews: LocalPreviews,
         @DataScope scope: CoroutineScope,
     ): HandoffPreviewer = HandoffPreviewer(HandoffTree(context.contentResolver), previews, scope)
+
+    /** Hand-offs that arrive as several intents (ADR 0011 "Batches over 500"). */
+    @Provides
+    @Singleton
+    fun provideHandoffBatches(database: RevealDatabase, @DataScope scope: CoroutineScope): HandoffBatches =
+        HandoffBatches(database, scope)
 
     @Provides
     @Singleton

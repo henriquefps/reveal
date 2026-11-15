@@ -82,7 +82,7 @@ class SyncServerItems(
             ServerItemInfo(
                 itemId = record.id,
                 mainFingerprint = record.mainFingerprint,
-                files = record.files.map { ServerFileInfo(it.fingerprint, it.role, it.name, it.size) },
+                files = record.files.map { ServerFileInfo(it.fingerprint, it.role, it.name, it.size, it.format) },
                 originalSource = if (nas != null || locations.isEmpty()) "nas" else "backup",
                 folder = listOfNotNull(nas?.folderName?.takeIf { it.isNotEmpty() }, directory.takeIf { it.isNotEmpty() })
                     .joinToString("/"),

@@ -4,7 +4,36 @@ package dev.hfps.reveal.data.handoff
 data class ServerPairing(val serverId: String, val serverName: String, val deviceId: String)
 
 /** One member file of a server item (Hoard ADR 0014): its v1 fingerprint, role (`raw`, `rendered`, ...), name, size. */
-data class ServerFileInfo(val fingerprint: String, val role: String, val name: String, val size: Long = 0)
+data class ServerFileInfo(
+    val fingerprint: String,
+    val role: String,
+    /** Blank when the server has no name for the file (uploaded originals, hoard-server 0.9.0). */
+    val name: String,
+    val size: Long = 0,
+    /** Content format (`jpeg`, `heif`, `arw`, ...), the extension of a nameless file. */
+    val format: String = "",
+) {
+    /**
+     * The file's name: its own, else [fallback] (the hand-off item's name, for the main file), else one made of its
+     * fingerprint and format, so it still classifies as an image (`3fa9c1d20b7e.jpg`).
+     */
+    fun named(fallback: String? = null): ServerFileInfo = if (name.isNotBlank()) {
+        this
+    } else {
+        copy(name = fallback?.takeIf { it.isNotBlank() } ?: "${fingerprint.removePrefix("v1:").take(NAME_HEX)}.${extension()}")
+    }
+
+    private fun extension(): String = when (val f = format.lowercase().trim().removePrefix(".")) {
+        "jpeg", "jpg", "" -> if (role == "raw" && format.isBlank()) "dng" else "jpg"
+        "heif", "heic" -> "heic"
+        "tiff", "tif" -> "tif"
+        else -> f
+    }
+
+    private companion object {
+        const val NAME_HEX = 12
+    }
+}
 
 /** An item of the server (`GET /v1/items/{itemId}`, Hoard ADR 0014): what Reveal needs to file it as a Server photo. */
 data class ServerItemInfo(

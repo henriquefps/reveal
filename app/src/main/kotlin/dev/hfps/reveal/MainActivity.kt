@@ -20,6 +20,7 @@ import androidx.navigation.NavDestination.Companion.hasRoute
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import dagger.hilt.android.AndroidEntryPoint
+import dev.hfps.reveal.data.handoff.HandoffBatches
 import dev.hfps.reveal.data.handoff.HandoffIntents
 import dev.hfps.reveal.data.handoff.HandoffOutcome
 import dev.hfps.reveal.data.handoff.HandoffRepository
@@ -64,6 +65,9 @@ class MainActivity : ComponentActivity() {
 
     @Inject
     lateinit var sync: SyncRepository
+
+    @Inject
+    lateinit var batches: HandoffBatches
 
     /** What a hand-off of server references could not do (docs/adr/0011 "Amendment W3/H"), until dismissed. */
     private val serverNotice = MutableStateFlow<ServerNotice?>(null)
@@ -150,6 +154,10 @@ class MainActivity : ComponentActivity() {
      * fill in (docs/adr/0011 "Amendment W3/H").
      */
     private fun watchServer() {
+        // A cascade of intents ended with nothing to open in the editor: the batch shows in the library.
+        lifecycleScope.launch {
+            batches.openLibrary.collect { openRequest.value = HandoffOutcome.OpenLibrary(emptyList()) }
+        }
         lifecycleScope.launch {
             sync.account.filterNotNull().collect { account ->
                 handoffs.resumePending(account.serverId)?.let { outcome ->
@@ -240,9 +248,24 @@ class MainActivity : ComponentActivity() {
             presetLink.offer(link)
             return
         }
-        val request = HandoffIntents.parse(intent) ?: return
+        val parsed = HandoffIntents.parse(intent) ?: return
+        // Several intents of one sender and title are one batch (docs/adr/0011 "Batches over 500").
+        val key = HandoffBatches.key(referrer?.host, parsed.title)
+        // An activity above others (a cascade of startActivities) that has nothing to open ingests and leaves at once.
+        val silentMember = key != null && !parsed.opensSomething && !isTaskRoot
         lifecycleScope.launch {
+            val join = key?.let { batches.join(it) }
+            val request = parsed.copy(batchAt = join?.at)
+            if (key != null && parsed.opensSomething) batches.claim(key)
             val outcome = handoffs.receive(request)
+            if (key != null) batches.touch(key)
+            if (silentMember) {
+                batches.silentFinished(key!!)
+                finish()
+                @Suppress("DEPRECATION")
+                overridePendingTransition(0, 0)
+                return@launch
+            }
             // A single photo opened in the editor: leaving it returns to the calling app.
             openedFromIntent = outcome is HandoffOutcome.OpenUri ||
                 (outcome is HandoffOutcome.OpenEditor && outcome.closeOnBack)

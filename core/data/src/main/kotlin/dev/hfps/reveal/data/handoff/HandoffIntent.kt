@@ -23,7 +23,12 @@ data class HandoffRequest(
     val action: String? = null,
     /** The sender's culling decisions per item (ADR 0011 "Culling"), keyed by URIs of [uris]; usually empty. */
     val culling: Map<Uri, HandoffCulling> = emptyMap(),
-)
+    /** The `handoff_at` of every photo of the request (a batch of several intents shares one); null = now. */
+    val batchAt: Long? = null,
+) {
+    /** The sender asked for something to open at once (an `INITIAL_URI` or `INITIAL_ITEM`). */
+    val opensSomething: Boolean get() = initial != null || server?.initialItem != null
+}
 
 /** One shot the sender's server holds (ADR 0011 "Amendment W3/H"): the item id and what helps to find it again. */
 data class ServerItemRef(

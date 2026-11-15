@@ -81,7 +81,7 @@ internal class ServerRefResolver(
     private val meta = db.metaDao()
 
     /** Which of [refs]' photos open, or why none does. */
-    suspend fun resolve(refs: ServerRefs, title: String?, refresh: Boolean = false): ServerBatch {
+    suspend fun resolve(refs: ServerRefs, title: String?, refresh: Boolean = false, at: Long? = null): ServerBatch {
         val pairing = server.pairing()
         return when {
             pairing == null -> {
@@ -92,7 +92,7 @@ internal class ServerRefResolver(
             pairing.serverId != refs.serverId ->
                 ServerBatch(issue = ServerIssue.OtherServer(pairing.serverName, refs.items.size))
 
-            else -> resolvePaired(refs, title, refresh)
+            else -> resolvePaired(refs, title, refresh, at)
         }
     }
 
@@ -107,8 +107,8 @@ internal class ServerRefResolver(
     }
 
     @Suppress("LongMethod")
-    private suspend fun resolvePaired(refs: ServerRefs, title: String?, refresh: Boolean): ServerBatch {
-        val now = clock()
+    private suspend fun resolvePaired(refs: ServerRefs, title: String?, refresh: Boolean, at: Long?): ServerBatch {
+        val now = at ?: clock()
         val local = localHits(refs.items, refresh)
         val misses = refs.items.filter { it.itemId !in local }
         // The network part: a few requests at a time, nothing written yet.
@@ -224,11 +224,16 @@ internal class ServerRefResolver(
             if (result is ServerItemResult.Gone && result.replacedBy != null) result = server.item(result.replacedBy)
         }
         return when (result) {
-            is ServerItemResult.Found -> Fetched.Info(result.item)
+            is ServerItemResult.Found -> Fetched.Info(result.item.withNames(ref))
             is ServerItemResult.Gone, ServerItemResult.Missing -> Fetched.Missing
             ServerItemResult.Unreachable -> Fetched.Unreachable
         }
     }
+
+    /** Files the server gave no name get the sender's name (the main file) or one made of their fingerprint. */
+    private fun ServerItemInfo.withNames(ref: ServerItemRef) = copy(
+        files = files.map { it.named(ref.name.takeIf { _ -> it.fingerprint == mainFingerprint }) },
+    )
 
     private fun placeholder(ref: ServerItemRef): ServerItemInfo {
         val name = checkNotNull(ref.name)

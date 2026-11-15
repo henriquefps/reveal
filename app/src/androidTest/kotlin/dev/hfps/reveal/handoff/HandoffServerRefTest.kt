@@ -148,6 +148,56 @@ class HandoffServerRefTest {
         android.util.Log.i("REVEAL_HANDOFF_TEST", "500 server items resolved in ${(System.nanoTime() - started) / 1_000_000} ms")
     }
 
+    /** A real JPEG in the debug provider, as another app would share it: its document id and URI. */
+    private fun shared(name: String, seed: Int): Pair<String, Uri> {
+        inbox.mkdirs()
+        val bytes = SyntheticFolder("unused-$stem-$seed").let { f ->
+            f.gradientJpeg(seed, 600, 400).also { f.dir.deleteRecursively() }
+        } + "$stem-$name".toByteArray()
+        File(inbox, name).writeBytes(bytes)
+        val id = "inbox-$stem/$name"
+        return id to DocumentsContract.buildDocumentUri(SyntheticDocumentsProvider.AUTHORITY, id)
+    }
+
+    private fun resumedMainActivities(): Int {
+        var count = 0
+        InstrumentationRegistry.getInstrumentation().runOnMainSync {
+            count = androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry.getInstance()
+                .getActivitiesInStage(androidx.test.runner.lifecycle.Stage.RESUMED).count { it is MainActivity } +
+                androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry.getInstance()
+                    .getActivitiesInStage(androidx.test.runner.lifecycle.Stage.STARTED).count { it is MainActivity } +
+                androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry.getInstance()
+                    .getActivitiesInStage(androidx.test.runner.lifecycle.Stage.STOPPED).count { it is MainActivity }
+        }
+        return count
+    }
+
+    /**
+     * Hoard sends a big batch as several intents with one title through `startActivities` (docs/adr/0011 "Batches over
+     * 500"): the first carries the item to open. All of them are one "Opened from other apps" batch, one stamp, one
+     * editor and no stack of `MainActivity` records.
+     */
+    @Test
+    fun startActivitiesWithOneTitleIsOneBatchAndOneActivity() {
+        val photos = (1..3).map { shared("$stem-$it.jpg", it) }
+        fun intent(n: Int, initial: Boolean) = Intent(HandoffIntents.ACTION_DEVELOP)
+            .setClass(context, MainActivity::class.java)
+            .setData(photos[n].second)
+            .putExtra(HandoffIntents.EXTRA_TITLE, stem)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            .also { if (initial) it.putExtra(HandoffIntents.EXTRA_INITIAL_URI, photos[n].second) }
+        context.startActivities(arrayOf(intent(0, initial = true), intent(1, false), intent(2, false)))
+        compose.waitUntil(TIMEOUT_MS) {
+            runBlocking { access.library().photoList(PhotoQuery.FROM_APPS) }.count { it.name.contains(stem) } == 3
+        }
+        val rows = runBlocking { access.library().photoList(PhotoQuery.FROM_APPS) }.filter { it.name.contains(stem) }
+        assertThat(rows.map { it.handoffAt }.distinct()).hasSize(1)
+        assertThat(rows.map { it.handoffTitle }.distinct()).containsExactly(stem)
+        // The cascade unwound: one MainActivity record is left, the one that carries the editor.
+        compose.waitUntil(TIMEOUT_MS) { resumedMainActivities() == 1 }
+        photos.forEach { SyntheticDocumentsProvider.allow(context.filesDir, it.first) }
+    }
+
     private companion object {
         const val TIMEOUT_MS = 30_000L
     }

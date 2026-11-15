@@ -181,6 +181,31 @@ class HandoffServerRefsTest {
     }
 
     @Test
+    fun `files the server gives no name get the sender's name, else one made of the fingerprint`() = runTest {
+        server.items[id(1)] = ServerItemResult.Found(
+            ServerItemInfo(
+                itemId = id(1),
+                mainFingerprint = fp(1),
+                files = listOf(
+                    ServerFileInfo(fp(1), "raw", "", 100, "arw"),
+                    ServerFileInfo(fp(2), "rendered", "", 50, "jpeg"),
+                ),
+            ),
+        )
+        server.items[id(2)] = ServerItemResult.Found(
+            ServerItemInfo(id(2), fp(3), listOf(ServerFileInfo(fp(3), "rendered", "", 50, "heif"))),
+        )
+        repo.receive(request(refs(ServerItemRef(id(1), name = "DSC9.ARW"), ServerItemRef(id(2)))))
+        val names = rows().associate { it.id to db.photoDao().files(it.id).map { f -> f.name } }.values.toList()
+        assertThat(names.flatten()).containsExactly(
+            "DSC9.ARW",
+            fp(2).removePrefix("v1:").take(12) + ".jpg",
+            fp(3).removePrefix("v1:").take(12) + ".heic",
+        )
+        assertThat(rows().map { it.format }).containsExactly(PhotoFormat.RAW_PAIR, PhotoFormat.HEIF)
+    }
+
+    @Test
     fun `an unknown item id falls back to a fingerprint lookup`() = runTest {
         serve(item(3))
         server.lookups[fp(3)] = id(3)

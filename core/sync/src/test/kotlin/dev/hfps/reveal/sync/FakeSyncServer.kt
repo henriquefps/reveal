@@ -136,6 +136,10 @@ class FakeSyncServer : Dispatcher() {
         return key
     }
 
+    /** How many culling pages were asked for (a hand-off's pull, a sync run's). */
+    @Volatile
+    var cullingPages = 0
+
     @Synchronized
     override fun dispatch(request: RecordedRequest): MockResponse {
         val url = request.url
@@ -244,6 +248,7 @@ class FakeSyncServer : Dispatcher() {
                         },
                     )
                 } else {
+                    cullingPages++
                     culling.page(url.queryParameter("cursor").orEmpty(), url.queryParameter("limit")?.toInt() ?: 500)
                         ?.let(::ok) ?: error(400, "invalid_cursor")
                 }

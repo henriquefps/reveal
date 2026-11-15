@@ -41,6 +41,25 @@ class ServerRefIntentsTest {
         }
 
     @Test
+    fun `the batch index marks the members above the first, a missing or invalid one marks none`() {
+        fun parse(index: Any?) = HandoffIntents.parse(
+            intent(listOf(bundle())).apply {
+                when (index) {
+                    is Int -> putExtra(HandoffIntents.EXTRA_BATCH_INDEX, index)
+                    is String -> putExtra(HandoffIntents.EXTRA_BATCH_INDEX, index)
+                }
+            },
+        )!!
+        assertThat(parse(null).batchIndex).isNull()
+        assertThat(parse(null).silentMember).isFalse()
+        assertThat(parse(0).silentMember).isFalse()
+        assertThat(parse(0).batchIndex).isEqualTo(0)
+        assertThat(parse(2).silentMember).isTrue()
+        assertThat(parse(-1).batchIndex).isNull()
+        assertThat(parse("two").silentMember).isFalse()
+    }
+
+    @Test
     fun `server items alone are a hand-off with no uris, in order, with every field`() {
         val request = HandoffIntents.parse(
             intent(

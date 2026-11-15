@@ -159,4 +159,24 @@ class DeviceIdentityTest {
         assertThat(server.culling.reports).hasSize(1)
         assertThat(server.culling.reports.single().second["features"].toString()).isEqualTo("[\"culling\"]")
     }
+
+    @Test
+    fun `a culling pull asked for while a sync run holds the lock follows that run`() {
+        val reveal = repository()
+        runBlocking { reveal.pair(PairingLink.parse(link())!!) }
+        val mutex = SyncRepository::class.java.getDeclaredField("mutex").apply { isAccessible = true }
+            .get(reveal) as kotlinx.coroutines.sync.Mutex
+        runBlocking {
+            reveal.syncMetadata()
+            val plain = server.cullingPages.also { reveal.syncMetadata() }.let { server.cullingPages - it }
+            mutex.lock() // a run is going
+            val before = server.cullingPages
+            reveal.pullCulling()
+            assertThat(server.cullingPages).isEqualTo(before) // not pulled under the run...
+            mutex.unlock()
+            reveal.syncMetadata()
+            // ...but pulled right after it, on top of the run's own pull.
+            assertThat(server.cullingPages - before).isEqualTo(plain + 1)
+        }
+    }
 }

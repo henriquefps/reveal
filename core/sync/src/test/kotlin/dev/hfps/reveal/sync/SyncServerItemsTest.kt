@@ -131,4 +131,29 @@ class SyncServerItemsTest {
         items().pullCulling()
         assertThat(pulls).isEqualTo(1)
     }
+
+    @Test
+    fun `a 200 that is not the server's JSON is no answer, not a crash`() = runBlocking {
+        // A captive portal or a proxy: HTML where JSON should be.
+        val portal = com.sun.net.httpserver.HttpServer.create(java.net.InetSocketAddress("127.0.0.1", 0), 0)
+        portal.createContext("/") { exchange ->
+            val body = "<html>Please sign in</html>".toByteArray()
+            exchange.sendResponseHeaders(200, body.size.toLong())
+            exchange.responseBody.use { it.write(body) }
+        }
+        portal.start()
+        try {
+            val api = SyncApi("http://127.0.0.1:${portal.address.port}", "key")
+            val client = SyncServerItems(
+                pairingOf = { ServerPairing(server.serverId, "Home", "dev") },
+                api = { api },
+                pull = { error("a failing pull must not escape") },
+            )
+            assertThat(client.item("i1")).isEqualTo(ServerItemResult.Unreachable)
+            assertThat(client.lookup(listOf("v1:aa"))).isNull()
+            client.pullCulling()
+        } finally {
+            portal.stop(0)
+        }
+    }
 }

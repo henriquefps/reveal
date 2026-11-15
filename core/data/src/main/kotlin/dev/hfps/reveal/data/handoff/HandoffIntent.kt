@@ -31,6 +31,8 @@ data class HandoffRequest(
      * (ADR 0011 "Batches over 500").
      */
     val batchIndex: Int? = null,
+    /** How many intents the sender split the batch into (`BATCH_COUNT`), null = not said. */
+    val batchCount: Int? = null,
 ) {
     /** The sender asked for something to open at once (an `INITIAL_URI` or `INITIAL_ITEM`). */
     val opensSomething: Boolean get() = initial != null || server?.initialItem != null
@@ -101,6 +103,13 @@ object HandoffIntents {
      * silently; the first one shows the batch. Without it every intent is a batch of its own that shows.
      */
     const val EXTRA_BATCH_INDEX = "dev.hfps.reveal.extra.BATCH_INDEX"
+
+    /**
+     * Optional `Int`: how many intents the batch has, on every intent of it (with [EXTRA_BATCH_INDEX]); Reveal knows the
+     * batch is complete once that many arrived ([HandoffBatches.Join.complete]), and keeps its 10 s window as the
+     * fallback for an incomplete one.
+     */
+    const val EXTRA_BATCH_COUNT = "dev.hfps.reveal.extra.BATCH_COUNT"
 
     /** Optional `Uri`: the item (one of the URIs sent) to open in the editor first. */
     const val EXTRA_INITIAL_URI = "dev.hfps.reveal.extra.INITIAL_URI"
@@ -189,6 +198,7 @@ object HandoffIntents {
             action = intent.action,
             culling = runCatching { culling(intent, uris) }.getOrDefault(emptyMap()),
             batchIndex = runCatching { intent.getIntExtra(EXTRA_BATCH_INDEX, -1) }.getOrDefault(-1).takeIf { it >= 0 },
+            batchCount = runCatching { intent.getIntExtra(EXTRA_BATCH_COUNT, -1) }.getOrDefault(-1).takeIf { it > 1 },
         )
     }
 

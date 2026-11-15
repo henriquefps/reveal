@@ -23,13 +23,16 @@ import kotlinx.serialization.json.Json
  */
 class HandoffBatches(private val db: RevealDatabase, private val clock: () -> Long = System::currentTimeMillis) {
     /** [at]: the `handoff_at` of every photo of the batch; [follower]: an earlier intent of the batch came first. */
-    class Join(val at: Long, val follower: Boolean)
+    class Join(val at: Long, val follower: Boolean, val complete: Boolean = false)
 
     @Serializable
     private data class State(
         val key: String,
         val at: Long,
         val touched: Long,
+        /** Intents of the batch that arrived so far, and how many the sender said there are (0 = not said). */
+        val received: Int = 1,
+        val expected: Int = 0,
         /** What the members reported so far (summed), until the intent that shows the batch takes it. */
         val notFound: Int = 0,
         val notPaired: Int = 0,
@@ -76,15 +79,16 @@ class HandoffBatches(private val db: RevealDatabase, private val clock: () -> Lo
         db.metaDao().put(MetaEntity(KEY, json.encodeToString(State.serializer(), state)))
 
     /** Joins (or starts) the batch [key]: the same stamp for every intent inside the window. */
-    suspend fun join(key: String): Join = mutex.withLock {
+    suspend fun join(key: String, expected: Int? = null): Join = mutex.withLock {
         val now = clock()
         val current = load()?.takeIf { it.key == key && now - it.touched <= WINDOW_MS }
         if (current == null) {
-            save(State(key, at = now, touched = now))
-            Join(now, follower = false)
+            save(State(key, at = now, touched = now, expected = expected ?: 0))
+            Join(now, follower = false, complete = expected != null && expected <= 1)
         } else {
-            save(current.copy(touched = now))
-            Join(current.at, follower = true)
+            val joined = current.copy(touched = now, received = current.received + 1)
+            save(joined)
+            Join(current.at, follower = true, complete = joined.expected > 0 && joined.received >= joined.expected)
         }
     }
 

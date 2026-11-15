@@ -183,7 +183,14 @@ class HandoffServerRefTest {
             .putExtra(HandoffIntents.EXTRA_TITLE, stem)
             .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             .also {
-                if (index != null) it.putExtra(HandoffIntents.EXTRA_BATCH_INDEX, index)
+                if (index !=
+                    null
+                ) {
+                    it.putExtra(
+                        HandoffIntents.EXTRA_BATCH_INDEX,
+                        index,
+                    ).putExtra(HandoffIntents.EXTRA_BATCH_COUNT, 3)
+                }
                 if (initial) it.putExtra(HandoffIntents.EXTRA_INITIAL_URI, photo.second)
             }
 
@@ -273,7 +280,7 @@ class HandoffServerRefTest {
         val serverId = checkNotNull(access.sync().account.value).serverId
         val intents = (0..2).map { i ->
             send(ServerRefs(serverId, listOf(item())))
-                .putExtra(HandoffIntents.EXTRA_BATCH_INDEX, i)
+                .putExtra(HandoffIntents.EXTRA_BATCH_INDEX, i).putExtra(HandoffIntents.EXTRA_BATCH_COUNT, 3)
                 .also { it.flags = it.flags and Intent.FLAG_ACTIVITY_NEW_TASK.inv() }
         }
         fromAnotherApp(*intents.toTypedArray()) {

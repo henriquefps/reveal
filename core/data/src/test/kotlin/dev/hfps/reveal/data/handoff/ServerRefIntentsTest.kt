@@ -41,6 +41,16 @@ class ServerRefIntentsTest {
         }
 
     @Test
+    fun `the batch count is read when above one, absent or invalid is null`() {
+        fun parse(count: Int?) = HandoffIntents.parse(
+            intent(listOf(bundle())).apply { count?.let { putExtra(HandoffIntents.EXTRA_BATCH_COUNT, it) } },
+        )!!
+        assertThat(parse(3).batchCount).isEqualTo(3)
+        assertThat(parse(null).batchCount).isNull()
+        assertThat(parse(1).batchCount).isNull()
+    }
+
+    @Test
     fun `the batch index marks the members above the first, a missing or invalid one marks none`() {
         fun parse(index: Any?) = HandoffIntents.parse(
             intent(listOf(bundle())).apply {

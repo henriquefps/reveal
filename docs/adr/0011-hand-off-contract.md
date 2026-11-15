@@ -476,7 +476,7 @@ flushes its culling pushes for those items before sending (best effort); Reveal 
 
 A bigger batch is several `DEVELOP` intents with the same `TITLE`, sent by `Activity.startActivities(intents)`; the
 first carries `INITIAL_ITEM` (or `INITIAL_URI`) and any URI items. Each intent carries **`BATCH_INDEX`**
-(`dev.hfps.reveal.extra.BATCH_INDEX`, `Int`, 0 for the first, the one lowest in the stack; **pending Hoard agreement**: a contract addition until the coordinator confirms it). `MainActivity` is
+(`dev.hfps.reveal.extra.BATCH_INDEX`, `Int`, 0 for the first, the one lowest in the stack) and **`BATCH_COUNT`** (`dev.hfps.reveal.extra.BATCH_COUNT`, `Int`, the number of intents, on every intent of the batch). Both are set only when the sender uses `startActivities` with more than one intent (**agreed** with Hoard). `MainActivity` is
 `standard`, so every intent gets its own record (the last intent's is created first, the others as each one above
 finishes). Reveal ingests them as **one** batch: a process-wide `HandoffBatches` keeps one record in `meta` (the
 sender package + `TITLE`, a shared `handoff_at`, the last touch, the notices so far) and every intent whose key matches
@@ -485,7 +485,7 @@ intent with `BATCH_INDEX` > 0 ingests, reports its notices to the batch and `fin
 so the cascade unwinds to the first intent, which shows the batch: the editor when it carries an `INITIAL_*` (library
 behind it, as for any multi-photo hand-off), else "Opened from other apps".
 
-Whether an activity is silent is decided **only** by `BATCH_INDEX`, never by the task or by the absence of an
+`BATCH_COUNT` tells Reveal when the batch is complete (that many intents joined: `Join.complete`); the 10 s window stays the fallback for an incomplete batch (a member that arrives after the notices were shown reports on its own). Whether an activity is silent is decided **only** by `BATCH_INDEX`, never by the task or by the absence of an
 `INITIAL_*`: Hoard starts Reveal with `startActivity(intent)` and no `FLAG_ACTIVITY_NEW_TASK`, so Reveal's activity
 lands in the sender's task and is never its root, and an ordinary multi-select hand-off (one intent, `TITLE`, several
 photos, no `INITIAL_URI`) is indistinguishable from a trailing chunk by its content. A sender that does not send

@@ -278,7 +278,7 @@ class MainActivity : ComponentActivity() {
         // the task (Hoard starts Reveal into its own task, so `isTaskRoot` is false for an ordinary hand-off too).
         val silentMember = parsed.silentMember
         lifecycleScope.launch {
-            val join = key?.let { batches.join(it) }
+            val join = key?.let { batches.join(it, parsed.batchCount) }
             val request = parsed.copy(batchAt = join?.at)
             val outcome = receive(request)
             if (key != null) batches.touch(key)

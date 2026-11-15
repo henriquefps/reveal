@@ -98,6 +98,35 @@ class HandoffBatchesTest {
     }
 
     @Test
+    fun `a batch is complete once BATCH_COUNT intents joined, absent counts never say so`() = runTest {
+        val batches = batches()
+        val key = "app\u0000Trip"
+        assertThat(batches.join(key, 3).complete).isFalse()
+        assertThat(batches.join(key, 3).complete).isFalse()
+        assertThat(batches.join(key, 3).complete).isTrue()
+        now += HandoffBatches.WINDOW_MS + 1
+        val other = "app\u0000Other"
+        assertThat(batches.join(other, null).complete).isFalse()
+        assertThat(batches.join(other, null).complete).isFalse()
+    }
+
+    @Test
+    fun `an incomplete batch is never complete, its late member reports on its own`() = runTest {
+        val batches = batches()
+        val key = "app\u0000Trip"
+        batches.join(key, 3)
+        assertThat(batches.join(key, 3).complete).isFalse() // the third never came
+        batches.takeNotices(key, HandoffNotice(notFound = 1))
+        val late = ArrayList<HandoffNotice>()
+        val job = backgroundScope.launchCollect(batches, late)
+        runCurrent()
+        batches.report(key, HandoffNotice(notFound = 4))
+        runCurrent()
+        assertThat(late).containsExactly(HandoffNotice(notFound = 4))
+        job.cancel()
+    }
+
+    @Test
     fun `a marked intent batches even without a title`() {
         assertThat(HandoffBatches.key("app", null)).isNull()
         assertThat(HandoffBatches.key("app", null, marked = true)).isNotNull()

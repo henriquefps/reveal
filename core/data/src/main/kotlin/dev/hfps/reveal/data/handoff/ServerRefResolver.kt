@@ -103,6 +103,8 @@ internal class ServerRefResolver(
 
         data object Missing : Fetched
 
+        data object Gone : Fetched
+
         data object Unreachable : Fetched
     }
 
@@ -112,10 +114,7 @@ internal class ServerRefResolver(
         val local = localHits(refs.items, refresh)
         val misses = refs.items.filter { it.itemId !in local }
         // The network part: a few requests at a time, nothing written yet.
-        val gate = Semaphore(FETCH_PARALLELISM)
-        val fetched = coroutineScope {
-            misses.map { ref -> async { ref to gate.withPermit { fetch(ref) } } }.awaitAll()
-        }
+        val fetched = fetchAll(misses)
         var notFound = 0
         val unreachable = ArrayList<ServerItemRef>()
         val byItem = LinkedHashMap<String, Long>()
@@ -123,7 +122,7 @@ internal class ServerRefResolver(
             quietly {
                 for ((ref, result) in fetched) {
                     when (result) {
-                        Fetched.Missing -> notFound++
+                        Fetched.Missing, Fetched.Gone -> notFound++
 
                         Fetched.Unreachable -> {
                             if (ref.name != null && ref.fingerprint != null) {
@@ -135,7 +134,8 @@ internal class ServerRefResolver(
 
                         is Fetched.Info -> {
                             // The item's own members decide (a replacement item names the shot now).
-                            val photoId = localPhotoFor(result.info.fingerprints, refresh) ?: upsert(result.info, now)
+                            val info = result.info.withNames(ref)
+                            val photoId = localPhotoFor(info.fingerprints, refresh) ?: upsert(info, now)
                             if (photoId != null) byItem[ref.itemId] = photoId else notFound++
                         }
                     }
@@ -208,27 +208,49 @@ internal class ServerRefResolver(
         .chunked(SQL_ARGS).flatMap { photos.filesByFingerprint(it) }.firstOrNull { reusable(it, refresh) }
         ?.file?.photoId
 
-    /**
-     * The item behind [ref]: `GET /v1/items/{id}` following one `replacedBy`; an unknown id falls back to a fingerprint
-     * lookup (the sender's); a tombstone without a replacement is gone.
-     */
-    @Suppress("ReturnCount")
-    private suspend fun fetch(ref: ServerItemRef): Fetched {
-        var result = server.item(ref.itemId)
+    /** `GET /v1/items/{id}` following one `replacedBy`; a tombstone without a replacement is gone. */
+    private suspend fun fetchById(itemId: String): Fetched {
+        var result = server.item(itemId)
         if (result is ServerItemResult.Gone && result.replacedBy != null) result = server.item(result.replacedBy)
-        if (result is ServerItemResult.Missing && ref.allFingerprints.isNotEmpty()) {
-            val found = server.lookup(ref.allFingerprints)
-                ?: return Fetched.Unreachable
-            val id = ref.allFingerprints.firstNotNullOfOrNull { found[it] } ?: return Fetched.Missing
-            result = server.item(id)
-            if (result is ServerItemResult.Gone && result.replacedBy != null) result = server.item(result.replacedBy)
-        }
         return when (result) {
-            is ServerItemResult.Found -> Fetched.Info(result.item.withNames(ref))
-            is ServerItemResult.Gone, ServerItemResult.Missing -> Fetched.Missing
+            is ServerItemResult.Found -> Fetched.Info(result.item)
+            is ServerItemResult.Gone -> Fetched.Gone
+            ServerItemResult.Missing -> Fetched.Missing
             ServerItemResult.Unreachable -> Fetched.Unreachable
         }
     }
+
+    /**
+     * The items behind [refs] (a few requests at a time). An unknown id (404) falls back to the sender's fingerprints,
+     * for all such refs in one lookup; a tombstone without a replacement is gone.
+     */
+    private suspend fun fetchAll(refs: List<ServerItemRef>): List<Pair<ServerItemRef, Fetched>> {
+        val gate = Semaphore(FETCH_PARALLELISM)
+        val first = coroutineScope {
+            refs.map { ref -> async { ref to gate.withPermit { fetchById(ref.itemId) } } }.awaitAll()
+        }
+        val unknown = first.map { it.first }.filter { ref ->
+            ref.allFingerprints.isNotEmpty() && first.any { it.first == ref && it.second == Fetched.Missing }
+        }
+        if (unknown.isEmpty()) return first.map { it.first to it.second.asMissing() }
+        val found = server.lookup(unknown.flatMap { it.allFingerprints }.distinct())
+        val second = coroutineScope {
+            unknown.map { ref ->
+                async {
+                    val id = found?.let { f -> ref.allFingerprints.firstNotNullOfOrNull { f[it] } }
+                    ref to when {
+                        found == null -> Fetched.Unreachable
+                        id == null -> Fetched.Missing
+                        else -> gate.withPermit { fetchById(id) }
+                    }
+                }
+            }.awaitAll()
+        }.toMap()
+        return first.map { (ref, result) -> ref to (second[ref] ?: result).asMissing() }
+    }
+
+    /** A tombstone without a replacement counts as not found. */
+    private fun Fetched.asMissing(): Fetched = if (this == Fetched.Gone) Fetched.Missing else this
 
     /** Files the server gave no name get the sender's name (the main file) or one made of their fingerprint. */
     private fun ServerItemInfo.withNames(ref: ServerItemRef) = copy(

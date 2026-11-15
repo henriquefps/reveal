@@ -46,6 +46,13 @@ All notable changes to Reveal are documented here. The format follows
 - Server photos without a capture time sort by their NAS file's time, or go to "No date", instead of the time their
   record arrived.
 ### Fixed
+- Photos from Hoard (W4): a camera's `IMG_0001.JPG` no longer pairs with a Hoard `IMG_0001.CR3` of the same name; a
+  RAW and its JPEG that arrive in different parts of a big batch still become one photo; the originals Reveal keeps
+  for Hoard's Downloads copies are no longer left behind (backups of photos the server holds, a failed re-copy, a
+  shot that is a folder's photo); a copy that would fill the phone is refused and reported; a batch keeps going when
+  the screen rotates; the parts of a big batch stay until their previews are made, so photos do not end up blank.
+- The photo access offer for Hoard's photos is asked once on its own, only for Hoard's photos (also over the editor
+  for a single photo), and the older offer for gallery shares has its own wording again.
 - A preset batch or XMP export that Android stops in the background (not your Cancel) is resumed instead of dropped.
 - Export XMP to a chosen folder: a photo whose own sidecar is malformed now gets a fresh sidecar there (its own file
   is still left alone).

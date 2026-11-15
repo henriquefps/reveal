@@ -1,5 +1,6 @@
 package dev.hfps.reveal.data.handoff
 
+import android.annotation.SuppressLint
 import android.net.Uri
 import dev.hfps.image.ImageInput
 import dev.hfps.image.format.ImageFormats
@@ -18,7 +19,30 @@ import java.util.UUID
  * It is not a cache: the copy may be the only readable one, so the cache budget never evicts it. Only forgetting the
  * photo (or the hand-off retention) deletes it.
  */
-class LocalOriginals(val dir: File) {
+class LocalOriginals(
+    val dir: File,
+    /** Bytes left free after a copy (the copy is refused below it: "not enough space", reported to the user). */
+    private val margin: Long = MARGIN_BYTES,
+    /** Bytes a copy may use in a folder (the app passes `StorageManager.getAllocatableBytes`). */
+    private val usableSpace: (File) -> Long = ::plainUsableSpace,
+) {
+    @Volatile
+    private var swept = false
+
+    /** A copy refused for lack of space. */
+    class NoSpaceException(name: String) : IOException("not enough space to keep $name")
+
+    /** A copy already kept for [fingerprint] whose size is [size] (any size when unknown), or null. */
+    fun existing(fingerprint: String, name: String, size: Long): File? =
+        fileFor(fingerprint, name).takeIf { it.isFile && (size <= 0 || it.length() == size) }
+
+    /** Deletes the temporary files a copy interrupted by a kill left behind (once per process, before copying). */
+    fun sweep() {
+        if (swept) return
+        swept = true
+        dir.listFiles { f -> f.isFile && f.name.endsWith(".tmp") }?.forEach { it.delete() }
+    }
+
     /** The file that holds the original of [fingerprint] named [name] (the extension is kept for the decoders). */
     fun fileFor(fingerprint: String, name: String): File {
         val extension = name.substringAfterLast('.', "").lowercase().filter { it.isLetterOrDigit() }.take(MAX_EXTENSION)
@@ -35,7 +59,8 @@ class LocalOriginals(val dir: File) {
     /**
      * Copies [input] (closed here) into the store when it is an image (decided by [name] and the file's own first
      * bytes, never by a MIME type: Downloads says `application/octet-stream`); returns the copy's file, or null when
-     * the content is not an image. An existing copy of the same size is reused. A failure leaves no partial file.
+     * the content is not an image. An existing copy of the same size is reused. A failure leaves no partial file;
+     * [NoSpaceException] when the copy would leave less than the margin free.
      */
     fun copyIn(input: ImageInput, fingerprint: String, name: String): File? = input.use { source ->
         FileInputStream(source.descriptor.fileDescriptor).channel.use { from ->
@@ -46,6 +71,9 @@ class LocalOriginals(val dir: File) {
             val size = source.descriptor.statSize
             if (target.isFile && (size <= 0 || target.length() == size)) return@use target
             from.position(0)
+            sweep()
+            dir.mkdirs()
+            if (usableSpace(dir) - size.coerceAtLeast(0) < margin) throw NoSpaceException(name)
             store(from, size, target)
             target
         }
@@ -73,7 +101,7 @@ class LocalOriginals(val dir: File) {
         }
     }
 
-    /** Deletes the copies of [fingerprints] (their photo was forgotten); only copies, never anything else. */
+    /** Deletes the copies of [fingerprints] (their photo was forgotten, whatever its rows point at); only copies. */
     fun delete(fingerprints: Collection<String>) {
         val prefixes = fingerprints.map { fileFor(it, "").name }.toSet()
         dir.listFiles()?.filter { it.isFile && it.name.substringBefore('.') in prefixes }?.forEach { it.delete() }
@@ -87,8 +115,17 @@ class LocalOriginals(val dir: File) {
         fun isDownloads(uri: Uri): Boolean = uri.scheme == "content" && uri.authority == "media" &&
             uri.pathSegments.any { it == "downloads" }
 
-        private const val HEAD_BYTES = 64
+        /** Whether [documentId] is a kept copy in a `handoff-originals` folder (any process's path, for SQL too). */
+        const val DIR_NAME = "handoff-originals"
+
+        /** The head bytes a name-less (extensionless) Downloads item is classified by. */
+        const val HEAD_BYTES = 64
+        const val MARGIN_BYTES = 200L * 1024 * 1024
         private const val CHUNK = 8L * 1024 * 1024
         private const val MAX_EXTENSION = 8
     }
 }
+
+/** The folder's plain usable space (tests; the app asks `StorageManager`, which counts clearable caches too). */
+@SuppressLint("UsableSpace")
+private fun plainUsableSpace(dir: File): Long = dir.usableSpace

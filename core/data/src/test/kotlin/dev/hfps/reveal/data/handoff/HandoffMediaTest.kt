@@ -27,7 +27,6 @@ import dev.hfps.reveal.data.synthetic.SyntheticShoot
 import java.io.File
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Before
@@ -100,19 +99,23 @@ class HandoffMediaTest {
         byteArrayOf(0, 0, 0, 24) + "ftypcrx ".toByteArray() + ByteArray(16),
     )
 
-    private fun media(collection: String, id: Int, name: String, bytes: ByteArray): Uri {
+    private fun media(collection: String, id: Int, name: String, bytes: ByteArray, path: String? = null): Uri {
         val file = File(temp.newFolder(), name).apply { writeBytes(bytes) }
-        return Uri.parse("content://media/external_primary/$collection/$id").also { tree.aliases[it.toString()] = file }
+        return Uri.parse("content://media/external_primary/$collection/$id").also {
+            tree.aliases[it.toString()] = file
+            tree.relativePaths[it.toString()] =
+                path ?: if (collection == "downloads") HOARD_DOWNLOADS else HOARD_PICTURES
+        }
     }
 
-    private fun image(id: Int, name: String) = media(
-        "images/media",
-        id,
-        name,
-        unique(name, SyntheticShoot.jpeg(SyntheticShoot.markerOnlyJpeg(600, 400), SyntheticExif())),
-    )
+    private fun jpegBytes(name: String) =
+        unique(name, SyntheticShoot.jpeg(SyntheticShoot.markerOnlyJpeg(600, 400), SyntheticExif()))
 
-    private fun download(id: Int, name: String) = media("downloads", id, name, cr3Bytes(name))
+    private fun image(id: Int, name: String, path: String? = null) =
+        media("images/media", id, name, jpegBytes(name), path)
+
+    private fun download(id: Int, name: String, path: String? = null) =
+        media("downloads", id, name, cr3Bytes(name), path)
 
     private suspend fun rows() = db.photoDao().rows(PhotoQuerySql.toQuery(PhotoQuery.FROM_APPS))
 
@@ -126,15 +129,33 @@ class HandoffMediaTest {
         assertThat(offer(true, GalleryAccessState.FULL, false)).isFalse()
         // Answered once (allowed or declined): never again, in any state.
         GalleryAccessState.entries.forEach { assertThat(offer(true, it, true)).isFalse() }
-        // No MediaStore photo in a hand-off: nothing to offer.
+        // No MediaStore photo from Hoard: nothing to offer.
         assertThat(offer(false, GalleryAccessState.NONE, false)).isFalse()
     }
 
     @Test
-    fun `a hand-off with MediaStore photos is what the offer looks for`() = runTest {
-        assertThat(db.photoDao().observeMediaHandoffs().first()).isFalse()
-        repo().receive(HandoffRequest(listOf(image(1, "IMG_0001.JPG"), image(2, "IMG_0002.JPG"))))
-        assertThat(db.photoDao().observeMediaHandoffs().first()).isTrue()
+    fun `the media offer is Hoard's Images documents only, with its own answer`() {
+        assertThat(HandoffApps.isHoard("dev.hfps.hoard")).isTrue()
+        assertThat(HandoffApps.isHoard("dev.hfps.hoard.debug")).isTrue()
+        assertThat(HandoffApps.isHoard("dev.hfps.hoardx")).isFalse()
+        assertThat(HandoffApps.isHoard("com.sec.android.gallery3d")).isFalse()
+        assertThat(HandoffApps.referrerPackage(Uri.parse("android-app://dev.hfps.hoard"))).isEqualTo("dev.hfps.hoard")
+        assertThat(HandoffApps.referrerPackage(Uri.parse("https://example.com"))).isNull()
+        assertThat(GalleryAccess.isMediaImages("content://media/external_primary/images/media/7")).isTrue()
+        assertThat(GalleryAccess.isMediaImages("content://media/external_primary/downloads/7")).isFalse()
+        assertThat(GalleryAccess.isMediaImages("content://dev.hfps.hoard.stream/h/1/A.JPG")).isFalse()
+
+        val access = GalleryAccess(context).apply { resetAskedForTests() }
+        access.noteHoardMedia()
+        assertThat(access.hoardMedia.value).isTrue()
+        // Answering the old offer (an unreadable gallery share) does not answer Hoard's, and the other way round.
+        access.setAsked()
+        assertThat(access.mediaAsked.value).isFalse()
+        access.resetAskedForTests()
+        access.setMediaAsked()
+        assertThat(access.asked.value).isFalse()
+        assertThat(GalleryAccess(context).mediaAsked.value).isTrue()
+        access.resetAskedForTests()
     }
 
     // ------------------------------------------------------------------ grants and pairing
@@ -153,6 +174,46 @@ class HandoffMediaTest {
         val photo = rows().single()
         assertThat(photo.format).isEqualTo(PhotoFormat.RAW_PAIR)
         assertThat(db.photoDao().files(photo.id).map { it.role }).containsExactly(FileRole.RAW, FileRole.RENDERED)
+    }
+
+    @Test
+    fun `MediaStore pairing keys on the folder below the collection, so a camera's file never pairs with Hoard's`() =
+        runTest {
+            // A camera JPEG in DCIM and a Hoard CR3 of the same stem: two photos.
+            val camera = image(1, "IMG_0001.JPG", path = "DCIM/Camera/")
+            val hoard = download(2, "IMG_0001.CR3")
+            repo().receive(HandoffRequest(listOf(camera, hoard), title = "Mixed"))
+            assertThat(rows()).hasSize(2)
+
+            fun key(path: String?) = HandoffRepository.parentKey(
+                Uri.parse("content://media/external_primary/images/media/1"),
+                path,
+            )
+            assertThat(key("Pictures/Hoard/Trip/")).isEqualTo(key("Download/Hoard/Trip/"))
+            assertThat(key("Pictures/Hoard/Trip/")).isNotEqualTo(key("Pictures/Hoard/Other/"))
+            assertThat(key("DCIM/Camera/")).isNotEqualTo(key("Pictures/Camera/Sub/"))
+            assertThat(key("DCIM/")).isEqualTo(key("Pictures/"))
+            // Without its path (not readable) a MediaStore URI pairs only within its collection.
+            assertThat(
+                HandoffRepository.parentKey(Uri.parse("content://media/external_primary/downloads/2"), null),
+            ).isNotEqualTo(key(null))
+        }
+
+    @Test
+    fun `a RAW in a later chunk joins its JPEG from an earlier chunk of the same batch`() = runTest {
+        val jpeg = image(1, "IMG_0009.JPG")
+        val raw = download(2, "IMG_0009.CR3")
+        val other = image(3, "IMG_0010.JPG")
+        repo().receive(HandoffRequest(listOf(jpeg, other), title = "Trip", batchAt = 5_000L, batchIndex = 0))
+        repo().receive(HandoffRequest(listOf(raw), title = "Trip", batchAt = 5_000L, batchIndex = 1))
+        val photos = rows().associateBy { it.name }
+        assertThat(photos.keys).containsExactly("IMG_0009.CR3", "IMG_0010.JPG")
+        val pair = photos.getValue("IMG_0009.CR3")
+        assertThat(pair.format).isEqualTo(PhotoFormat.RAW_PAIR)
+        assertThat(db.photoDao().files(pair.id).map { it.role }).containsExactly(FileRole.RAW, FileRole.RENDERED)
+        // Another batch (another stamp) with the same names is not joined.
+        repo().receive(HandoffRequest(listOf(download(4, "IMG_0010.CR3")), title = "Trip", batchAt = 6_000L))
+        assertThat(rows()).hasSize(3)
     }
 
     // ------------------------------------------------------------------ kept originals
@@ -214,6 +275,123 @@ class HandoffMediaTest {
         library().forget(listOf(photo.id))
         assertThat(rows()).isEmpty()
         assertThat(originals.files().map { it.name }).containsExactly(stray.name)
+    }
+
+    @Test
+    fun `a Downloads file of a folder's photo is not copied`() = runTest {
+        val bytes = cr3Bytes("IMG_0011.CR3")
+        val folder = temp.newFolder("card")
+        File(folder, "IMG_0011.CR3").writeBytes(bytes)
+        val sourceId = db.sourceDao().insert(
+            SourceEntity(0, "content://test/tree/card", "", "card", null, null, SourceState.AVAILABLE, false, 0),
+        )
+        val folderTree = dev.hfps.reveal.data.FileDocumentTree(folder)
+        LibraryIndexer(db).index(sourceId, folderTree)
+        LibraryIndexer(db).fillFingerprints(sourceId, folderTree)
+
+        repo().receive(HandoffRequest(listOf(media("downloads", 11, "IMG_0011.CR3", bytes))))
+
+        assertThat(originals.files()).isEmpty()
+        assertThat(db.photoDao().handoffFiles()).isEmpty()
+    }
+
+    @Test
+    fun `a kept copy is filed again when the URI cannot be read, and forgetting deletes it whatever the row says`() =
+        runTest {
+            val raw = download(7, "IMG_0012.CR3")
+            repo().receive(HandoffRequest(listOf(raw)))
+            assertThat(originals.files()).hasSize(1)
+            // Handed over again while the URI cannot be opened for a copy (the grant is gone by the time it is read):
+            // its stat and fingerprint are known from before (the row keeps the URI), the kept copy is filed again.
+            tree.refusedOpens += raw.toString()
+            repo().receive(HandoffRequest(listOf(raw)))
+            val file = db.photoDao().files(rows().single().id).single()
+            assertThat(originals.isLocal(file.documentId)).isTrue()
+            assertThat(originals.files()).hasSize(1)
+
+            // A copy whose row was never repointed (a kill between the copy and the update) is still deleted.
+            db.photoDao().repointFile(file.sourceId, file.documentId, raw.toString())
+            library().forget(listOf(rows().single().id))
+            assertThat(originals.files()).isEmpty()
+        }
+
+    @Test
+    fun `a copy is refused below the free-space margin and reported, the photo keeps its URI`() = runTest {
+        originals = LocalOriginals(temp.newFolder("full"), margin = 1_000, usableSpace = { 500 })
+        val raw = download(7, "IMG_0013.CR3")
+        val received = repo().receiveStaged(HandoffRequest(listOf(raw)))
+        assertThat(received.settled.await().noSpace).isEqualTo(1)
+        assertThat(originals.files()).isEmpty()
+        assertThat(db.photoDao().handoffFiles().single().documentId).isEqualTo(raw.toString())
+    }
+
+    @Test
+    fun `temporary files of an interrupted copy are swept, an extensionless Downloads item is kept by its bytes`() =
+        runTest {
+            val stale = File(originals.dir.apply { mkdirs() }, "1234.tmp").apply { writeText("half") }
+            val unnamed = media("downloads", 14, "IMG_0014", cr3Bytes("IMG_0014"))
+            tree.names[unnamed.toString()] = "IMG_0014"
+            repo().receive(HandoffRequest(listOf(unnamed)))
+            assertThat(stale.exists()).isFalse()
+            val photo = rows().single()
+            assertThat(photo.format).isEqualTo(PhotoFormat.RAW)
+            assertThat(originals.files()).hasSize(1)
+        }
+
+    @Test
+    fun `a silent chunk settles once its display previews are made, smart ones only while its grant lives`() = runTest {
+        val displays = java.util.concurrent.atomic.AtomicInteger()
+        val smarts = java.util.concurrent.atomic.AtomicInteger()
+        val making = object : PreviewMaking {
+            override fun display(raw: dev.hfps.image.ImageInput?, rendered: dev.hfps.image.ImageInput?, out: File) {
+                displays.incrementAndGet()
+                out.writeBytes(byteArrayOf(1))
+            }
+
+            override fun smart(main: dev.hfps.image.ImageInput, out: File) {
+                smarts.incrementAndGet()
+                out.writeBytes(byteArrayOf(2))
+            }
+        }
+        val previews = LocalPreviews(temp.newFolder("previews"))
+        val scope = CoroutineScope(Dispatchers.IO)
+        val previewer = HandoffPreviewer(tree, previews, scope, making)
+        val staged = HandoffRepository(
+            resolver,
+            db,
+            LibraryIndexer(db) { now },
+            tree,
+            previewer,
+            originals,
+            background = scope,
+        ) { now }
+        val chunk0 = (1..3).map { image(it, "IMG_%04d.JPG".format(20 + it)) }
+        val chunk1 = (4..6).map { image(it, "IMG_%04d.JPG".format(20 + it)) }
+        // An editor is open (chunk 0's photo): smart previews wait, display images do not.
+        previewer.editorOpened()
+        staged.receiveStaged(HandoffRequest(chunk0, title = "Trip", batchAt = 7_000L, batchIndex = 0))
+            .settled.await()
+
+        // Chunk 1: its activity holds the grant until its display previews are made, then finishes.
+        var alive = true
+        val received = staged.receiveStaged(
+            HandoffRequest(chunk1, title = "Trip", batchAt = 7_000L, batchIndex = 1),
+        ) { alive }
+        received.settled.await()
+        val prints = chunk1.map { uri -> db.photoDao().handoffFiles().single { it.documentId == uri.toString() } }
+            .map { it.fingerprint }
+        assertThat(prints.all { previews.display(it) != null }).isTrue()
+        // The activity finishes and the grant is revoked: no smart preview is attempted on those URIs any more;
+        // chunk 0's holder (the visible activity) still lives, so its smart previews are made.
+        alive = false
+        tree.refused += chunk1.map { it.toString() }
+        tree.opens.clear()
+        previewer.editorClosed()
+        previewer.idle()
+        assertThat(prints.none { previews.smart(it) != null }).isTrue()
+        assertThat(tree.opens.filter { id -> chunk1.any { it.toString() == id } }).isEmpty()
+        assertThat(smarts.get()).isEqualTo(chunk0.size)
+        assertThat(displays.get()).isEqualTo(6)
     }
 
     // ------------------------------------------------------------------ access check on MediaStore URIs
@@ -341,5 +519,10 @@ class HandoffMediaTest {
         repo().receive(HandoffRequest(listOf(image(9_999, "NEW.JPG")), title = "Small"))
         assertThat(rows().count { it.handoffTitle == "Small" }).isEqualTo(1)
         assertThat(rows().size).isEqualTo(HandoffRepository.MAX_PHOTOS)
+    }
+
+    private companion object {
+        const val HOARD_PICTURES = "Pictures/Hoard/Trip/"
+        const val HOARD_DOWNLOADS = "Download/Hoard/Trip/"
     }
 }

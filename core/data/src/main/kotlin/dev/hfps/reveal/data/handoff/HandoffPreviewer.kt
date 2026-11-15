@@ -65,12 +65,15 @@ class HandoffPreviewer(
         val raw: Document?,
         val rendered: Document?,
         val smart: Boolean,
+        /** Whether the documents can still be read when its smart preview's turn comes (W4: the grant's holder). */
+        val readable: () -> Boolean = { true },
     )
 
     /** A document of the hand-off tree: its id (the content URI) and name. */
     data class Document(val id: String, val name: String)
 
-    private val lock = Mutex()
+    private val displayLock = Mutex()
+    private val smartLock = Mutex()
     private val jobs = ArrayList<Job>()
     private val editors = MutableStateFlow(0)
 
@@ -91,22 +94,30 @@ class HandoffPreviewer(
 
     fun editorClosed() = editors.update { (it - 1).coerceAtLeast(0) }
 
-    /** Previews [shots] in order, after the ones scheduled before: every display image, then the smart previews. */
-    fun schedule(shots: List<Shot>) {
-        if (shots.isEmpty()) return
-        val job = scope.launch {
-            lock.withLock {
-                shots.forEach { display(it) }
+    /**
+     * Previews [shots] in order, after the ones scheduled before: every display image, then the smart previews. Display
+     * images never wait behind smart previews (those wait for the editor to close). Returns the job of these shots'
+     * display images (a hand-off's holder waits for it before it lets its grant go, ADR 0011 "Amendment W4"); a smart
+     * preview is made only while its shot is still [Shot.readable].
+     */
+    fun schedule(shots: List<Shot>): Job {
+        if (shots.isEmpty()) return Job().apply { complete() }
+        val displays = scope.launch { displayLock.withLock { shots.forEach { display(it) } } }
+        val smarts = scope.launch {
+            displays.join()
+            smartLock.withLock {
                 for (shot in shots.filter { it.smart }) {
                     quiet()
-                    smart(shot)
+                    if (shot.readable()) smart(shot)
                 }
             }
         }
         synchronized(jobs) {
             jobs.removeAll { it.isCompleted }
-            jobs += job
+            jobs += displays
+            jobs += smarts
         }
+        return displays
     }
 
     /** Waits for every scheduled preview (tests, and the access check that follows a hand-off). */

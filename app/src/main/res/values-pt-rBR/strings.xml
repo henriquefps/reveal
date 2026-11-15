@@ -10,4 +10,9 @@
     <string name="about_licence_body">GNU AGPL-3.0 ou posterior. Código-fonte: github.com/henriquefps/reveal</string>
     <string name="about_third_party">Licenças de terceiros</string>
     <string name="handoff_unreadable">O Reveal não conseguiu abrir essas fotos. Confira se o outro app compartilhou imagens que o Reveal consegue ler.</string>
+    <plurals name="handoff_no_space">
+        <item quantity="one">Sem espaço para guardar %1$d original do Hoard: ele mostra só a prévia.</item>
+        <item quantity="many">Sem espaço para guardar %1$d originais do Hoard: eles mostram só a prévia.</item>
+        <item quantity="other">Sem espaço para guardar %1$d originais do Hoard: eles mostram só a prévia.</item>
+    </plurals>
 </resources>

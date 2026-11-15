@@ -527,18 +527,28 @@ interface PhotoDao {
     )
     fun observeUnreadableHandoffs(): Flow<List<String>>
 
-    /** Whether any hand-off photo has a MediaStore file (the gallery access offer on receipt, W4). */
+    /**
+     * The hand-off photo an earlier chunk of the same batch filed for a shot (batch stamp [at], parent key [folder],
+     * stem [stem]): a later chunk's member joins it (ADR 0011 "Amendment W4").
+     */
     @Query(
-        "SELECT EXISTS (SELECT 1 FROM photo_files f JOIN sources s ON s.id = f.source_id JOIN photos p ON " +
-            "p.id = f.photo_id WHERE s.kind = 'HANDOFF' AND p.hidden = 0 AND f.document_id LIKE 'content://media/%')",
+        "SELECT * FROM photos WHERE source_id = :sourceId AND handoff_at = :at AND folder_document_id = :folder " +
+            "AND stem_key = :stem ORDER BY id LIMIT 1",
     )
-    fun observeMediaHandoffs(): Flow<Boolean>
+    suspend fun batchShot(sourceId: Long, at: Long, folder: String, stem: String): PhotoEntity?
 
-    /** Points a file row at another document (a hand-off's local copy of its original, W4). */
+    /** Of [fingerprints], those a file row still files under a kept local copy (`handoff-originals`, W4). */
     @Query(
-        "UPDATE photo_files SET document_id = :to, relative_path = :to " +
-            "WHERE document_id = :from AND source_id = :sourceId",
+        "SELECT DISTINCT fingerprint FROM photo_files WHERE fingerprint IN (:fingerprints) " +
+            "AND document_id LIKE 'file:%/handoff-originals/%'",
     )
+    suspend fun localCopyPrints(fingerprints: List<String>): List<String>
+
+    /**
+     * Points a file row at another document (a hand-off's local copy of its original, W4). Its `relative_path` keeps
+     * the sender's URI, so the same URI handed over again finds the row (and its fingerprint) without reading it.
+     */
+    @Query("UPDATE photo_files SET document_id = :to WHERE document_id = :from AND source_id = :sourceId")
     suspend fun repointFile(sourceId: Long, from: String, to: String)
 
     /** How many photos the newest hand-off batch holds (it is never pruned, however big). */

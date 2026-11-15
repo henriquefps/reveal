@@ -27,6 +27,7 @@ import dev.hfps.reveal.data.handoff.HandoffMerge
 import dev.hfps.reveal.data.handoff.LocalOriginals
 import dev.hfps.reveal.data.handoff.LocalPreviews
 import dev.hfps.reveal.data.handoff.MergeReport
+import dev.hfps.reveal.data.handoff.deleteCopies
 import dev.hfps.reveal.data.index.IndexProgress
 import dev.hfps.reveal.data.index.IndexReport
 import dev.hfps.reveal.data.index.LibraryIndexer
@@ -264,9 +265,6 @@ class LibraryRepository(
         }
     }
 
-    /** Whether the hand-offs hold MediaStore photos (the gallery access offer on receipt, ADR 0011 W4). */
-    fun hasMediaHandoffs(): Flow<Boolean> = photoDao.observeMediaHandoffs().distinctUntilChanged()
-
     /** Hand-off documents Reveal cannot read now (the gallery access offer, ADR 0011). */
     fun unreadableHandoffs(): Flow<List<String>> = photoDao.observeUnreadableHandoffs()
 
@@ -491,8 +489,9 @@ class LibraryRepository(
         gone.map { it.id }.chunked(SQL_ARGS).forEach { ids ->
             val files = photoDao.filesOf(ids)
             previews?.delete(files.mapNotNull { it.fingerprint })
-            originals?.delete(files.filter { originals.isLocal(it.documentId) }.mapNotNull { it.fingerprint })
             photoDao.deletePhotos(ids)
+            // By fingerprint, whatever the rows pointed at, unless another row still files under the copy (W4).
+            originals?.let { deleteCopies(photoDao, it, files.mapNotNull { file -> file.fingerprint }) }
         }
         hide.map { it.id }.chunked(SQL_ARGS).forEach { photoDao.setHidden(it, true) }
         photoIds.size
@@ -700,7 +699,7 @@ class LibraryRepository(
         if (report.merged > 0) {
             Log.i(TAG, "Merged ${report.merged} hand-off photos into source $sourceId")
             previews?.delete(report.fingerprints)
-            originals?.delete(report.fingerprints)
+            originals?.let { deleteCopies(photoDao, it, report.fingerprints) }
         }
         report
     }

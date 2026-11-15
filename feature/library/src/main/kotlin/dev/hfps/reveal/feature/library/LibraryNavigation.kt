@@ -201,11 +201,12 @@ fun LibraryScreen(
     }
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { viewModel.onResumed() }
     val galleryPartial by viewModel.galleryPartial.collectAsStateWithLifecycle()
-    if (galleryOffer) {
+    galleryOffer?.let { offer ->
         GalleryAccessSheet(
+            offer = offer,
             partial = galleryPartial,
             onAllow = { galleryPermission.launch(GalleryAccess.permissions()) },
-            onDecline = viewModel::declineGalleryAccess,
+            onDecline = { viewModel.declineGalleryAccess(offer) },
         )
     }
     state.unavailableInfo?.let { info ->

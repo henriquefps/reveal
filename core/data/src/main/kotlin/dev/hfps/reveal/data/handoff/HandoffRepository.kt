@@ -3,13 +3,16 @@ package dev.hfps.reveal.data.handoff
 import android.content.ContentResolver
 import android.content.Intent
 import android.net.Uri
+import android.provider.MediaStore
 import android.util.Log
 import androidx.core.net.toUri
 import androidx.room.withTransaction
 import dev.hfps.image.format.ImageFormats
+import dev.hfps.image.format.ImageKind
 import dev.hfps.image.format.ListedFile
 import dev.hfps.image.format.ShotPairing
 import dev.hfps.reveal.data.db.FingerprintMatch
+import dev.hfps.reveal.data.db.PhotoDao
 import dev.hfps.reveal.data.db.PhotoEntity
 import dev.hfps.reveal.data.db.PhotoFileEntity
 import dev.hfps.reveal.data.db.RevealDatabase
@@ -28,8 +31,13 @@ import dev.hfps.reveal.data.xmp.SidecarCulling
 import dev.hfps.reveal.data.xmp.SidecarNames
 import dev.hfps.reveal.data.xmp.XmpFields
 import dev.hfps.reveal.data.xmp.XmpReader
+import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
@@ -74,6 +82,8 @@ sealed interface HandoffOutcome {
  * mtime), never by name, so re-sending the same file updates it and keeps its edits and a different file with the
  * same name is a new photo.
  */
+// One request's whole path (resolve, pair, file, culling, copies, previews, retention) lives here (ADR 0011).
+@Suppress("LargeClass")
 class HandoffRepository(
     private val resolver: ContentResolver,
     private val db: RevealDatabase,
@@ -85,6 +95,13 @@ class HandoffRepository(
     private val originals: LocalOriginals? = null,
     /** The paired server, to resolve server references (ADR 0011 "Amendment W3/H"); never paired by default. */
     private val server: ServerItems = ServerItems.None,
+    /**
+     * Where the rest of a request's work runs after its outcome is known (B8: the copies after the initial photo's, the
+     * previews): the app's scope; null = inline, before [receiveStaged] returns (tests).
+     */
+    private val background: CoroutineScope? = null,
+    /** The photo permission is FULL: `MediaStore.Images` documents stay readable after the grant (W4). */
+    private val mediaReadable: () -> Boolean = { false },
     private val clock: () -> Long = System::currentTimeMillis,
 ) {
     private val photos = db.photoDao()
@@ -93,7 +110,7 @@ class HandoffRepository(
     /** One resolved document of the request; [fingerprint] is its content fingerprint (null: unreadable). */
     private class Item(val uri: Uri, val entry: DocumentEntry) {
         val name: String get() = entry.name
-        val parent: String get() = parentKey(uri)
+        val parent: String get() = parentKey(uri, entry.relativePath)
         var fingerprint: String? = null
     }
 
@@ -102,12 +119,40 @@ class HandoffRepository(
         var sidecar: Item? = null
     }
 
-    suspend fun receive(request: HandoffRequest): HandoffOutcome = withContext(Dispatchers.IO) {
-        // Server references first: they never touch the sender, so they resolve whatever the URIs do.
-        val batch = request.server?.let { refs.resolve(it, request.title, at = request.batchAt) }
-        if (request.uris.isEmpty()) return@withContext serverOutcome(batch)
-        receiveUris(request, batch)
-    }
+    /** What a request did once everything that needs the sender's grant is done ([Received.settled]). */
+    data class Settled(
+        /** Originals that were not kept for lack of space ("not enough space": they show their preview only). */
+        val noSpace: Int = 0,
+    )
+
+    /**
+     * A request's [outcome] (known once the photo to open first is in: its rows, and its local copy of a Downloads
+     * original) and [settled], completed when the rest is done: the other copies and the display previews of the
+     * shots whose documents only the sender's grant covers. The activity that holds the grant waits for [settled]
+     * before it finishes (a silent batch member, ADR 0011 "Amendment W4").
+     */
+    class Received(val outcome: HandoffOutcome, val settled: Deferred<Settled>)
+
+    /** [receiveStaged], waiting for everything ([Received.settled]) before it returns the outcome. */
+    suspend fun receive(request: HandoffRequest): HandoffOutcome =
+        receiveStaged(request).also { it.settled.await() }.outcome
+
+    /**
+     * Receives [request] (ADR 0011). [holderAlive]: whether the activity that holds the intent's grant still lives
+     * (smart previews of documents only that grant covers are made only while it does).
+     */
+    suspend fun receiveStaged(request: HandoffRequest, holderAlive: () -> Boolean = { true }): Received =
+        withContext(Dispatchers.IO) {
+            // Server references first: they never touch the sender, so they resolve whatever the URIs do.
+            val batch = request.server?.let { refs.resolve(it, request.title, at = request.batchAt) }
+            if (request.uris.isEmpty()) {
+                return@withContext Received(
+                    serverOutcome(batch),
+                    CompletableDeferred(Settled()),
+                )
+            }
+            receiveUris(request, batch, holderAlive)
+        }
 
     /**
      * The photos kept for [HandoffOutcome.ServerRefs] when Reveal was not paired: after pairing with the sender's
@@ -166,7 +211,12 @@ class HandoffRepository(
     }
 
     @Suppress("LongMethod", "CyclomaticComplexMethod")
-    private suspend fun receiveUris(request: HandoffRequest, batch: ServerBatch?): HandoffOutcome {
+    private suspend fun receiveUris(
+        request: HandoffRequest,
+        batch: ServerBatch?,
+        holderAlive: () -> Boolean,
+    ): Received {
+        val done: Deferred<Settled> = CompletableDeferred(Settled())
         val persisted = HashSet<Uri>()
         val items = request.uris.mapNotNull { uri ->
             if (persist(uri, request.persistable)) persisted += uri
@@ -177,19 +227,22 @@ class HandoffRepository(
                 entry ?: DocumentEntry(uri.toString(), uri.lastPathSegment.orEmpty().substringAfterLast('/'), "", 0, 0),
             )
         }
-        val (sidecarItems, imageItems) = items.partition { SidecarNames.isSidecar(it.name) }
+        val (sidecarItems, named) = items.partition { SidecarNames.isSidecar(it.name) }
+        // A Downloads item may have no extension: its first bytes decide, and it is named after what it is (B9).
+        val imageItems = named.map(::sniffed)
         val displayable = imageItems.filter { ImageFormats.classify(it.name).isDisplayable }
         if (displayable.isEmpty()) {
             // Keep M0's behaviour for a single unrecognised name: the editor opens it by URI and explains.
             val single = imageItems.singleOrNull()
             val serverHasSay = batch != null && (batch.photos.isNotEmpty() || batch.issue != null)
-            return if (serverHasSay || (batch != null && batch.notFound > 0)) {
+            val outcome = if (serverHasSay || (batch != null && batch.notFound > 0)) {
                 serverOutcome(batch)
             } else if (single != null && request.uris.size == 1) {
                 HandoffOutcome.OpenUri(single.uri)
             } else {
                 HandoffOutcome.Nothing
             }
+            return Received(outcome, done)
         }
         val shots = pair(displayable, sidecarItems)
         val source = ensureSource()
@@ -197,7 +250,9 @@ class HandoffRepository(
         val now = request.batchAt ?: clock()
         val stored = ArrayList<Pair<Shot, StoredShot>>()
         db.withTransaction {
-            for (shot in shots) stored += shot to store(source.id, shot, now, request.title)
+            for (shot in shots) {
+                stored += shot to store(source.id, shot, now, request.title, joinBatch = request.batchAt != null)
+            }
             photos.deleteEmptyPhotos(source.id)
         }
         // Headers first: what is embedded in a file (JPEG XMP) only fills an unrated photo, and the sender's culling
@@ -213,14 +268,25 @@ class HandoffRepository(
                 }
             }
         }
-        keepOriginals(source.id, shots)
-        schedulePreviews(stored, initial, persisted)
         val served = batch?.photos.orEmpty()
         val total = stored.size + served.size
         val first = initial ?: stored.firstOrNull()
+        // The photo the editor or the library opens first: its Downloads original is kept before the outcome (B8).
+        val head = listOfNotNull(first)
+        val rest = stored.filter { it !== first }
+        val headNoSpace = keepOriginals(source.id, head, parallel = 1)
+        // The editor opens after this returns (one photo, or the initial one): its decode comes first.
+        if (initial != null || stored.size == 1) previewer?.expectEditor()
+        val headPreviews = schedulePreviews(source.id, head, persisted, holderAlive)
+        val settled = later {
+            val noSpace = headNoSpace + keepOriginals(source.id, rest, parallel = COPY_PARALLELISM)
+            schedulePreviews(source.id, rest, persisted, holderAlive).join()
+            headPreviews.join()
+            Settled(noSpace)
+        }
         val notFound = batch?.notFound ?: 0
         val issue = batch?.issue
-        return when {
+        val outcome = when {
             // An item to open at once wins over a URI one (ADR 0011 "Amendment W3/H").
             batch?.initialVersionId != null ->
                 HandoffOutcome.OpenEditor(batch.initialVersionId, total == 1, total > 1, notFound, issue)
@@ -238,30 +304,99 @@ class HandoffRepository(
                 issue,
             )
         }
+        return Received(outcome, settled)
+    }
+
+    /**
+     * Runs [block] after the outcome: in [background] when there is one (its result completes the returned value),
+     * else at once. A failure is logged and settles with nothing more done.
+     */
+    private suspend fun later(block: suspend () -> Settled): Deferred<Settled> {
+        suspend fun guarded(): Settled = try {
+            block()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
+            Log.w(TAG, "A hand-off's background work failed: ${e.javaClass.simpleName}")
+            Settled()
+        }
+        val scope = background ?: return CompletableDeferred(guarded())
+        return scope.async { guarded() }
+    }
+
+    /** [item] named after what its first bytes say when its name has no extension (a Downloads item, B9). */
+    @Suppress("ReturnCount")
+    private fun sniffed(item: Item): Item {
+        if (item.name.substringAfterLast('.', "").isNotEmpty()) return item
+        val head = runCatching {
+            tree.openInput(item.uri.toString(), item.name).use { input ->
+                java.io.FileInputStream(input.descriptor.fileDescriptor).use { stream ->
+                    val bytes = ByteArray(LocalOriginals.HEAD_BYTES)
+                    bytes.copyOf(stream.read(bytes).coerceAtLeast(0))
+                }
+            }
+        }.getOrNull() ?: return item
+        val type = ImageFormats.classify(item.name, head)
+        val raw = type.raw
+        val extension = when {
+            raw != null -> raw.extensions.first()
+            type.kind == ImageKind.JPEG -> "jpg"
+            type.kind == ImageKind.HEIF -> "heic"
+            type.kind == ImageKind.PNG -> "png"
+            type.kind == ImageKind.WEBP -> "webp"
+            else -> return item
+        }
+        return Item(item.uri, item.entry.copy(name = "${item.name}.$extension"))
     }
 
     /**
      * Copies the files the sender's temporary grant covers only (MediaStore Downloads, W4) into [originals] while the
-     * grant is valid, and files them under the copy. The copy goes through the tree's [FileOpens] slot (`busy:` is
-     * retried); a failure keeps the URI, and the photo falls back to its preview as for any unreadable hand-off.
+     * grant is valid, and files them under the copy; [parallel] at a time, each open through the tree's [FileOpens]
+     * slot (`busy:` is retried). Only files filed under the hand-off source: a shot that is a folder's or a Server
+     * photo (`foreign`) keeps its own files and gets no copy (B3). A copy already kept (same fingerprint and size) is
+     * reused without opening the URI again (B4). A failure keeps the URI, and the photo falls back to its preview as
+     * for any unreadable hand-off. Returns how many were not kept for lack of space.
      */
-    private suspend fun keepOriginals(sourceId: Long, shots: List<Shot>) {
-        val store = originals ?: return
-        for (shot in shots) {
-            for ((item, _) in shot.files) {
-                val print = item.fingerprint
-                if (print == null || !LocalOriginals.isDownloads(item.uri)) continue
-                val copy = try {
-                    store.copyIn(tree.openInput(item.uri.toString(), item.name), print, item.name)
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
-                    Log.w(TAG, "Could not keep the original of a Downloads hand-off: ${e.javaClass.simpleName}")
-                    null
-                }
-                if (copy != null) photos.repointFile(sourceId, item.uri.toString(), store.documentId(copy))
-            }
+    @Suppress("ReturnCount")
+    private suspend fun keepOriginals(sourceId: Long, stored: List<Pair<Shot, StoredShot>>, parallel: Int): Int {
+        val store = originals ?: return 0
+        val wanted = stored.filterNot { it.second.foreign }.flatMap { (shot, ids) ->
+            shot.files.map { it.first }
+                .filter { it.fingerprint != null && LocalOriginals.isDownloads(it.uri) }
+                .map { ids.photoId to it }
         }
+        if (wanted.isEmpty()) return 0
+        val gate = Semaphore(parallel)
+        val noSpace = AtomicInteger()
+        coroutineScope {
+            wanted.map { (photoId, item) ->
+                async {
+                    gate.withPermit { if (!keepOriginal(store, sourceId, photoId, item)) noSpace.incrementAndGet() }
+                }
+            }.awaitAll()
+        }
+        return noSpace.get()
+    }
+
+    /** One [keepOriginals] file; false only when it was refused for lack of space. */
+    @Suppress("ReturnCount")
+    private suspend fun keepOriginal(store: LocalOriginals, sourceId: Long, photoId: Long, item: Item): Boolean {
+        val uri = item.uri.toString()
+        if (photos.files(photoId).none { it.sourceId == sourceId && it.documentId == uri }) return true
+        val print = checkNotNull(item.fingerprint)
+        val copy = store.existing(print, item.name, item.entry.size) ?: try {
+            store.copyIn(tree.openInput(uri, item.name), print, item.name)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: LocalOriginals.NoSpaceException) {
+            Log.w(TAG, "Not enough space to keep the original of a Downloads hand-off", e)
+            return false
+        } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
+            Log.w(TAG, "Could not keep the original of a Downloads hand-off: ${e.javaClass.simpleName}")
+            null
+        }
+        if (copy != null) photos.repointFile(sourceId, uri, store.documentId(copy))
+        return true
     }
 
     /**
@@ -406,12 +541,13 @@ class HandoffRepository(
      * a counter reset) is two photos, and a file replaced under the same URI (other fingerprint) leaves its old photo
      * and does not inherit its recipe. A match in an added folder opens that photo as it is (its files stay there).
      */
-    @Suppress("LongMethod")
-    private suspend fun store(sourceId: Long, shot: Shot, now: Long, title: String?): StoredShot {
+    @Suppress("LongMethod", "ReturnCount")
+    private suspend fun store(sourceId: Long, shot: Shot, now: Long, title: String?, joinBatch: Boolean): StoredShot {
         val format = shotFormat(shot)
         val hasRaw = shot.files.any { it.second == FileRole.RAW }
         val sidecarId = shot.sidecar?.uri?.toString()
         val match = findPhoto(sourceId, shot)
+        if (match == null && joinBatch) joinEarlierChunk(sourceId, shot, now, title)?.let { return it }
         if (match != null && !match.handoff) {
             // The folder photo is the photo (ADR 0011 "One photo across sources"): its files stay where they are; it
             // shows in "Opened from other apps" with this batch.
@@ -474,6 +610,56 @@ class HandoffRepository(
             },
         )
         return StoredShot(photoId, versionId, previousHandoff = previous)
+    }
+
+    /**
+     * A safety net for a batch split over several intents (ADR 0011 "Amendment W4"; the sender keeps a shot's members
+     * in one chunk): a single file whose shot an earlier chunk of the same batch (same `handoff_at` stamp) already
+     * filed, under the same parent key and stem, joins that photo when the photo lacks its role (a RAW meets its JPEG).
+     */
+    @Suppress("ReturnCount")
+    private suspend fun joinEarlierChunk(sourceId: Long, shot: Shot, now: Long, title: String?): StoredShot? {
+        val (item, role) = shot.files.singleOrNull() ?: return null
+        if (role == FileRole.OTHER) return null
+        val photo = photos.batchShot(sourceId, now, shot.folder, shot.stem) ?: return null
+        val files = photos.files(photo.id)
+        if (files.any { it.role == role }) return null
+        photos.insertFiles(
+            listOf(
+                PhotoFileEntity(
+                    photoId = photo.id,
+                    sourceId = sourceId,
+                    relativePath = item.uri.toString(),
+                    documentId = item.uri.toString(),
+                    name = item.name,
+                    size = item.entry.size,
+                    modified = item.entry.modified,
+                    role = role,
+                    fingerprint = item.fingerprint,
+                ),
+            ),
+        )
+        val raw = if (role == FileRole.RAW) item.name else files.firstOrNull { it.role == FileRole.RAW }?.name
+        val rendered = if (role ==
+            FileRole.RENDERED
+        ) {
+            item.name
+        } else {
+            files.firstOrNull { it.role == FileRole.RENDERED }?.name
+        }
+        val format = LibraryIndexer.format(
+            dev.hfps.image.format.Shot(
+                stem = shot.stem,
+                raw = raw?.let(::ListedFile),
+                rendered = rendered?.let(::ListedFile),
+            ),
+        )
+        // The RAW is the shot's main file from now on.
+        photos.updateHandoff(
+            photo.id, raw ?: photo.name, format, raw != null, shot.folder, now, title, photo.xmpDocumentId,
+            photo.xmpModified,
+        )
+        return StoredShot(photo.id, checkNotNull(photos.firstVersion(photo.id)))
     }
 
     /**
@@ -707,7 +893,8 @@ class HandoffRepository(
         stale.chunked(SQL_ARGS).forEach { photos.deletePhotos(it) }
         files.forEach { release(it.documentId.toUri()) }
         previewer?.previews?.delete(files.mapNotNull { it.fingerprint })
-        originals?.delete(files.filter { originals.isLocal(it.documentId) }.mapNotNull { it.fingerprint })
+        // By fingerprint, whatever the rows pointed at (a copy whose row was never repointed too), unless still used.
+        originals?.let { deleteCopies(photos, it, files.mapNotNull { file -> file.fingerprint }) }
     }
 
     /**
@@ -725,35 +912,55 @@ class HandoffRepository(
     }
 
     /**
-     * Local previews of the hand-off photos (ADR 0011 "Unreadable hand-offs"), [initial] first: the display image for
-     * each, the smart preview for those whose grant is temporary. Folder photos need none (their folder stays
-     * readable).
+     * Local previews of the hand-off photos (ADR 0011 "Unreadable hand-offs"): schedules those of [stored] (their files
+     * as filed now: a kept copy is read instead of the sender's URI). Returns the job of the display previews of the
+     * shots whose documents only the sender's grant covers (the holder waits for it); the others' display previews and
+     * every smart preview go on in the background, a smart preview of such a document only while [holderAlive] (else
+     * it comes from the display preview or the server).
      */
-    private fun schedulePreviews(
+    private suspend fun schedulePreviews(
+        sourceId: Long,
         stored: List<Pair<Shot, StoredShot>>,
-        initial: Pair<Shot, StoredShot>?,
         persisted: Set<Uri>,
-    ) {
-        val previewer = previewer ?: return
-        // The editor opens after `receive` returns (one photo, or the initial one): its decode comes first.
-        if (initial != null || stored.size == 1) previewer.expectEditor()
-        val first = initial ?: stored.firstOrNull()
-        val ordered = listOfNotNull(first) + stored.filter { it !== first }
-        val shots = ordered.filterNot { it.second.foreign }.mapNotNull { (shot, _) ->
-            val fingerprint = shot.main.fingerprint ?: return@mapNotNull null
-            fun document(role: FileRole) = shot.files.firstOrNull { it.second == role }?.first?.let {
-                HandoffPreviewer.Document(it.uri.toString(), it.name)
+        holderAlive: () -> Boolean,
+    ): Job {
+        val previewer = previewer ?: return Job().apply { complete() }
+        val shots = stored.filterNot { it.second.foreign }.mapNotNull { (shot, ids) ->
+            val files = photos.files(ids.photoId).filter { it.sourceId == sourceId }
+            val main =
+                files.firstOrNull { it.role == FileRole.RAW } ?: files.firstOrNull { it.role == FileRole.RENDERED }
+            val fingerprint = main?.fingerprint ?: shot.main.fingerprint ?: return@mapNotNull null
+            fun document(role: FileRole) = files.firstOrNull { it.role == role }?.let {
+                HandoffPreviewer.Document(it.documentId, it.name)
             }
+            val documents = files.map { it.documentId }
+            val lasting = documents.all { readableLater(it, persisted) }
             HandoffPreviewer.Shot(
                 fingerprint = fingerprint,
-                main = HandoffPreviewer.Document(shot.main.uri.toString(), shot.main.name),
+                main = HandoffPreviewer.Document(
+                    main?.documentId ?: shot.main.uri.toString(),
+                    main?.name ?: shot.main.name,
+                ),
                 raw = document(FileRole.RAW),
                 rendered = document(FileRole.RENDERED),
                 smart = shot.main.uri !in persisted,
-            )
+                readable = { lasting || holderAlive() },
+            ) to lasting
         }
-        previewer.schedule(shots)
+        // The shots only the grant covers first, in their own call: the holder waits for exactly these.
+        val (lasting, granted) = shots.partition { it.second }
+        val wait = previewer.schedule(granted.map { it.first })
+        previewer.schedule(lasting.map { it.first })
+        return wait
     }
+
+    /**
+     * Whether [documentId] stays readable after the sender's grant ends: a kept copy (`file:`), a persisted grant, or a
+     * `MediaStore.Images` document while the photo permission is FULL.
+     */
+    private fun readableLater(documentId: String, persisted: Set<Uri>): Boolean =
+        documentId.startsWith("file:") || documentId.toUri() in persisted ||
+            (GalleryAccess.isMediaImages(documentId) && mediaReadable())
 
     private fun release(uri: Uri) {
         runCatching {
@@ -770,6 +977,9 @@ class HandoffRepository(
 
         /** Hand-off photos kept (unedited ones beyond this are forgotten, with their grants). */
         const val MAX_PHOTOS = 400
+
+        /** Downloads originals copied at a time after the initial photo's (B8). */
+        const val COPY_PARALLELISM = 2
         private const val SQL_ARGS = 900
         private const val FINGERPRINT_PARALLELISM = 4
 
@@ -794,20 +1004,39 @@ class HandoffRepository(
         private fun agree(a: Long, b: Long) = a == 0L || b == 0L || a == b
 
         /**
-         * The "folder" two files must share to pair. A document URI whose decoded last segment is a path (SAF
-         * `primary:DCIM/Camera/DSC1.ARW`) uses that path's directory; otherwise the URI minus its last segment
-         * (FileProvider paths, a MediaStore collection: a batch from one collection pairs by stem).
+         * The "folder" two files must share to pair. A MediaStore document ([relativePath] = its `RELATIVE_PATH`) uses
+         * that path without its top-level folder (`Pictures/`, `DCIM/`, `Download/`); a document URI whose decoded last
+         * segment is a path (SAF `primary:DCIM/Camera/DSC1.ARW`) uses that path's directory; otherwise the URI minus
+         * its last segment (FileProvider paths).
          */
-        fun parentKey(uri: Uri): String {
-            // MediaStore (W4): Hoard's RAW can sit in Downloads and its JPEG in Images, so every MediaStore URI of a
-            // request shares one parent and pairs by stem.
+        fun parentKey(uri: Uri, relativePath: String? = null): String {
             val segment = uri.lastPathSegment.orEmpty()
             val text = uri.toString()
             return when {
-                uri.authority == "media" -> "media:"
+                // MediaStore (W4): the file's folder without its top-level collection folder, so Hoard's
+                // `Pictures/Hoard/<batch>/` and `Download/Hoard/<batch>/` pair (a CR3 in Downloads, its JPEG in
+                // Images) while a camera's `DCIM/IMG_0001.JPG` does not pair with a Hoard `IMG_0001.CR3`.
+                uri.authority == MediaStore.AUTHORITY && relativePath != null ->
+                    "media:" + relativePath.trim('/').substringAfter('/', "").lowercase()
+
                 '/' in segment -> "${uri.authority}:${segment.substringBeforeLast('/')}"
+
+                // A MediaStore URI without its path (not readable): its collection, nothing else.
                 else -> text.substring(0, text.lastIndexOf('/').coerceAtLeast(0))
             }
         }
     }
 }
+
+/**
+ * Deletes the kept originals of [fingerprints] (their photos were forgotten or merged) except those a file row still
+ * files under its copy (ADR 0011 "Amendment W4").
+ */
+internal suspend fun deleteCopies(photos: PhotoDao, originals: LocalOriginals, fingerprints: List<String>) {
+    val prints = fingerprints.distinct()
+    if (prints.isEmpty()) return
+    val used = prints.chunked(LOCAL_COPY_ARGS).flatMap { photos.localCopyPrints(it) }.toSet()
+    originals.delete(prints - used)
+}
+
+private const val LOCAL_COPY_ARGS = 500

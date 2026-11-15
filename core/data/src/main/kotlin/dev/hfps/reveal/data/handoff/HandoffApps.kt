@@ -22,4 +22,14 @@ object HandoffApps {
         val launch = packageManager.getLaunchIntentForPackage(app.packageName) ?: return null
         SenderApp(app.packageName, packageManager.getApplicationLabel(app).toString(), launch)
     }.getOrNull()
+
+    /** The package that started Reveal ([android.app.Activity.getReferrer]: `android-app://<package>`), or null. */
+    fun referrerPackage(referrer: Uri?): String? =
+        referrer?.takeIf { it.scheme == "android-app" }?.host?.takeIf { it.isNotBlank() }
+
+    /** Hoard (any build: `dev.hfps.hoard`, `.debug`, ...): its MediaStore copies need the photo permission (W4). */
+    fun isHoard(packageName: String?): Boolean = packageName != null &&
+        (packageName == HOARD_PACKAGE || packageName.startsWith("$HOARD_PACKAGE."))
+
+    private const val HOARD_PACKAGE = "dev.hfps.hoard"
 }

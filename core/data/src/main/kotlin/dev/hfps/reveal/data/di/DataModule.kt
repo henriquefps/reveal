@@ -3,6 +3,7 @@ package dev.hfps.reveal.data.di
 import android.app.ActivityManager
 import android.content.Context
 import android.os.Build
+import android.os.storage.StorageManager
 import androidx.core.net.toUri
 import androidx.room.Room
 import dagger.Module
@@ -19,7 +20,9 @@ import dev.hfps.reveal.data.editor.EditorLayoutPreferences
 import dev.hfps.reveal.data.export.ExportPreferences
 import dev.hfps.reveal.data.export.ExportPresetRepository
 import dev.hfps.reveal.data.handoff.GalleryAccess
+import dev.hfps.reveal.data.handoff.GalleryAccessState
 import dev.hfps.reveal.data.handoff.HandoffBatches
+import dev.hfps.reveal.data.handoff.HandoffIngests
 import dev.hfps.reveal.data.handoff.HandoffPreviewer
 import dev.hfps.reveal.data.handoff.HandoffRepository
 import dev.hfps.reveal.data.handoff.HandoffTree
@@ -121,8 +124,16 @@ object DataModule {
     /** Originals of hand-offs that only a temporary grant covers (ADR 0011 "Amendment W4"): kept, never evicted. */
     @Provides
     @Singleton
-    fun provideLocalOriginals(@ApplicationContext context: Context): LocalOriginals =
-        LocalOriginals(File(context.noBackupFilesDir, "handoff-originals"))
+    fun provideLocalOriginals(@ApplicationContext context: Context): LocalOriginals {
+        val storage = context.getSystemService(StorageManager::class.java)
+        return LocalOriginals(
+            File(context.noBackupFilesDir, LocalOriginals.DIR_NAME),
+            // Unknown (the volume cannot say): the copy is tried, and a write that fails leaves no partial file.
+            usableSpace = { dir ->
+                runCatching { storage.getAllocatableBytes(storage.getUuidForPath(dir)) }.getOrDefault(Long.MAX_VALUE)
+            },
+        )
+    }
 
     @Provides
     @Singleton
@@ -145,6 +156,8 @@ object DataModule {
         previewer: HandoffPreviewer,
         server: ServerItems,
         originals: LocalOriginals,
+        gallery: GalleryAccess,
+        @DataScope scope: CoroutineScope,
     ): HandoffRepository = HandoffRepository(
         context.contentResolver,
         database,
@@ -152,7 +165,17 @@ object DataModule {
         previewer = previewer,
         originals = originals,
         server = server,
+        background = scope,
+        mediaReadable = {
+            gallery.refresh()
+            gallery.state.value == GalleryAccessState.FULL
+        },
     )
+
+    /** Hand-offs received in the app's scope, re-attached by a recreated activity (ADR 0011 "Amendment W4"). */
+    @Provides
+    @Singleton
+    fun provideHandoffIngests(@DataScope scope: CoroutineScope): HandoffIngests = HandoffIngests(scope)
 
     @Provides
     @Singleton

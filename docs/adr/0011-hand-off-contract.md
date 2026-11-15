@@ -549,14 +549,21 @@ by Hoard into MediaStore and handed over as a `content://media/...` URI in the u
 (`content://dev.hfps.hoard.stream/...`) are the **legacy** path: not used for new hand-offs, but the links already in
 existing libraries keep working (`busy:` handling stays).
 
+**Sender contract: a shot's members stay in one chunk** (agreed with Hoard's coordinator): when Hoard splits a batch
+over several intents, a RAW and its JPEG (and any other member of the shot) go in the same intent. Reveal keeps a
+safety net for a sender that does not (item 5).
+
 **Reveal.**
-1. *Gallery access on receipt.* When a hand-off holds `content://media` photos and `GalleryAccess` is not FULL, the
-   library offers the permission once in a sheet ("To open photos from Hoard, Reveal needs access to all your
-   photos"): `GalleryAccess.shouldOfferForMedia`, driven by `PhotoDao.observeMediaHandoffs` (any hand-off file under
-   `content://media/`). The batch opens meanwhile from the temporary grant. PARTIAL gets a variant that says only the
-   selected photos stay openable (what the grant allows opens; later reads that fail fall back to previews,
-   `HandoffPreviewer`). NONE/declined behaves as before. The answer is remembered (`asked`); Settings → Gallery access
-   changes it. A single-photo hand-off opens the editor, so the sheet shows when the library is next visited.
+1. *Gallery access on receipt.* When **Hoard** (the referrer package `dev.hfps.hoard*`, `HandoffApps.isHoard`; the
+   debug build's `HandoffHostActivity` plays it in tests) hands over documents of the `MediaStore.Images` collection
+   (`GalleryAccess.isMediaImages`: `content://media/...` outside `/downloads/`, which is copied instead, item 3) and
+   access is not FULL, Reveal offers the permission once ("To open photos from Hoard, Reveal needs access to all your
+   photos"): `GalleryAccess.noteHoardMedia` on receipt, `shouldOfferForMedia(hoardMedia, state, mediaAsked)`. A batch
+   shows it in the library (`LibraryViewModel.galleryOffer` = `GalleryOffer.HOARD`); a single photo shows it over the
+   editor (`MainActivity.EditorGalleryOffer`, the same design-system sheet, non-blocking). The batch opens meanwhile
+   from the temporary grant. PARTIAL gets a variant that says only the selected photos stay openable. Its answer is
+   its own (`mediaAsked`, separate from the older gallery-share offer's `asked`, whose text is unchanged:
+   `GalleryOffer.SHARED`); Settings → Gallery access changes it.
 2. *Media URIs are stable references* under FULL (and for the selected photos under PARTIAL): re-openable without
    grants. The access check (`recheckAccess`, `checkHandoffs`, the background pass) simply opens them through
    `FileOpens`: readable stays readable, only a real refusal (`isAccessError`) marks a file unreadable, `busy:` never
@@ -565,27 +572,55 @@ existing libraries keep working (`busy:` handling stays).
    file at `content://media/<volume>/downloads/<id>` (detected by URI, confirmed by its name and magic bytes, never by
    MIME) is copied, while the intent's grant is valid, into `noBackupFilesDir/handoff-originals/<fingerprint>.<ext>`
    (`LocalOriginals`, through the tree's `FileOpens` slot, `busy:` retried) and the file row is repointed at the copy
-   (`file:` URI). It is read from there from then on, never marked unreadable when the grant ends, and uploaded from
-   there; identity stays by fingerprint. It is *not* a cache: the budget never evicts it (a copy may be the only
+   (`document_id` = the `file:` URI; `relative_path` keeps the sender's URI, so the same URI handed over again finds
+   the row and its fingerprint without reading). It is read from there from then on, never marked unreadable when the
+   grant ends, and uploaded from there; identity stays by fingerprint. Only files filed under the hand-off source are
+   copied (a shot that is a folder's or a Server photo keeps its own files, `StoredShot.foreign`). A copy already kept
+   (same fingerprint and size) is filed again without opening the URI, so a failed re-copy never orphans it, and
+   forgetting / the retention / a merge delete copies **by fingerprint** whatever the rows point at, unless a row
+   still files under the copy (`deleteCopies`). Copies are refused when they would leave less than 200 MiB
+   (`StorageManager.getAllocatableBytes`; reported as "not enough space", the photo keeps its URI and falls back to
+   its preview); `*.tmp` files of an interrupted copy are swept before the first copy. An item without an extension is
+   classified by its first bytes (and named after them) before the name filter, so an extensionless Downloads file is
+   not dropped. It is *not* a cache: the budget never evicts it (a copy may be the only
    readable one), it has its own row in Settings → Storage (`StorageKind.HANDOFF_ORIGINALS`, not part of "Clear
    cache"), and only forgetting the photo, the retention, or merging it into a folder photo that has the file deletes it.
 4. *Identity* is the v1 fingerprint as before: a Hoard copy, the NAS/server original and an earlier hand-off of the
    same content are one photo (`HandoffMerge`, folder-first and hand-off-first paths).
-5. *Pairing* across collections: a CR3 in Downloads and its JPEG in Images arrive in one intent with different parents,
-   so every MediaStore URI of a request shares one parent key (`HandoffRepository.parentKey`) and pairs by stem.
+5. *Pairing* across collections: a CR3 in Downloads and its JPEG in Images arrive in one intent with different parents.
+   The parent key of a MediaStore document (`HandoffRepository.parentKey(uri, relativePath)`) is its `RELATIVE_PATH`
+   without the top-level folder (`Pictures/`, `DCIM/`, `Download/`), read by `HandoffTree.stat`: Hoard's
+   `Pictures/Hoard/<batch>/` and `Download/Hoard/<batch>/` pair by stem, a camera's `DCIM/Camera/IMG_0001.JPG` never
+   pairs with a Hoard `IMG_0001.CR3`. Without its path (not queryable) a MediaStore URI pairs only within its
+   collection. Safety net for split batches: a single file whose shot an earlier chunk of the same batch (same
+   `handoff_at` stamp) filed under the same key and stem joins that photo when the photo lacks its role
+   (`PhotoDao.batchShot`, `joinEarlierChunk`).
 6. *Adoption (W3/C) leaves local copies alone:* `SyncDao.adoptableHandoffs` skips a main file that is a readable
-   `content://media/` file; an unreadable one is adopted as before.
+   `content://media/` file (an unreadable one is adopted as before) and never adopts a kept Downloads original
+   (`file:` under `handoff-originals`): adoption would drop the row and orphan the copy.
 7. No write grants are asked on these URIs and no sidecar is written for them (ADR 0026 "Amendment W4").
 8. *Chunks.* Media-URI items split at 200 per intent use the same `BATCH_INDEX`/`BATCH_COUNT` scheme as server items;
-   `HandoffIntents`, `HandoffBatches` and `MainActivity` treat URI-only, server-only and mixed chunks alike: index > 0
-   ingests silently inside its own activity (its temporary grant, including the Downloads copy, is used before that
-   activity finishes), one shared stamp and title (one entry in "Opened from other apps"), notices shown once,
-   culling applied per chunk, the initial photo opens from index 0 only. The hand-off retention (400 photos) never cuts
-   the newest batch, however big.
+   `HandoffIntents`, `HandoffBatches` and `MainActivity` treat URI-only, server-only and mixed chunks alike: one
+   shared stamp and title (one entry in "Opened from other apps"), notices shown once, culling applied per chunk, the
+   initial photo opens from index 0 only. The hand-off retention (400 photos) never cuts the newest batch.
+9. *The grant's holder waits for what needs it.* Each intent is received in the app's scope (`HandoffIngests`, keyed
+   per intent and saved in the activity's state), so a recreated activity (rotation) re-attaches instead of dropping
+   a batch half-way; the activity follows it. `HandoffRepository.receiveStaged` returns the outcome once the photo to
+   open first is filed (and its Downloads original kept): index 0 opens the editor or the library then. The rest
+   (the other copies, 2 at a time through `FileOpens`, and the display previews) completes `Received.settled` in the
+   background. A silent member (index > 0) keeps its activity, and so the intent's grant, until `settled`: the display
+   previews of its own shots whose documents only that grant covers are written (`HandoffPreviewer.schedule` returns
+   their job; display images never wait behind smart previews), then it finishes. Under FULL access Images documents
+   need no waiting. A smart preview of a grant-only document is made only while its holder lives
+   (`HandoffIngests.Ingest.holderGone` when it finishes); otherwise it comes from the display preview or the server later.
 
-Tests: `HandoffMediaTest` (JVM: offer state machine, no persistable grant, cross-collection pairing, kept original +
-revoked grant + restart + forget, access check, identity incl. a Server photo, URI chunks, retention),
-`HandoffServerRefsTest` (URI/server/mixed chunks), `HandoffAdoptionTest`, `ReadOnlyGrantsTest`; instrumented
-`HandoffMediaTest` (real MediaStore Images/Downloads, read grant only through `HandoffHostActivity`, 450 URIs in
-3 chunks).
+Tests: `HandoffMediaTest` (JVM: offer state machine and its own answer, Hoard-only Images trigger, no persistable
+grant, cross-collection pairing by relative path (DCIM never pairs with Hoard), a RAW in a later chunk joining its
+JPEG, kept original + revoked grant + restart + forget, no copy for a folder's photo, a kept copy reused when the URI
+cannot be opened, forget by fingerprint, free-space refusal, `.tmp` sweep, an extensionless Downloads item, a silent
+chunk whose grant is revoked after it settled (display previews made, no smart preview attempted), access check,
+identity incl. a Server photo, URI chunks, retention), `HandoffServerRefsTest` (URI/server/mixed chunks),
+`HandoffAdoptionTest` (kept originals never adopted), `ReadOnlyGrantsTest`; instrumented `HandoffMediaTest` (real
+MediaStore Images/Downloads, read grant only through `HandoffHostActivity`, 600 URIs in 3 chunks of 200, the editor's
+offer once, a batch that survives `recreate()` mid-ingest).
 

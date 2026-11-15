@@ -41,4 +41,8 @@
         <item>ZXing core (QR codes)|Apache-2.0</item>
     </string-array>
     <string name="handoff_unreadable">Reveal could not open those photos. Check that the other app shared images Reveal can read.</string>
+    <plurals name="handoff_no_space">
+        <item quantity="one">Not enough space to keep %1$d original from Hoard: it shows its preview only.</item>
+        <item quantity="other">Not enough space to keep %1$d originals from Hoard: they show their preview only.</item>
+    </plurals>
 </resources>

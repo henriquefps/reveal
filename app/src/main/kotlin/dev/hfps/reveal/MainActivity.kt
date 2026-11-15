@@ -8,8 +8,10 @@ import android.view.MotionEvent
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -23,7 +25,11 @@ import androidx.navigation.NavDestination.Companion.hasRoute
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import dagger.hilt.android.AndroidEntryPoint
+import dev.hfps.reveal.data.handoff.GalleryAccess
+import dev.hfps.reveal.data.handoff.GalleryAccessState
+import dev.hfps.reveal.data.handoff.HandoffApps
 import dev.hfps.reveal.data.handoff.HandoffBatches
+import dev.hfps.reveal.data.handoff.HandoffIngests
 import dev.hfps.reveal.data.handoff.HandoffIntents
 import dev.hfps.reveal.data.handoff.HandoffNotice
 import dev.hfps.reveal.data.handoff.HandoffOutcome
@@ -43,6 +49,8 @@ import dev.hfps.reveal.feature.editor.navigateToEditor
 import dev.hfps.reveal.feature.editor.presets.PresetLinkHost
 import dev.hfps.reveal.feature.editor.presets.PresetLinkViewModel
 import dev.hfps.reveal.feature.editor.presets.PresetMessages
+import dev.hfps.reveal.feature.library.GalleryAccessSheet
+import dev.hfps.reveal.feature.library.GalleryOffer
 import dev.hfps.reveal.feature.library.HandoffServerSheet
 import dev.hfps.reveal.feature.library.LibraryRoute
 import dev.hfps.reveal.feature.library.ViewerRoute
@@ -51,8 +59,10 @@ import dev.hfps.reveal.input.PalmRejection
 import dev.hfps.reveal.navigation.RevealNavHost
 import dev.hfps.reveal.sync.SyncRepository
 import dev.hfps.reveal.theme.ThemeModeStore
+import java.util.UUID
 import javax.inject.Inject
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filterNotNull
@@ -76,6 +86,21 @@ class MainActivity : ComponentActivity() {
     @Inject
     lateinit var batches: HandoffBatches
 
+    @Inject
+    lateinit var ingests: HandoffIngests
+
+    @Inject
+    lateinit var gallery: GalleryAccess
+
+    /** The hand-off this activity receives (its key in [ingests], kept across recreation), or null. */
+    private var ingestKey: String? = null
+
+    /** The ingest whose outcome [openRequest] holds: marked shown once navigated to. */
+    private var requestKey: String? = null
+
+    /** A single photo from Hoard opened in the editor: the media offer may show over it (ADR 0011 "Amendment W4"). */
+    private val editorMediaOffer = MutableStateFlow(false)
+
     /** What a hand-off of server references could not do (docs/adr/0011 "Amendment W3/H"), until dismissed. */
     private val serverNotice = MutableStateFlow<ServerNotice?>(null)
 
@@ -98,8 +123,17 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        // A recreated activity restores its back stack; only a fresh launch handles its intent.
-        if (savedInstanceState == null) handleIntent(intent)
+        // A recreated activity restores its back stack; only a fresh launch handles its intent. A hand-off still being
+        // received when it was recreated goes on in the app's scope: this activity re-attaches to it.
+        if (savedInstanceState == null) {
+            handleIntent(intent)
+        } else {
+            savedInstanceState.getString(KEY_INGEST)?.let { key ->
+                ingestKey = key
+                ingests.attach(key)?.let(::follow)
+            }
+            editorMediaOffer.value = savedInstanceState.getBoolean(KEY_MEDIA_OFFER)
+        }
         watchServer()
         openedFromIntent = savedInstanceState?.getBoolean(KEY_FROM_INTENT) ?: openedFromIntent
         // Bulk background work (indexing, access checks, sync, the thumbnail prefetch) waits for the first frame
@@ -129,6 +163,8 @@ class MainActivity : ComponentActivity() {
                 val outcome = request ?: return@LaunchedEffect
                 openRequest.value = null
                 show(navController, outcome)
+                requestKey?.let { ingests.attach(it)?.shown = true }
+                requestKey = null
             }
             RevealTheme(darkTheme = dark) {
                 RevealNavHost(
@@ -143,7 +179,36 @@ class MainActivity : ComponentActivity() {
                 )
                 PresetLinkHost(presetLink)
                 ServerNoticeHost(navController)
+                EditorGalleryOffer()
             }
+        }
+    }
+
+    /**
+     * The photo permission offer over the editor, for a single photo Hoard handed over as a MediaStore copy (ADR 0011
+     * "Amendment W4"): non-blocking, once (the same answer as the library's offer).
+     */
+    @Composable
+    private fun EditorGalleryOffer() {
+        val wanted by editorMediaOffer.collectAsStateWithLifecycle()
+        val hoardMedia by gallery.hoardMedia.collectAsStateWithLifecycle()
+        val state by gallery.state.collectAsStateWithLifecycle()
+        val answered by gallery.mediaAsked.collectAsStateWithLifecycle()
+        val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
+            gallery.setMediaAsked()
+            gallery.refresh()
+            editorMediaOffer.value = false
+        }
+        if (wanted && GalleryAccess.shouldOfferForMedia(hoardMedia, state, answered)) {
+            GalleryAccessSheet(
+                offer = GalleryOffer.HOARD,
+                partial = state == GalleryAccessState.PARTIAL,
+                onAllow = { permission.launch(GalleryAccess.permissions()) },
+                onDecline = {
+                    gallery.setMediaAsked()
+                    editorMediaOffer.value = false
+                },
+            )
         }
     }
 
@@ -252,6 +317,14 @@ class MainActivity : ComponentActivity() {
     override fun onSaveInstanceState(outState: Bundle) {
         super.onSaveInstanceState(outState)
         outState.putBoolean(KEY_FROM_INTENT, openedFromIntent)
+        outState.putBoolean(KEY_MEDIA_OFFER, editorMediaOffer.value)
+        ingestKey?.let { outState.putString(KEY_INGEST, it) }
+    }
+
+    override fun onDestroy() {
+        // Finishing (not recreated): the intent's grant goes with this activity.
+        if (isFinishing) ingestKey?.let { ingests.attach(it)?.holderGone() }
+        super.onDestroy()
     }
 
     @Suppress("ReturnCount") // One early return per kind of intent: preset file, preset link, photo hand-off.
@@ -273,43 +346,82 @@ class MainActivity : ComponentActivity() {
         }
         val parsed = HandoffIntents.parse(intent) ?: return
         // Several intents of one sender and title are one batch (docs/adr/0011 "Batches over 500").
-        val key = HandoffBatches.key(referrer?.host, parsed.title, marked = parsed.batchIndex != null)
-        // The intents above the first of a split batch (`BATCH_INDEX` > 0) ingest and leave at once: never decided by
-        // the task (Hoard starts Reveal into its own task, so `isTaskRoot` is false for an ordinary hand-off too).
-        val silentMember = parsed.silentMember
+        val batchKey = HandoffBatches.key(referrer?.host, parsed.title, marked = parsed.batchIndex != null)
+        // Hoard's MediaStore copies need the photo permission to stay readable: offered once (ADR 0011 "Amendment
+        // W4"). The debug build's `HandoffHostActivity` plays Hoard in the instrumented tests.
+        val sender = HandoffApps.referrerPackage(referrer)
+        val fromHoard = HandoffApps.isHoard(sender) || (BuildConfig.DEBUG && sender == packageName)
+        val hoardMedia = fromHoard && parsed.uris.any { GalleryAccess.isMediaImages(it.toString()) }
+        if (hoardMedia) gallery.noteHoardMedia()
+        val key = UUID.randomUUID().toString()
+        ingestKey = key
+        // Received in the app's scope (a rotation does not drop a batch half-way); this activity follows it. The
+        // intents above the first of a split batch (`BATCH_INDEX` > 0) ingest and leave: never decided by the task
+        // (Hoard starts Reveal into its own task, so `isTaskRoot` is false for an ordinary hand-off too).
+        val ingest = ingests.start(key, parsed.silentMember, batchKey, hoardMedia) { holderAlive ->
+            val join = batchKey?.let { batches.join(it, parsed.batchCount) }
+            val received = receive(parsed.copy(batchAt = join?.at), holderAlive)
+            if (batchKey != null) {
+                batches.touch(batchKey)
+                // A silent member's notices wait for the intent that shows the batch: one sheet for all (ADR 0011).
+                if (parsed.silentMember) batches.report(batchKey, noticeOf(received.outcome))
+            }
+            HandoffIngests.Result(received, follower = join?.follower == true)
+        }
+        follow(ingest)
+    }
+
+    /**
+     * Follows [ingest] from this activity: shows its outcome once (a re-attached activity skips what was shown), then
+     * stays until everything that needs the intent's grant is done ([HandoffRepository.Received.settled]). A silent
+     * batch member shows nothing and finishes then (ADR 0011 "Amendment W4").
+     */
+    private fun follow(ingest: HandoffIngests.Ingest) {
         lifecycleScope.launch {
-            val join = key?.let { batches.join(it, parsed.batchCount) }
-            val request = parsed.copy(batchAt = join?.at)
-            val outcome = receive(request)
-            if (key != null) batches.touch(key)
-            if (silentMember) {
-                // Its notices wait for the intent that shows the batch: one sheet for all (ADR 0011).
-                if (key != null) batches.report(key, noticeOf(outcome))
+            val result = ingest.await()
+            val outcome = result.received.outcome
+            if (!ingest.silent && !ingest.shown) present(ingest, outcome, result.follower)
+            val settled = result.received.settled.await()
+            if (settled.noSpace > 0) {
+                Toast.makeText(
+                    this@MainActivity,
+                    resources.getQuantityString(R.plurals.handoff_no_space, settled.noSpace, settled.noSpace),
+                    Toast.LENGTH_LONG,
+                ).show()
+            }
+            if (ingest.silent) {
+                ingests.done(ingest.key)
                 finish()
                 @Suppress("DEPRECATION")
                 overridePendingTransition(0, 0)
-                return@launch
+            } else if (ingest.shown) {
+                ingests.done(ingest.key)
             }
-            // The notices of the whole batch (every member's, summed), shown once with this intent's outcome.
-            val notice = batches.takeNotices(key, noticeOf(outcome))
-            // The batch's other members were ingested before this one: the library is behind the editor.
-            val shown = if (join?.follower == true && outcome is HandoffOutcome.OpenEditor && outcome.closeOnBack) {
-                outcome.copy(closeOnBack = false, libraryBehind = true)
-            } else {
-                outcome
-            }
-            noticeShown = shown
-            notify(notice.issue, notice.notFound)
-            // A single photo opened in the editor: leaving it returns to the calling app.
-            openedFromIntent = shown is HandoffOutcome.OpenUri ||
-                (shown is HandoffOutcome.OpenEditor && shown.closeOnBack)
-            openRequest.value = shown
         }
     }
 
+    private suspend fun present(ingest: HandoffIngests.Ingest, outcome: HandoffOutcome, follower: Boolean) {
+        // The notices of the whole batch (every member's, summed), shown once with this intent's outcome.
+        val notice = batches.takeNotices(ingest.batchKey, noticeOf(outcome))
+        // The batch's other members were ingested before this one: the library is behind the editor.
+        val shown = if (follower && outcome is HandoffOutcome.OpenEditor && outcome.closeOnBack) {
+            outcome.copy(closeOnBack = false, libraryBehind = true)
+        } else {
+            outcome
+        }
+        noticeShown = shown
+        notify(notice.issue, notice.notFound)
+        // A single photo opened in the editor: leaving it returns to the calling app.
+        openedFromIntent = shown is HandoffOutcome.OpenUri ||
+            (shown is HandoffOutcome.OpenEditor && shown.closeOnBack)
+        if (ingest.hoardMedia && shown is HandoffOutcome.OpenEditor && shown.closeOnBack) editorMediaOffer.value = true
+        requestKey = ingest.key
+        openRequest.value = shown
+    }
+
     /** A hand-off that fails (a malformed server answer, a provider error) never crashes the app: a notice instead. */
-    private suspend fun receive(request: HandoffRequest): HandoffOutcome = try {
-        handoffs.receive(request)
+    private suspend fun receive(request: HandoffRequest, holderAlive: () -> Boolean): HandoffRepository.Received = try {
+        handoffs.receiveStaged(request, holderAlive)
     } catch (e: CancellationException) {
         throw e
     } catch (
@@ -317,16 +429,17 @@ class MainActivity : ComponentActivity() {
     ) {
         Log.w("RevealHandoff", "hand-off failed", e)
         val refs = request.server
-        if (refs !=
-            null
-        ) {
+        val outcome = if (refs != null) {
             HandoffOutcome.ServerRefs(ServerIssue.Unreachable(refs.items.size))
         } else {
             HandoffOutcome.Nothing
         }
+        HandoffRepository.Received(outcome, CompletableDeferred(HandoffRepository.Settled()))
     }
 
     private companion object {
         const val KEY_FROM_INTENT = "openedFromIntent"
+        const val KEY_INGEST = "handoffIngest"
+        const val KEY_MEDIA_OFFER = "editorMediaOffer"
     }
 }

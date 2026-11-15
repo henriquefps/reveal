@@ -343,13 +343,19 @@ adb -s <serial> shell am instrument -w -e class dev.hfps.reveal.handoff.HandoffS
 
 W4 local copies (ADR 0011 "Amendment W4"): Hoard 2.2.0 copies non-server photos into MediaStore (`Pictures/Hoard/<batch>`,
 and `Download/Hoard/<batch>` for what Images refuses, e.g. CR3) and hands over `content://media/...` URIs with a read grant
-only (no persistable grant, no write, no sidecar; chunks of 200 with `BATCH_INDEX/COUNT` like server items; SMB streaming
-links are legacy). `GalleryAccess.shouldOfferForMedia` (`PhotoDao.observeMediaHandoffs`) = the once-only offer on receipt
-(`GalleryAccessContent(partial)`); media URIs are never persisted (`HandoffRepository.persist`), all share one parent key
-so RAW (Downloads) and JPEG (Images) pair (`parentKey`); `handoff/LocalOriginals` copies a Downloads file while the grant
-lives into `noBackupFilesDir/handoff-originals/<fingerprint>.<ext>` and `PhotoDao.repointFile` files it under the `file:`
-copy (never evicted, `StorageKind.HANDOFF_ORIGINALS`, deleted by `forget`/retention/merge only); `SyncDao.adoptableHandoffs`
-skips readable `content://media/` files; the retention keeps the newest batch whole (`newestBatchSize`).
+only (no persistable grant, no write, no sidecar; chunks of 200 with `BATCH_INDEX/COUNT`, a shot's members in one chunk;
+SMB streaming links are legacy). Gallery offer: only for Hoard (`HandoffApps.isHoard(referrer)`) Images documents
+(`GalleryAccess.isMediaImages`, `noteHoardMedia`), its own answer `mediaAsked` (`GalleryOffer.HOARD`; the older share offer
+is `GalleryOffer.SHARED`/`asked`), in the library for a batch and over the editor for one photo (`MainActivity`). Media
+URIs are never persisted; pairing key = MediaStore `RELATIVE_PATH` minus its top folder (`parentKey(uri, relativePath)`),
+plus `joinEarlierChunk` for a split shot. `handoff/LocalOriginals` copies a Downloads file while the grant lives into
+`noBackupFilesDir/handoff-originals/<fingerprint>.<ext>` (free-space margin, `.tmp` sweep, existing copy reused) and
+`PhotoDao.repointFile` changes `document_id` only (`relative_path` keeps the URI); never evicted
+(`StorageKind.HANDOFF_ORIGINALS`), deleted by fingerprint (`deleteCopies`) on forget/retention/merge; never adopted
+(`SyncDao.adoptableHandoffs`). Receiving runs in the app's scope (`HandoffIngests`, re-attached after recreation):
+`receiveStaged` returns the outcome once the first photo is in, `Received.settled` when the rest (copies 2 at a time,
+display previews of grant-only shots) is done; a silent chunk's activity waits for it, smart previews of grant-only
+documents need the holder alive.
 ```sh
 ./gradlew :core:data:testDebugUnitTest --tests '*HandoffMediaTest*' --tests '*HandoffServerRefsTest*' --tests '*ReadOnlyGrantsTest*' && ./gradlew :core:sync:testDebugUnitTest --tests '*HandoffAdoptionTest*'
 adb -s <serial> shell pm grant dev.hfps.reveal.debug android.permission.READ_MEDIA_IMAGES   # FULL; `pm revoke` = NONE (kills the app)

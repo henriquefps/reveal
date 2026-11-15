@@ -123,7 +123,9 @@ class HandoffMediaTest {
                     compose.onAllNodes(hasTestTag(GalleryAccessTags.SHEET)).fetchSemanticsNodes().isNotEmpty()
                 }
                 compose.onNodeWithTag(GalleryAccessTags.DECLINE).performClick()
-                compose.waitUntil(TIMEOUT_MS) { access.galleryAccess().asked.value }
+                // Hoard's offer has its own answer: the older gallery-share offer is still unanswered.
+                compose.waitUntil(TIMEOUT_MS) { access.galleryAccess().mediaAsked.value }
+                assertThat(access.galleryAccess().asked.value).isFalse()
                 compose.waitUntil(TIMEOUT_MS) {
                     compose.onAllNodes(hasTestTag(GalleryAccessTags.SHEET)).fetchSemanticsNodes().isEmpty()
                 }
@@ -193,9 +195,42 @@ class HandoffMediaTest {
         }
     }
 
+    @Test
+    fun aSinglePhotoFromHoardOpensTheEditorWithTheOfferOverItOnce() {
+        val uri = image("$stem-single.jpg", jpegBytes(7))
+        val state = access.galleryAccess().also { it.refresh() }.state.value
+        assumeTrue("the offer shows below full access only", state != GalleryAccessState.FULL)
+        fromAnotherApp(intent(listOf(uri))) {
+            compose.waitUntil(TIMEOUT_MS) {
+                compose.onAllNodes(hasTestTag(GalleryAccessTags.SHEET)).fetchSemanticsNodes().isNotEmpty()
+            }
+            compose.onNodeWithTag(GalleryAccessTags.DECLINE).performClick()
+            compose.waitUntil(TIMEOUT_MS) { access.galleryAccess().mediaAsked.value }
+        }
+        // Once: the next single photo from Hoard opens without it.
+        val again = image("$stem-again.jpg", jpegBytes(8))
+        fromAnotherApp(intent(listOf(again))) {
+            compose.waitUntil(TIMEOUT_MS) { photos().any { it.name == "$stem-again.jpg" } }
+            compose.waitForIdle()
+            assertThat(compose.onAllNodes(hasTestTag(GalleryAccessTags.SHEET)).fetchSemanticsNodes()).isEmpty()
+        }
+    }
+
+    @Test
+    fun aBatchGoesOnWhenTheActivityIsRecreatedWhileItIsReceived() {
+        val bytes = SyntheticShoot.jpeg(SyntheticShoot.markerOnlyJpeg(64, 48), SyntheticExif())
+        val uris = (0 until CHUNK).map { n -> image("$stem-r%03d.jpg".format(n), bytes + "$stem-r$n".toByteArray()) }
+        ActivityScenario.launch<MainActivity>(intent(uris)).use { scenario ->
+            // A rotation (or any configuration change) while the batch is still being filed.
+            scenario.recreate()
+            compose.waitUntil(BIG_TIMEOUT_MS) { photos().size == uris.size }
+            assertThat(photos().map { it.handoffAt }.distinct()).hasSize(1)
+        }
+    }
+
     private companion object {
         const val TIMEOUT_MS = 30_000L
         const val BIG_TIMEOUT_MS = 240_000L
-        const val CHUNK = 150
+        const val CHUNK = 200
     }
 }

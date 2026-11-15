@@ -109,6 +109,7 @@ class LibraryThumbs(
     }
 
     /** Collects the cells' requests into batches and answers them. */
+    @Suppress("LoopWithTooManyJumpStatements")
     private suspend fun serveRequests() {
         while (true) {
             val first = requests.receive()
@@ -162,59 +163,19 @@ class LibraryThumbs(
         pendingRetries: Int = 0,
     ): Map<String, ServerThumb> {
         val now = clock()
-        val rows = dao.getAll(fingerprints).associateBy { it.fingerprint }
-        val known = HashMap<String, String>()
-        for (print in fingerprints) rows[print]?.itemId?.let { known[print] = it }
-        val unknown = fingerprints.filter { it !in known }
-        if (unknown.isNotEmpty()) known += lookup(client, unknown)
-        // In the order asked (the prefetch asks newest shot first; the server works in the warm's order).
-        val items = LinkedHashMap<String, String>()
-        for (print in fingerprints) known[print]?.let { items[print] = it }
+        val items = itemsOf(client, fingerprints)
         val results = HashMap<String, ServerThumb>()
-        val unavailable = ArrayList<ServerThumbEntity>()
-        for (print in fingerprints) {
-            if (print !in items) {
-                results[print] = ServerThumb.NotServed
-                unavailable += ServerThumbEntity(print, state = ServerThumbState.UNAVAILABLE, updatedAt = now)
-            }
+        val unavailable = fingerprints.filter { it !in items }
+        unavailable.forEach { results[it] = ServerThumb.NotServed }
+        if (unavailable.isNotEmpty()) {
+            dao.upsert(unavailable.map { ServerThumbEntity(it, state = ServerThumbState.UNAVAILABLE, updatedAt = now) })
         }
-        if (unavailable.isNotEmpty()) dao.upsert(unavailable)
         var waiting = items.entries.groupBy({ it.value }, { it.key })
         var attempt = 0
         while (waiting.isNotEmpty()) {
             val pending = HashMap<String, List<String>>()
-            waiting.keys.chunked(MAX_WARM).forEach { chunk ->
-                val warm = client.warmPreviews(chunk)
-                val missing = warm.missing.toSet()
-                val ready = ArrayList<Pair<String, String>>()
-                val rowsNow = ArrayList<ServerThumbEntity>()
-                for (item in warm.items) {
-                    val prints = waiting[item.id].orEmpty()
-                    val thumb = item.thumb
-                    when {
-                        thumb?.status == STATUS_READY && thumb.v != null -> ready += item.id to thumb.v
-
-                        thumb?.status == STATUS_PENDING -> {
-                            pending[item.id] = prints
-                            prints.forEach {
-                                rowsNow += ServerThumbEntity(it, item.id, state = ServerThumbState.PENDING, updatedAt = now)
-                                results[it] = ServerThumb.Later
-                            }
-                        }
-
-                        else -> prints.forEach {
-                            rowsNow += ServerThumbEntity(it, item.id, state = ServerThumbState.UNAVAILABLE, updatedAt = now)
-                            results[it] = ServerThumb.NotServed
-                        }
-                    }
-                }
-                for (id in missing) {
-                    waiting[id].orEmpty().forEach {
-                        rowsNow += ServerThumbEntity(it, null, state = ServerThumbState.UNAVAILABLE, updatedAt = now)
-                        results[it] = ServerThumb.NotServed
-                    }
-                }
-                if (rowsNow.isNotEmpty()) dao.upsert(rowsNow)
+            for (chunk in waiting.keys.chunked(MAX_WARM)) {
+                val ready = warm(client, chunk, waiting, now, results, pending)
                 results += download(client, ready, waiting)
             }
             if (pending.isEmpty() || attempt++ >= pendingRetries) break
@@ -222,6 +183,60 @@ class LibraryThumbs(
             waiting = pending
         }
         return results
+    }
+
+    /** fingerprint -> item id of [fingerprints] the server holds, in the order asked (newest shot first). */
+    private suspend fun itemsOf(client: SyncApi, fingerprints: List<String>): LinkedHashMap<String, String> {
+        val rows = dao.getAll(fingerprints).associateBy { it.fingerprint }
+        val known = HashMap<String, String>()
+        for (print in fingerprints) rows[print]?.itemId?.let { known[print] = it }
+        val unknown = fingerprints.filter { it !in known }
+        if (unknown.isNotEmpty()) known += lookup(client, unknown)
+        val items = LinkedHashMap<String, String>()
+        for (print in fingerprints) known[print]?.let { items[print] = it }
+        return items
+    }
+
+    /**
+     * One warm request for the items of [chunk]: records the pending and unavailable ones ([results], [pending]) and
+     * returns the ready ones with their `v`.
+     */
+    @Suppress("LongParameterList")
+    private suspend fun warm(
+        client: SyncApi,
+        chunk: List<String>,
+        waiting: Map<String, List<String>>,
+        now: Long,
+        results: MutableMap<String, ServerThumb>,
+        pending: MutableMap<String, List<String>>,
+    ): List<Pair<String, String>> {
+        val answer = client.warmPreviews(chunk)
+        val ready = ArrayList<Pair<String, String>>()
+        val rows = ArrayList<ServerThumbEntity>()
+        fun mark(prints: List<String>, item: String?, state: ServerThumbState, result: ServerThumb) = prints.forEach {
+            rows += ServerThumbEntity(it, item, state = state, updatedAt = now)
+            results[it] = result
+        }
+        for (item in answer.items) {
+            val prints = waiting[item.id].orEmpty()
+            val thumb = item.thumb
+            val v = thumb?.v
+            when {
+                thumb?.status == STATUS_READY && v != null -> ready += item.id to v
+
+                thumb?.status == STATUS_PENDING -> {
+                    pending[item.id] = prints
+                    mark(prints, item.id, ServerThumbState.PENDING, ServerThumb.Later)
+                }
+
+                else -> mark(prints, item.id, ServerThumbState.UNAVAILABLE, ServerThumb.NotServed)
+            }
+        }
+        for (id in answer.missing) {
+            mark(waiting[id].orEmpty(), null, ServerThumbState.UNAVAILABLE, ServerThumb.NotServed)
+        }
+        if (rows.isNotEmpty()) dao.upsert(rows)
+        return ready
     }
 
     /** fingerprint -> item id for [fingerprints] (the server's lookup, ≤ [MAX_LOOKUP] per request). */
@@ -242,7 +257,9 @@ class LibraryThumbs(
                 val targets = prints[id].orEmpty()
                 when (answer) {
                     is PreviewAnswer.Ready -> store(id, answer.v ?: v, answer.bytes, targets)
+
                     PreviewAnswer.Pending -> targets.associateWith { ServerThumb.Later }
+
                     PreviewAnswer.Unavailable -> {
                         dao.upsert(
                             targets.map {
@@ -257,10 +274,19 @@ class LibraryThumbs(
     }
 
     /** Re-encodes [bytes] small and stores the file once per fingerprint of the item. */
-    private suspend fun store(item: String, v: String, bytes: ByteArray, prints: List<String>): Map<String, ServerThumb> {
+    private suspend fun store(
+        item: String,
+        v: String,
+        bytes: ByteArray,
+        prints: List<String>,
+    ): Map<String, ServerThumb> {
         val small = codec.shrink(bytes, STORED_EDGE)
         if (small == null) {
-            dao.upsert(prints.map { ServerThumbEntity(it, item, state = ServerThumbState.UNAVAILABLE, updatedAt = clock()) })
+            dao.upsert(
+                prints.map {
+                    ServerThumbEntity(it, item, state = ServerThumbState.UNAVAILABLE, updatedAt = clock())
+                },
+            )
             return prints.associateWith { ServerThumb.NotServed }
         }
         dir.mkdirs()
@@ -302,6 +328,7 @@ class LibraryThumbs(
      * is missing, the switch is off, the store reached [FULL_SHARE] of the budget, [maxItems] were asked for or the
      * server cannot be reached ([IOException]). One run at a time; cancellable between rounds.
      */
+    @Suppress("LoopWithTooManyJumpStatements")
     suspend fun prefetch(maxItems: Int = Int.MAX_VALUE): PrefetchReport = withContext(Dispatchers.IO) {
         prefetchLock.withLock {
             val started = clock()

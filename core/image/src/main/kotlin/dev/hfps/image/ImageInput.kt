@@ -26,7 +26,6 @@ class ImageInput(
 ) : AutoCloseable {
     private val closed = java.util.concurrent.atomic.AtomicBoolean()
 
-
     /** Type from the extension and the first bytes (magic wins on disagreement). */
     val type: ImageType by lazy {
         withSource { ImageFormats.classify(name, it.readRange(0, HEAD_BYTES)) }

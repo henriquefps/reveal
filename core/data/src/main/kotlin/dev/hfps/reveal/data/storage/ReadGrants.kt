@@ -30,7 +30,9 @@ fun readGrants(context: Context): (Uri) -> Boolean {
         val now = System.nanoTime() / NANOS_PER_MS
         if (now - persistedAt > PERSISTED_TTL_MS) {
             persisted = runCatching {
-                context.contentResolver.persistedUriPermissions.filter { it.isReadPermission }.mapTo(HashSet()) { it.uri }
+                context.contentResolver.persistedUriPermissions.filter {
+                    it.isReadPermission
+                }.mapTo(HashSet()) { it.uri }
             }.getOrDefault(emptySet())
             persistedAt = now
         }

@@ -39,7 +39,6 @@ import dev.hfps.reveal.data.storage.SafDocumentTree
 import dev.hfps.reveal.data.storage.StorageVolumes
 import dev.hfps.reveal.data.storage.isAccessError
 import dev.hfps.reveal.data.storage.isProviderBusy
-import kotlinx.coroutines.ensureActive
 import dev.hfps.reveal.data.sync.RemoteEdits
 import dev.hfps.reveal.data.sync.ServerTree
 import dev.hfps.reveal.pipeline.recipe.Recipe
@@ -49,6 +48,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -320,6 +320,7 @@ class LibraryRepository(
      * found: readable clears `unreadable_at`, refused or gone sets it, busy changes nothing. [pass] says whether to
      * pace the opens (background) and collects the summary, logged at the end.
      */
+    @Suppress("LoopWithTooManyJumpStatements")
     private suspend fun check(files: List<PhotoFileEntity>, pass: AccessPass): AccessPass {
         val trees = HashMap<Long, DocumentTree?>()
         val started = clock()

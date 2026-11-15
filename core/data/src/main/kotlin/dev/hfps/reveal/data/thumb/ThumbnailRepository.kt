@@ -202,7 +202,9 @@ class ThumbnailRepository(
         }
         val key = editedKey(target, versionId, editTime, ai = false)
         return withMasks ?: fromDisk(key, sample)
-            ?: serverEdit(target, versionId)?.also { save(key, target.photoId, KIND_EDITED, it) }?.let { shrink(it, sample) }
+            ?: serverEdit(target, versionId)?.also {
+                save(key, target.photoId, KIND_EDITED, it)
+            }?.let { shrink(it, sample) }
             ?: renderEdited(target, versionId, editTime)?.also { save(key, target.photoId, KIND_EDITED, it) }
                 ?.let { shrink(it, sample) }
     }
@@ -404,20 +406,20 @@ class ThumbnailRepository(
         }
     }
 
+    @Suppress("ReturnCount")
     private suspend fun loadPreview(target: Target, sample: Int = 1): Bitmap? {
         val key = CacheKeys.key(target.identity, Variant.THUMB, EDGE)
         fromDisk(key, sample)?.let { return it }
         when (val thumb = serverThumb(target)) {
             is ServerThumb.Image -> return scaleTo(thumb.bitmap, EDGE / sample)
-
             ServerThumb.Later -> return null
-
             ServerThumb.NotServed, null -> Unit
         }
         return decodePreview(target)?.also { save(key, target.photoId, KIND_PREVIEW, it) }?.let { shrink(it, sample) }
     }
 
     /** The server's thumbnail of [target]'s file (ADR 0018 "W3/C"), or null when it has none to offer. */
+    @Suppress("ReturnCount")
     private suspend fun serverThumb(target: Target): ServerThumb? {
         val print = target.serverPrint ?: return null
         val thumbs = serverThumbs?.invoke() ?: return null
@@ -436,14 +438,17 @@ class ThumbnailRepository(
         val long = maxOf(bitmap.width, bitmap.height)
         if (long <= edge) return bitmap
         val scale = edge.toFloat() / long
-        return bitmap.scale((bitmap.width * scale).toInt().coerceAtLeast(1), (bitmap.height * scale).toInt().coerceAtLeast(1))
+        return bitmap.scale(
+            (bitmap.width * scale).toInt().coerceAtLeast(1),
+            (bitmap.height * scale).toInt().coerceAtLeast(1),
+        )
     }
 
     /** An available source's tree, or null (unplugged, access lost, removed). */
     private suspend fun availableTree(sourceId: Long): DocumentTree? =
         db.sourceDao().get(sourceId)?.takeIf { it.state == SourceState.AVAILABLE }?.let(trees::open)
 
-    @Suppress("ReturnCount")
+    @Suppress("ReturnCount", "CyclomaticComplexMethod")
     private suspend fun decodePreview(target: Target): Bitmap? {
         val tree = availableTree(target.sourceId) ?: return null
         val main = target.main

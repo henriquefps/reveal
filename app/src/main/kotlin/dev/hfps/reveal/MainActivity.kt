@@ -3,8 +3,6 @@ package dev.hfps.reveal
 import android.content.Intent
 import android.graphics.Color
 import android.os.Bundle
-import androidx.core.view.doOnPreDraw
-import dev.hfps.reveal.data.storage.AppStart
 import android.view.MotionEvent
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -15,6 +13,7 @@ import androidx.activity.viewModels
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.core.view.doOnPreDraw
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.navigation.NavController
@@ -30,6 +29,7 @@ import dev.hfps.reveal.data.model.PhotoQuery
 import dev.hfps.reveal.data.preset.PresetFilesIo
 import dev.hfps.reveal.data.preset.PresetIntents
 import dev.hfps.reveal.data.preset.PresetRepository
+import dev.hfps.reveal.data.storage.AppStart
 import dev.hfps.reveal.designsystem.theme.RevealTheme
 import dev.hfps.reveal.designsystem.theme.isDark
 import dev.hfps.reveal.feature.editor.EditorRoute

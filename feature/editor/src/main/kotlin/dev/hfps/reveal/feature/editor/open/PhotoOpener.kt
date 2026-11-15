@@ -18,6 +18,7 @@ import dev.hfps.image.source.CancelledException
 import dev.hfps.image.source.SourceInputStream
 import dev.hfps.image.source.readRange
 import dev.hfps.reveal.data.storage.FileOpens
+import dev.hfps.reveal.data.storage.LocalCopies
 import dev.hfps.reveal.data.storage.isAccessError
 import dev.hfps.reveal.pipeline.PipelineInput
 import dev.hfps.reveal.pipeline.gl.GlesRequirementException
@@ -82,7 +83,15 @@ class OpenedPhoto(
  * Opens a photo by URI for the editor: preview first, then the screen proxy, mapped to a [PipelineInput]. Reads the
  * document in place through its descriptor (never copies the original). Blocking: call it off the main thread.
  */
-class PhotoOpener(private val resolver: ContentResolver) {
+class PhotoOpener(
+    private val resolver: ContentResolver,
+    /**
+     * Where a very large standard image of another app is copied before it is read in regions (ADR 0018 "W3/C"): the
+     * region source would hold the sender's descriptor (and one of its read slots) while the editor is open. Null =
+     * read in place (tests).
+     */
+    private val copies: Pair<java.io.File, String>? = null,
+) {
 
     /** The document's display name, else the last path segment. */
     fun displayName(uri: Uri): String {
@@ -171,8 +180,11 @@ class PhotoOpener(private val resolver: ContentResolver) {
             val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
             BitmapFactory.decodeFileDescriptor(fd, null, bounds)
             if (bounds.outWidth.toLong() * bounds.outHeight > FULL_DECODE_MAX_PIXELS) {
-                // Very large: regions on demand (as the library viewer), the document stays open.
-                return RegionTileSource(image.descriptor, orientation) { image.close() }
+                // Very large: regions on demand (as the library viewer), the document stays open; another app's is
+                // copied first and closed (its descriptor never outlives the read).
+                val (dir, own) = copies ?: (null to "")
+                val read = if (dir != null && LocalCopies.isForeign(uri, own)) LocalCopies.copy(image, dir) else image
+                return RegionTileSource(read.descriptor, orientation) { read.close() }
             }
             // A JPEG region decode re-reads everything above the region (about 250 ms per tile at 12 MP on the
             // emulator); one full decode (4 bytes per pixel, the export's own source) makes every tile cheap.

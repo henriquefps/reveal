@@ -38,19 +38,18 @@ import dev.hfps.reveal.data.storage.AppStorage
 import dev.hfps.reveal.data.storage.CacheBudget
 import dev.hfps.reveal.data.storage.FillCacheArea
 import dev.hfps.reveal.data.storage.HealFillCacheArea
+import dev.hfps.reveal.data.storage.LibraryThumbsPreferences
+import dev.hfps.reveal.data.storage.LocalCopies
 import dev.hfps.reveal.data.storage.MaskCacheArea
 import dev.hfps.reveal.data.storage.SafDocumentTree
 import dev.hfps.reveal.data.storage.StorageVolumes
-import dev.hfps.reveal.data.sync.ServerTree
-import dev.hfps.reveal.data.storage.LibraryThumbsPreferences
 import dev.hfps.reveal.data.storage.readGrants
+import dev.hfps.reveal.data.sync.ServerTree
 import dev.hfps.reveal.data.thumb.EditedThumbnails
 import dev.hfps.reveal.data.thumb.GpuEditedThumbnails
 import dev.hfps.reveal.data.thumb.PhotoImages
 import dev.hfps.reveal.data.thumb.ServerThumbs
 import dev.hfps.reveal.data.thumb.ThumbnailRepository
-import java.util.Optional
-import javax.inject.Provider
 import dev.hfps.reveal.data.xmp.XmpPreferences
 import dev.hfps.reveal.ml.MaskModels
 import dev.hfps.reveal.ml.inpaint.FillDiskCache
@@ -60,6 +59,8 @@ import dev.hfps.reveal.ml.service.MaskDiskCache
 import dev.hfps.reveal.ml.service.MaskService
 import dev.hfps.reveal.pipeline.preset.SmartCorrection
 import java.io.File
+import java.util.Optional
+import javax.inject.Provider
 import javax.inject.Qualifier
 import javax.inject.Singleton
 import kotlinx.coroutines.CoroutineScope
@@ -385,6 +386,9 @@ object DataModule {
 
     private const val STORAGE_PREFS = "storage"
 
+    /** Short-lived local copies of other apps' documents (`LocalCopies`), swept at start. */
+    const val LOCAL_COPIES_DIR = "local-copies"
+
     @Provides
     @Singleton
     fun providePhotoImages(
@@ -402,6 +406,7 @@ object DataModule {
         previews,
         resolver = context.contentResolver,
         serverAuthority = ServerTree.authority(context.packageName),
+        copiesDir = File(context.cacheDir, LOCAL_COPIES_DIR).also(LocalCopies::sweep),
     )
 }
 

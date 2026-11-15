@@ -94,7 +94,10 @@
     <string name="storage_section_library_thumbs">Library thumbnails</string>
     <string name="storage_keep_library_thumbs">Keep thumbnails of the whole library</string>
     <string name="storage_keep_library_thumbs_note">Fetched from your server on Wi-Fi while charging or idle; the grid then scrolls offline. They go last when the cache is full.</string>
-    <string name="storage_keep_library_thumbs_count">%1$d of %2$d photos, %3$s. Fetched on Wi-Fi while charging or idle.</string>
+    <plurals name="storage_keep_library_thumbs_count">
+        <item quantity="one">%1$d of %2$d photo, %3$s. Fetched on Wi-Fi while charging or idle.</item>
+        <item quantity="other">%1$d of %2$d photos, %3$s. Fetched on Wi-Fi while charging or idle.</item>
+    </plurals>
     <string name="storage_clear_library_thumbs">Clear library thumbnails</string>
     <string name="storage_server_files">Server files</string>
     <string name="storage_server_files_note">Parts of originals and previews from your server, kept while you view them</string>

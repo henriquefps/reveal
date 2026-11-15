@@ -20,6 +20,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
@@ -29,8 +30,10 @@ import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dagger.hilt.android.qualifiers.ApplicationContext
 import dev.hfps.reveal.data.storage.AppStorage
 import dev.hfps.reveal.data.storage.CacheBudget
+import dev.hfps.reveal.data.storage.LibraryThumbsPreferences
 import dev.hfps.reveal.data.storage.StorageKind
 import dev.hfps.reveal.data.storage.StorageUsage
 import dev.hfps.reveal.designsystem.components.Eyebrow
@@ -45,12 +48,10 @@ import dev.hfps.reveal.designsystem.components.SecondaryButton
 import dev.hfps.reveal.designsystem.icons.PhosphorRegular
 import dev.hfps.reveal.designsystem.theme.RevealTheme
 import dev.hfps.reveal.feature.settings.R
+import dev.hfps.reveal.feature.settings.sync.SwitchRow
 import dev.hfps.reveal.sync.files.ServerFiles
 import dev.hfps.reveal.sync.thumbs.LibraryThumbs
 import dev.hfps.reveal.sync.work.SyncScheduler
-import dev.hfps.reveal.data.storage.LibraryThumbsPreferences
-import dev.hfps.reveal.feature.settings.sync.SwitchRow
-import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -393,10 +394,12 @@ private fun libraryThumbsNote(state: StorageUiState, usage: StorageUsage?, conte
     return if (stored == null || photos == null || usage == null) {
         stringResource(R.string.storage_keep_library_thumbs_note)
     } else {
-        stringResource(
-            R.string.storage_keep_library_thumbs_count,
+        val total = maxOf(stored, photos)
+        pluralStringResource(
+            R.plurals.storage_keep_library_thumbs_count,
+            total,
             stored,
-            maxOf(stored, photos),
+            total,
             size(context, usage[StorageKind.LIBRARY_THUMBNAILS]),
         )
     }

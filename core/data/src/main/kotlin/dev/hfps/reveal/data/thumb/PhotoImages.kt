@@ -24,6 +24,7 @@ import dev.hfps.reveal.data.model.FileRole
 import dev.hfps.reveal.data.model.SourceKind
 import dev.hfps.reveal.data.model.SourceState
 import dev.hfps.reveal.data.storage.DocumentTree
+import dev.hfps.reveal.data.storage.LocalCopies
 import dev.hfps.reveal.data.storage.isAccessError
 import dev.hfps.reveal.data.sync.ServerTree
 import dev.hfps.reveal.pipeline.preview.SmartPreviewCodec
@@ -118,6 +119,11 @@ class PhotoImages(
     /** Reads the server's copy of an unreadable hand-off (ADR 0011 "Fallbacks"); null without sync (tests). */
     private val resolver: ContentResolver? = null,
     private val serverAuthority: String? = null,
+    /**
+     * Where zoom regions of other apps' documents are copied (ADR 0018 "W3/C"): a region decoder keeps its descriptor
+     * for as long as the page is open, and a sender's large file would hold one of its read slots all that time.
+     */
+    private val copiesDir: java.io.File? = null,
 ) {
     private val photos = db.photoDao()
     private val fallbacks = HandoffFallbacks(db, previews, serverAuthority)
@@ -270,7 +276,13 @@ class PhotoImages(
     suspend fun region(photoId: Long): RegionSource? = withContext(Dispatchers.IO) {
         val opened = open(photoId) ?: return@withContext null
         val file = opened.rendered ?: return@withContext null
-        runCatching { openRegion(opened.tree.openInput(file.documentId, file.name)) }.getOrNull()
+        val source = photos.get(photoId)?.let { db.sourceDao().get(it.sourceId) }
+        runCatching {
+            val input = opened.tree.openInput(file.documentId, file.name)
+            val dir = copiesDir
+            // A hand-off's document is copied and closed at once (open, copy, close), never held by the decoder.
+            openRegion(if (dir != null && source?.kind == SourceKind.HANDOFF) LocalCopies.copy(input, dir) else input)
+        }.getOrNull()
     }
 
     private fun openRegion(input: ImageInput): RegionSource? {

@@ -18,6 +18,7 @@ import java.util.concurrent.atomic.AtomicLong
 const val PROVIDER_BUSY_PREFIX = "busy:"
 
 /** Whether [error] (or a cause) is a provider's "busy, retry" answer ([PROVIDER_BUSY_PREFIX]). */
+@Suppress("ReturnCount")
 fun isProviderBusy(error: Throwable): Boolean {
     var e: Throwable? = error
     var depth = 0

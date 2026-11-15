@@ -491,8 +491,8 @@ interface PhotoDao {
     suspend fun setHandoffAt(id: Long, at: Long, title: String?)
 
     /**
-     * Folder and Server photos (adopted hand-offs, ADR 0018 "W3/C") beyond the newest [keep] of "Opened from other apps"
-     * leave it (the photos stay).
+     * Folder and Server photos (adopted hand-offs, ADR 0018 "W3/C") beyond the newest [keep] of "Opened from other
+     * apps" leave it (the photos stay).
      */
     @Query(
         "UPDATE photos SET handoff_at = NULL, handoff_title = NULL WHERE id IN (SELECT p.id FROM photos p WHERE " +

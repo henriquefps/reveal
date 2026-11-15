@@ -524,3 +524,23 @@ can also evict it (not reproduced in the lab): the 512 px thumbnails of a 21,000
 Settings -> Storage lists every area (library thumbnails, thumbnails, originals kept, server files, AI masks and
 fills, photos from other apps, other, library and edits) with its size, and the cache budget the owner sets (500 MB to
 10 GB).
+
+### Other apps' descriptors (Hoard integration contract 11)
+
+Hoard 2.0.1 serves at most 6 hand-off reads at once; files over 8 MiB (every RAW) are appfuse proxy descriptors that
+hold a slot until Reveal closes them. Audit of every path that opens a hand-off document:
+
+| Path | Before | Now |
+| --- | --- | --- |
+| Editor proxy (`PhotoOpener.open`) | open, decode the preview and the proxy, close | unchanged; busy retried |
+| Editor full resolution, RAW (`NativeRawTileSource`) | decoded once into native memory, closed | unchanged |
+| Editor full resolution, standard image ≤ 40 MP (`BitmapTileSource`) | decoded once, closed | unchanged |
+| Editor full resolution, standard image > 40 MP (`RegionTileSource`) | **descriptor held while the editor is open** | another app's document is copied to `cache/local-copies` (open, copy, close) and the copy is read |
+| Viewer zoom regions (`PhotoImages.region`, `BitmapRegionDecoder`) | **descriptor held while the page is open** (and a `FileOpens` slot) | a hand-off's rendering is copied first (`LocalCopies`), the copy is deleted with the page |
+| Export (`ExportEngine.openSource`: LibRaw / full decode) | open, decode, close before the tiles render | unchanged; busy retried |
+| Grid thumbnails, viewer display, hand-off previews (`SmartPreviewMaker`), fingerprints, headers, sidecars, the access check | open, read, close | unchanged; through `HandoffTree` (≤ 4 at once, busy retried) |
+| Server originals (`RangeCache`, provider proxies) | Reveal's own provider, not a sender's | unchanged (kept originals open as plain files) |
+
+`HandoffDescriptorsTest` (debug provider counting its open descriptors and answering `busy:` beyond 6) opens a
+handed-over RAW in the editor (preview, proxy, full resolution) and exports it: never more than 4 open at once, none
+left open while the editor shows the photo or after the export.

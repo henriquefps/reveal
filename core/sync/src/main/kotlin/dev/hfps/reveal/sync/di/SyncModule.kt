@@ -20,7 +20,6 @@ import dev.hfps.reveal.data.storage.CacheBudget
 import dev.hfps.reveal.data.storage.LibraryThumbsPreferences
 import dev.hfps.reveal.data.thumb.ServerThumbs
 import dev.hfps.reveal.data.thumb.ThumbnailRepository
-import dev.hfps.reveal.sync.thumbs.LibraryThumbs
 import dev.hfps.reveal.pipeline.preview.SmartPreviewMaker
 import dev.hfps.reveal.sync.SyncRepository
 import dev.hfps.reveal.sync.account.ClientDevice
@@ -36,6 +35,7 @@ import dev.hfps.reveal.sync.engine.SyncEngine
 import dev.hfps.reveal.sync.engine.SyncStore
 import dev.hfps.reveal.sync.engine.SyncedSetting
 import dev.hfps.reveal.sync.files.ServerFiles
+import dev.hfps.reveal.sync.thumbs.LibraryThumbs
 import dev.hfps.reveal.sync.work.SyncController
 import java.io.ByteArrayOutputStream
 import java.io.File

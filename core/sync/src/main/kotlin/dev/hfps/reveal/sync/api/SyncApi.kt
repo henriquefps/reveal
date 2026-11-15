@@ -199,7 +199,9 @@ class SyncApi(baseUrl: String, private val apiKey: String?, private val client: 
         return client.newCall(authed(Request.Builder().url(builder.build())).build()).execute().use { response ->
             when (response.code) {
                 HTTP_ACCEPTED -> PreviewAnswer.Pending
+
                 HTTP_NOT_FOUND -> PreviewAnswer.Unavailable
+
                 else -> {
                     check(response)
                     PreviewAnswer.Ready(response.body.bytes(), response.header("X-Hoard-Preview-Version") ?: v)

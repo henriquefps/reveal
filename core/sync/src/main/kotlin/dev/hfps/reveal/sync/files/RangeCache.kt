@@ -74,8 +74,8 @@ class RangeCache(private val dir: File, private val maxBytes: () -> Long = { DEF
     fun bytes(): Long = dir.listFiles()?.sumOf { folder -> folder.listFiles()?.sumOf { it.length() } ?: 0L } ?: 0L
 
     /**
-     * Drops whole files until the cache is under its cap: those not in [pinned] first (originals opened lately, ADR 0018
-     * "W3/C"), least recently read first.
+     * Drops whole files until the cache is under its cap: those not in [pinned] first (originals opened lately, ADR
+     * 0018 "W3/C"), least recently read first.
      */
     fun trim(pinned: Set<String> = emptySet()) {
         val folders = dir.listFiles()?.filter { it.isDirectory }

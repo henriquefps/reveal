@@ -73,7 +73,9 @@ class ServerThumbnailsTest {
 
     private suspend fun handOver(name: String, onServer: Boolean): Pair<Long, Long> {
         val file = File(temp.newFolder(), name).apply {
-            val bitmap = Bitmap.createBitmap(320, 200, Bitmap.Config.ARGB_8888).apply { eraseColor(android.graphics.Color.BLUE) }
+            val bitmap = Bitmap.createBitmap(320, 200, Bitmap.Config.ARGB_8888).apply {
+                eraseColor(android.graphics.Color.BLUE)
+            }
             val jpeg = java.io.ByteArrayOutputStream().also { bitmap.compress(Bitmap.CompressFormat.JPEG, 90, it) }
             writeBytes(jpeg.toByteArray() + name.toByteArray())
         }

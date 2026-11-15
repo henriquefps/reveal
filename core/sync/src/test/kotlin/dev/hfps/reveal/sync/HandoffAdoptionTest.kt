@@ -3,11 +3,11 @@ package dev.hfps.reveal.sync
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.google.common.truth.Truth.assertThat
 import dev.hfps.image.source.FileFingerprint
+import dev.hfps.reveal.data.db.PhotoQuerySql
 import dev.hfps.reveal.data.db.SyncRecordEntity
 import dev.hfps.reveal.data.model.PhotoQuery
 import dev.hfps.reveal.data.model.PickFlag
 import dev.hfps.reveal.data.model.SourceKind
-import dev.hfps.reveal.data.db.PhotoQuerySql
 import dev.hfps.reveal.data.sync.ServerTree
 import dev.hfps.reveal.sync.engine.ServerHeaders
 import dev.hfps.reveal.sync.engine.SyncStore

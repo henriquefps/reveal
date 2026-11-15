@@ -82,12 +82,15 @@ interface ServerThumbDao {
      * again once its row is older than [retryBefore]; an unavailable one after [unavailableBefore].
      */
     @Query(
-        "SELECT q.photo_id, q.fingerprint FROM (SELECT p.id AS photo_id, COALESCE(p.capture_time, p.added_at) AS shot, " +
-            "(SELECT f.fingerprint FROM photo_files f WHERE f.photo_id = p.id AND f.on_server = 1 AND " +
-            "f.fingerprint IS NOT NULL ORDER BY CASE f.role WHEN 'RAW' THEN 0 ELSE 1 END, f.id LIMIT 1) AS fingerprint " +
-            "FROM photos p JOIN sources s ON s.id = p.source_id WHERE p.hidden = 0 AND s.kind IN ('SERVER', 'HANDOFF')) q " +
+        "SELECT q.photo_id, q.fingerprint FROM (SELECT p.id AS photo_id, " +
+            "COALESCE(p.capture_time, p.added_at) AS shot, (SELECT f.fingerprint FROM photo_files f " +
+            "WHERE f.photo_id = p.id AND f.on_server = 1 AND f.fingerprint IS NOT NULL " +
+            "ORDER BY CASE f.role WHEN 'RAW' THEN 0 ELSE 1 END, f.id LIMIT 1) AS fingerprint " +
+            "FROM photos p JOIN sources s ON s.id = p.source_id " +
+            "WHERE p.hidden = 0 AND s.kind IN ('SERVER', 'HANDOFF')) q " +
             "WHERE q.fingerprint IS NOT NULL AND NOT EXISTS (SELECT 1 FROM server_thumbs t WHERE " +
-            "t.fingerprint = q.fingerprint AND (t.state = 'READY' OR (t.state = 'PENDING' AND t.updated_at > :retryBefore) " +
+            "t.fingerprint = q.fingerprint AND (t.state = 'READY' OR " +
+            "(t.state = 'PENDING' AND t.updated_at > :retryBefore) " +
             "OR (t.state = 'UNAVAILABLE' AND t.updated_at > :unavailableBefore))) ORDER BY q.shot DESC LIMIT :limit",
     )
     suspend fun missing(limit: Int, retryBefore: Long, unavailableBefore: Long): List<ThumbCandidate>

@@ -62,7 +62,9 @@ class ServerFiles(
     /** Whole originals of photos opened in the editor (ADR 0018 "W3/C"): `<fingerprint hex>`, served as files. */
     private val kept = File(cacheDir, KEPT_DIR)
     private val keeping = ConcurrentHashMap.newKeySet<String>()
-    private val keeper = java.util.concurrent.Executors.newSingleThreadExecutor { r -> Thread(r, "reveal-keep-original") }
+    private val keeper = java.util.concurrent.Executors.newSingleThreadExecutor { r ->
+        Thread(r, "reveal-keep-original")
+    }
 
     @Volatile
     private var pinnedAt = 0L
@@ -71,8 +73,8 @@ class ServerFiles(
     private var pinnedKeys: Set<String> = emptySet()
 
     /**
-     * The originals to keep (fingerprint hex): every file of the [PINNED_PHOTOS] photos opened most recently in the last
-     * [PINNED_DAYS] days (ADR 0018 "W3/C"), memoised for a minute.
+     * The originals to keep (fingerprint hex): every file of the [PINNED_PHOTOS] photos opened most recently in the
+     * last [PINNED_DAYS] days (ADR 0018 "W3/C"), memoised for a minute.
      */
     suspend fun pinned(): Set<String> {
         val now = System.currentTimeMillis()
@@ -98,8 +100,8 @@ class ServerFiles(
 
     /**
      * Downloads the rest of [remote] in the background and keeps it as one file (ADR 0018 "W3/C"): an original opened
-     * in the editor or the export then opens from this device, whole, as a plain file. One at a time; nothing when it is
-     * kept already or being kept. The blocks are dropped once the file is complete.
+     * in the editor or the export then opens from this device, whole, as a plain file. One at a time; nothing when it
+     * is kept already or being kept. The blocks are dropped once the file is complete.
      */
     fun keep(fingerprint: String, remote: RemoteFile) {
         val key = fingerprint.removePrefix("v1:")

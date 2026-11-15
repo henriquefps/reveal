@@ -177,7 +177,9 @@ object SyncScheduler {
     fun libraryThumbs(context: Context, again: Boolean = false) {
         val work = WorkManager.getInstance(context)
         val policy = if (again) ExistingWorkPolicy.APPEND_OR_REPLACE else ExistingWorkPolicy.KEEP
-        val base = { Constraints.Builder().setRequiredNetworkType(NetworkType.UNMETERED).setRequiresStorageNotLow(true) }
+        val base = {
+            Constraints.Builder().setRequiredNetworkType(NetworkType.UNMETERED).setRequiresStorageNotLow(true)
+        }
         val charging = base().setRequiresCharging(true).setRequiresBatteryNotLow(true).build()
         val idle = base().setRequiresDeviceIdle(true).build()
         for ((name, constraints) in listOf(THUMBS_CHARGING to charging, THUMBS_IDLE to idle)) {

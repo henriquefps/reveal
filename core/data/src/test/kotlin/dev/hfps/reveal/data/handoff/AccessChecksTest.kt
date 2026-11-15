@@ -63,7 +63,9 @@ class AccessChecksTest {
     private suspend fun handOver(vararg names: String): List<Uri> {
         val uris = names.map { name ->
             val file = File(temp.newFolder(), name).apply {
-                writeBytes(SyntheticShoot.jpeg(SyntheticShoot.markerOnlyJpeg(60, 40), SyntheticExif()) + name.toByteArray())
+                writeBytes(
+                    SyntheticShoot.jpeg(SyntheticShoot.markerOnlyJpeg(60, 40), SyntheticExif()) + name.toByteArray(),
+                )
             }
             Uri.parse("content://dev.hfps.hoard.stream/h/${name.hashCode() and 0xffff}/$name").also {
                 tree.aliases[it.toString()] = file

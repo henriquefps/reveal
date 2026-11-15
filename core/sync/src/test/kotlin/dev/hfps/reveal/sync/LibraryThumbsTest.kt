@@ -86,10 +86,18 @@ class LibraryThumbsTest {
         val photo = phone.addHandoffPhoto("IMG$seed", jpeg)
         runBlocking {
             phone.db.syncDao().setOnServer(print, true)
-            phone.db.photoDao().setMetadata(photo, time, null, null, null, 1, dev.hfps.reveal.data.model.MetadataState.READ)
+            phone.db.photoDao().setMetadata(
+                photo,
+                time,
+                null,
+                null,
+                null,
+                1,
+                dev.hfps.reveal.data.model.MetadataState.READ,
+            )
         }
         val item = server.culling.addItem(listOf(print))
-        server.previews[item] = FakeSyncServer.Preview(status, "v$seed", "thumb-$seed".toByteArray())
+        server.previews.thumbs[item] = FakePreviews.Preview(status, "v$seed", "thumb-$seed".toByteArray())
         return print
     }
 
@@ -100,17 +108,17 @@ class LibraryThumbsTest {
         val results = coroutineScope { prints.map { async { thumbs.thumbnail(it) } }.map { it.await() } }
         assertThat(results.all { it is ServerThumb.Image }).isTrue()
         // Batched: the cells' requests join one or two warm requests, never one each.
-        assertThat(server.warms.size).isAtMost(2)
-        assertThat(server.warms.flatten()).hasSize(6)
-        assertThat(server.previewGets).hasSize(6)
-        assertThat(server.previewGets.all { it.contains("?v=v") }).isTrue()
+        assertThat(server.previews.warms.size).isAtMost(2)
+        assertThat(server.previews.warms.flatten()).hasSize(6)
+        assertThat(server.previews.previewGets).hasSize(6)
+        assertThat(server.previews.previewGets.all { it.contains("?v=v") }).isTrue()
         assertThat(phone.db.serverThumbDao().storedCount()).isEqualTo(6)
 
         // Offline: the store answers, nothing is asked.
         reachable = false
-        val gets = server.previewGets.size
+        val gets = server.previews.previewGets.size
         assertThat(thumbs().thumbnail(prints[0])).isInstanceOf(ServerThumb.Image::class.java)
-        assertThat(server.previewGets).hasSize(gets)
+        assertThat(server.previews.previewGets).hasSize(gets)
     }
 
     @Test
@@ -125,9 +133,9 @@ class LibraryThumbsTest {
             assertThat(thumbs.thumbnail(lacking)).isEqualTo(ServerThumb.NotServed)
             assertThat(phone.db.serverThumbDao().get(pending)!!.state).isEqualTo(ServerThumbState.PENDING)
             // An unavailable one is not asked again for a week.
-            val warms = server.warms.size
+            val warms = server.previews.warms.size
             assertThat(thumbs.thumbnail(unavailable)).isEqualTo(ServerThumb.NotServed)
-            assertThat(server.warms).hasSize(warms)
+            assertThat(server.previews.warms).hasSize(warms)
         }
 
     @Test
@@ -137,7 +145,11 @@ class LibraryThumbsTest {
         val first = thumbs.prefetch(maxItems = 5)
         assertThat(first.stored).isAtLeast(5)
         // Newest shot first.
-        assertThat(server.warms.first().first()).isEqualTo(server.culling.items.entries.first { prints[11] in it.value }.key)
+        assertThat(server.previews.warms.first().first()).isEqualTo(
+            server.culling.items.entries.first {
+                prints[11] in it.value
+            }.key,
+        )
         val rest = thumbs.prefetch()
         assertThat(first.stored + rest.stored).isEqualTo(12)
         assertThat(rest.left).isFalse()
@@ -193,7 +205,7 @@ class LibraryThumbsTest {
     @Test
     fun `an edit made on another device is shown from the server's edited preview`(): Unit = runBlocking {
         val print = shot(1)
-        server.editThumbs["version-uuid"] = "edited".toByteArray()
+        server.previews.editThumbs["version-uuid"] = "edited".toByteArray()
         assertThat(thumbs().editedThumbnail(print, "version-uuid")).isNotNull()
         assertThat(thumbs().editedThumbnail(print, "other")).isNull()
     }

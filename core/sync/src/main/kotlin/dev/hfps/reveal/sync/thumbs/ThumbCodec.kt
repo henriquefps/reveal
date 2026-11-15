@@ -19,6 +19,7 @@ interface ThumbCodec {
 
 /** Android's codecs: the server's WebP decoded subsampled, scaled to the edge, written as lossy WebP. */
 object AndroidThumbCodec : ThumbCodec {
+    @Suppress("ReturnCount")
     override fun shrink(bytes: ByteArray, edge: Int): ByteArray? {
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
@@ -26,11 +27,15 @@ object AndroidThumbCodec : ThumbCodec {
         if (long <= 0) return null
         var sample = 1
         while (long / (sample * 2) >= edge) sample *= 2
-        val decoded = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, BitmapFactory.Options().apply { inSampleSize = sample })
-            ?: return null
+        val decoded =
+            BitmapFactory.decodeByteArray(bytes, 0, bytes.size, BitmapFactory.Options().apply { inSampleSize = sample })
+                ?: return null
         val scale = edge.toFloat() / maxOf(decoded.width, decoded.height)
         val small = if (scale < 1f) {
-            decoded.scale((decoded.width * scale).toInt().coerceAtLeast(1), (decoded.height * scale).toInt().coerceAtLeast(1))
+            decoded.scale(
+                (decoded.width * scale).toInt().coerceAtLeast(1),
+                (decoded.height * scale).toInt().coerceAtLeast(1),
+            )
                 .also { if (it !== decoded) decoded.recycle() }
         } else {
             decoded
@@ -48,5 +53,11 @@ object AndroidThumbCodec : ThumbCodec {
 
     @Suppress("DEPRECATION")
     private val webp: Bitmap.CompressFormat
-        get() = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) Bitmap.CompressFormat.WEBP_LOSSY else Bitmap.CompressFormat.WEBP
+        get() = if (Build.VERSION.SDK_INT >=
+            Build.VERSION_CODES.R
+        ) {
+            Bitmap.CompressFormat.WEBP_LOSSY
+        } else {
+            Bitmap.CompressFormat.WEBP
+        }
 }

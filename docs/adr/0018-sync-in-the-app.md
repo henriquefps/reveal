@@ -785,6 +785,33 @@ Decisions (`SyncEngine.recoverParked`, `SyncStore.parkedOrphans` / `recover` / `
   `sameEdit`); after a first sync's pull, edited versions the server has no record of go up as new
   (`markUnrecordedEdits`). Other deletions of edited photos are user actions (removing a folder, "Forget").
 
+- **Kept photos belong to their server** (verification round of d2106de). `forget()` records each kept Server photo
+  and kept edit with the server it came from (`sync.keptPhotos`, `sync.keptEdits`: `uuid@serverId`; `sync.tracking`
+  at the time, `?` when unknown, e.g. kept by an earlier test build). `startTracking(serverId)` takes back only the
+  entries of that server (its photos are ordinary Server photos again, its kept edits are marked new); the others stay
+  listed and **nothing about them goes up** while paired elsewhere: their photo and version records are cleaned, not
+  pushed (`photoChange`/`versionChange`), `markUnrecordedEdits` skips them, and their culling changes stay local
+  (`CullingSync`). Pushing them would leak the old NAS's file names and edits and leave dead photos on other devices.
+  They show as unavailable, as before; `SyncStore.removeKeptPhotos` (with `keptPhotoCount` for a confirmation) deletes
+  them quietly.
+- **A local edit on top of this installation's own record.** On a first sync, a version never pushed here (rev 0,
+  dirty) whose server record differs and was authored by one of this installation's devices (`ownAuthors` = the
+  `ownDevices` view read before the pull, plus `sync.ownDevices`) takes the server's revision and stays dirty
+  (`rebaseOwn`): the push is a clean update, not a base-0 conflict copy. Another device's record is still a conflict.
+- **Recovery pass details.** Pages go by photo id (`recoveryFingerprints(limit, after)`: photos added during a pass
+  come after it, nothing shifts; the state is `last photo id|uuids`). A lookup refused for good (not transient, not
+  401) ends the pass like a miss (back-off). A proof entry is dropped once `GET /v1/device` was read and its author
+  is neither this installation's nor a physical device it is offered to join (`candidates`): no claim offered in the
+  app could prove it, so the view is not asked every sync forever. `forgetDevice` keeps the old physical device's id
+  as one of this installation's (it is the old device's id when that device created it).
+- **What proves a revoked old id (hoard-server).** Neither `GET /v1/device` nor `GET /v1/devices` lists revoked
+  devices (`physicalDevice.devices` and `candidates` are live devices only), and a revoked device keeps its
+  `physical_id`. A physical device's id is its first device's id, so claiming into the old group makes
+  `physicalDevice.id` equal the old Reveal id when the old Reveal created that group; the group is offered as a
+  candidate only while it holds a live device of another app on the same platform (Hoard). A group whose only device
+  was the revoked Reveal is not offered (only the admin page's Move reaches it), and one Hoard created has Hoard's id:
+  neither proves, and those versions stay applied locally, unpushed.
+
 What the production devices do after the update: first and second sync, the four are applied locally on both
 devices, nothing is pushed. After "Same phone/tablet?" (Settings -> Sync -> This device, claiming the old physical
 device that holds Hoard), the next sync of the phone pushes again a09ff2ba and a615a71f, the tablet's c33fcf7f and
@@ -794,6 +821,8 @@ Hoard's rule (`internal/store/records.go`, `applyOne`): a push whose `baseRev` e
 whatever device sends it; revoking a device changes none of its records.
 
 Tests: `VersionPhotoSyncTest` (the four-orphan replay in both stages, no preview found -> parked and looked for once a
-day at most then found when the preview appears, unpairing keeps edited Server photos), `RealServerRecoveryTest`
+day at most then found when the preview appears, unpairing keeps edited Server photos, a refused lookup backs off,
+paging by photo id), `KeptServerPhotosTest` (another server never hears of kept photos, their own server gets them
+again, removal, rebase onto an own record vs another device's conflict), `RealServerRecoveryTest`
 (pinned hoard-server: one orphan per device, edited previews uploaded, revoke and claim through the admin API and
 `/v1/device/claim`; `REVEAL_RECOVERY_DIR`).

@@ -32,9 +32,9 @@ import kotlinx.coroutines.runBlocking
 /** One simulated device: its own in-memory database, sync store and engine, paired with [key]. */
 class TestDevice(
     val name: String,
-    private val url: String,
+    private var url: String,
     key: String,
-    private val serverId: String,
+    private var serverId: String,
     settings: List<SyncedSetting> = emptyList(),
     var now: Long = 1_700_000_000_000L,
     device: ClientDevice? = null,
@@ -58,6 +58,13 @@ class TestDevice(
     fun rekey(key: String) {
         this.key = key
         api = SyncApi(url, key)
+    }
+
+    /** Paired with another server ([url], [serverId]) under [key] (same database). */
+    fun switchServer(url: String, key: String, serverId: String) {
+        this.url = url
+        this.serverId = serverId
+        rekey(key)
     }
     val folder: Long = runBlocking {
         db.sourceDao().insert(

@@ -103,35 +103,47 @@ class SyncStore(
 
     // ------------------------------------------------------------------ pairing
 
-    /** A first sync with a server: every local photo and version is to be pushed, settings included. */
-    suspend fun startTracking() = db.withTransaction {
+    /**
+     * A first sync with [serverId]: every local photo and version is to be pushed, settings included. What an
+     * unpairing kept of a Server source ([forget]) is this server's again only when it came from this server: its
+     * photos are ordinary Server photos again and its edits the server was not known to hold go up as new (unless the
+     * first pull shows it has the same edit, [sameEdit]). Kept photos of another server stay on this device only
+     * ([keptPhotos]): never pushed, their names and edits never reach this server.
+     */
+    suspend fun startTracking(serverId: String) = db.withTransaction {
         val now = clock()
         sync.markAllPhotos(now)
         sync.markAllVersions(now)
         sync.markAllPresets(now)
         sync.markAllExportPresets(now)
-        // Edited Server photos an unpairing kept because the server was not known to hold their edit ([forget]): new
-        // to this server unless the first pull shows it has the same edit ([sameEdit]).
-        meta.get(KEY_KEPT_EDITS)?.split(',')?.filter { it.isNotEmpty() }?.chunked(CHUNK)?.forEach {
-            sync.markVersionsNew(it, now)
-        }
-        meta.delete(KEY_KEPT_EDITS)
+        val (ownEdits, otherEdits) = keptEntries(KEY_KEPT_EDITS).partition { it.origin == serverId }
+        ownEdits.map { it.uuid }.chunked(CHUNK).forEach { sync.markVersionsNew(it, now) }
+        putKept(KEY_KEPT_EDITS, otherEdits)
+        putKept(KEY_KEPT_PHOTOS, keptEntries(KEY_KEPT_PHOTOS).filter { it.origin != serverId })
         for (setting in settings) meta.delete(settingKey(setting.key))
     }
 
     /**
      * After a first sync's pull: edited versions this server has no record of (an edited Server photo an unpairing
-     * kept, paired now with another server, or with this one after it lost the record) go up as new. Returns how many.
+     * kept from this server, or a local edit the server lost) go up as new. Never a kept photo of another server
+     * ([keptPhotos]). Returns how many.
      */
     suspend fun markUnrecordedEdits(): Int = db.withTransaction {
+        val foreign = keptPhotos()
         val missing = sync.editedVersions()
-            .filter { it.copyOf == null && sync.record(Kinds.VERSION, it.versionUuid) == null }
+            .filter {
+                it.copyOf == null && it.photoUuid !in foreign && sync.record(Kinds.VERSION, it.versionUuid) == null
+            }
             .map { it.versionUuid }
         missing.chunked(CHUNK).forEach { sync.markVersionsNew(it, clock()) }
         missing.size
     }
 
-    /** Unpairing (or a different server behind the same URL): forgets every sync row and the Server source. */
+    /**
+     * Unpairing (or a different server behind the same URL): forgets every sync row and the Server source. Its edited
+     * photos stay, each remembered with the server it came from (`sync.tracking`, "?" when unknown), so only a pairing
+     * with that server ever pushes them ([startTracking]).
+     */
     suspend fun forget() = db.withTransaction {
         sync.clearCloud()
         sync.clearUploads()
@@ -140,23 +152,69 @@ class SyncStore(
         sync.clearDeletes()
         sync.clearOnServer()
         // Never an edit lost with the Server source (ADR 0018 "W5"): an edited Server photo stays with its versions;
-        // the ones whose edit the server was not known to hold are pushed by the next pairing ([startTracking]).
+        // the ones whose edit the server was not known to hold are pushed by the next pairing with it.
         val unsynced = sync.unsyncedServerEdits()
         sync.clearRecords()
         sync.deleteUneditedServerPhotos()
         sync.deleteEmptyServerSource()
-        val kept = (meta.get(KEY_KEPT_EDITS)?.split(',').orEmpty() + unsynced).filter { it.isNotEmpty() }.distinct()
-        if (kept.isEmpty()) {
-            meta.delete(
-                KEY_KEPT_EDITS,
-            )
-        } else {
-            meta.put(MetaEntity(KEY_KEPT_EDITS, kept.joinToString(",")))
+        val origin = meta.get(SyncEngine.KEY_TRACKING) ?: UNKNOWN_ORIGIN
+        val keptPhotos = keptEntries(KEY_KEPT_PHOTOS).associate { it.uuid to it.origin }.toMutableMap()
+        // Before 0.9.0's origins, kept edits had none: their photos are of an unknown server.
+        keptEntries(KEY_KEPT_EDITS).filter { it.origin == UNKNOWN_ORIGIN }.forEach { edit ->
+            sync.versionByUuid(edit.uuid)?.let {
+                photos.get(it.photoId)
+            }?.let { keptPhotos.putIfAbsent(it.uuid, UNKNOWN_ORIGIN) }
         }
+        for (uuid in sync.serverPhotoUuids()) keptPhotos.putIfAbsent(uuid, origin)
+        val remaining = sync.serverPhotoUuids().toSet()
+        putKept(KEY_KEPT_PHOTOS, keptPhotos.filterKeys { it in remaining }.map { Kept(it.key, it.value) })
+        val keptEdits = keptEntries(KEY_KEPT_EDITS).associate { it.uuid to it.origin }.toMutableMap()
+        for (edit in unsynced) keptEdits.putIfAbsent(edit.versionUuid, keptPhotos[edit.photoUuid] ?: origin)
+        putKept(KEY_KEPT_EDITS, keptEdits.map { Kept(it.key, it.value) })
         for (setting in settings) meta.delete(settingKey(setting.key))
         meta.delete(KEY_REPAIR_CHECKS)
         meta.delete(KEY_HELD_VERSIONS)
         for (key in RECOVERY_KEYS) meta.delete(key)
+    }
+
+    /**
+     * Photos (uuids) an unpairing kept from a server other than the paired one: they stay on this device only, shown
+     * as today (unavailable without their server), and nothing about them is pushed ([photoChange], [versionChange],
+     * [markUnrecordedEdits], culling). Empty once paired again with the server they came from ([startTracking]).
+     */
+    suspend fun keptPhotos(): Set<String> = keptEntries(KEY_KEPT_PHOTOS).mapTo(HashSet()) { it.uuid }
+
+    /** How many edited photos [keptPhotos] holds (the "Remove photos from the previous server" confirmation). */
+    suspend fun keptPhotoCount(): Int = keptPhotos().count { uuid -> sync.photoByUuid(uuid) != null }
+
+    /**
+     * "Remove photos from the previous server": deletes the [keptPhotos] with their edits (they cannot open without
+     * that server). Returns how many photos went.
+     */
+    suspend fun removeKeptPhotos(): Int = quietly {
+        // Quietly: deleting them marks nothing for the paired server, which never heard of them.
+        val ids = keptPhotos().mapNotNull { sync.photoByUuid(it)?.id }
+        ids.chunked(CHUNK).forEach { photos.deletePhotos(it) }
+        meta.delete(KEY_KEPT_PHOTOS)
+        meta.delete(KEY_KEPT_EDITS)
+        sync.deleteEmptyServerSource()
+        ids.size
+    }
+
+    private data class Kept(val uuid: String, val origin: String)
+
+    private suspend fun keptEntries(key: String): List<Kept> =
+        meta.get(key)?.split(',')?.filter { it.isNotEmpty() }?.map {
+            val at = it.indexOf(KEPT_SEPARATOR)
+            if (at < 0) Kept(it, UNKNOWN_ORIGIN) else Kept(it.substring(0, at), it.substring(at + 1))
+        }.orEmpty()
+
+    private suspend fun putKept(key: String, entries: List<Kept>) {
+        if (entries.isEmpty()) {
+            meta.delete(key)
+        } else {
+            meta.put(MetaEntity(key, entries.joinToString(",") { it.uuid + KEPT_SEPARATOR + it.origin }))
+        }
     }
 
     // ------------------------------------------------------------------ push
@@ -175,6 +233,7 @@ class SyncStore(
         // an index, so nothing could ever go up again): settings, records and the photos added ahead of their versions
         // all count.
         val settingsOut = settingChanges()
+        foreign = keptPhotos()
         val room = limit - settingsOut.size
         if (room <= 0) return OutgoingBatch(settingsOut.take(limit), read = settingsOut.size)
         val out = ArrayList<Outgoing>()
@@ -229,6 +288,9 @@ class SyncStore(
     }
 
     private enum class PhotoFirst { READY, HELD, NO_ROOM }
+
+    /** [keptPhotos] while a batch is read: their records are cleaned, never pushed. */
+    private var foreign: Set<String> = emptySet()
 
     /**
      * Makes sure the server knows [photo] before a version naming it goes up (ADR 0018 "W5"): a photo whose record the
@@ -350,6 +412,7 @@ class SyncStore(
     }
 
     private suspend fun photoChange(record: SyncRecordEntity): PushChange? {
+        if (record.recordId in foreign) return null
         if (record.deleted) {
             // A hand-off photo merged into a folder photo (ADR 0011 "One photo across sources"): the server's copy of
             // it goes; its versions now name the folder photo.
@@ -398,6 +461,8 @@ class SyncStore(
     private suspend fun versionChange(record: SyncRecordEntity, maxData: Int): VersionChange? {
         // A held version (rev -1) that changed again is still new to the server.
         val baseRev = record.rev.coerceAtLeast(0)
+        // A version of another server's kept photo that was never pushed here: its tombstone stays local too.
+        if (record.deleted && record.rev <= 0 && foreign.isNotEmpty()) return null
         if (record.deleted) {
             return VersionChange(
                 PushChange(Kinds.VERSION, record.recordId, record.rev, record.modifiedAt, deleted = true),
@@ -406,6 +471,8 @@ class SyncStore(
         }
         val version = sync.versionByUuid(record.recordId) ?: return null
         val photo = photos.get(version.photoId) ?: return null
+        // A photo kept from another server: this server never hears of it or its edits.
+        if (photo.uuid in foreign) return null
         val recipe = edits.recipe(version.id)
         val steps = edits.history(version.id)
         val snapshots = db.versionDao().snapshots(version.id)
@@ -544,6 +611,12 @@ class SyncStore(
                 return
             }
 
+            // This installation's own record under a local edit it never pushed: rebased, pushed as an update.
+            rebaseOwn(local, record) -> {
+                stats.skipped++
+                return
+            }
+
             // Unpushed local work: the next push carries the old baseRev and the server decides (ADR 0017); the
             // server's state waits in the inbox and applies after that push if it is still the newest. A held version
             // ([hold]) is unpushed work too.
@@ -614,6 +687,28 @@ class SyncStore(
         val fingerprint = photo?.let { mainFile(photos.files(it.id))?.fingerprint }
         val named = photo != null && data.photoId == photo.uuid && data.photoFingerprint == fingerprint
         sync.putRecord(local.copy(rev = record.rev, dirty = !named || fingerprint == null))
+        return true
+    }
+
+    /**
+     * This installation's earlier devices ([ownAuthors], [ownDevices]); set by [SyncEngine] before a first sync's pull.
+     */
+    @Volatile
+    var ownAuthors: Set<String> = emptySet()
+
+    /**
+     * A version this device never pushed to this server (rev 0, dirty: a first sync, an edit kept by an unpairing)
+     * whose edit differs from the server's record, when that record's author is this installation (an earlier device
+     * id, or one of its physical device): the local edit was made on top of it. The local record takes the server's
+     * revision and stays dirty, so the push is a clean update instead of a base-0 conflict copy. True when rebased.
+     */
+    private suspend fun rebaseOwn(local: SyncRecordEntity?, record: FeedRecord): Boolean {
+        if (local == null || record.kind != Kinds.VERSION || record.deleted) return false
+        if (!local.dirty || local.rev != 0L || local.deleted) return false
+        if (record.deviceId.isEmpty()) return false
+        if (record.deviceId !in ownAuthors && record.deviceId !in ownDevices()) return false
+        if (sync.versionByUuid(record.id) == null) return false
+        sync.putRecord(local.copy(rev = record.rev))
         return true
     }
 
@@ -1134,8 +1229,9 @@ class SyncStore(
         }
     }
 
-    /** Main-file fingerprints the recovery looks up, a page at a time ([SyncDao.recoveryFingerprints]). */
-    suspend fun recoveryFingerprints(limit: Int, offset: Int): List<String> = sync.recoveryFingerprints(limit, offset)
+    /** Main-file fingerprints the recovery looks up, a page at a time after photo id [after]. */
+    suspend fun recoveryFingerprints(limit: Int, after: Long): List<dev.hfps.reveal.data.db.RecoveryKey> =
+        sync.recoveryFingerprints(limit, after)
 
     /**
      * The photos of parked versions, found through the server's edited previews ([found]: version uuid -> a main-file
@@ -1167,37 +1263,43 @@ class SyncStore(
      * own device ids, or a device of its physical device): on the server's revision, naming the photo's current id and
      * main-file fingerprint, so every device finds it without the server's previews. Without proof nothing is pushed
      * (the alias is enough here) and the version stays listed; one whose record changed meanwhile (another device
-     * pushed it, or it was edited here) is dropped. Returns how many it marked.
+     * pushed it, or it was edited here) is dropped, and so is one whose author [hopeless] says can never be proven (the
+     * server's view of this device was read and no claim it offers could prove it), so the view is not asked for
+     * every sync forever. Returns how many it marked.
      */
-    suspend fun proveRecovered(ownDevice: (String) -> Boolean): Int = db.withTransaction {
-        var marked = 0
-        val left = proofEntries().filter { entry ->
-            val parts = entry.split(CHECK_REV)
-            val record = sync.record(Kinds.VERSION, parts[0])
-            val rev = parts.getOrNull(1)?.toLongOrNull()
-            when {
-                record == null || record.rev != rev || !record.isSettled -> false
+    suspend fun proveRecovered(hopeless: (String) -> Boolean = { false }, ownDevice: (String) -> Boolean): Int =
+        db.withTransaction {
+            var marked = 0
+            val left = proofEntries().filter { entry ->
+                val parts = entry.split(CHECK_REV)
+                val record = sync.record(Kinds.VERSION, parts[0])
+                val rev = parts.getOrNull(1)?.toLongOrNull()
+                when {
+                    record == null || record.rev != rev || !record.isSettled -> false
 
-                ownDevice(parts.getOrNull(2).orEmpty()) -> false.also {
-                    sync.putRecord(record.copy(dirty = true))
-                    marked++
+                    ownDevice(parts.getOrNull(2).orEmpty()) -> false.also {
+                        sync.putRecord(record.copy(dirty = true))
+                        marked++
+                    }
+
+                    else -> !hopeless(parts.getOrNull(2).orEmpty())
                 }
-
-                else -> true
             }
+            putList(KEY_RECOVERY_PROOF, left)
+            marked
         }
-        putList(KEY_RECOVERY_PROOF, left)
-        marked
-    }
 
-    /** Where a recovery pass stopped: the next fingerprint page and the versions it looks for; null between passes. */
-    suspend fun recoverySearch(): Pair<Int, Set<String>>? {
+    /**
+     * Where a recovery pass stopped: the last photo id it asked about and the versions it looks for; null between
+     * passes.
+     */
+    suspend fun recoverySearch(): Pair<Long, Set<String>>? {
         val value = meta.get(KEY_RECOVERY_SEARCH) ?: return null
-        val offset = value.substringBefore('|').toIntOrNull() ?: return null
+        val offset = value.substringBefore('|').toLongOrNull() ?: return null
         return offset to value.substringAfter('|', "").split(',').filter { it.isNotEmpty() }.toSet()
     }
 
-    suspend fun saveRecoverySearch(state: Pair<Int, Set<String>>?) {
+    suspend fun saveRecoverySearch(state: Pair<Long, Set<String>>?) {
         if (state == null) {
             meta.delete(KEY_RECOVERY_SEARCH)
         } else {
@@ -1618,8 +1720,18 @@ class SyncStore(
         /** `meta`: versions held back until their photo is on the server ([hold]): version uuids, `,` joined. */
         const val KEY_HELD_VERSIONS = "sync.heldVersions"
 
-        /** `meta`: edited Server photos' versions an unpairing kept without the server holding them ([forget]). */
+        /**
+         * `meta`: edited Server photos' versions an unpairing kept without the server holding them ([forget]):
+         * `uuid@origin server id`, `,` joined.
+         */
         const val KEY_KEPT_EDITS = "sync.keptEdits"
+
+        /** `meta`: the Server photos an unpairing kept ([forget]), `uuid@origin server id`, `,` joined. */
+        const val KEY_KEPT_PHOTOS = "sync.keptPhotos"
+
+        /** The origin of kept entries whose server is not known (kept before 0.9.0 recorded it). */
+        const val UNKNOWN_ORIGIN = "?"
+        private const val KEPT_SEPARATOR = '@'
 
         /** `meta`: parked versions' photos found through the server's previews: `uuid=fingerprint`, `,` joined. */
         const val KEY_RECOVERED_FP = "sync.recovery.fingerprints"
@@ -1627,7 +1739,7 @@ class SyncStore(
         /** `meta`: recovered versions waiting for proof of authorship: `uuid@rev@author device id`, `,` joined. */
         const val KEY_RECOVERY_PROOF = "sync.recovery.proof"
 
-        /** `meta`: the recovery pass in progress: `offset|uuid,uuid`. */
+        /** `meta`: the recovery pass in progress: `last photo id|uuid,uuid`. */
         const val KEY_RECOVERY_SEARCH = "sync.recovery.search"
 
         /** `meta`: versions a whole pass did not find: `uuid@at@misses`, `,` joined. */

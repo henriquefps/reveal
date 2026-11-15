@@ -86,6 +86,9 @@ class FakeSyncServer(val serverId: String = "858e1b9d-0000-4000-8000-00000000000
     val patchCount = AtomicInteger()
     var chunkSize = 1024L
 
+    /** Refuse `POST /v1/items/lookup` with this `400` code (null: answer it). */
+    var refuseItemLookups: String? = null
+
     /** Answer the next N authenticated requests with `429` + `Retry-After: 1`. */
     var rateLimitNext = 0
 
@@ -227,6 +230,7 @@ class FakeSyncServer(val serverId: String = "858e1b9d-0000-4000-8000-00000000000
 
             path == "/v1/items/lookup" && "items" in features -> {
                 itemLookups++
+                refuseItemLookups?.let { return error(400, it) }
                 ok(edits.lookup(json.parseToJsonElement(request.body!!.utf8()).jsonObject))
             }
 

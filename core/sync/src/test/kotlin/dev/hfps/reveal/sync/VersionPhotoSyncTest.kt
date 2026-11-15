@@ -692,6 +692,12 @@ class VersionPhotoSyncTest {
             assertThat(device.inbox().map { it.recordId }).containsExactlyElementsIn(uuids)
             for (fp in fingerprints) assertThat(device.exposure(device.photoByFingerprint(fp)!!.id)).isEqualTo(0f)
         }
+        // Hoard shares each old physical device (it is offered as "same phone?" once the old Reveal id is revoked).
+        for (old in listOf(oldPhone, oldTablet)) {
+            val hoard = server.devices.getValue(server.addDevice("Hoard"))
+            server.culling.app[hoard] = "hoard"
+            server.culling.physical[hoard] = old
+        }
         server.revoke(oldPhone)
         server.revoke(oldTablet)
         val revs = uuids.map { server.record("version", it)!!.rev }
@@ -762,6 +768,7 @@ class VersionPhotoSyncTest {
         server.hoard(edits = true)
         val phone = device("Phone")
         val tablet = device("Tablet")
+        listOf(phone, tablet).forEach { server.culling.app[server.devices.getValue(it.key)] = "reveal" }
         phone.oldBuild()
         val fingerprint = nas("DSC09101.ARW", 51)
         server.culling.addItem(listOf(fingerprint))
@@ -803,6 +810,58 @@ class VersionPhotoSyncTest {
         assertThat(tablet.inbox()).isEmpty()
         assertThat(server.record("version", uuid)!!.rev).isEqualTo(rev)
         assertThat(server.copies()).isEmpty()
+        // The phone is another live Reveal (never offered as "same tablet?"): the record can never be proven here, so
+        // it is not waited for (no device view asked every sync).
+        assertThat(runBlocking { tablet.db.metaDao().get(SyncStore.KEY_RECOVERY_PROOF) }).isNull()
+    }
+
+    @Test
+    fun `a lookup the server refuses backs off like a miss`() {
+        server.hoard(edits = true)
+        val phone = device("Phone")
+        val tablet = device("Tablet")
+        phone.oldBuild()
+        val fingerprint = nas("DSC09111.ARW", 52)
+        server.culling.addItem(listOf(fingerprint))
+        phone.sync()
+        tablet.sync()
+        val onPhone = phone.photoByFingerprint(fingerprint)!!
+        phone.editExposure(onPhone.id, 0.3f)
+        val uuid = phone.legacyPushVersion(onPhone.id)
+        server.refuseItemLookups = "invalid_request"
+        tablet.sync()
+        val first = server.itemLookups
+        assertThat(first).isEqualTo(1)
+        assertThat(tablet.inbox().map { it.recordId }).containsExactly(uuid)
+        repeat(3) {
+            tablet.now += 60 * 60 * 1000L
+            tablet.sync()
+        }
+        assertThat(server.itemLookups).isEqualTo(first)
+        // Answered again a day later: found.
+        server.refuseItemLookups = null
+        putEdit(uuid, server.culling.items.keys.single(), server.devices.getValue(phone.key), phone.now)
+        tablet.now += 24 * 60 * 60 * 1000L
+        tablet.sync()
+        assertThat(tablet.exposure(tablet.photoByFingerprint(fingerprint)!!.id)).isEqualTo(0.3f)
+    }
+
+    @Test
+    fun `a recovery pass pages by photo id so photos added during it are not skipped`() = runBlocking {
+        val phone = device("Phone")
+        val handoff = phone.addFolder("Handoff")
+        phone.db.openHelper.writableDatabase.execSQL(
+            "UPDATE sources SET kind = 'HANDOFF' WHERE id = ?",
+            arrayOf<Any>(handoff),
+        )
+        val first = (1..3).map { phone.addPhoto("H$it", bytes(200 + it), source = handoff) }
+        val page = phone.store.recoveryFingerprints(2, 0)
+        assertThat(page.map { it.photoId }).isEqualTo(first.take(2))
+        // A photo added (newest) during the pass: it comes after the pass's position, never shifts a page.
+        val added = phone.addPhoto("H9", bytes(209), source = handoff)
+        val rest = phone.store.recoveryFingerprints(2, page.last().photoId)
+        assertThat(rest.map { it.photoId }).isEqualTo(listOf(first[2], added))
+        assertThat(rest.all { it.fingerprint != null }).isTrue()
     }
 
     @Test

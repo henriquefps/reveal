@@ -1113,8 +1113,10 @@ W5 recovery (ADR 0018 "W5 recovery"): parked versions whose photo nobody can fin
 deleted the edited Server photos) are found through Hoard's edited previews (`SyncEngine.recoverParked`: paced
 `POST /v1/items/lookup` over Server/hand-off main fingerprints, `edits[].versionId` + `matches`; misses back off from a
 day) and applied on every device; pushed again only with proof of authorship (`sync.ownDevices`, or the physical
-device from `GET /v1/device`). `forget()` keeps edited Server photos (`sync.keptEdits`, `markUnrecordedEdits`).
-Tests: `VersionPhotoSyncTest`, `RealServerRecoveryTest` (`REVEAL_RECOVERY_DIR`; `local-server.sh revoke`).
+device from `GET /v1/device`). `forget()` keeps edited Server photos (`sync.keptPhotos`/`sync.keptEdits` with their origin server: only a pairing with that
+server pushes them, `startTracking(serverId)`; elsewhere `keptPhotos()` are never pushed, `removeKeptPhotos`); a local
+edit on top of this installation's own record is rebased on a first sync (`rebaseOwn`), not copied.
+Tests: `VersionPhotoSyncTest`, `KeptServerPhotosTest`, `RealServerRecoveryTest` (`REVEAL_RECOVERY_DIR`; `local-server.sh revoke`).
 
 Culling with hoard-server (R0.8, ADR 0027, DB v13; only when `/v1/server` lists `culling`, else culling stays in
 `photo` records): `engine/CullingSync` (seed once per server, push `POST /v1/culling` per field by main fingerprint,

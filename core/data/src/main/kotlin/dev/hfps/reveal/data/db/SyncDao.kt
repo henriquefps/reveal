@@ -77,6 +77,15 @@ data class EditedVersion(
     @ColumnInfo(name = "from_record") val fromRecord: Boolean,
 )
 
+/** A photo the W5 recovery asks the server about ([SyncDao.recoveryFingerprints]); null while it has no fingerprint. */
+data class RecoveryKey(@ColumnInfo(name = "photo_id") val photoId: Long, val fingerprint: String?)
+
+/** An edited Server photo's version an unpairing keeps ([SyncDao.unsyncedServerEdits]). */
+data class KeptEdit(
+    @ColumnInfo(name = "version_uuid") val versionUuid: String,
+    @ColumnInfo(name = "photo_uuid") val photoUuid: String,
+)
+
 @Dao
 @Suppress("TooManyFunctions")
 interface SyncDao {
@@ -152,11 +161,16 @@ interface SyncDao {
 
     /** Edited versions of Server photos whose current state the server is not known to hold (unpairing keeps them). */
     @Query(
-        "SELECT v.uuid FROM versions v JOIN photos p ON p.id = v.photo_id JOIN sources s ON s.id = p.source_id " +
+        "SELECT v.uuid AS version_uuid, p.uuid AS photo_uuid FROM versions v JOIN photos p ON p.id = v.photo_id " +
+            "JOIN sources s ON s.id = p.source_id " +
             "WHERE s.kind = 'SERVER' AND (" + EDITED_VERSION + ") AND NOT EXISTS (SELECT 1 FROM sync_records r " +
             "WHERE r.kind = 'version' AND r.record_id = v.uuid AND r.rev > 0 AND r.dirty = 0 AND r.deleted = 0)",
     )
-    suspend fun unsyncedServerEdits(): List<String>
+    suspend fun unsyncedServerEdits(): List<KeptEdit>
+
+    /** The Server source's photos (uuids): what an unpairing keeps of it belongs to a server (SyncStore.forget). */
+    @Query("SELECT p.uuid FROM photos p JOIN sources s ON s.id = p.source_id WHERE s.kind = 'SERVER'")
+    suspend fun serverPhotoUuids(): List<String>
 
     /** Marks [uuids] (versions) to push as new on this server, dated by their last edit. */
     @Query(
@@ -166,16 +180,17 @@ interface SyncDao {
     suspend fun markVersionsNew(uuids: List<String>, now: Long)
 
     /**
-     * Main-file fingerprints of photos whose records the server may never have had (Server photos and hand-offs),
-     * newest shot first, for finding the photo of a parked version through the server's edited previews.
+     * Main-file fingerprints of photos whose records the server may never have had (Server photos and hand-offs), for
+     * finding the photo of a parked version through the server's edited previews. Paged by photo id ([after] = the
+     * last page's last id): photos added during a pass come after it, so no page shifts and nothing is skipped.
      */
     @Query(
-        "SELECT DISTINCT f.fingerprint FROM photos p JOIN photo_files f ON f.photo_id = p.id JOIN sources s ON " +
-            "s.id = p.source_id WHERE s.kind IN ('SERVER', 'HANDOFF') AND f.fingerprint IS NOT NULL AND " +
-            "(f.role = 'RAW' OR NOT EXISTS (SELECT 1 FROM photo_files o WHERE o.photo_id = p.id AND o.role = 'RAW')) " +
-            "ORDER BY p.sort_time DESC, p.id DESC LIMIT :limit OFFSET :offset",
+        "SELECT p.id AS photo_id, (SELECT f.fingerprint FROM photo_files f WHERE f.photo_id = p.id " +
+            "AND f.fingerprint IS NOT NULL ORDER BY CASE f.role WHEN 'RAW' THEN 0 ELSE 1 END, f.id LIMIT 1) " +
+            "AS fingerprint FROM photos p JOIN sources s ON s.id = p.source_id WHERE s.kind IN ('SERVER', 'HANDOFF') " +
+            "AND p.id > :after ORDER BY p.id LIMIT :limit",
     )
-    suspend fun recoveryFingerprints(limit: Int, offset: Int): List<String>
+    suspend fun recoveryFingerprints(limit: Int, after: Long): List<RecoveryKey>
 
     /** First sync with a server: every photo and version is to be pushed (rev 0 = created there). */
     @Query(

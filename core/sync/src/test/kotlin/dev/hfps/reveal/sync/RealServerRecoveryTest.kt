@@ -68,11 +68,11 @@ class RealServerRecoveryTest {
 
     private data class Paired(val url: String, val key: String, val serverId: String, val deviceId: String)
 
-    /** A fresh pairing. */
-    private fun pair(name: String): Paired {
+    /** A fresh pairing of [app]. */
+    private fun pair(name: String, app: String = "reveal"): Paired {
         val link = checkNotNull(PairingLink.parse(script("pair", dir!!).lines().last()))
         val response = SyncApi(link.url, null).pair(
-            PairRequest(link.token, name, "android", "test", "reveal", model.manufacturer, model.model),
+            PairRequest(link.token, name, "android", "test", app, model.manufacturer, model.model),
         )
         return Paired(link.url, response.apiKey, response.serverId, response.deviceId)
     }
@@ -210,8 +210,18 @@ class RealServerRecoveryTest {
             assertThat(device.inbox()).containsAtLeastElementsIn(uuids)
             fingerprints.forEach { assertThat(device.exposure(it)).isEqualTo(0f) }
         }
+        // Hoard on each device, in its old physical device (the group the old Reveal created: its id is the old id).
+        for (old in listOf(oldPhone, oldTablet)) {
+            val hoard = pair("Hoard", app = "hoard")
+            SyncApi(hoard.url, hoard.key).claim(old)
+        }
         script("revoke", dir!!, oldPhone)
         script("revoke", dir, oldTablet)
+        // hoard-server never lists a revoked device; its physical device stays, offered as "same phone?" through Hoard.
+        val view = phone.api.device()
+        assertThat(view.physicalDevice!!.devices.map { it.id }).doesNotContain(oldPhone)
+        assertThat(phone.api.devices().devices.map { it.id }).containsNoneOf(oldPhone, oldTablet)
+        assertThat(view.candidates.map { it.physicalDeviceId }).contains(oldPhone)
         val feedNow = phone.feed()
         val revs = uuids.map { u -> feedNow.last { it.id == u }.rev }
 
@@ -229,9 +239,10 @@ class RealServerRecoveryTest {
         val feed = phone.feed()
         assertThat(uuids.map { u -> feed.last { it.id == u }.rev }).isEqualTo(revs)
 
-        // Claimed into their old physical devices: each pushes its own again.
-        phone.api.claim(oldPhone)
-        tablet.api.claim(oldTablet)
+        // Claimed into their old physical devices: each pushes its own again (proof = the physical device's id, which
+        // is the revoked old id).
+        assertThat(phone.api.claim(oldPhone).physicalDevice!!.id).isEqualTo(oldPhone)
+        assertThat(tablet.api.claim(oldTablet).physicalDevice!!.id).isEqualTo(oldTablet)
         phone.sync()
         tablet.sync()
         phone.sync()

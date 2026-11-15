@@ -53,6 +53,10 @@ All notable changes to Reveal are documented here. The format follows
   from another app) that nobody had rated, flagged or labelled never reached the other devices. The photo now goes to
   the server before its edit, an edit finds its photo on the other device by the file itself, and the first sync after
   updating sends such edits again (they then show up on the other devices).
+- Pairing again with the same server (a new address, a new QR) no longer registers a new device: Reveal keeps its
+  device, its place next to Hoard on the same phone and everything it had synced. When the old device was removed
+  from the server, the new one keeps the sync state and rejoins Hoard's phone. A re-pair or a pairing after unpairing
+  no longer turns every edited photo into a conflict copy.
 - Photos from Hoard (W4): a camera's `IMG_0001.JPG` no longer pairs with a Hoard `IMG_0001.CR3` of the same name; a
   RAW and its JPEG that arrive in different parts of a big batch still become one photo; the originals Reveal keeps
   for Hoard's Downloads copies are no longer left behind (backups of photos the server holds, a failed re-copy, a

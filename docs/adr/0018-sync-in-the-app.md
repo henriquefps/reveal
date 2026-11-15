@@ -632,6 +632,47 @@ Decisions:
   device_api.go`); the app version is only sent at pairing (`POST /v1/pair` `appVersion`). Nothing changes in Reveal:
   refreshing it needs a server change first (Hoard ADR 0012: additions are made in Hoard).
 
+### W5 (f): pairing again with the same server
+
+Context: the owner moved the server from a tunnel to Tailscale and scanned a new pairing QR on both devices. Each
+`POST /v1/pair` made a new device on the same server; the old ones stayed registered (live), the new ones got a
+physical device of their own and lost the grouping with Hoard on the same phone (Hoard ADR 0017). And `pair()`
+forgot everything first (`forgetLocked`): the first sync then marked every photo and version at rev 0
+(`startTracking`), parked the server's records behind them and pushed them as conflicts, so the server kept the
+losing side of **every edited version as a conflict copy** (reproduced in `RePairTest`).
+
+What the protocol allows (hoard-server `main`, Hoard ADR 0013/0017, `openapi.yaml`, `internal/server/api.go`): there
+is **no self-revoke** under `/v1` (no `DELETE /v1/device`); revoking is admin-only (`/admin`, `Store.RevokeDevice`).
+`candidates` never list a physical device that already has a live device of this app id, and a claim there is
+`409 same_app`. So a phone whose old Reveal is still live cannot be rejoined by the new one, with or without a user
+step, until the old device is revoked on the admin page. Nothing changes on the server.
+
+Decisions (`SyncRepository.pair`):
+
+- **Same server, key still valid: no new device.** Before calling `/v1/pair`, when this installation is paired and
+  the link names no other server, `GET /v1/server` at the link's address with the current key; the same `serverId`
+  and `deviceId` -> only the address changes (`SyncAccount.url`). Device id, key, physical device (Hoard's grouping),
+  cursors and records stay; the pairing token is left unused. This is the owner's case from now on.
+- **Same server, key refused** (`401`: revoked or lost): pair a new device but **keep the library's sync state**
+  (records, revisions, cursors, aliases, inbox, culling, Server source); only the device report and the stored
+  physical id are forgotten (`SyncEngine.forgetDevice`), so the new device declares `culling` on its next sync. When
+  the previous device was grouped and that physical device is among the pair answer's `candidates` (the old Reveal is
+  no longer live there), the new device claims it at once: this installation's user already said "same phone". Else
+  the usual model-match question is offered.
+- **First sync after an unpair** (the state is gone on purpose): a pulled version whose local record is rev 0 and dirty
+  (marked by `startTracking`) and whose edit equals the server's (recipe, name, position, snapshot ids) is not a
+  change: it is unmarked and the server's record applies (`SyncStore.unmarkSameEdit`) instead of a conflict copy.
+- Another server: as before (everything forgotten).
+
+The production state (both devices re-paired as new devices, old ones live in the Hoard groups): revoke the two old
+Reveal devices on the admin page, then Settings -> Sync -> This device offers Hoard's phone again (claim). The conflict
+copies the re-pair made are resolved with the conflict chooser (FIX/W).
+
+Tests: `RePairTest` (a new address with a valid key keeps the device and its phone, no token used; a revoked key -> a
+new device that keeps the records, rejoins Hoard's phone, reports itself, and still gets the W5 repair; an old device
+still live -> no forced claim; unpair + pair -> no conflict copy), `SyncApiTest` (a used token is refused once
+unpaired).
+
 Tests: `VersionPhotoSyncTest` (FakeSyncServer, two devices: an unculled NAS photo, a hand-off never culled against the
 other device's folder photo, the exact production sequence, the repair of a photo the server never had, a version
 before its photo record, the ambiguity, a held version, a tombstoned photo), `RealServerVersionPhotoTest` (the pinned

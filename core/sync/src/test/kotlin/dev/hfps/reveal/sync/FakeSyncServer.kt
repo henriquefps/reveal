@@ -136,6 +136,13 @@ class FakeSyncServer : Dispatcher() {
         return key
     }
 
+    /** Revokes a device as the admin page does: its key answers `401`, it is no longer listed (ADR 0017). */
+    @Synchronized
+    fun revoke(deviceId: String) {
+        devices.entries.removeIf { it.value == deviceId }
+        deviceNames.remove(deviceId)
+    }
+
     /** How many culling pages were asked for (a hand-off's pull, a sync run's). */
     @Volatile
     var cullingPages = 0

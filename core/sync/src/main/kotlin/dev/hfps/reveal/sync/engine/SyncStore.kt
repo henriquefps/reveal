@@ -410,7 +410,7 @@ class SyncStore(
         fromInbox: Boolean = false,
     ) {
         reassert = false
-        val local = sync.record(record.kind, record.id)
+        val local = unmarkSameEdit(sync.record(record.kind, record.id), record)
         val placed = when {
             // Unpushed local work: the next push carries the old baseRev and the server decides (ADR 0017); the
             // server's state waits in the inbox and applies after that push if it is still the newest.
@@ -460,6 +460,26 @@ class SyncStore(
         )
         reassert = false
         stats.applied++
+    }
+
+    /**
+     * A version this device never pushed to this server (rev 0, dirty: a first sync with a server it was paired with
+     * before, ADR 0018 "W5 (f)") whose edit is the server's: not a change, so the server's record applies instead of
+     * parking it and pushing ours as a conflict (the server kept the losing side as a conflict copy of every edit).
+     */
+    private suspend fun unmarkSameEdit(local: SyncRecordEntity?, record: FeedRecord): SyncRecordEntity? {
+        if (local == null || record.kind != Kinds.VERSION || record.deleted) return local
+        if (!local.dirty || local.rev != 0L || local.deleted) return local
+        val data = decode(record.data, VersionData.serializer()) ?: return local
+        val version = sync.versionByUuid(record.id) ?: return local
+        val recipe = edits.recipe(version.id)?.json?.let(::parse) ?: parse(RecipeCodec.Default.encode(DEFAULT_RECIPE))
+        val snapshots = db.versionDao().snapshots(version.id).map { it.uuid }.sorted()
+        val same = recipe == data.recipe && version.name == data.name && version.position == data.position &&
+            snapshots == data.snapshots.orEmpty().map { it.id }.sorted()
+        if (!same) return local
+        val clean = local.copy(dirty = false)
+        sync.putRecord(clean)
+        return clean
     }
 
     /** [record] is already applied (or older than what our push left) and its photo or version is still here. */

@@ -175,8 +175,17 @@ class SyncRepository(
         return newApi(account.url, key)
     }
 
-    /** Pairs with the server of [link]; the device key goes to the Keystore. Throws [PairException]. */
+    /**
+     * Pairs with the server of [link]; the device key goes to the Keystore. Throws [PairException].
+     *
+     * Pairing again with the server this installation is paired with (its address changed, ADR 0018 "W5 (f)") keeps
+     * everything: when the current key still works at the link's address the device stays the same (no new device on
+     * the server, its physical device and Hoard's grouping kept, the pairing token unused); otherwise the new device
+     * keeps the library's sync state (records, cursors, culling) and joins the physical device the previous one was in
+     * when the server offers it.
+     */
     suspend fun pair(link: PairingLink): SyncAccount = withContext(Dispatchers.IO) {
+        sameDevice(link)?.let { return@withContext it }
         val response = try {
             newApi(link.url, null).pair(
                 PairRequest(
@@ -200,9 +209,17 @@ class SyncRepository(
             throw PairException(PairProblem.INVALID_LINK, e)
         }
         if (link.serverId != null && link.serverId != response.serverId) throw PairException(PairProblem.OTHER_SERVER)
-        mutex.withLock {
-            // A new pairing starts from nothing: whatever an earlier server knew does not apply.
-            forgetLocked()
+        val previous = accounts.account.value?.takeIf { it.serverId == response.serverId }
+        val previousGroup = previous?.let { db.metaDao().get(SyncEngine.KEY_PHYSICAL_DEVICE) }
+        val account = mutex.withLock {
+            if (previous == null) {
+                // A new pairing starts from nothing: whatever an earlier server knew does not apply.
+                forgetLocked()
+            } else {
+                // The same server under a new device: the library's sync state stays (its revisions are the server's);
+                // only what was reported about the old device goes, so the new one declares itself on its next sync.
+                engine.forgetDevice()
+            }
             val account =
                 SyncAccount(
                     link.url,
@@ -218,6 +235,44 @@ class SyncRepository(
             candidates.update { response.candidates.filter(DeviceCandidate::modelMatch) }
             runtime.update { SyncStatus() }
             account
+        }
+        // The previous device of this installation was in a physical device (with Hoard): the new one goes back there
+        // when the server offers it (the old device is no longer live in it). The user answered that question already.
+        val rejoin = previousGroup?.takeIf { group ->
+            group != previous.deviceId && response.candidates.any { it.physicalDeviceId == group }
+        }
+        if (rejoin != null) {
+            runCatching { claim(rejoin) }.onFailure { Log.w(TAG, "re-pair: could not rejoin the previous phone") }
+        }
+        account
+    }
+
+    /**
+     * The current device again, at [link]'s address, when this installation is paired with that server and its key
+     * still works there (`GET /v1/server` answers with the same server id); null otherwise.
+     */
+    @Suppress("ReturnCount")
+    private suspend fun sameDevice(link: PairingLink): SyncAccount? {
+        val account = accounts.account.value ?: return null
+        if (link.serverId != null && link.serverId != account.serverId) return null
+        val key = accounts.apiKey() ?: return null
+        val info = try {
+            newApi(link.url, key).server()
+        } catch (e: SyncHttpException) {
+            // A revoked key (`401`) or a server that refuses: pair as a new device.
+            Log.i(TAG, "re-pair: the current key is not accepted (${e.code}), pairing a new device")
+            return null
+        } catch (_: IOException) {
+            return null
+        } catch (_: IllegalArgumentException) {
+            return null
+        }
+        if (info.serverId != account.serverId || info.deviceId != account.deviceId) return null
+        return mutex.withLock {
+            val moved = account.copy(url = link.url)
+            accounts.save(moved, key)
+            runtime.update { SyncStatus() }
+            moved
         }
     }
 

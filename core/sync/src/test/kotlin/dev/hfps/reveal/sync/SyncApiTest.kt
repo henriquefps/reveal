@@ -113,11 +113,9 @@ class SyncApiTest {
             assertThat(server.deviceNames.values).contains("Test phone")
             assertThat(runBlocking { repository.syncMetadata() }).isNotNull()
 
-            val reused =
-                assertThrows(PairException::class.java) {
-                    runBlocking { repository.pair(PairingLink.parse(link(token))!!) }
-                }
-            assertThat(reused.problem).isEqualTo(PairProblem.INVALID_TOKEN)
+            // Paired with that server and the key still works there: the same device, the token is not needed.
+            val again = runBlocking { repository.pair(PairingLink.parse(link(token))!!) }
+            assertThat(again.deviceId).isEqualTo(account.deviceId)
             val other = assertThrows(PairException::class.java) {
                 runBlocking { repository.pair(PairingLink.parse(link(server.pairingToken(), "another"))!!) }
             }
@@ -130,6 +128,12 @@ class SyncApiTest {
             // A sync that runs after unpairing (a job queued before) does nothing and brings nothing back.
             assertThat(runBlocking { repository.syncMetadata() }).isNull()
             assertThat(runBlocking { db.syncDao().serverSource() }).isNull()
+
+            val reused =
+                assertThrows(PairException::class.java) {
+                    runBlocking { repository.pair(PairingLink.parse(link(token))!!) }
+                }
+            assertThat(reused.problem).isEqualTo(PairProblem.INVALID_TOKEN)
         } finally {
             db.close()
         }

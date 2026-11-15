@@ -1095,7 +1095,10 @@ no accepted record (`photoFirst`); a photo without a fingerprint yet holds its v
 ambiguous) and alias the record's photo id. One-off `repairVersionPhotos` (meta `sync.versionPhotos`, after the pull,
 skipped on a first sync): edited versions of photos the server never had + this device's edited versions again (their
 original `modifiedAt`). Tests: `VersionPhotoSyncTest`, `RealServerVersionPhotoTest` (`REVEAL_VERSION_DIR`,
-`REVEAL_VERSION_LINKS`, two links).
+`REVEAL_VERSION_LINKS`, two links). Re-pair with the same server (W5 (f)): `SyncRepository.pair` first tries the
+current key at the link's address (`sameDevice`: same device, only the URL changes); a refused key pairs a new device
+but keeps the sync state (`SyncEngine.forgetDevice`) and claims the previous physical device when offered; no
+self-revoke exists in `/v1`. `SyncStore.unmarkSameEdit` avoids conflict copies on a first sync. Test: `RePairTest`.
 
 Culling with hoard-server (R0.8, ADR 0027, DB v13; only when `/v1/server` lists `culling`, else culling stays in
 `photo` records): `engine/CullingSync` (seed once per server, push `POST /v1/culling` per field by main fingerprint,

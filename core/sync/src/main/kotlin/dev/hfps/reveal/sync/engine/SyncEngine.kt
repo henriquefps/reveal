@@ -296,6 +296,15 @@ class SyncEngine(
     /** Last successful sync (Unix ms), or null. */
     suspend fun lastSync(): Long? = meta.get(KEY_LAST_SYNC)?.toLongOrNull()
 
+    /**
+     * The same server under a new device (a re-pair whose old key no longer works, ADR 0018 "W5 (f)"): what was
+     * reported about the old device goes; cursors, records and culling state stay.
+     */
+    suspend fun forgetDevice() {
+        meta.delete(KEY_DEVICE_REPORTED)
+        meta.delete(KEY_PHYSICAL_DEVICE)
+    }
+
     /** Forgets the cursors (unpair, another server). */
     suspend fun resetCursors() {
         val keys = listOf(

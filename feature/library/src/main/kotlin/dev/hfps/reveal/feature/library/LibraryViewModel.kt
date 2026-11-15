@@ -168,11 +168,12 @@ class LibraryViewModel @Inject constructor(
     }
 
     /**
-     * The system dialog answered (from the offer on screen, or from the unavailable photo's sheet): the documents it
-     * opened are readable again (thumbnails, export, backup).
+     * The system dialog answered ([askedBy] = the offer that launched it, null from the unavailable photo's sheet):
+     * only that offer's answer is kept (the Hoard media offer's `mediaAsked` is never set by another), and the
+     * documents it opened are readable again (thumbnails, export, backup).
      */
-    fun onGalleryAccessResult() {
-        answer(galleryOffer.value)
+    fun onGalleryAccessResult(askedBy: GalleryOffer?) {
+        answer(askedBy)
         gallery.refresh()
         library.scheduleAccessCheck(again = true)
     }

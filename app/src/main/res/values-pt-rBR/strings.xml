@@ -15,4 +15,15 @@
         <item quantity="many">Sem espaço para guardar %1$d originais do Hoard: eles mostram só a prévia.</item>
         <item quantity="other">Sem espaço para guardar %1$d originais do Hoard: eles mostram só a prévia.</item>
     </plurals>
+    <plurals name="handoff_not_copied">
+        <item quantity="one">%1$d foto do Hoard não pôde ser copiada: o Reveal vai usar a prévia dela.</item>
+        <item quantity="many">%1$d fotos do Hoard não puderam ser copiadas: o Reveal vai usar as prévias delas.</item>
+        <item quantity="other">%1$d fotos do Hoard não puderam ser copiadas: o Reveal vai usar as prévias delas.</item>
+    </plurals>
+    <plurals name="handoff_copying">
+        <item quantity="one">Copiando %1$d foto do Hoard</item>
+        <item quantity="many">Copiando %1$d fotos do Hoard</item>
+        <item quantity="other">Copiando %1$d fotos do Hoard</item>
+    </plurals>
+    <string name="handoff_channel">Fotos de outros apps</string>
 </resources>

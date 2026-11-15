@@ -591,10 +591,12 @@ safety net for a sender that does not (item 5).
    The parent key of a MediaStore document (`HandoffRepository.parentKey(uri, relativePath)`) is its `RELATIVE_PATH`
    without the top-level folder (`Pictures/`, `DCIM/`, `Download/`), read by `HandoffTree.stat`: Hoard's
    `Pictures/Hoard/<batch>/` and `Download/Hoard/<batch>/` pair by stem, a camera's `DCIM/Camera/IMG_0001.JPG` never
-   pairs with a Hoard `IMG_0001.CR3`. Without its path (not queryable) a MediaStore URI pairs only within its
+   pairs with a Hoard `IMG_0001.CR3`. A file at a collection's root (`Pictures/`, `DCIM/`, `Download/` with no
+   subfolder) keys on its full relative path (`media-root:<path>`): it pairs only with files of that same root. Without its path (not queryable) a MediaStore URI pairs only within its
    collection. Safety net for split batches: a single file whose shot an earlier chunk of the same batch (same
    `handoff_at` stamp) filed under the same key and stem joins that photo when the photo lacks its role
-   (`PhotoDao.batchShot`, `joinEarlierChunk`).
+   (`PhotoDao.batchShot`, `joinEarlierChunk`); when a RAW joins, the display preview made for the JPEG alone (keyed
+   by the JPEG's fingerprint) is deleted, the shot's preview is the RAW's from then on.
 6. *Adoption (W3/C) leaves local copies alone:* `SyncDao.adoptableHandoffs` skips a main file that is a readable
    `content://media/` file (an unreadable one is adopted as before) and never adopts a kept Downloads original
    (`file:` under `handoff-originals`): adoption would drop the row and orphan the copy.
@@ -603,24 +605,49 @@ safety net for a sender that does not (item 5).
    `HandoffIntents`, `HandoffBatches` and `MainActivity` treat URI-only, server-only and mixed chunks alike: one
    shared stamp and title (one entry in "Opened from other apps"), notices shown once, culling applied per chunk, the
    initial photo opens from index 0 only. The hand-off retention (400 photos) never cuts the newest batch.
-9. *The grant's holder waits for what needs it.* Each intent is received in the app's scope (`HandoffIngests`, keyed
-   per intent and saved in the activity's state), so a recreated activity (rotation) re-attaches instead of dropping
-   a batch half-way; the activity follows it. `HandoffRepository.receiveStaged` returns the outcome once the photo to
-   open first is filed (and its Downloads original kept): index 0 opens the editor or the library then. The rest
-   (the other copies, 2 at a time through `FileOpens`, and the display previews) completes `Received.settled` in the
-   background. A silent member (index > 0) keeps its activity, and so the intent's grant, until `settled`: the display
-   previews of its own shots whose documents only that grant covers are written (`HandoffPreviewer.schedule` returns
-   their job; display images never wait behind smart previews), then it finishes. Under FULL access Images documents
-   need no waiting. A smart preview of a grant-only document is made only while its holder lives
-   (`HandoffIngests.Ingest.holderGone` when it finishes); otherwise it comes from the display preview or the server later.
+9. *The grant's holder waits for what needs it.* Each intent is received in the app's scope (`HandoffIngests.receive`:
+   the batch join, `receiveStaged`, the silent member's notices; keyed per intent and saved in the activity's state;
+   it holds no reference to the activity), so a recreated activity (rotation) re-attaches instead of dropping a batch
+   half-way; the activity follows it. `HandoffRepository.receiveStaged` returns the outcome once the photo to open
+   first is filed (and its Downloads original kept): index 0 opens the editor or the library then. The rest (the
+   other copies, 2 at a time through `FileOpens`, and the display previews of the shots whose documents only the
+   intent's grant covers) completes `Received.settled` in the background. Under FULL access Images documents need no
+   waiting. A smart preview of a grant-only document is made only while someone holds the grant
+   (`Ingest.holderAlive`); otherwise it comes from the display preview or the server later.
+10. *Grant service (fix round 2).* An activity's intent grant ends when the activity is destroyed, and Reveal's
+   activity sits in the sender's task (Hoard starts it without `NEW_TASK`), so neither keeping the activity nor
+   `moveTaskToBack` works: back must return to Hoard. Instead `MainActivity` starts `HandoffGrantService` (app module,
+   a short dataSync foreground service, notification "Copying N photos from Hoard", no Cancel) for every URI hand-off,
+   with the intent's URIs as `ClipData` + `FLAG_GRANT_READ_URI_PERMISSION`: the system grants them to that start, and
+   the start keeps them until it is stopped. Each start holds its ingest (`Ingest.handOver`, taken before the start so
+   the grant never looks gone in between; `takeHandOver` in the service) until it settles, then lets go; starts
+   are stopped in order (`stopSelfResult(id)` drops every delivered start up to `id` with its grants), so a later
+   start that settles first waits for earlier ones (`START_REDELIVER_INTENT`; a redelivery after a kill whose ingest is
+   gone stops at once). Back returns to the sender as for any activity, and a silent member (index > 0) finishes at
+   once instead of staying invisible over Hoard until `settled`. Holders are counted (the activity, the service); the
+   activity lets go in `onDestroy` when finishing (every intent it received, `onNewIntent` included).
+   When `startForegroundService` is refused (background-start restrictions), nothing is held beyond the activity: a
+   silent member stays until `settled` as before, a shown one finishes on back.
+   What could not be kept is reported once (`Ingest.claimSettledNotice`: the activity when it is still there, else
+   the service): originals refused for lack of space (`Settled.noSpace`) and copies the ended grant refused
+   (`Settled.notCopied`, `isAccessError`: "N photos could not be copied; Reveal will use their previews").
+   A silent member recreated after its process died (its ingest is gone) receives its intent again while the grant
+   still works (`checkCallingOrSelfUriPermission`), else finishes.
+   `LocalOriginals` sweeps its `.tmp` files once, when the store is created (the app's start), never from a copy:
+   a sweep from a copy deleted the temporary files of copies running beside it.
 
 Tests: `HandoffMediaTest` (JVM: offer state machine and its own answer, Hoard-only Images trigger, no persistable
 grant, cross-collection pairing by relative path (DCIM never pairs with Hoard), a RAW in a later chunk joining its
 JPEG, kept original + revoked grant + restart + forget, no copy for a folder's photo, a kept copy reused when the URI
-cannot be opened, forget by fingerprint, free-space refusal, `.tmp` sweep, an extensionless Downloads item, a silent
+cannot be opened, forget by fingerprint, free-space refusal, `.tmp` sweep at creation with two copies running together,
+the grant held by the service after the activity left (every copy made) and, without it, the refused copies counted,
+root-folder keys, a joined RAW dropping the JPEG's preview, an extensionless Downloads item, a silent
 chunk whose grant is revoked after it settled (display previews made, no smart preview attempted), access check,
 identity incl. a Server photo, URI chunks, retention), `HandoffServerRefsTest` (URI/server/mixed chunks),
 `HandoffAdoptionTest` (kept originals never adopted), `ReadOnlyGrantsTest`; instrumented `HandoffMediaTest` (real
 MediaStore Images/Downloads, read grant only through `HandoffHostActivity`, 600 URIs in 3 chunks of 200, the editor's
-offer once, a batch that survives `recreate()` mid-ingest).
+offer once, a batch that survives `recreate()` mid-ingest), `HandoffGrantServiceTest` (shell-owned Downloads files
+granted by `am start --grant-read-uri-permission` as three silent members: each activity leaves before any copy, every
+copy completes through the service's grant, the grants end when it stops; with the service start disabled the same
+copies fail with `SecurityException`).
 

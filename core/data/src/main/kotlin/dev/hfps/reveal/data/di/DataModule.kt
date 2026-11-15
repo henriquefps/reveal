@@ -175,7 +175,11 @@ object DataModule {
     /** Hand-offs received in the app's scope, re-attached by a recreated activity (ADR 0011 "Amendment W4"). */
     @Provides
     @Singleton
-    fun provideHandoffIngests(@DataScope scope: CoroutineScope): HandoffIngests = HandoffIngests(scope)
+    fun provideHandoffIngests(
+        @DataScope scope: CoroutineScope,
+        handoffs: HandoffRepository,
+        batches: HandoffBatches,
+    ): HandoffIngests = HandoffIngests(scope, handoffs, batches)
 
     @Provides
     @Singleton

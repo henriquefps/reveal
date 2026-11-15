@@ -27,6 +27,7 @@ import dev.hfps.reveal.data.model.SourceState
 import dev.hfps.reveal.data.storage.DocumentEntry
 import dev.hfps.reveal.data.storage.DocumentTree
 import dev.hfps.reveal.data.storage.fingerprint
+import dev.hfps.reveal.data.storage.isAccessError
 import dev.hfps.reveal.data.xmp.SidecarCulling
 import dev.hfps.reveal.data.xmp.SidecarNames
 import dev.hfps.reveal.data.xmp.XmpFields
@@ -123,7 +124,14 @@ class HandoffRepository(
     data class Settled(
         /** Originals that were not kept for lack of space ("not enough space": they show their preview only). */
         val noSpace: Int = 0,
-    )
+        /**
+         * Originals that could not be copied because the sender's grant was refused (it ended before the copy): they
+         * show their preview ("N photos could not be copied; Reveal will use their previews").
+         */
+        val notCopied: Int = 0,
+    ) {
+        operator fun plus(other: Settled) = Settled(noSpace + other.noSpace, notCopied + other.notCopied)
+    }
 
     /**
      * A request's [outcome] (known once the photo to open first is in: its rows, and its local copy of a Downloads
@@ -255,6 +263,7 @@ class HandoffRepository(
             }
             photos.deleteEmptyPhotos(source.id)
         }
+        stored.mapNotNull { it.second.stalePreview }.takeIf { it.isNotEmpty() }?.let { previewer?.previews?.delete(it) }
         // Headers first: what is embedded in a file (JPEG XMP) only fills an unrated photo, and the sender's culling
         // values or the sidecar applied next win over it.
         indexer.readMetadata(source.id, tree)
@@ -274,15 +283,15 @@ class HandoffRepository(
         // The photo the editor or the library opens first: its Downloads original is kept before the outcome (B8).
         val head = listOfNotNull(first)
         val rest = stored.filter { it !== first }
-        val headNoSpace = keepOriginals(source.id, head, parallel = 1)
+        val headKept = keepOriginals(source.id, head, parallel = 1)
         // The editor opens after this returns (one photo, or the initial one): its decode comes first.
         if (initial != null || stored.size == 1) previewer?.expectEditor()
         val headPreviews = schedulePreviews(source.id, head, persisted, holderAlive)
         val settled = later {
-            val noSpace = headNoSpace + keepOriginals(source.id, rest, parallel = COPY_PARALLELISM)
+            val kept = headKept + keepOriginals(source.id, rest, parallel = COPY_PARALLELISM)
             schedulePreviews(source.id, rest, persisted, holderAlive).join()
             headPreviews.join()
-            Settled(noSpace)
+            kept
         }
         val notFound = batch?.notFound ?: 0
         val issue = batch?.issue
@@ -355,34 +364,48 @@ class HandoffRepository(
      * slot (`busy:` is retried). Only files filed under the hand-off source: a shot that is a folder's or a Server
      * photo (`foreign`) keeps its own files and gets no copy (B3). A copy already kept (same fingerprint and size) is
      * reused without opening the URI again (B4). A failure keeps the URI, and the photo falls back to its preview as
-     * for any unreadable hand-off. Returns how many were not kept for lack of space.
+     * for any unreadable hand-off. Returns how many were not kept for lack of space, and how many because the grant
+     * was refused.
      */
     @Suppress("ReturnCount")
-    private suspend fun keepOriginals(sourceId: Long, stored: List<Pair<Shot, StoredShot>>, parallel: Int): Int {
-        val store = originals ?: return 0
+    private suspend fun keepOriginals(sourceId: Long, stored: List<Pair<Shot, StoredShot>>, parallel: Int): Settled {
+        val store = originals ?: return Settled()
         val wanted = stored.filterNot { it.second.foreign }.flatMap { (shot, ids) ->
             shot.files.map { it.first }
                 .filter { it.fingerprint != null && LocalOriginals.isDownloads(it.uri) }
                 .map { ids.photoId to it }
         }
-        if (wanted.isEmpty()) return 0
+        if (wanted.isEmpty()) return Settled()
         val gate = Semaphore(parallel)
         val noSpace = AtomicInteger()
+        val refused = AtomicInteger()
         coroutineScope {
             wanted.map { (photoId, item) ->
                 async {
-                    gate.withPermit { if (!keepOriginal(store, sourceId, photoId, item)) noSpace.incrementAndGet() }
+                    gate.withPermit {
+                        when (keepOriginal(store, sourceId, photoId, item)) {
+                            Kept.NO_SPACE -> noSpace.incrementAndGet()
+                            Kept.REFUSED -> refused.incrementAndGet()
+                            Kept.DONE -> Unit
+                        }
+                    }
                 }
             }.awaitAll()
         }
-        return noSpace.get()
+        return Settled(noSpace.get(), refused.get())
     }
 
-    /** One [keepOriginals] file; false only when it was refused for lack of space. */
+    /** What [keepOriginal] did with one file. */
+    private enum class Kept { DONE, NO_SPACE, REFUSED }
+
+    /**
+     * One [keepOriginals] file: [Kept.NO_SPACE] when refused for lack of space, [Kept.REFUSED] when the sender's grant
+     * was refused (an access error, `isAccessError`), else [Kept.DONE] (copied, reused, or another failure).
+     */
     @Suppress("ReturnCount")
-    private suspend fun keepOriginal(store: LocalOriginals, sourceId: Long, photoId: Long, item: Item): Boolean {
+    private suspend fun keepOriginal(store: LocalOriginals, sourceId: Long, photoId: Long, item: Item): Kept {
         val uri = item.uri.toString()
-        if (photos.files(photoId).none { it.sourceId == sourceId && it.documentId == uri }) return true
+        if (photos.files(photoId).none { it.sourceId == sourceId && it.documentId == uri }) return Kept.DONE
         val print = checkNotNull(item.fingerprint)
         val copy = store.existing(print, item.name, item.entry.size) ?: try {
             store.copyIn(tree.openInput(uri, item.name), print, item.name)
@@ -390,13 +413,14 @@ class HandoffRepository(
             throw e
         } catch (e: LocalOriginals.NoSpaceException) {
             Log.w(TAG, "Not enough space to keep the original of a Downloads hand-off", e)
-            return false
+            return Kept.NO_SPACE
         } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
             Log.w(TAG, "Could not keep the original of a Downloads hand-off: ${e.javaClass.simpleName}")
+            if (isAccessError(e)) return Kept.REFUSED
             null
         }
         if (copy != null) photos.repointFile(sourceId, uri, store.documentId(copy))
-        return true
+        return Kept.DONE
     }
 
     /**
@@ -408,6 +432,8 @@ class HandoffRepository(
         val versionId: Long,
         val foreign: Boolean = false,
         val previousHandoff: Long? = null,
+        /** A local display preview keyed by a file that is no longer the shot's main one (a RAW joined its JPEG). */
+        val stalePreview: String? = null,
     )
 
     /**
@@ -659,7 +685,10 @@ class HandoffRepository(
             photo.id, raw ?: photo.name, format, raw != null, shot.folder, now, title, photo.xmpDocumentId,
             photo.xmpModified,
         )
-        return StoredShot(photo.id, checkNotNull(photos.firstVersion(photo.id)))
+        // The display preview made for the JPEG alone is keyed by the JPEG's fingerprint: the shot's preview is the
+        // RAW's from now on, so that one would be orphaned.
+        val stale = if (role == FileRole.RAW) files.firstOrNull { it.role == FileRole.RENDERED }?.fingerprint else null
+        return StoredShot(photo.id, checkNotNull(photos.firstVersion(photo.id)), stalePreview = stale)
     }
 
     /**
@@ -1016,8 +1045,12 @@ class HandoffRepository(
                 // MediaStore (W4): the file's folder without its top-level collection folder, so Hoard's
                 // `Pictures/Hoard/<batch>/` and `Download/Hoard/<batch>/` pair (a CR3 in Downloads, its JPEG in
                 // Images) while a camera's `DCIM/IMG_0001.JPG` does not pair with a Hoard `IMG_0001.CR3`.
-                uri.authority == MediaStore.AUTHORITY && relativePath != null ->
-                    "media:" + relativePath.trim('/').substringAfter('/', "").lowercase()
+                // A file at a collection's root (`Pictures/`, `DCIM/`, `Download/` without a subfolder) pairs only with
+                // files of that same root.
+                uri.authority == MediaStore.AUTHORITY && relativePath != null -> {
+                    val path = relativePath.trim('/').lowercase()
+                    if ('/' in path) "media:" + path.substringAfter('/') else "media-root:$path"
+                }
 
                 '/' in segment -> "${uri.authority}:${segment.substringBeforeLast('/')}"
 

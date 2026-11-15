@@ -354,8 +354,12 @@ plus `joinEarlierChunk` for a split shot. `handoff/LocalOriginals` copies a Down
 (`StorageKind.HANDOFF_ORIGINALS`), deleted by fingerprint (`deleteCopies`) on forget/retention/merge; never adopted
 (`SyncDao.adoptableHandoffs`). Receiving runs in the app's scope (`HandoffIngests`, re-attached after recreation):
 `receiveStaged` returns the outcome once the first photo is in, `Received.settled` when the rest (copies 2 at a time,
-display previews of grant-only shots) is done; a silent chunk's activity waits for it, smart previews of grant-only
-documents need the holder alive.
+display previews of grant-only shots) is done (`noSpace`, `notCopied` reported once, `HandoffNotices`). The intent's
+grant is passed to `HandoffGrantService` (app, dataSync FGS, URIs as ClipData + FLAG_GRANT_READ, starts stopped in
+order) until the ingest settles, so back returns to Hoard and silent chunks finish at once; `HandoffIngests.receive`
+holds no activity; holders are counted (`handOver`/`holderGone`), smart previews of grant-only documents need one.
+`LocalOriginals` sweeps `.tmp` only when created. Grant test: `HandoffGrantServiceTest` (shell-owned Downloads files,
+`am start --grant-read-uri-permission`; emulator is fine, no GL).
 ```sh
 ./gradlew :core:data:testDebugUnitTest --tests '*HandoffMediaTest*' --tests '*HandoffServerRefsTest*' --tests '*ReadOnlyGrantsTest*' && ./gradlew :core:sync:testDebugUnitTest --tests '*HandoffAdoptionTest*'
 adb -s <serial> shell pm grant dev.hfps.reveal.debug android.permission.READ_MEDIA_IMAGES   # FULL; `pm revoke` = NONE (kills the app)

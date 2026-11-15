@@ -53,6 +53,12 @@ All notable changes to Reveal are documented here. The format follows
   the screen rotates; the parts of a big batch stay until their previews are made, so photos do not end up blank.
 - The photo access offer for Hoard's photos is asked once on its own, only for Hoard's photos (also over the editor
   for a single photo), and the older offer for gallery shares has its own wording again.
+- Photos from Hoard: going back to Hoard right away no longer stops the copies of its photos half-way (Reveal keeps
+  access while it copies, with a short "Copying N photos from Hoard" notification), the extra parts of a big batch no
+  longer stay open over Hoard, a copy that still fails is reported ("N photos could not be copied; Reveal will use
+  their previews"), and two copies at once no longer delete each other's temporary files. Files at the top of
+  Pictures, DCIM or Download pair only with files there.
+- The photo access offer for Hoard's photos is marked answered only when it was that offer you answered.
 - A preset batch or XMP export that Android stops in the background (not your Cancel) is resumed instead of dropped.
 - Export XMP to a chosen folder: a photo whose own sidecar is malformed now gets a fresh sidecar there (its own file
   is still left alone).

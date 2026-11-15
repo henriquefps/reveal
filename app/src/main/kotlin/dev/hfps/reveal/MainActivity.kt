@@ -1,9 +1,9 @@
 package dev.hfps.reveal
 
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.Color
 import android.os.Bundle
-import android.util.Log
 import android.view.MotionEvent
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -34,7 +34,6 @@ import dev.hfps.reveal.data.handoff.HandoffIntents
 import dev.hfps.reveal.data.handoff.HandoffNotice
 import dev.hfps.reveal.data.handoff.HandoffOutcome
 import dev.hfps.reveal.data.handoff.HandoffRepository
-import dev.hfps.reveal.data.handoff.HandoffRequest
 import dev.hfps.reveal.data.handoff.ServerIssue
 import dev.hfps.reveal.data.model.PhotoListCodec
 import dev.hfps.reveal.data.model.PhotoQuery
@@ -55,14 +54,14 @@ import dev.hfps.reveal.feature.library.HandoffServerSheet
 import dev.hfps.reveal.feature.library.LibraryRoute
 import dev.hfps.reveal.feature.library.ViewerRoute
 import dev.hfps.reveal.feature.settings.SyncSettingsRoute
+import dev.hfps.reveal.handoff.HandoffGrantService
+import dev.hfps.reveal.handoff.HandoffNotices
 import dev.hfps.reveal.input.PalmRejection
 import dev.hfps.reveal.navigation.RevealNavHost
 import dev.hfps.reveal.sync.SyncRepository
 import dev.hfps.reveal.theme.ThemeModeStore
 import java.util.UUID
 import javax.inject.Inject
-import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filterNotNull
@@ -94,6 +93,12 @@ class MainActivity : ComponentActivity() {
 
     /** The hand-off this activity receives (its key in [ingests], kept across recreation), or null. */
     private var ingestKey: String? = null
+
+    /**
+     * The hand-offs whose intents this activity received (it holds their grants until it is destroyed): each told
+     * [HandoffIngests.Ingest.holderGone] when it finishes.
+     */
+    private val held = ArrayList<HandoffIngests.Ingest>()
 
     /** The ingest whose outcome [openRequest] holds: marked shown once navigated to. */
     private var requestKey: String? = null
@@ -128,10 +133,7 @@ class MainActivity : ComponentActivity() {
         if (savedInstanceState == null) {
             handleIntent(intent)
         } else {
-            savedInstanceState.getString(KEY_INGEST)?.let { key ->
-                ingestKey = key
-                ingests.attach(key)?.let(::follow)
-            }
+            savedInstanceState.getString(KEY_INGEST)?.let(::reattach)
             editorMediaOffer.value = savedInstanceState.getBoolean(KEY_MEDIA_OFFER)
         }
         watchServer()
@@ -288,12 +290,7 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun noticeOf(outcome: HandoffOutcome) = when (outcome) {
-        is HandoffOutcome.OpenEditor -> HandoffNotice(outcome.notFound, outcome.issue)
-        is HandoffOutcome.OpenLibrary -> HandoffNotice(outcome.notFound, outcome.issue)
-        is HandoffOutcome.ServerRefs -> HandoffNotice(outcome.notFound, outcome.issue)
-        else -> HandoffNotice()
-    }
+    private fun noticeOf(outcome: HandoffOutcome) = HandoffIngests.noticeOf(outcome)
 
     private fun notify(issue: ServerIssue?, notFound: Int) {
         if (issue != null || notFound > 0) serverNotice.value = ServerNotice(issue, notFound)
@@ -322,9 +319,43 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
-        // Finishing (not recreated): the intent's grant goes with this activity.
-        if (isFinishing) ingestKey?.let { ingests.attach(it)?.holderGone() }
+        // Finishing (not recreated): the grants of the intents it received go with this activity (the grant service
+        // holds its own for work still running).
+        if (isFinishing) held.forEach { it.holderGone() }
         super.onDestroy()
+    }
+
+    /** Recreated: follows the hand-off [key] again, or handles one lost with the process ([restoreLost]). */
+    private fun reattach(key: String) {
+        ingestKey = key
+        val ingest = ingests.attach(key)
+        if (ingest != null) {
+            held += ingest
+            follow(ingest, handedOver = false)
+        } else {
+            restoreLost()
+        }
+    }
+
+    /**
+     * Recreated after its process died, and its hand-off with it: a silent batch member receives its intent again
+     * while the grant still works (it has nothing to show), else finishes; a shown one keeps its restored screen.
+     */
+    private fun restoreLost() {
+        val parsed = HandoffIntents.parse(intent) ?: return
+        if (!parsed.silentMember) return
+        val granted = parsed.uris.isNotEmpty() && parsed.uris.all {
+            checkCallingOrSelfUriPermission(it, Intent.FLAG_GRANT_READ_URI_PERMISSION) ==
+                PackageManager.PERMISSION_GRANTED
+        }
+        if (granted) handleIntent(intent) else leaveQuietly()
+    }
+
+    /** A silent batch member leaves without a transition. */
+    private fun leaveQuietly() {
+        finish()
+        @Suppress("DEPRECATION")
+        overridePendingTransition(0, 0)
     }
 
     @Suppress("ReturnCount") // One early return per kind of intent: preset file, preset link, photo hand-off.
@@ -355,45 +386,39 @@ class MainActivity : ComponentActivity() {
         if (hoardMedia) gallery.noteHoardMedia()
         val key = UUID.randomUUID().toString()
         ingestKey = key
-        // Received in the app's scope (a rotation does not drop a batch half-way); this activity follows it. The
-        // intents above the first of a split batch (`BATCH_INDEX` > 0) ingest and leave: never decided by the task
-        // (Hoard starts Reveal into its own task, so `isTaskRoot` is false for an ordinary hand-off too).
-        val ingest = ingests.start(key, parsed.silentMember, batchKey, hoardMedia) { holderAlive ->
-            val join = batchKey?.let { batches.join(it, parsed.batchCount) }
-            val received = receive(parsed.copy(batchAt = join?.at), holderAlive)
-            if (batchKey != null) {
-                batches.touch(batchKey)
-                // A silent member's notices wait for the intent that shows the batch: one sheet for all (ADR 0011).
-                if (parsed.silentMember) batches.report(batchKey, noticeOf(received.outcome))
-            }
-            HandoffIngests.Result(received, follower = join?.follower == true)
-        }
-        follow(ingest)
+        // Received in the app's scope, which holds no reference to this activity (a rotation does not drop a batch
+        // half-way); this activity follows it. The intents above the first of a split batch (`BATCH_INDEX` > 0) are
+        // silent: never decided by the task (Hoard starts Reveal into its own task, so `isTaskRoot` is false for an
+        // ordinary hand-off too).
+        val ingest = ingests.receive(key, parsed, batchKey, hoardMedia)
+        held += ingest
+        // The grant service holds the intent's grant until the copies and previews that need it are done, so back
+        // returns to the sender at once and a silent member leaves at once (ADR 0011 "Amendment W4", "Grant service").
+        val handedOver = HandoffGrantService.start(this, ingest, parsed.uris)
+        follow(ingest, handedOver)
+        if (ingest.silent && handedOver) leaveQuietly()
     }
 
     /**
-     * Follows [ingest] from this activity: shows its outcome once (a re-attached activity skips what was shown), then
-     * stays until everything that needs the intent's grant is done ([HandoffRepository.Received.settled]). A silent
-     * batch member shows nothing and finishes then (ADR 0011 "Amendment W4").
+     * Follows [ingest] from this activity: shows its outcome once (a re-attached activity skips what was shown) and,
+     * while it is still here when the rest settles, what could not be kept. Without the grant service
+     * ([handedOver] false: its start was refused) a silent batch member stays until everything that needs the
+     * intent's grant is done, then finishes.
      */
-    private fun follow(ingest: HandoffIngests.Ingest) {
+    private fun follow(ingest: HandoffIngests.Ingest, handedOver: Boolean) {
         lifecycleScope.launch {
             val result = ingest.await()
             val outcome = result.received.outcome
             if (!ingest.silent && !ingest.shown) present(ingest, outcome, result.follower)
-            val settled = result.received.settled.await()
-            if (settled.noSpace > 0) {
-                Toast.makeText(
-                    this@MainActivity,
-                    resources.getQuantityString(R.plurals.handoff_no_space, settled.noSpace, settled.noSpace),
-                    Toast.LENGTH_LONG,
-                ).show()
+            val settled = ingest.awaitSettled()
+            if (ingest.claimSettledNotice()) {
+                HandoffNotices.texts(this@MainActivity, settled).forEach {
+                    Toast.makeText(this@MainActivity, it, Toast.LENGTH_LONG).show()
+                }
             }
             if (ingest.silent) {
                 ingests.done(ingest.key)
-                finish()
-                @Suppress("DEPRECATION")
-                overridePendingTransition(0, 0)
+                if (!handedOver) leaveQuietly()
             } else if (ingest.shown) {
                 ingests.done(ingest.key)
             }
@@ -417,24 +442,6 @@ class MainActivity : ComponentActivity() {
         if (ingest.hoardMedia && shown is HandoffOutcome.OpenEditor && shown.closeOnBack) editorMediaOffer.value = true
         requestKey = ingest.key
         openRequest.value = shown
-    }
-
-    /** A hand-off that fails (a malformed server answer, a provider error) never crashes the app: a notice instead. */
-    private suspend fun receive(request: HandoffRequest, holderAlive: () -> Boolean): HandoffRepository.Received = try {
-        handoffs.receiveStaged(request, holderAlive)
-    } catch (e: CancellationException) {
-        throw e
-    } catch (
-        @Suppress("TooGenericExceptionCaught") e: Exception,
-    ) {
-        Log.w("RevealHandoff", "hand-off failed", e)
-        val refs = request.server
-        val outcome = if (refs != null) {
-            HandoffOutcome.ServerRefs(ServerIssue.Unreachable(refs.items.size))
-        } else {
-            HandoffOutcome.Nothing
-        }
-        HandoffRepository.Received(outcome, CompletableDeferred(HandoffRepository.Settled()))
     }
 
     private companion object {

@@ -27,6 +27,7 @@ import dev.hfps.reveal.data.synthetic.SyntheticShoot
 import java.io.File
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Before
@@ -192,7 +193,8 @@ class HandoffMediaTest {
             assertThat(key("Pictures/Hoard/Trip/")).isEqualTo(key("Download/Hoard/Trip/"))
             assertThat(key("Pictures/Hoard/Trip/")).isNotEqualTo(key("Pictures/Hoard/Other/"))
             assertThat(key("DCIM/Camera/")).isNotEqualTo(key("Pictures/Camera/Sub/"))
-            assertThat(key("DCIM/")).isEqualTo(key("Pictures/"))
+            // Files at a collection's root pair only within that root.
+            assertThat(key("DCIM/")).isNotEqualTo(key("Pictures/"))
             // Without its path (not readable) a MediaStore URI pairs only within its collection.
             assertThat(
                 HandoffRepository.parentKey(Uri.parse("content://media/external_primary/downloads/2"), null),
@@ -329,6 +331,8 @@ class HandoffMediaTest {
     fun `temporary files of an interrupted copy are swept, an extensionless Downloads item is kept by its bytes`() =
         runTest {
             val stale = File(originals.dir.apply { mkdirs() }, "1234.tmp").apply { writeText("half") }
+            // Swept when the store is created (the app's start), never by a copy.
+            originals = LocalOriginals(originals.dir)
             val unnamed = media("downloads", 14, "IMG_0014", cr3Bytes("IMG_0014"))
             tree.names[unnamed.toString()] = "IMG_0014"
             repo().receive(HandoffRequest(listOf(unnamed)))
@@ -337,6 +341,133 @@ class HandoffMediaTest {
             assertThat(photo.format).isEqualTo(PhotoFormat.RAW)
             assertThat(originals.files()).hasSize(1)
         }
+
+    @Test
+    fun `copies running together keep their temporary files, only a new store sweeps old ones`() = runTest {
+        val dir = originals.dir.apply { mkdirs() }
+        val sources = (1..2).map { i -> File(temp.newFolder(), "IMG_00$i.CR3").apply { writeBytes(cr3Bytes(name)) } }
+        // Each copy waits until both have their temporary file: a sweep from a copy would delete the other's.
+        val bothStarted = java.util.concurrent.CyclicBarrier(2)
+        val store = LocalOriginals(dir, usableSpace = {
+            bothStarted.await(5, java.util.concurrent.TimeUnit.SECONDS)
+            Long.MAX_VALUE
+        })
+        val stale = File(dir, "old.tmp").apply { writeText("half") }
+        val copies = sources.mapIndexed { i, file ->
+            kotlinx.coroutines.CoroutineScope(Dispatchers.IO).async {
+                store.copyIn(dev.hfps.image.ImageInput.fromFile(file), "print$i", file.name)
+            }
+        }
+        val kept = copies.map { it.await() }
+        assertThat(kept.map { it?.name }).containsExactly("print0.cr3", "print1.cr3")
+        assertThat(kept.all { it!!.length() == sources[0].length() || it.length() == sources[1].length() }).isTrue()
+        // Created before the copies began, after this store's own sweep: only the next store removes it.
+        assertThat(stale.exists()).isTrue()
+        LocalOriginals(dir)
+        assertThat(stale.exists()).isFalse()
+        assertThat(store.files().map { it.name }).containsExactly("print0.cr3", "print1.cr3")
+    }
+
+    /**
+     * A batch of Downloads originals received through [HandoffIngests]; the copies after the first wait until the
+     * activity is gone ([HandoffIngests.Ingest.holderGone]); the sender's grant lasts while someone holds it.
+     */
+    private suspend fun receiveThenLeave(serviceHolds: Boolean): Pair<HandoffRepository.Settled, List<Uri>> {
+        val scope = CoroutineScope(Dispatchers.IO)
+        val staged =
+            HandoffRepository(resolver, db, LibraryIndexer(db) { now }, tree, null, originals, background = scope) {
+                now
+            }
+        val ingests = HandoffIngests(scope, staged, HandoffBatches(db) { now })
+        val uris = (1..3).map { download(40 + it + if (serviceHolds) 10 else 0, "IMG_%04d.CR3".format(40 + it)) }
+        val activityGone = java.util.concurrent.CountDownLatch(1)
+        val opened = HashMap<String, Int>()
+        lateinit var ingest: HandoffIngests.Ingest
+        tree.onOpen = { id ->
+            // The first open is the fingerprint; the copy of a photo after the first waits for the activity to go.
+            val n = synchronized(opened) { opened.merge(id, 1, Int::plus)!! }
+            if (n == 2 && id != uris.first().toString()) activityGone.await(5, java.util.concurrent.TimeUnit.SECONDS)
+        }
+        tree.granted = { id -> uris.none { it.toString() == id } || ingest.holderAlive }
+        ingest = ingests.receive("k$serviceHolds", HandoffRequest(uris), batchKey = null, hoardMedia = false)
+        ingest.await()
+        val service = if (serviceHolds) ingest.handOver() else null
+        ingest.holderGone()
+        activityGone.countDown()
+        val settled = ingest.awaitSettled()
+        service?.invoke()
+        tree.onOpen = {}
+        tree.granted = { true }
+        return settled to uris
+    }
+
+    @Test
+    fun `the grant service keeps the grant after the activity finishes, so every copy is made`() = runTest {
+        val (settled, uris) = receiveThenLeave(serviceHolds = true)
+        assertThat(settled.notCopied).isEqualTo(0)
+        val files = db.photoDao().handoffFiles()
+        assertThat(files).hasSize(uris.size)
+        assertThat(files.all { originals.isLocal(it.documentId) }).isTrue()
+    }
+
+    @Test
+    fun `without the service the copies the ended grant refused are counted for the notice`() = runTest {
+        val (settled, uris) = receiveThenLeave(serviceHolds = false)
+        // The first photo was copied before the outcome; the other two met the ended grant.
+        assertThat(settled.notCopied).isEqualTo(2)
+        val files = db.photoDao().handoffFiles()
+        assertThat(files.count { originals.isLocal(it.documentId) }).isEqualTo(1)
+        assertThat(files.filterNot { originals.isLocal(it.documentId) }.map { it.documentId })
+            .containsExactlyElementsIn(uris.drop(1).map { it.toString() })
+    }
+
+    @Test
+    fun `files at a collection's root pair only with the same root`() {
+        val uri = Uri.parse("content://media/external_primary/images/media/1")
+        val key = HandoffRepository.Companion::parentKey
+        assertThat(key(uri, "Pictures/")).isEqualTo(key(uri, "Pictures"))
+        assertThat(key(uri, "Pictures/")).isNotEqualTo(key(uri, "DCIM/"))
+        assertThat(key(uri, "Download/")).isNotEqualTo(key(uri, "Pictures/"))
+        // Not the key of a subfolder either, and Hoard's two collections still pair.
+        assertThat(key(uri, "Pictures/")).isNotEqualTo(key(uri, "Pictures/Hoard/"))
+        assertThat(key(uri, HOARD_PICTURES)).isEqualTo(key(uri, HOARD_DOWNLOADS))
+    }
+
+    @Test
+    fun `a RAW that joins its JPEG from an earlier chunk drops the JPEG's own display preview`() = runTest {
+        val making = object : PreviewMaking {
+            override fun display(raw: dev.hfps.image.ImageInput?, rendered: dev.hfps.image.ImageInput?, out: File) {
+                out.writeBytes(byteArrayOf(1))
+            }
+
+            override fun smart(main: dev.hfps.image.ImageInput, out: File) = out.writeBytes(byteArrayOf(2))
+        }
+        val previews = LocalPreviews(temp.newFolder("previews"))
+        val scope = CoroutineScope(Dispatchers.IO)
+        val previewer = HandoffPreviewer(tree, previews, scope, making)
+        val staged = HandoffRepository(resolver, db, LibraryIndexer(db) { now }, tree, previewer, originals) { now }
+        val jpeg = image(60, "IMG_0060.JPG")
+
+        // One photo opens the editor: smart previews would wait for it; this test opens and closes none.
+        fun noEditor() {
+            previewer.editorOpened()
+            previewer.editorClosed()
+        }
+        staged.receive(HandoffRequest(listOf(jpeg), title = "Trip", batchAt = 7_000L, batchIndex = 0))
+        noEditor()
+        previewer.idle()
+        val jpegPrint = db.photoDao().handoffFiles().single().fingerprint!!
+        assertThat(previews.display(jpegPrint)).isNotNull()
+
+        val raw = download(61, "IMG_0060.CR3")
+        staged.receive(HandoffRequest(listOf(raw), title = "Trip", batchAt = 7_000L, batchIndex = 1))
+        noEditor()
+        previewer.idle()
+        val photo = rows().single()
+        val rawPrint = db.photoDao().files(photo.id).single { it.role == FileRole.RAW }.fingerprint!!
+        assertThat(previews.display(rawPrint)).isNotNull()
+        assertThat(previews.display(jpegPrint)).isNull()
+    }
 
     @Test
     fun `a silent chunk settles once its display previews are made, smart ones only while its grant lives`() = runTest {

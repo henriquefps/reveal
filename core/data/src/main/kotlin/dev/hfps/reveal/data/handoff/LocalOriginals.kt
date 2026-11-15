@@ -26,8 +26,11 @@ class LocalOriginals(
     /** Bytes a copy may use in a folder (the app passes `StorageManager.getAllocatableBytes`). */
     private val usableSpace: (File) -> Long = ::plainUsableSpace,
 ) {
-    @Volatile
-    private var swept = false
+    init {
+        // Once, when the store is created (the app's start), before any copy can begin: a sweep while copies run
+        // would delete their temporary files.
+        synchronized(SWEEP_LOCK) { sweep() }
+    }
 
     /** A copy refused for lack of space. */
     class NoSpaceException(name: String) : IOException("not enough space to keep $name")
@@ -36,10 +39,8 @@ class LocalOriginals(
     fun existing(fingerprint: String, name: String, size: Long): File? =
         fileFor(fingerprint, name).takeIf { it.isFile && (size <= 0 || it.length() == size) }
 
-    /** Deletes the temporary files a copy interrupted by a kill left behind (once per process, before copying). */
-    fun sweep() {
-        if (swept) return
-        swept = true
+    /** Deletes the temporary files a copy interrupted by a kill left behind (only from [init], before any copy). */
+    private fun sweep() {
         dir.listFiles { f -> f.isFile && f.name.endsWith(".tmp") }?.forEach { it.delete() }
     }
 
@@ -71,7 +72,6 @@ class LocalOriginals(
             val size = source.descriptor.statSize
             if (target.isFile && (size <= 0 || target.length() == size)) return@use target
             from.position(0)
-            sweep()
             dir.mkdirs()
             if (usableSpace(dir) - size.coerceAtLeast(0) < margin) throw NoSpaceException(name)
             store(from, size, target)
@@ -123,6 +123,9 @@ class LocalOriginals(
         const val MARGIN_BYTES = 200L * 1024 * 1024
         private const val CHUNK = 8L * 1024 * 1024
         private const val MAX_EXTENSION = 8
+
+        /** Two stores over one folder (tests, a recreated graph) never sweep at once. */
+        private val SWEEP_LOCK = Any()
     }
 }
 

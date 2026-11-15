@@ -30,6 +30,14 @@ internal class FileUriTree : DocumentTree {
     /** Documents that can be listed (stat) but not opened: a grant gone between the listing and the read. */
     val refusedOpens = HashSet<String>()
 
+    /** Called before each open (a test's gate: it may block until the test lets the open go on). */
+    @Volatile
+    var onOpen: (String) -> Unit = {}
+
+    /** Whether the sender's grant still covers a document (false: the open is refused, as when the grant ended). */
+    @Volatile
+    var granted: (String) -> Boolean = { true }
+
     /** The display name per document when it differs from the file's (an extensionless Downloads item). */
     val names = HashMap<String, String>()
 
@@ -58,8 +66,9 @@ internal class FileUriTree : DocumentTree {
         }
 
     override fun openInput(documentId: String, name: String): ImageInput {
-        opens += documentId
-        if (documentId in refusedOpens) throw SecurityException("no access to $documentId")
+        synchronized(opens) { opens += documentId }
+        onOpen(documentId)
+        if (documentId in refusedOpens || !granted(documentId)) throw SecurityException("no access to $documentId")
         return ImageInput.fromFile(file(documentId))
     }
 

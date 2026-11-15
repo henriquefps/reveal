@@ -45,4 +45,13 @@
         <item quantity="one">Not enough space to keep %1$d original from Hoard: it shows its preview only.</item>
         <item quantity="other">Not enough space to keep %1$d originals from Hoard: they show their preview only.</item>
     </plurals>
+    <plurals name="handoff_not_copied">
+        <item quantity="one">%1$d photo from Hoard could not be copied: Reveal will use its preview.</item>
+        <item quantity="other">%1$d photos from Hoard could not be copied: Reveal will use their previews.</item>
+    </plurals>
+    <plurals name="handoff_copying">
+        <item quantity="one">Copying %1$d photo from Hoard</item>
+        <item quantity="other">Copying %1$d photos from Hoard</item>
+    </plurals>
+    <string name="handoff_channel">Photos from other apps</string>
 </resources>

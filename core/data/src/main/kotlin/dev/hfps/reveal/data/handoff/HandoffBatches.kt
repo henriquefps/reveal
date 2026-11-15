@@ -2,12 +2,9 @@ package dev.hfps.reveal.data.handoff
 
 import dev.hfps.reveal.data.db.MetaEntity
 import dev.hfps.reveal.data.db.RevealDatabase
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.Serializable
@@ -15,18 +12,17 @@ import kotlinx.serialization.json.Json
 
 /**
  * Hand-offs that arrive as several intents with the same sender and `TITLE` (ADR 0011 "Batches over 500"): Hoard sends
- * a bigger batch as `startActivities(...)` (or a `startActivity` loop). Every intent opens its own `MainActivity`; all
- * of them are filed as **one** "Opened from other apps" batch (one `handoff_at`), and the ones that carry nothing to
- * open ([Join.follower] without an `INITIAL_*`) ingest and finish silently, so the cascade unwinds to the one that
- * opens the editor.
+ * a bigger batch as `startActivities(...)`, each intent marked with its `BATCH_INDEX`. Every intent opens its own
+ * `MainActivity`; all of them are filed as **one** "Opened from other apps" batch (one `handoff_at`). The ones above
+ * the first (`BATCH_INDEX` > 0, [HandoffRequest.silentMember]) ingest and finish silently, so the cascade unwinds to
+ * the first, which shows the batch (the editor, or the library) with the notices of every member ([report],
+ * [takeNotices]).
  *
  * The state is one record in `meta` (process death mid-cascade is fine): the batch's key, its stamp, when it was last
- * touched, and whether an intent that opens something claimed it. A window of [WINDOW_MS] after the last touch keeps
- * the batch open.
+ * touched and the notices so far. A window of [WINDOW_MS] after the last touch keeps the batch open.
  */
 class HandoffBatches(
     private val db: RevealDatabase,
-    private val scope: CoroutineScope,
     private val clock: () -> Long = System::currentTimeMillis,
 ) {
     /** [at]: the `handoff_at` of every photo of the batch; [follower]: an earlier intent of the batch came first. */
@@ -37,8 +33,6 @@ class HandoffBatches(
         val key: String,
         val at: Long,
         val touched: Long,
-        val claimed: Boolean = false,
-        val shown: Boolean = false,
         /** What the members reported so far (summed), until the intent that shows the batch takes it. */
         val notFound: Int = 0,
         val notPaired: Int = 0,
@@ -72,14 +66,7 @@ class HandoffBatches(
 
     private val mutex = Mutex()
     private val json = Json { ignoreUnknownKeys = true }
-    private val library = MutableSharedFlow<HandoffNotice>(extraBufferCapacity = 1)
     private val late = MutableSharedFlow<HandoffNotice>(extraBufferCapacity = 8)
-
-    /**
-     * Fires when a cascade ended with nothing to open in the editor: show "Opened from other apps", with the notices
-     * every member of the batch reported (summed).
-     */
-    val openLibrary: SharedFlow<HandoffNotice> = library.asSharedFlow()
 
     /** Notices of a member that finished after the batch's notice was shown (rare): shown on their own. */
     val lateNotices: SharedFlow<HandoffNotice> = late.asSharedFlow()
@@ -107,11 +94,6 @@ class HandoffBatches(
     /** The intent was ingested: the window restarts (a big batch takes a while to resolve). */
     suspend fun touch(key: String) = mutex.withLock {
         load()?.takeIf { it.key == key }?.let { save(it.copy(touched = clock())) }
-    }
-
-    /** An intent that opens something (an `INITIAL_*`) belongs to the batch: no library fallback is needed. */
-    suspend fun claim(key: String) = mutex.withLock {
-        load()?.takeIf { it.key == key }?.let { save(it.copy(claimed = true, touched = clock())) }
     }
 
     /**
@@ -145,27 +127,6 @@ class HandoffBatches(
         }
     }
 
-    /**
-     * A silent member finished. When nothing claims the batch for [SETTLE_MS] after the last touch (no intent carried
-     * an `INITIAL_*`), the library opens instead, so a batch without an item to open is still shown.
-     */
-    fun silentFinished(key: String) {
-        scope.launch {
-            delay(SETTLE_MS)
-            val show: HandoffNotice? = mutex.withLock {
-                val state = load()
-                val open = state != null && state.key == key && !state.claimed && !state.shown
-                if (state != null && open && clock() - state.touched >= SETTLE_MS - SLACK_MS) {
-                    save(state.copy(shown = true, taken = true))
-                    state.notice()
-                } else {
-                    null
-                }
-            }
-            if (show != null) library.emit(show)
-        }
-    }
-
     companion object {
         private fun Int?.orZero() = this ?: 0
 
@@ -173,12 +134,10 @@ class HandoffBatches(
 
         /** How long after its last intent a batch stays open for more. */
         const val WINDOW_MS = 10_000L
-        const val SETTLE_MS = 5_000L
-        private const val SLACK_MS = 100L
 
         /** The batch key of an intent: its sender and title; null when it has no title (no batching). */
-        fun key(senderPackage: String?, title: String?): String? =
-            title?.takeIf { it.isNotBlank() }?.let { "${senderPackage.orEmpty()}\u0000$it" }
+        fun key(senderPackage: String?, title: String?, marked: Boolean = false): String? =
+            (title?.takeIf { it.isNotBlank() } ?: "".takeIf { marked })?.let { "${senderPackage.orEmpty()}\u0000$it" }
     }
 }
 

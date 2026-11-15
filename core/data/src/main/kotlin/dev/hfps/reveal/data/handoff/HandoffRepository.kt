@@ -115,26 +115,33 @@ class HandoffRepository(
      * server ([serverId]) the batch resolves as if it had just arrived, and opens. Null when nothing waits for it.
      */
     suspend fun resumePending(serverId: String): HandoffOutcome? = withContext(Dispatchers.IO) {
-        val pending = refs.pendingBatch()?.takeIf { it.serverId == serverId } ?: return@withContext null
-        val title = refs.pendingTitle()
-        refs.clearPending()
-        serverOutcome(refs.resolve(pending, title))
+        // An atomic take: with two live activities (Reveal's own task and the sender's) only one resolves it.
+        val groups = refs.takePending(serverId).takeIf { it.isNotEmpty() } ?: return@withContext null
+        val at = clock()
+        serverOutcome(
+            groups.map { refs.resolve(refs.refsOf(it), it.title, at = at) }.reduce(ServerBatch::plus),
+        )
     }
 
     /** True when a batch waits for a pairing. */
-    suspend fun hasPending(): Boolean = refs.pendingBatch() != null
+    suspend fun hasPending(): Boolean = refs.pendingGroups().isNotEmpty()
 
     /** The server id the pending batch waits for, if any. */
-    suspend fun pendingServerId(): String? = refs.pendingBatch()?.serverId
+    suspend fun pendingServerId(): String? = refs.pendingGroups().firstOrNull()?.serverId
 
     /** The pending batch is not wanted any more (the sheet was cancelled). */
     suspend fun dropPending() = refs.clearPending()
 
-    /** Fills the photos that opened from what Reveal had while the server was unreachable; true when it did. */
+    /**
+     * Fills the photos that opened from what Reveal had while the server was unreachable; true when none is left
+     * unreachable. Each batch keeps the time it was handed over, so its photos stay under their header.
+     */
     suspend fun retryUnreachable(): Boolean = withContext(Dispatchers.IO) {
-        val (pending, title) = refs.retryBatch() ?: return@withContext false
-        if (server.pairing()?.serverId != pending.serverId) return@withContext false
-        refs.resolve(pending, title, refresh = true).issue !is ServerIssue.Unreachable
+        val paired = server.pairing()?.serverId
+        val groups = refs.retryGroups().filter { it.serverId == paired }
+        if (groups.isEmpty()) return@withContext false
+        groups.map { refs.resolve(refs.refsOf(it), it.title, refresh = true, at = it.at) }
+            .all { it.issue !is ServerIssue.Unreachable }
     }
 
     private fun serverOutcome(batch: ServerBatch?): HandoffOutcome {

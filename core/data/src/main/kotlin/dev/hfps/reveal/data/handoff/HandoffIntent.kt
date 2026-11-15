@@ -25,9 +25,18 @@ data class HandoffRequest(
     val culling: Map<Uri, HandoffCulling> = emptyMap(),
     /** The `handoff_at` of every photo of the request (a batch of several intents shares one); null = now. */
     val batchAt: Long? = null,
+    /**
+     * The intent's position in a batch the sender split over several (`startActivities`), 0 for the first; null = the
+     * sender did not say (a single intent). An intent above the first one is a silent member: it ingests and leaves
+     * (ADR 0011 "Batches over 500").
+     */
+    val batchIndex: Int? = null,
 ) {
     /** The sender asked for something to open at once (an `INITIAL_URI` or `INITIAL_ITEM`). */
     val opensSomething: Boolean get() = initial != null || server?.initialItem != null
+
+    /** An intent above the first of a split batch: it only ingests, the first one shows the batch. */
+    val silentMember: Boolean get() = (batchIndex ?: 0) > 0
 }
 
 /** One shot the sender's server holds (ADR 0011 "Amendment W3/H"): the item id and what helps to find it again. */
@@ -85,6 +94,13 @@ object HandoffIntents {
 
     /** Optional `String`: a title for the batch, shown as the group header in "Opened from other apps". */
     const val EXTRA_TITLE = "dev.hfps.reveal.extra.TITLE"
+
+    /**
+     * Optional `Int`: the intent's position (0 = first, the one below the others) when the sender splits a batch over
+     * several `startActivities` intents with one [EXTRA_TITLE]. Intents with an index above 0 ingest and finish
+     * silently; the first one shows the batch. Without it every intent is a batch of its own that shows.
+     */
+    const val EXTRA_BATCH_INDEX = "dev.hfps.reveal.extra.BATCH_INDEX"
 
     /** Optional `Uri`: the item (one of the URIs sent) to open in the editor first. */
     const val EXTRA_INITIAL_URI = "dev.hfps.reveal.extra.INITIAL_URI"
@@ -172,6 +188,7 @@ object HandoffIntents {
             persistable = intent.flags and Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION != 0,
             action = intent.action,
             culling = runCatching { culling(intent, uris) }.getOrDefault(emptyMap()),
+            batchIndex = runCatching { intent.getIntExtra(EXTRA_BATCH_INDEX, -1) }.getOrDefault(-1).takeIf { it >= 0 },
         )
     }
 

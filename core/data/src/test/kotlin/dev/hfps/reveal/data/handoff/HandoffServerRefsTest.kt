@@ -18,6 +18,8 @@ import dev.hfps.reveal.data.model.SourceKind
 import dev.hfps.reveal.data.synthetic.SyntheticExif
 import dev.hfps.reveal.data.synthetic.SyntheticShoot
 import java.io.File
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Before
@@ -108,8 +110,8 @@ class HandoffServerRefsTest {
     private fun refs(vararg items: ServerItemRef, initial: String? = null, serverId: String = SERVER) =
         ServerRefs(serverId, items.toList(), initial)
 
-    private fun request(refs: ServerRefs, title: String? = null, uris: List<Uri> = emptyList()) =
-        HandoffRequest(uris = uris, server = refs, title = title)
+    private fun request(refs: ServerRefs, title: String? = null, uris: List<Uri> = emptyList(), at: Long? = null) =
+        HandoffRequest(uris = uris, server = refs, title = title, batchAt = at)
 
     private suspend fun rows() = db.photoDao().rows(PhotoQuerySql.toQuery(PhotoQuery.FROM_APPS))
 
@@ -143,7 +145,7 @@ class HandoffServerRefsTest {
     }
 
     @Test
-    fun `a photo already in the library under a member fingerprint is that photo, without asking the server`() =
+    fun `a photo already in the library under a member fingerprint is that photo, once the server confirmed it`() =
         runTest {
             val dir = temp.newFolder("local")
             val bytes =
@@ -153,11 +155,15 @@ class HandoffServerRefsTest {
             repo.receive(HandoffRequest(listOf(uri)))
             val before = rows().single()
             now = 20_000
+            // The item's own members include the local file's fingerprint: the server says so.
+            server.items[id(5)] = ServerItemResult.Found(
+                item(5).copy(files = listOf(ServerFileInfo(print, "rendered", "IMG_1.JPG", 100))),
+            )
             val outcome = repo.receive(
                 request(refs(ServerItemRef(id(5), fingerprint = "v1:other", fingerprints = listOf("v1:other", print)))),
             )
             outcome as HandoffOutcome.OpenEditor
-            assertThat(server.itemCalls).isEmpty()
+            assertThat(server.itemCalls).containsExactly(id(5))
             val after = rows()
             assertThat(after).hasSize(1)
             assertThat(after.single().id).isEqualTo(before.id)
@@ -165,6 +171,31 @@ class HandoffServerRefsTest {
             assertThat(db.syncDao().serverSource()).isNull()
             assertThat(server.pulls).isEqualTo(1)
         }
+
+    @Test
+    fun `a stale sender fingerprint never opens another photo`() = runTest {
+        // A local photo holds fp(7); Hoard names item 9 with fp(7), which is not one of its members.
+        serve(item(7), item(9))
+        repo.receive(request(refs(ServerItemRef(id(7)))))
+        val seven = rows().single().id
+        val outcome = repo.receive(request(refs(ServerItemRef(id(9), fp(7), listOf(fp(7))))))
+        outcome as HandoffOutcome.OpenEditor
+        val nine = db.photoDao().photoIdOfVersion(outcome.versionId)!!
+        assertThat(nine).isNotEqualTo(seven)
+        assertThat(db.photoDao().get(nine)!!.name).isEqualTo("DSC00009.ARW")
+    }
+
+    @Test
+    fun `with the server unreachable the sender fingerprint stands in for a photo Reveal has`() = runTest {
+        serve(item(7))
+        repo.receive(request(refs(ServerItemRef(id(7)))))
+        val seven = rows().single().id
+        server.up = false
+        val outcome = repo.receive(request(refs(ServerItemRef(id(8), fp(7), listOf(fp(7)), name = "DSC00007.ARW"))))
+        outcome as HandoffOutcome.OpenEditor
+        assertThat(db.photoDao().photoIdOfVersion(outcome.versionId)).isEqualTo(seven)
+        assertThat(rows()).hasSize(1)
+    }
 
     @Test
     fun `the item id wins over a fingerprint that is not one of its members`() = runTest {
@@ -364,6 +395,66 @@ class HandoffServerRefsTest {
     }
 
     @Test
+    fun `unreachable items of several hand-offs all wait, and a later resolved one does not wipe them`() = runTest {
+        server.up = false
+        repo.receive(request(refs(ServerItemRef(id(1), fp(1), listOf(fp(1)), "DSC00001.ARW")), "Trip"))
+        repo.receive(request(refs(ServerItemRef(id(2), fp(2), listOf(fp(2)), "DSC00002.ARW")), "Trip"))
+        repo.receive(request(refs(ServerItemRef(id(3), fp(3), listOf(fp(3)), "DSC00003.ARW")), "Other"))
+        // The server answers for a later hand-off: it resolves fully, the earlier ones keep waiting.
+        server.up = true
+        serve(item(4))
+        repo.receive(request(refs(ServerItemRef(id(4))), "Fine"))
+        server.up = false
+        assertThat(repo.retryUnreachable()).isFalse() // still not answering: nothing was lost, nothing resolved
+        server.up = true
+        serve(item(1), item(2), item(3))
+        assertThat(repo.retryUnreachable()).isTrue()
+        assertThat(rows().map { it.name }).containsExactly(
+            "DSC00001.ARW", "DSC00002.ARW", "DSC00003.ARW", "DSC00004.ARW",
+        )
+        assertThat(db.photoDao().files(rows().first { it.name == "DSC00001.ARW" }.id).single().onServer).isTrue()
+        assertThat(repo.retryUnreachable()).isFalse() // nothing waits any more
+    }
+
+    @Test
+    fun `a retry keeps the batch's time and title`() = runTest {
+        server.up = false
+        repo.receive(request(refs(ServerItemRef(id(1), fp(1), listOf(fp(1)), "DSC00001.ARW")), "Trip", at = 5_000L))
+        assertThat(rows().single().handoffAt).isEqualTo(5_000L)
+        now = 99_000L
+        server.up = true
+        serve(item(1))
+        assertThat(repo.retryUnreachable()).isTrue()
+        val row = rows().single()
+        assertThat(row.handoffAt).isEqualTo(5_000L)
+        assertThat(row.handoffTitle).isEqualTo("Trip")
+    }
+
+    @Test
+    fun `batches of different titles waiting for a pairing both resolve`() = runTest {
+        server.pairing = null
+        repo.receive(request(refs(ServerItemRef(id(1))), "One"))
+        repo.receive(request(refs(ServerItemRef(id(2))), "Two"))
+        serve(item(1), item(2))
+        server.pairing = ServerPairing(SERVER, "Home NAS", "own-device")
+        repo.resumePending(SERVER)
+        assertThat(rows().associate { it.name to it.handoffTitle })
+            .containsExactly("DSC00001.ARW", "One", "DSC00002.ARW", "Two")
+    }
+
+    @Test
+    fun `two activities resuming the same pending batch resolve it once`() = runTest {
+        server.pairing = null
+        repo.receive(request(refs(ServerItemRef(id(1))), "Trip"))
+        serve(item(1))
+        server.pairing = ServerPairing(SERVER, "Home NAS", "own-device")
+        val both = listOf(async { repo.resumePending(SERVER) }, async { repo.resumePending(SERVER) }).awaitAll()
+        assertThat(both.count { it != null }).isEqualTo(1)
+        assertThat(rows()).hasSize(1)
+        assertThat(server.itemCalls).hasSize(1)
+    }
+
+    @Test
     fun `500 items resolve in one batch`() = runTest {
         val infos = (1..500).map { item(it, folder = "Big") }
         serve(*infos.toTypedArray())
@@ -372,10 +463,9 @@ class HandoffServerRefsTest {
         assertThat(outcome.photoIds).hasSize(500)
         assertThat(rows()).hasSize(500)
         assertThat(server.pulls).isEqualTo(1)
-        // The same batch again finds every photo locally.
-        server.itemCalls.clear()
+        // The same batch again finds every photo (the item's members, read once more): no duplicates.
         repo.receive(request(refs(*infos.map { ServerItemRef(it.itemId, it.mainFingerprint) }.toTypedArray())))
-        assertThat(server.itemCalls).isEmpty()
+        assertThat(rows()).hasSize(500)
     }
 
     @Test

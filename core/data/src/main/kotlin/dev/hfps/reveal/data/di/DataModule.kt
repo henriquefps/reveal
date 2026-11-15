@@ -127,8 +127,7 @@ object DataModule {
     /** Hand-offs that arrive as several intents (ADR 0011 "Batches over 500"). */
     @Provides
     @Singleton
-    fun provideHandoffBatches(database: RevealDatabase, @DataScope scope: CoroutineScope): HandoffBatches =
-        HandoffBatches(database, scope)
+    fun provideHandoffBatches(database: RevealDatabase): HandoffBatches = HandoffBatches(database)
 
     @Provides
     @Singleton

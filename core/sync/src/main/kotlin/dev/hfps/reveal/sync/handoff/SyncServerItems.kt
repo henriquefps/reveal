@@ -10,7 +10,6 @@ import dev.hfps.reveal.sync.SyncRepository
 import dev.hfps.reveal.sync.api.ItemRecord
 import dev.hfps.reveal.sync.api.SyncApi
 import dev.hfps.reveal.sync.api.SyncHttpException
-import java.io.IOException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -43,7 +42,10 @@ class SyncServerItems(
         } catch (e: SyncHttpException) {
             Log.i(TAG, "item lookup refused: ${e.status} ${e.code}")
             if (e.status == HTTP_NOT_FOUND) ServerItemResult.Missing else ServerItemResult.Unreachable
-        } catch (e: IOException) {
+        } catch (
+            // A 200 that is not the server's JSON (a captive portal, a proxy) is as good as no answer.
+            @Suppress("TooGenericExceptionCaught") e: Exception,
+        ) {
             Log.i(TAG, "item lookup failed: ${e.javaClass.simpleName}")
             ServerItemResult.Unreachable
         }
@@ -56,7 +58,9 @@ class SyncServerItems(
                 .associate { it.fingerprint to it.itemId }
         } catch (e: CancellationException) {
             throw e
-        } catch (@Suppress("SwallowedException") e: IOException) {
+        } catch (
+            @Suppress("TooGenericExceptionCaught", "SwallowedException") e: Exception,
+        ) {
             null
         }
     }
@@ -66,7 +70,9 @@ class SyncServerItems(
             pull()
         } catch (e: CancellationException) {
             throw e
-        } catch (e: IOException) {
+        } catch (
+            @Suppress("TooGenericExceptionCaught") e: Exception,
+        ) {
             Log.i(TAG, "culling pull failed: ${e.javaClass.simpleName}")
         }
     }

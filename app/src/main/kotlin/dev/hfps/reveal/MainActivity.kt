@@ -3,6 +3,7 @@ package dev.hfps.reveal
 import android.content.Intent
 import android.graphics.Color
 import android.os.Bundle
+import android.util.Log
 import android.view.MotionEvent
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -24,6 +25,7 @@ import androidx.navigation.compose.rememberNavController
 import dagger.hilt.android.AndroidEntryPoint
 import dev.hfps.reveal.data.handoff.HandoffBatches
 import dev.hfps.reveal.data.handoff.HandoffNotice
+import dev.hfps.reveal.data.handoff.HandoffRequest
 import dev.hfps.reveal.data.handoff.HandoffIntents
 import dev.hfps.reveal.data.handoff.HandoffOutcome
 import dev.hfps.reveal.data.handoff.HandoffRepository
@@ -50,6 +52,7 @@ import dev.hfps.reveal.navigation.RevealNavHost
 import dev.hfps.reveal.sync.SyncRepository
 import dev.hfps.reveal.theme.ThemeModeStore
 import javax.inject.Inject
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filterNotNull
@@ -170,15 +173,6 @@ class MainActivity : ComponentActivity() {
      * fill in (docs/adr/0011 "Amendment W3/H").
      */
     private fun watchServer() {
-        // A cascade of intents ended with nothing to open in the editor: the batch shows in the library.
-        lifecycleScope.launch {
-            batches.openLibrary.collect { notice ->
-                val outcome = HandoffOutcome.OpenLibrary(emptyList())
-                noticeShown = outcome
-                notify(notice.issue, notice.notFound)
-                openRequest.value = outcome
-            }
-        }
         // A member that finished after the batch's notice was shown: its own notice, once.
         lifecycleScope.launch { batches.lateNotices.collect { notify(it.issue, it.notFound) } }
         lifecycleScope.launch {
@@ -279,19 +273,18 @@ class MainActivity : ComponentActivity() {
         }
         val parsed = HandoffIntents.parse(intent) ?: return
         // Several intents of one sender and title are one batch (docs/adr/0011 "Batches over 500").
-        val key = HandoffBatches.key(referrer?.host, parsed.title)
-        // An activity above others (a cascade of startActivities) that has nothing to open ingests and leaves at once.
-        val silentMember = key != null && !parsed.opensSomething && !isTaskRoot
+        val key = HandoffBatches.key(referrer?.host, parsed.title, marked = parsed.batchIndex != null)
+        // The intents above the first of a split batch (`BATCH_INDEX` > 0) ingest and leave at once: never decided by
+        // the task (Hoard starts Reveal into its own task, so `isTaskRoot` is false for an ordinary hand-off too).
+        val silentMember = parsed.silentMember
         lifecycleScope.launch {
             val join = key?.let { batches.join(it) }
             val request = parsed.copy(batchAt = join?.at)
-            if (key != null && parsed.opensSomething) batches.claim(key)
-            val outcome = handoffs.receive(request)
+            val outcome = receive(request)
             if (key != null) batches.touch(key)
             if (silentMember) {
                 // Its notices wait for the intent that shows the batch: one sheet for all (ADR 0011).
-                batches.report(key, noticeOf(outcome))
-                batches.silentFinished(key)
+                if (key != null) batches.report(key, noticeOf(outcome))
                 finish()
                 @Suppress("DEPRECATION")
                 overridePendingTransition(0, 0)
@@ -299,13 +292,32 @@ class MainActivity : ComponentActivity() {
             }
             // The notices of the whole batch (every member's, summed), shown once with this intent's outcome.
             val notice = batches.takeNotices(key, noticeOf(outcome))
-            noticeShown = outcome
+            // The batch's other members were ingested before this one: the library is behind the editor.
+            val shown = if (join?.follower == true && outcome is HandoffOutcome.OpenEditor && outcome.closeOnBack) {
+                outcome.copy(closeOnBack = false, libraryBehind = true)
+            } else {
+                outcome
+            }
+            noticeShown = shown
             notify(notice.issue, notice.notFound)
             // A single photo opened in the editor: leaving it returns to the calling app.
-            openedFromIntent = outcome is HandoffOutcome.OpenUri ||
-                (outcome is HandoffOutcome.OpenEditor && outcome.closeOnBack)
-            openRequest.value = outcome
+            openedFromIntent = shown is HandoffOutcome.OpenUri ||
+                (shown is HandoffOutcome.OpenEditor && shown.closeOnBack)
+            openRequest.value = shown
         }
+    }
+
+    /** A hand-off that fails (a malformed server answer, a provider error) never crashes the app: a notice instead. */
+    private suspend fun receive(request: HandoffRequest): HandoffOutcome = try {
+        handoffs.receive(request)
+    } catch (e: CancellationException) {
+        throw e
+    } catch (
+        @Suppress("TooGenericExceptionCaught") e: Exception,
+    ) {
+        Log.w("RevealHandoff", "hand-off failed", e)
+        val refs = request.server
+        if (refs != null) HandoffOutcome.ServerRefs(ServerIssue.Unreachable(refs.items.size)) else HandoffOutcome.Nothing
     }
 
     private companion object {

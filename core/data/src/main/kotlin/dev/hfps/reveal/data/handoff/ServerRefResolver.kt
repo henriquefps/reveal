@@ -25,7 +25,10 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
 
 /** A photo a server reference resolved to. */
@@ -39,7 +42,15 @@ class ServerBatch(
     val issue: ServerIssue? = null,
     /** The editor's photo: the `INITIAL_ITEM`'s version. */
     val initialVersionId: Long? = null,
-)
+) {
+    /** Two batches of one resumed hand-off as one: photos in order, counts summed, the first issue and initial. */
+    operator fun plus(other: ServerBatch) = ServerBatch(
+        photos = photos + other.photos,
+        notFound = notFound + other.notFound,
+        issue = issue ?: other.issue,
+        initialVersionId = initialVersionId ?: other.initialVersionId,
+    )
+}
 
 /** A batch kept for later (`meta`): [reason] says what it waits for. */
 @Serializable
@@ -49,6 +60,8 @@ internal data class PendingRefs(
     val items: List<PendingItem>,
     val initialItem: String? = null,
     val savedAt: Long = 0,
+    /** The `handoff_at` of the batch's photos, kept so a retry does not move them under another header. */
+    val at: Long? = null,
 )
 
 @Serializable
@@ -85,7 +98,7 @@ internal class ServerRefResolver(
         val pairing = server.pairing()
         return when {
             pairing == null -> {
-                keepBatch(refs, title)
+                keepBatch(refs, title, at ?: clock())
                 ServerBatch(issue = ServerIssue.NotPaired(refs.items.size))
             }
 
@@ -125,7 +138,11 @@ internal class ServerRefResolver(
                         Fetched.Missing, Fetched.Gone -> notFound++
 
                         Fetched.Unreachable -> {
-                            if (ref.name != null && ref.fingerprint != null) {
+                            val held = localPhotoFor(ref.allFingerprints, refresh)
+                            if (held != null) {
+                                // Unverifiable now: the photo Reveal has under the sender's fingerprint stands in.
+                                byItem[ref.itemId] = held
+                            } else if (ref.name != null && ref.fingerprint != null) {
                                 // Open from what Reveal has: a placeholder that fills in once the server answers.
                                 upsert(placeholder(ref), now)?.let { byItem[ref.itemId] = it }
                             }
@@ -152,7 +169,7 @@ internal class ServerRefResolver(
             photos.setHandoffAt(photoId, now, title)
             photos.firstVersion(photoId)?.let { served += ServedPhoto(ref.itemId, photoId, it) }
         }
-        if (unreachable.isNotEmpty()) keepUnreachable(refs.serverId, title, unreachable) else clearUnreachable()
+        settleUnreachable(refs, title, unreachable, now)
         // The server's decisions for these shots (Hoard has pushed its own before sending): best effort.
         if (served.isNotEmpty()) server.pullCulling()
         val initial = refs.initialItem?.let { id -> served.firstOrNull { it.itemId == id }?.versionId }
@@ -164,31 +181,20 @@ internal class ServerRefResolver(
         )
     }
 
-    /** Photos already in the library for [items] (by the item's known members, else the sender's fingerprints). */
+    /**
+     * Photos already in the library for [items], by the item's own known members (`culling_files`, from earlier syncs).
+     * The sender's fingerprint alone is never trusted here: Hoard may have sent a stale one, so such an item is read
+     * from the server first (its members decide, [localPhotoFor]); only when the server cannot answer does the sender's
+     * fingerprint stand in (the `Unreachable` branch).
+     */
     private suspend fun localHits(items: List<ServerItemRef>, refresh: Boolean): Map<String, Hit> {
         val members = items.associate { ref -> ref.itemId to db.cullingDao().filesOf(ref.itemId) }
-        val prints = items.flatMap { ref ->
-            val known = members.getValue(ref.itemId)
-            if (known.isNotEmpty() && ref.allFingerprints.none { it in known }) {
-                // The item's own members win over a fingerprint that is not one of them (Hoard sent a stale one).
-                if (ref.allFingerprints.isNotEmpty()) {
-                    Log.w(TAG, "item ${ref.itemId}: fingerprint does not belong to it; trusting the item id")
-                }
-                known
-            } else {
-                (known + ref.allFingerprints).distinct()
-            }
-        }.distinct()
+        val prints = members.values.flatten().distinct()
         val byPrint = prints.chunked(SQL_ARGS).flatMap { photos.filesByFingerprint(it) }.groupBy { it.file.fingerprint }
         val out = LinkedHashMap<String, Hit>()
         for (ref in items) {
             val known = members.getValue(ref.itemId)
-            val wanted = if (known.isNotEmpty() && ref.allFingerprints.none { it in known }) {
-                known
-            } else {
-                (ref.allFingerprints + known).distinct()
-            }
-            val match = wanted.firstNotNullOfOrNull { fp -> byPrint[fp]?.firstOrNull { reusable(it, refresh) } }
+            val match = known.firstNotNullOfOrNull { fp -> byPrint[fp]?.firstOrNull { reusable(it, refresh) } }
             if (match != null) out[ref.itemId] = Hit(match.file.photoId, match.photoHidden)
         }
         return out
@@ -204,9 +210,13 @@ internal class ServerRefResolver(
         else -> true
     }
 
+    /** The photo that holds one of [fingerprints] (a hidden one comes back, [reuse]). */
     private suspend fun localPhotoFor(fingerprints: List<String>, refresh: Boolean): Long? = fingerprints
         .chunked(SQL_ARGS).flatMap { photos.filesByFingerprint(it) }.firstOrNull { reusable(it, refresh) }
-        ?.file?.photoId
+        ?.let { match ->
+            if (match.photoHidden) photos.setHidden(listOf(match.file.photoId), false)
+            match.file.photoId
+        }
 
     /** `GET /v1/items/{id}` following one `replacedBy`; a tombstone without a replacement is gone. */
     private suspend fun fetchById(itemId: String): Fetched {
@@ -358,35 +368,97 @@ internal class ServerRefResolver(
 
     // ------------------------------------------------------------------ batches kept for later
 
-    private suspend fun keepBatch(refs: ServerRefs, title: String?) {
-        // Members of one cascade (same server and title) add to the batch that waits, they do not replace it.
-        val before = pending(KEY_PENDING)?.takeIf { title != null && it.serverId == refs.serverId && it.title == title }
-        val items = (before?.items.orEmpty() + refs.items.map(PendingItem::of)).distinctBy { it.itemId }
-        val pending = PendingRefs(refs.serverId, title, items, before?.initialItem ?: refs.initialItem, clock())
-        meta.put(MetaEntity(KEY_PENDING, json.encodeToString(PendingRefs.serializer(), pending)))
+    /** Guards the read-modify-write of the two kept records (two `MainActivity`s may both reach them). */
+    private val keep = Mutex()
+
+    /**
+     * Adds [group] to the record [key] (one list of groups): a group of the same server and (non-null) title is the
+     * same batch, so the members of a cascade add their items instead of replacing the earlier ones.
+     */
+    private suspend fun keepGroup(key: String, group: PendingRefs) = keep.withLock {
+        val groups = groups(key).toMutableList()
+        val at = groups.indexOfFirst { it.sameBatch(group) }
+        if (at < 0) {
+            groups += group
+        } else {
+            val old = groups[at]
+            groups[at] = old.copy(
+                items = (old.items + group.items).distinctBy { it.itemId },
+                initialItem = old.initialItem ?: group.initialItem,
+                at = old.at ?: group.at,
+                savedAt = group.savedAt,
+            )
+        }
+        saveGroups(key, groups.takeLast(MAX_GROUPS))
     }
 
-    /** The batch that waited for a pairing, if any. */
-    private suspend fun pending(key: String): PendingRefs? =
-        meta.get(key)?.let { runCatching { json.decodeFromString(PendingRefs.serializer(), it) }.getOrNull() }
+    private fun PendingRefs.sameBatch(other: PendingRefs) =
+        title != null && serverId == other.serverId && title == other.title
 
-    suspend fun pendingBatch(): ServerRefs? = pending(KEY_PENDING)?.let(::refsOf)
+    private suspend fun keepBatch(refs: ServerRefs, title: String?, at: Long) = keepGroup(
+        KEY_PENDING,
+        PendingRefs(refs.serverId, title, refs.items.map(PendingItem::of), refs.initialItem, clock(), at),
+    )
 
-    suspend fun pendingTitle(): String? = pending(KEY_PENDING)?.title
-
-    suspend fun clearPending() = meta.delete(KEY_PENDING)
-
-    private fun refsOf(p: PendingRefs) = ServerRefs(p.serverId, p.items.map(PendingItem::toRef), p.initialItem)
-
-    private suspend fun keepUnreachable(serverId: String, title: String?, items: List<ServerItemRef>) {
-        val pending = PendingRefs(serverId, title, items.map(PendingItem::of), null, clock())
-        meta.put(MetaEntity(KEY_RETRY, json.encodeToString(PendingRefs.serializer(), pending)))
+    private suspend fun groups(key: String): List<PendingRefs> {
+        val text = meta.get(key) ?: return emptyList()
+        return runCatching { json.decodeFromString(ListSerializer(PendingRefs.serializer()), text) }.getOrNull()
+            ?: runCatching { listOf(json.decodeFromString(PendingRefs.serializer(), text)) }.getOrDefault(emptyList())
     }
 
-    private suspend fun clearUnreachable() = meta.delete(KEY_RETRY)
+    private suspend fun saveGroups(key: String, groups: List<PendingRefs>) {
+        if (groups.isEmpty()) {
+            meta.delete(key)
+        } else {
+            meta.put(MetaEntity(key, json.encodeToString(ListSerializer(PendingRefs.serializer()), groups)))
+        }
+    }
 
-    /** The unreachable items to try again (`null` = nothing waits), with the title of their batch. */
-    suspend fun retryBatch(): Pair<ServerRefs, String?>? = pending(KEY_RETRY)?.let { refsOf(it) to it.title }
+    /** The batches that wait for a pairing. */
+    internal suspend fun pendingGroups(): List<PendingRefs> = groups(KEY_PENDING)
+
+    /** Takes the batches waiting for [serverId], atomically: of two callers only one gets them. */
+    internal suspend fun takePending(serverId: String): List<PendingRefs> = keep.withLock {
+        val all = groups(KEY_PENDING)
+        val mine = all.filter { it.serverId == serverId }
+        if (mine.isNotEmpty()) saveGroups(KEY_PENDING, all - mine.toSet())
+        mine
+    }
+
+    suspend fun clearPending() = keep.withLock { meta.delete(KEY_PENDING) }
+
+    internal fun refsOf(p: PendingRefs) = ServerRefs(p.serverId, p.items.map(PendingItem::toRef), p.initialItem)
+
+    /**
+     * What waits for the server to answer after [refs] resolved with [unreachable] items: the resolved ones leave the
+     * record (whatever batch they were kept under), the unreachable ones join their batch's group.
+     */
+    private suspend fun settleUnreachable(
+        refs: ServerRefs,
+        title: String?,
+        unreachable: List<ServerItemRef>,
+        at: Long,
+    ) = keep.withLock {
+        val resolved = refs.items.map { it.itemId }.toSet() - unreachable.map { it.itemId }.toSet()
+        val groups = groups(KEY_RETRY).map { g ->
+            if (g.serverId == refs.serverId) g.copy(items = g.items.filter { it.itemId !in resolved }) else g
+        }.filter { it.items.isNotEmpty() }
+        saveGroups(KEY_RETRY, groups)
+        if (unreachable.isNotEmpty()) {
+            val group = PendingRefs(refs.serverId, title, unreachable.map(PendingItem::of), null, clock(), at)
+            val all = groups.toMutableList()
+            val same = all.indexOfFirst { it.sameBatch(group) }
+            if (same < 0) {
+                all += group
+            } else {
+                all[same] = all[same].copy(items = (all[same].items + group.items).distinctBy { it.itemId })
+            }
+            saveGroups(KEY_RETRY, all.takeLast(MAX_GROUPS))
+        }
+    }
+
+    /** The unreachable items to try again (empty = nothing waits), by batch. */
+    internal suspend fun retryGroups(): List<PendingRefs> = groups(KEY_RETRY)
 
     private suspend fun <T> quietly(block: suspend () -> T): T {
         val already = meta.get(SyncTriggers.APPLYING) != null
@@ -404,6 +476,7 @@ internal class ServerRefResolver(
         const val KEY_RETRY = "handoff.retryServerRefs"
         private const val ROLE_RAW = "raw"
         private const val ROLE_RENDERED = "rendered"
+        private const val MAX_GROUPS = 50
         private const val FETCH_PARALLELISM = 4
         private const val SQL_ARGS = 900
         private const val FP_SUFFIX = 12

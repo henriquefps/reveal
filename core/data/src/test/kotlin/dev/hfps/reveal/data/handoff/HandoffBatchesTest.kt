@@ -8,8 +8,6 @@ import com.google.common.truth.Truth.assertThat
 import dev.hfps.reveal.data.db.RevealDatabase
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.test.TestScope
-import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.After
@@ -34,11 +32,11 @@ class HandoffBatchesTest {
     @After
     fun tearDown() = db.close()
 
-    private fun batches(scope: TestScope) = HandoffBatches(db, scope) { now }
+    private fun batches() = HandoffBatches(db) { now }
 
     @Test
     fun `the shown intent gets every member's not found counts summed, once`() = runTest {
-        val batches = batches(this)
+        val batches = batches()
         val key = "app\u0000Trip"
         batches.join(key)
         batches.report(key, HandoffNotice(notFound = 2))
@@ -51,7 +49,7 @@ class HandoffBatchesTest {
 
     @Test
     fun `issues of the members are summed into one, not paired first`() = runTest {
-        val batches = batches(this)
+        val batches = batches()
         val key = "app\u0000Trip"
         batches.join(key)
         batches.report(key, HandoffNotice(issue = ServerIssue.Unreachable(4)))
@@ -71,7 +69,7 @@ class HandoffBatchesTest {
 
     @Test
     fun `a member that reports after the notice was taken goes out on its own`() = runTest {
-        val batches = batches(this)
+        val batches = batches()
         val key = "app\u0000Trip"
         batches.join(key)
         batches.takeNotices(key, HandoffNotice(notFound = 1))
@@ -85,38 +83,33 @@ class HandoffBatchesTest {
     }
 
     @Test
-    fun `the library fallback carries the batch's notices`() = runTest {
-        val batches = batches(this)
+    fun `members join one stamp and the later ones are followers`() = runTest {
+        val batches = batches()
         val key = "app\u0000Trip"
-        val got = ArrayList<HandoffNotice>()
-        val job = backgroundScope.launchCollectLibrary(batches, got)
-        runCurrent()
-        batches.join(key)
-        batches.report(key, HandoffNotice(notFound = 2))
-        batches.report(key, HandoffNotice(notFound = 1))
-        batches.silentFinished(key)
-        now += HandoffBatches.SETTLE_MS
-        advanceTimeBy(HandoffBatches.SETTLE_MS + 1)
-        // Room answers on its own threads: wait in real time for the emission.
-        repeat(200) {
-            runCurrent()
-            if (got.isEmpty()) Thread.sleep(25)
-        }
-        assertThat(got).containsExactly(HandoffNotice(notFound = 3))
-        job.cancel()
+        val first = batches.join(key)
+        now += 2_000
+        val second = batches.join(key)
+        assertThat(first.follower).isFalse()
+        assertThat(second.follower).isTrue()
+        assertThat(second.at).isEqualTo(first.at)
+        // After the window a hand-off with the same title is a new batch.
+        now += HandoffBatches.WINDOW_MS + 1
+        assertThat(batches.join(key).at).isNotEqualTo(first.at)
+    }
+
+    @Test
+    fun `a marked intent batches even without a title`() {
+        assertThat(HandoffBatches.key("app", null)).isNull()
+        assertThat(HandoffBatches.key("app", null, marked = true)).isNotNull()
+        assertThat(HandoffBatches.key("app", "Trip")).isNotNull()
     }
 
     @Test
     fun `a batch without a key is not merged`() = runTest {
         val own = HandoffNotice(notFound = 2)
-        assertThat(batches(this).takeNotices(null, own)).isEqualTo(own)
+        assertThat(batches().takeNotices(null, own)).isEqualTo(own)
     }
 
     private fun kotlinx.coroutines.CoroutineScope.launchCollect(b: HandoffBatches, into: MutableList<HandoffNotice>) =
         launch { b.lateNotices.collect { into += it } }
-
-    private fun kotlinx.coroutines.CoroutineScope.launchCollectLibrary(
-        b: HandoffBatches,
-        into: MutableList<HandoffNotice>,
-    ) = launch { b.openLibrary.collect { into += it } }
 }

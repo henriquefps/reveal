@@ -143,6 +143,9 @@ class SyncRepository(
     fun dismissCandidates() = candidates.update { emptyList() }
 
     private val mutex = Mutex()
+
+    /** A hand-off asked for the culling pull while a run held [mutex]: pulled right after that run. */
+    private val cullingWanted = java.util.concurrent.atomic.AtomicBoolean(false)
     private val runtime = MutableStateFlow(SyncStatus())
 
     val account: StateFlow<SyncAccount?> = accounts.account
@@ -300,12 +303,16 @@ class SyncRepository(
     )
 
     /**
-     * Pulls the culling records and applies them (a hand-off's server references, ADR 0011 "Amendment W3/H"), unless a
-     * sync run is going (it pulls them itself) or the server does not sync culling.
+     * Pulls the culling records and applies them (a hand-off's server references, ADR 0011 "Amendment W3/H"), unless
+     * the server does not sync culling. While a sync run is going the pull is left to follow that run (it may have
+     * passed its own culling step already): [syncMetadata] does it as soon as the run ends.
      */
     suspend fun pullCulling() = withContext(Dispatchers.IO) {
         val api = api() ?: return@withContext
-        if (!mutex.tryLock()) return@withContext
+        if (!mutex.tryLock()) {
+            cullingWanted.set(true)
+            return@withContext
+        }
         try {
             val info = api.server()
             if (info.has("culling")) engine.culling.run(api, info)
@@ -319,6 +326,20 @@ class SyncRepository(
         val account = accounts.account.value ?: return@withContext null
         val api =
             api() ?: return@withContext null.also { runtime.update { it.copy(problem = SyncProblem.UNAUTHORIZED) } }
+        try {
+            runLocked(account, api)
+        } finally {
+            if (cullingWanted.getAndSet(false)) {
+                try {
+                    pullCulling()
+                } catch (e: IOException) {
+                    Log.i(TAG, "culling pull after the sync failed: ${e.javaClass.simpleName}")
+                }
+            }
+        }
+    }
+
+    private suspend fun runLocked(account: SyncAccount, api: SyncApi): SyncReport? =
         mutex.withLock {
             // Unpaired (or paired again) while this run waited: its key and server are gone, do nothing.
             if (accounts.account.value != account) return@withLock null
@@ -352,7 +373,6 @@ class SyncRepository(
                 runtime.update { it.copy(running = false) }
             }
         }
-    }
 
     /**
      * Blob work: smart previews (when on; on an [unmetered] network also a few made again in the current format),

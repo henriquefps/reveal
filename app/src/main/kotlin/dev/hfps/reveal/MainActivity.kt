@@ -23,6 +23,7 @@ import dagger.hilt.android.AndroidEntryPoint
 import dev.hfps.reveal.data.handoff.HandoffIntents
 import dev.hfps.reveal.data.handoff.HandoffOutcome
 import dev.hfps.reveal.data.handoff.HandoffRepository
+import dev.hfps.reveal.data.handoff.ServerIssue
 import dev.hfps.reveal.data.model.PhotoListCodec
 import dev.hfps.reveal.data.model.PhotoQuery
 import dev.hfps.reveal.data.preset.PresetFilesIo
@@ -35,13 +36,19 @@ import dev.hfps.reveal.feature.editor.navigateToEditor
 import dev.hfps.reveal.feature.editor.presets.PresetLinkHost
 import dev.hfps.reveal.feature.editor.presets.PresetLinkViewModel
 import dev.hfps.reveal.feature.editor.presets.PresetMessages
+import dev.hfps.reveal.feature.library.HandoffServerSheet
 import dev.hfps.reveal.feature.library.LibraryRoute
 import dev.hfps.reveal.feature.library.ViewerRoute
+import dev.hfps.reveal.feature.settings.SyncSettingsRoute
 import dev.hfps.reveal.input.PalmRejection
 import dev.hfps.reveal.navigation.RevealNavHost
+import dev.hfps.reveal.sync.SyncRepository
 import dev.hfps.reveal.theme.ThemeModeStore
 import javax.inject.Inject
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 
 @AndroidEntryPoint
@@ -54,6 +61,14 @@ class MainActivity : ComponentActivity() {
 
     @Inject
     lateinit var presets: PresetRepository
+
+    @Inject
+    lateinit var sync: SyncRepository
+
+    /** What a hand-off of server references could not do (docs/adr/0011 "Amendment W3/H"), until dismissed. */
+    private val serverNotice = MutableStateFlow<ServerNotice?>(null)
+
+    private data class ServerNotice(val issue: ServerIssue?, val notFound: Int)
 
     /** What the last hand-off from another app (ADR 0011) resolved to, until navigated to. */
     private val openRequest = MutableStateFlow<HandoffOutcome?>(null)
@@ -71,6 +86,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         // A recreated activity restores its back stack; only a fresh launch handles its intent.
         if (savedInstanceState == null) handleIntent(intent)
+        watchServer()
         openedFromIntent = savedInstanceState?.getBoolean(KEY_FROM_INTENT) ?: openedFromIntent
         setContent {
             val mode by themeModeStore.mode.collectAsStateWithLifecycle()
@@ -109,13 +125,55 @@ class MainActivity : ComponentActivity() {
                     },
                 )
                 PresetLinkHost(presetLink)
+                val notice by serverNotice.collectAsStateWithLifecycle()
+                notice?.let { shown ->
+                    HandoffServerSheet(
+                        issue = shown.issue,
+                        notFound = shown.notFound,
+                        onPair = {
+                            // The batch stays kept: pairing with that server opens it (watchServer).
+                            serverNotice.value = null
+                            navController.navigate(SyncSettingsRoute)
+                        },
+                        onDismiss = {
+                            serverNotice.value = null
+                            if (shown.issue is ServerIssue.NotPaired) lifecycleScope.launch { handoffs.dropPending() }
+                        },
+                    )
+                }
             }
+        }
+    }
+
+    /**
+     * After pairing, the batch that waited for it opens; after a sync, photos opened while the server was not answering
+     * fill in (docs/adr/0011 "Amendment W3/H").
+     */
+    private fun watchServer() {
+        lifecycleScope.launch {
+            sync.account.filterNotNull().collect { account ->
+                handoffs.resumePending(account.serverId)?.let { outcome ->
+                    openedFromIntent = outcome is HandoffOutcome.OpenEditor && outcome.closeOnBack
+                    openRequest.value = outcome
+                }
+            }
+        }
+        lifecycleScope.launch {
+            sync.status.map { it.lastSyncAt }.distinctUntilChanged().collect { handoffs.retryUnreachable() }
         }
     }
 
     /** Navigates to what a hand-off resolved to (ADR 0011). */
     private fun show(navController: NavController, outcome: HandoffOutcome) {
         when (outcome) {
+            is HandoffOutcome.OpenEditor -> notify(outcome.issue, outcome.notFound)
+            is HandoffOutcome.OpenLibrary -> notify(outcome.issue, outcome.notFound)
+            is HandoffOutcome.ServerRefs -> notify(outcome.issue, outcome.notFound)
+            else -> Unit
+        }
+        when (outcome) {
+            is HandoffOutcome.ServerRefs -> Unit
+
             is HandoffOutcome.OpenEditor -> {
                 if (outcome.libraryBehind) {
                     navController.navigate(LibraryRoute(fromApps = true)) {
@@ -139,6 +197,10 @@ class MainActivity : ComponentActivity() {
 
             HandoffOutcome.Nothing -> Toast.makeText(this, R.string.handoff_unreadable, Toast.LENGTH_LONG).show()
         }
+    }
+
+    private fun notify(issue: ServerIssue?, notFound: Int) {
+        if (issue != null || notFound > 0) serverNotice.value = ServerNotice(issue, notFound)
     }
 
     override fun dispatchTouchEvent(event: MotionEvent): Boolean {

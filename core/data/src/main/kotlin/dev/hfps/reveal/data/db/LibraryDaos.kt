@@ -177,7 +177,7 @@ interface PhotoDao {
      * version: a virtual copy counts once more (docs/adr/0025).
      */
     @Query(
-        "SELECT COALESCE(SUM(p.handoff_at IS NOT NULL AND NOT " + PhotoQuerySql.SERVER_SOURCE_SQL + "), 0) " +
+        "SELECT COALESCE(SUM(p.handoff_at IS NOT NULL), 0) " +
             "AS from_apps, COALESCE(SUM(" + PhotoQuerySql.SERVER_SOURCE_SQL + "), 0) AS server_only, " +
             "COALESCE(SUM(p.flag = 'PICK'), 0) AS picked, COALESCE(SUM(p.rating >= 1), 0) AS starred, " +
             "COALESCE(SUM(p.flag = 'REJECT'), 0) AS rejected, " +
@@ -480,7 +480,7 @@ interface PhotoDao {
     @Query(
         "UPDATE photos SET handoff_at = NULL, handoff_title = NULL WHERE id IN (SELECT p.id FROM photos p WHERE " +
             "p.handoff_at IS NOT NULL ORDER BY p.handoff_at DESC, p.id DESC LIMIT -1 OFFSET :keep) AND " +
-            "source_id IN (SELECT id FROM sources WHERE kind = 'FOLDER')",
+            "source_id IN (SELECT id FROM sources WHERE kind IN ('FOLDER', 'SERVER'))",
     )
     suspend fun clearStaleFolderHandoffs(keep: Int)
 

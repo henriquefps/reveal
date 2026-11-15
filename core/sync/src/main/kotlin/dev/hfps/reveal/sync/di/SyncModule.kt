@@ -37,6 +37,8 @@ import dev.hfps.reveal.sync.work.SyncController
 import java.io.ByteArrayOutputStream
 import java.io.File
 import javax.inject.Singleton
+import dev.hfps.reveal.data.handoff.ServerItems
+import dev.hfps.reveal.sync.handoff.SyncServerItems
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.serialization.json.JsonElement
 
@@ -181,6 +183,11 @@ object SyncModule {
     }
 
     private val JPEG_QUALITIES = listOf(90, 80, 70)
+
+    /** What the hand-off needs of the server (ADR 0011 "Amendment W3/H"). */
+    @Provides
+    @Singleton
+    fun provideServerItems(sync: SyncRepository): ServerItems = SyncServerItems(sync)
 
     @Provides
     @Singleton

@@ -6,6 +6,11 @@ All notable changes to Reveal are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- Server-reference hand-offs (W3/H): a photo the paired server holds opens from the server through Reveal's own
+  pairing, never through the sending app; not paired / another server / server not answering / photos not found each
+  get a clear sheet, and a batch that waited for a pairing opens after it.
+
 ### Changed
 - Hand-off contract (W3/H, docs/adr/0011 "Amendment W3/H"): photos the sender's paired server holds are handed over as
   server references (`SERVER_ITEMS`) instead of content URIs, and `CULLING_VERSION` 2 adds per-field dates and authors

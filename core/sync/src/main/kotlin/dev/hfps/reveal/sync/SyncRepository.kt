@@ -295,6 +295,21 @@ class SyncRepository(
         candidates = view.candidates,
     )
 
+    /**
+     * Pulls the culling records and applies them (a hand-off's server references, ADR 0011 "Amendment W3/H"), unless a
+     * sync run is going (it pulls them itself) or the server does not sync culling.
+     */
+    suspend fun pullCulling() = withContext(Dispatchers.IO) {
+        val api = api() ?: return@withContext
+        if (!mutex.tryLock()) return@withContext
+        try {
+            val info = api.server()
+            if (info.has("culling")) engine.culling.run(api, info)
+        } finally {
+            mutex.unlock()
+        }
+    }
+
     /** One metadata sync; null when not paired. Problems end up in [status] (and are rethrown when worth a retry). */
     suspend fun syncMetadata(): SyncReport? = withContext(Dispatchers.IO) {
         val account = accounts.account.value ?: return@withContext null

@@ -23,6 +23,7 @@ import dev.hfps.reveal.data.handoff.HandoffPreviewer
 import dev.hfps.reveal.data.handoff.HandoffRepository
 import dev.hfps.reveal.data.handoff.HandoffTree
 import dev.hfps.reveal.data.handoff.LocalPreviews
+import dev.hfps.reveal.data.handoff.ServerItems
 import dev.hfps.reveal.data.index.LibraryIndexer
 import dev.hfps.reveal.data.library.DocumentTreeFactory
 import dev.hfps.reveal.data.library.EditSidecars
@@ -123,12 +124,14 @@ object DataModule {
         database: RevealDatabase,
         sidecars: SidecarSync,
         previewer: HandoffPreviewer,
+        server: ServerItems,
     ): HandoffRepository = HandoffRepository(
         context.contentResolver,
         database,
         LibraryIndexer(database),
         sidecars = sidecars,
         previewer = previewer,
+        server = server,
     )
 
     @Provides

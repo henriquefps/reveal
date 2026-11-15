@@ -162,7 +162,7 @@ object PhotoQuerySql {
             },
             // Every photo another app handed over: hand-off photos, and folder photos a hand-off opened or merged
             // into (ADR 0011 "One photo across sources"); the Server source never.
-            Clause("(p.handoff_at IS NOT NULL AND NOT $SERVER_SOURCE_SQL)").takeIf { SourceFilter.FromApps in sources },
+            Clause("p.handoff_at IS NOT NULL").takeIf { SourceFilter.FromApps in sources },
             Clause(SERVER_SOURCE_SQL).takeIf { SourceFilter.ServerOnly in sources },
         )
     }

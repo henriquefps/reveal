@@ -59,6 +59,7 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
@@ -169,7 +170,7 @@ private fun formatCount(count: Int): String = NumberFormat.getIntegerInstance().
 fun rememberDateLabels(): DateLabels {
     val locale = LocalConfiguration.current.locales[0]
     val noDate = stringResource(R.string.library_no_date)
-    val resources = LocalContext.current.resources
+    val resources = LocalResources.current
     return remember(locale, noDate) { DateLabels(locale, noDate, resources) }
 }
 

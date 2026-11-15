@@ -742,3 +742,58 @@ other device's folder photo, the exact production sequence, the repair of a phot
 before its photo record, the ambiguity, a held version, a held version the server already has (real `baseRev`, no conflict copy), a pulled
 version releasing its photo's held versions, a tombstoned photo), `RealServerVersionPhotoTest` (the pinned
 hoard-server: the NAS case and the production sequence; `REVEAL_VERSION_DIR`, `REVEAL_VERSION_LINKS`).
+
+### W5 recovery: versions orphaned by an old re-pair
+
+What happened in production (2026-11-15): on builds before W5 the phone (86f9c052) and the tablet (36f8f112) each
+edited unculled NAS photos; each version went up alone, naming the author's random photo id, without a photo record
+or a `photoFingerprint`; the other device pushed its own photo record for the same file. Both then paired again on
+the old build, whose `forget()` ran `deleteServerSource()`: the edited Server photos and **their versions were
+deleted locally** (cascade), and the first sync under the new ids (e75cbaf1, f004f152) pulled the four version records
+and parked them (their photo id unknown everywhere, nothing in the record names the file). The admin revoked the old
+ids. The W5 repair walks local versions, so it could never see them; nothing in `/v1` maps a version id to a photo,
+**except Hoard's edited previews** (Hoard ADR 0020): `item_edits` held a row for each of the four.
+
+Decisions (`SyncEngine.recoverParked`, `SyncStore.parkedOrphans` / `recover` / `proveRecovered`):
+
+- **Every device recovers by itself.** A parked version whose photo cannot be found (no local version, no
+  `photoFingerprint`, not a copy) is looked for in the edited previews: `POST /v1/items/lookup` answers each item with
+  its `edits` and the `matches` of the fingerprints asked, so an edit named after the version gives its item, and the
+  matched member gives a local photo. The fingerprint found is used exactly as a record's `photoFingerprint` would be
+  (`applyVersion` -> `photoByFingerprint`: alias of the record's photo id, or adoption of it when the local photo was
+  never on the server), and the inbox is retried. The edit appears on every device, with no push.
+- **Cost.** `/v1` has no lookup by version id (`GET /v1/items/{id}/edits/{versionId}` needs the item; the items feed
+  carries edits but only from a cursor, and Reveal's culling feed asks for `include=culling` only), so the lookup goes
+  over the main-file fingerprints of the photos whose records the server may never have had (Server photos and
+  hand-offs, newest shot first, `SyncDao.recoveryFingerprints`), 5 pages of 1,000 per run, resumable
+  (`sync.recovery.search`), only while such versions exist and only for those due. A whole pass that does not find a
+  version is logged once and the version is looked for again after a day, then 2, 4, ... up to 30 days
+  (`sync.recovery.misses`, `SyncStore.searchDue`); it stays parked meanwhile.
+- **Pushed again only with proof of authorship.** A recovered version is listed (`sync.recovery.proof`: uuid, the
+  server revision, the record's author) and, on every sync, pushed again on that revision (naming the photo's current
+  id and main-file fingerprint) only when its author is one of this installation's own device ids (`sync.ownDevices`,
+  recorded from now on at every pairing, sync and device report, never forgotten) or a device of this installation's
+  physical device (`GET /v1/device`: the physical device's id, which is its first device's id, and its devices). A
+  name is never proof (revoked devices are not listed, and names repeat). Without proof nothing is pushed (the alias
+  is enough locally); a version whose record changed meanwhile is dropped from the list. Since the authoring
+  installation is the only one with proof, two devices never push the same version (no conflict copy).
+- **The repair's authorship.** `repairVersionPhotos` also counts an `edit_device` that is the shortened id of one of
+  this installation's own device ids.
+- **Unpairing never deletes an edit.** `forget()` keeps every Server photo with an edited version (and the Server
+  source while it has photos); the versions whose current state the server was not known to hold are remembered
+  (`sync.keptEdits`) and marked new by the next pairing's `startTracking` (an equal edit on the server is settled by
+  `sameEdit`); after a first sync's pull, edited versions the server has no record of go up as new
+  (`markUnrecordedEdits`). Other deletions of edited photos are user actions (removing a folder, "Forget").
+
+What the production devices do after the update: first and second sync, the four are applied locally on both
+devices, nothing is pushed. After "Same phone/tablet?" (Settings -> Sync -> This device, claiming the old physical
+device that holds Hoard), the next sync of the phone pushes again a09ff2ba and a615a71f, the tablet's c33fcf7f and
+6aeb6d71, each on the server's revision, so the records name the current ids and fingerprints.
+
+Hoard's rule (`internal/store/records.go`, `applyOne`): a push whose `baseRev` equals the record's revision is applied
+whatever device sends it; revoking a device changes none of its records.
+
+Tests: `VersionPhotoSyncTest` (the four-orphan replay in both stages, no preview found -> parked and looked for once a
+day at most then found when the preview appears, unpairing keeps edited Server photos), `RealServerRecoveryTest`
+(pinned hoard-server: one orphan per device, edited previews uploaded, revoke and claim through the admin API and
+`/v1/device/claim`; `REVEAL_RECOVERY_DIR`).

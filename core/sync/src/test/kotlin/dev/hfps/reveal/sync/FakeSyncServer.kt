@@ -148,6 +148,10 @@ class FakeSyncServer(val serverId: String = "858e1b9d-0000-4000-8000-00000000000
         deviceNames.remove(deviceId)
     }
 
+    /** How many `POST /v1/items/lookup` requests were answered. */
+    @Volatile
+    var itemLookups = 0
+
     /** How many culling pages were asked for (a hand-off's pull, a sync run's). */
     @Volatile
     var cullingPages = 0
@@ -221,8 +225,10 @@ class FakeSyncServer(val serverId: String = "858e1b9d-0000-4000-8000-00000000000
 
             path == "/v1/fingerprints/lookup" -> lookup(request)
 
-            path == "/v1/items/lookup" && "items" in features ->
+            path == "/v1/items/lookup" && "items" in features -> {
+                itemLookups++
                 ok(edits.lookup(json.parseToJsonElement(request.body!!.utf8()).jsonObject))
+            }
 
             path == "/v1/items/previews" && method == "POST" && "previews" in features -> previews.warm(request)
 

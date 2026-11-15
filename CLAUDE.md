@@ -1109,6 +1109,12 @@ any other host asks "Same server at <host>?" (`keyReuseQuestion`, `KeyReuse.CONF
 (W5 (g)): `server=` naming another one = `PairProblem.PAIRED_ELSEWHERE` ("Switch server" via Unpair); none and the
 server answers as another = `ServerSwitchException`, the new pairing kept in memory until `switchServer()` /
 `cancelSwitch()`. A refused photo record releases its held versions. `SyncStore.sameEdit` avoids conflict copies on a first sync (and re-pushes a record naming a stale photo id). Test: `RePairTest`.
+W5 recovery (ADR 0018 "W5 recovery"): parked versions whose photo nobody can find (records of an old re-pair that
+deleted the edited Server photos) are found through Hoard's edited previews (`SyncEngine.recoverParked`: paced
+`POST /v1/items/lookup` over Server/hand-off main fingerprints, `edits[].versionId` + `matches`; misses back off from a
+day) and applied on every device; pushed again only with proof of authorship (`sync.ownDevices`, or the physical
+device from `GET /v1/device`). `forget()` keeps edited Server photos (`sync.keptEdits`, `markUnrecordedEdits`).
+Tests: `VersionPhotoSyncTest`, `RealServerRecoveryTest` (`REVEAL_RECOVERY_DIR`; `local-server.sh revoke`).
 
 Culling with hoard-server (R0.8, ADR 0027, DB v13; only when `/v1/server` lists `culling`, else culling stays in
 `photo` records): `engine/CullingSync` (seed once per server, push `POST /v1/culling` per field by main fingerprint,

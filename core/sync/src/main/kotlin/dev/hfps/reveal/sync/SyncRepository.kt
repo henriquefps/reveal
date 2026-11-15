@@ -291,6 +291,8 @@ class SyncRepository(
                 System.currentTimeMillis(),
             )
         accounts.save(account, response.apiKey)
+        // This installation's device ids are kept for good: proof of authorship for the W5 recovery.
+        store.noteOwnDevice(response.deviceId)
         response.physicalDeviceId?.let { db.metaDao().put(MetaEntity(SyncEngine.KEY_PHYSICAL_DEVICE, it)) }
         // The device was reported with the pairing itself: the first sync does not need to send it again unless it
         // also declares culling (the signature includes the features).
@@ -559,7 +561,7 @@ class SyncRepository(
         try {
             // Previews no longer needed stop being named before the push, so the blob run can drop them.
             uploader.markDrops()
-            val report = engine.sync(api, account.serverId)
+            val report = engine.sync(api, account.serverId, account.deviceId)
             // After the push: the server keeps an original while a live record names it.
             val deleted = uploader.deleteOriginals(api)
             if (deleted > 0) Log.i(TAG, "deleted $deleted originals from the server")

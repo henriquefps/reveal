@@ -33,7 +33,7 @@ import kotlinx.coroutines.runBlocking
 class TestDevice(
     val name: String,
     private val url: String,
-    val key: String,
+    key: String,
     private val serverId: String,
     settings: List<SyncedSetting> = emptyList(),
     var now: Long = 1_700_000_000_000L,
@@ -49,7 +49,16 @@ class TestDevice(
         db,
         java.io.File(System.getProperty("java.io.tmpdir"), "reveal-covers-$name-${System.nanoTime()}"),
     ) { now }
-    val api = SyncApi(url, key)
+    var key: String = key
+        private set
+    var api = SyncApi(url, key)
+        private set
+
+    /** Paired again under another device [key] (same database; what the database keeps is the caller's business). */
+    fun rekey(key: String) {
+        this.key = key
+        api = SyncApi(url, key)
+    }
     val folder: Long = runBlocking {
         db.sourceDao().insert(
             SourceEntity(

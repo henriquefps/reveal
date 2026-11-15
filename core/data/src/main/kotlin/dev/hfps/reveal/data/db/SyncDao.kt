@@ -34,6 +34,15 @@ data class CloudCandidate(
 data class DroppablePreview(@ColumnInfo(name = "photo_id") val photoId: Long, val sha256: String)
 
 /**
+ * A version `v` a user edited: a recipe that is not the default, a name, a virtual copy, a conflict copy or snapshots
+ * (the W5 repair, and what unpairing keeps of the Server source).
+ */
+private const val EDITED_VERSION =
+    "EXISTS (SELECT 1 FROM recipes r WHERE r.version_id = v.id AND r.is_default = 0) " +
+        "OR v.name IS NOT NULL OR v.position > 0 OR v.copy_of IS NOT NULL " +
+        "OR EXISTS (SELECT 1 FROM snapshots n WHERE n.version_id = v.id)"
+
+/**
  * The photos [SyncDao.previewCandidates] and [SyncDao.outdatedPreviews] start from: device-only (looked up, missing on
  * the server), visible, in a reachable folder or hand-off, main file printed, nothing queued, and whose original cannot
  * go to the server: Reveal cannot read it, or it is edited while the originals backup is off (`:originalsOff`).
@@ -119,11 +128,54 @@ interface SyncDao {
         "SELECT v.uuid AS version_uuid, p.uuid AS photo_uuid, v.edit_device, v.edited_at, v.copy_of, " +
             "(s.kind = 'SERVER' AND p.stem_key = p.uuid) AS from_record FROM versions v " +
             "JOIN photos p ON p.id = v.photo_id JOIN sources s ON s.id = p.source_id " +
-            "WHERE EXISTS (SELECT 1 FROM recipes r WHERE r.version_id = v.id AND r.is_default = 0) " +
-            "OR v.name IS NOT NULL OR v.position > 0 OR v.copy_of IS NOT NULL " +
-            "OR EXISTS (SELECT 1 FROM snapshots n WHERE n.version_id = v.id) ORDER BY v.id",
+            "WHERE " + EDITED_VERSION + " ORDER BY v.id",
     )
     suspend fun editedVersions(): List<EditedVersion>
+
+    /**
+     * Unpairing (ADR 0018 "W5"): the Server source's photos without an edited version go; a Server photo a user edited
+     * stays with its versions (the server may not hold its edit, and an old record naming a photo id without its
+     * fingerprint could never find it again). Same "edited" as [editedVersions].
+     */
+    @Query(
+        "DELETE FROM photos WHERE source_id IN (SELECT id FROM sources WHERE kind = 'SERVER') AND NOT EXISTS " +
+            "(SELECT 1 FROM versions v WHERE v.photo_id = photos.id AND (" + EDITED_VERSION + "))",
+    )
+    suspend fun deleteUneditedServerPhotos()
+
+    /** The Server source once none of its photos is left ([deleteUneditedServerPhotos]). */
+    @Query(
+        "DELETE FROM sources WHERE kind = 'SERVER' AND NOT EXISTS " +
+            "(SELECT 1 FROM photos p WHERE p.source_id = sources.id)",
+    )
+    suspend fun deleteEmptyServerSource()
+
+    /** Edited versions of Server photos whose current state the server is not known to hold (unpairing keeps them). */
+    @Query(
+        "SELECT v.uuid FROM versions v JOIN photos p ON p.id = v.photo_id JOIN sources s ON s.id = p.source_id " +
+            "WHERE s.kind = 'SERVER' AND (" + EDITED_VERSION + ") AND NOT EXISTS (SELECT 1 FROM sync_records r " +
+            "WHERE r.kind = 'version' AND r.record_id = v.uuid AND r.rev > 0 AND r.dirty = 0 AND r.deleted = 0)",
+    )
+    suspend fun unsyncedServerEdits(): List<String>
+
+    /** Marks [uuids] (versions) to push as new on this server, dated by their last edit. */
+    @Query(
+        "INSERT OR REPLACE INTO sync_records (kind, record_id, rev, dirty, modified_at, deleted) " +
+            "SELECT 'version', v.uuid, 0, 1, COALESCE(v.edited_at, :now), 0 FROM versions v WHERE v.uuid IN (:uuids)",
+    )
+    suspend fun markVersionsNew(uuids: List<String>, now: Long)
+
+    /**
+     * Main-file fingerprints of photos whose records the server may never have had (Server photos and hand-offs),
+     * newest shot first, for finding the photo of a parked version through the server's edited previews.
+     */
+    @Query(
+        "SELECT DISTINCT f.fingerprint FROM photos p JOIN photo_files f ON f.photo_id = p.id JOIN sources s ON " +
+            "s.id = p.source_id WHERE s.kind IN ('SERVER', 'HANDOFF') AND f.fingerprint IS NOT NULL AND " +
+            "(f.role = 'RAW' OR NOT EXISTS (SELECT 1 FROM photo_files o WHERE o.photo_id = p.id AND o.role = 'RAW')) " +
+            "ORDER BY p.sort_time DESC, p.id DESC LIMIT :limit OFFSET :offset",
+    )
+    suspend fun recoveryFingerprints(limit: Int, offset: Int): List<String>
 
     /** First sync with a server: every photo and version is to be pushed (rev 0 = created there). */
     @Query(

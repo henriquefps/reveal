@@ -24,6 +24,7 @@ import org.junit.runner.RunWith
  * hand-off) reaches the other devices: the photo goes up before its version, a version finds its photo by the main
  * file's fingerprint, and the one-off repair fixes what 0.8 left on the server.
  */
+@Suppress("LargeClass")
 @RunWith(AndroidJUnit4::class)
 class VersionPhotoSyncTest {
     private val server = FakeSyncServer()
@@ -588,6 +589,259 @@ class VersionPhotoSyncTest {
         phone.sync()
         assertThat(server.record("version", version.uuid)!!.rev).isGreaterThan(rev)
         assertThat(fingerprintOf(version.uuid)).isNotNull()
+    }
+
+    /** A build before the W5 repair and recovery: neither runs. */
+    private fun TestDevice.oldBuild() {
+        engine.parkedRecovery = false
+        runBlocking { db.metaDao().put(dev.hfps.reveal.data.db.MetaEntity(SyncEngine.KEY_VERSION_PHOTOS, "1")) }
+    }
+
+    /** This build: the recovery on, the one-off repair not run yet. */
+    private fun TestDevice.newBuild() {
+        engine.parkedRecovery = true
+        runBlocking { db.metaDao().delete(SyncEngine.KEY_VERSION_PHOTOS) }
+    }
+
+    /**
+     * Pairing again on a build before this one: everything the old pairing knew is forgotten, the Server source with
+     * its edited photos included (store.forget() and the cursors, then the old deleteServerSource), then a first sync
+     * under a new device id. Returns the new id.
+     */
+    private fun TestDevice.oldRePair(): String {
+        runBlocking {
+            store.forget()
+            db.metaDao().delete(SyncStore.KEY_KEPT_EDITS)
+            // The old build never recorded its own device ids.
+            db.metaDao().delete(SyncStore.KEY_OWN_DEVICES)
+            db.syncDao().deleteServerSource()
+            engine.resetCursors()
+        }
+        rekey(server.addDevice(name))
+        now += 1_000
+        sync()
+        runBlocking { db.metaDao().put(dev.hfps.reveal.data.db.MetaEntity(SyncEngine.KEY_VERSION_PHOTOS, "1")) }
+        return server.devices.getValue(key)
+    }
+
+    private fun TestDevice.markPhotoDirty(photoId: Long) = runBlocking {
+        db.syncDao().putRecord(SyncRecordEntity("photo", photo(photoId).uuid, 0, dirty = true, modifiedAt = now))
+    }
+
+    /** The edited preview [device] uploaded for [versionUuid] (hoard-server 0.9.0, Hoard ADR 0020). */
+    private fun putEdit(versionUuid: String, itemId: String, deviceId: String, at: Long) {
+        server.edits.edits[versionUuid] =
+            FakeEdits.Edit(itemId, "r1.1:$versionUuid", "", true, false, at, ByteArray(1), deviceId)
+    }
+
+    /**
+     * The production history of 2026-11-15 (four orphans): on the old build, the phone (86f9c052) edited two unculled
+     * NAS photos and the tablet (36f8f112) two others, each version going up alone and naming the author's random
+     * photo id; each device's edited previews went up; the other device pushed its own photo records. Both paired
+     * again on the old build (forgetting everything, the edited Server photos included) and parked all four versions;
+     * the admin revoked the old ids. This build recovers all four on both devices through the edited previews, and
+     * once each device is claimed into its old physical device, each pushes again the two it made.
+     */
+    @Suppress("LongMethod")
+    @Test
+    fun `four versions orphaned by old re-pairs are recovered on both devices and pushed again by their authors`() {
+        server.hoard(edits = true)
+        val phone = device("Phone")
+        val tablet = device("Tablet")
+        phone.oldBuild()
+        tablet.oldBuild()
+        val oldPhone = server.devices.getValue(phone.key)
+        val oldTablet = server.devices.getValue(tablet.key)
+        val fingerprints = (1..4).map { nas("DSC0900$it.ARW", 40 + it) }
+        val items = fingerprints.map { server.culling.addItem(listOf(it)) }
+        phone.sync()
+        tablet.sync()
+
+        // Phone: versions 0 and 1; tablet: 2 and 3. Exposure i + 1 tenths.
+        val authors = listOf(phone, phone, tablet, tablet)
+        val uuids = fingerprints.mapIndexed { i, fp ->
+            val author = authors[i]
+            val photo = author.photoByFingerprint(fp)!!
+            author.now += 1_000
+            author.editExposure(photo.id, (i + 1) / 10f)
+            author.legacyPushVersion(photo.id).also {
+                putEdit(it, items[i], server.devices.getValue(author.key), author.now)
+            }
+        }
+        for (i in uuids.indices) {
+            assertThat(
+                server.record("photo", authors[i].photoByFingerprint(fingerprints[i])!!.uuid),
+            ).isNull()
+        }
+        // The other device pushes its own photo record for each (a cull, a hand-off: anything that marks it).
+        fingerprints.forEachIndexed { i, fp ->
+            val other = if (authors[i] === phone) tablet else phone
+            other.markPhotoDirty(other.photoByFingerprint(fp)!!.id)
+        }
+        phone.sync()
+        tablet.sync()
+        phone.sync()
+        assertThat(phone.inbox().map { it.recordId }).containsExactly(uuids[2], uuids[3])
+        assertThat(tablet.inbox().map { it.recordId }).containsExactly(uuids[0], uuids[1])
+
+        // Both pair again on the old build: all four parked on both, no edit shown.
+        val newPhone = phone.oldRePair()
+        val newTablet = tablet.oldRePair()
+        phone.sync()
+        for (device in listOf(phone, tablet)) {
+            assertThat(device.inbox().map { it.recordId }).containsExactlyElementsIn(uuids)
+            for (fp in fingerprints) assertThat(device.exposure(device.photoByFingerprint(fp)!!.id)).isEqualTo(0f)
+        }
+        server.revoke(oldPhone)
+        server.revoke(oldTablet)
+        val revs = uuids.map { server.record("version", it)!!.rev }
+
+        // This build, first and second sync on each: all four applied locally, nothing pushed (no proof yet).
+        phone.newBuild()
+        tablet.newBuild()
+        repeat(2) {
+            phone.now += 60_000
+            phone.sync()
+            tablet.now += 60_000
+            tablet.sync()
+        }
+        for (device in listOf(phone, tablet)) {
+            fingerprints.forEachIndexed { i, fp ->
+                assertThat(device.exposure(device.photoByFingerprint(fp)!!.id)).isEqualTo((i + 1) / 10f)
+            }
+            assertThat(device.inbox()).isEmpty()
+            assertThat(device.pending()).isEqualTo(0)
+        }
+        assertThat(uuids.map { server.record("version", it)!!.rev }).isEqualTo(revs)
+        assertThat(uuids.map { server.record("version", it)!!.deviceId })
+            .containsExactly(oldPhone, oldPhone, oldTablet, oldTablet).inOrder()
+        assertThat(server.copies()).isEmpty()
+
+        // "Same phone?" / "same tablet?": each new device joins its old physical device (Settings > Sync > This
+        // device).
+        server.culling.physical[newPhone] = oldPhone
+        server.culling.physical[newTablet] = oldTablet
+        phone.now += 60_000
+        phone.sync()
+        tablet.now += 60_000
+        tablet.sync()
+        phone.now += 60_000
+        phone.sync()
+        uuids.forEachIndexed { i, uuid ->
+            val record = server.record("version", uuid)!!
+            val author = authors[i]
+            assertThat(record.deviceId).isEqualTo(if (author === phone) newPhone else newTablet)
+            assertThat(record.rev).isGreaterThan(revs[i])
+            val data = record.data!!.jsonObject
+            assertThat(data["photoId"]!!.jsonPrimitive.content)
+                .isEqualTo(author.photoByFingerprint(fingerprints[i])!!.uuid)
+            assertThat(data["photoFingerprint"]!!.jsonPrimitive.content).isEqualTo(fingerprints[i])
+        }
+        for (device in listOf(phone, tablet)) {
+            fingerprints.forEachIndexed { i, fp ->
+                assertThat(device.exposure(device.photoByFingerprint(fp)!!.id)).isEqualTo((i + 1) / 10f)
+                assertThat(
+                    device.versions(device.photoByFingerprint(fp)!!.id).map {
+                        it.uuid
+                    },
+                ).containsExactly(uuids[i])
+            }
+            assertThat(device.inbox()).isEmpty()
+            assertThat(device.pending()).isEqualTo(0)
+        }
+        assertThat(server.copies()).isEmpty()
+        // Settled: nothing goes up again.
+        val settled = uuids.map { server.record("version", it)!!.rev }
+        phone.sync()
+        tablet.sync()
+        assertThat(uuids.map { server.record("version", it)!!.rev }).isEqualTo(settled)
+    }
+
+    @Test
+    fun `a parked version no edited preview names stays parked and is looked for once a day at most`() {
+        server.hoard(edits = true)
+        val phone = device("Phone")
+        val tablet = device("Tablet")
+        phone.oldBuild()
+        val fingerprint = nas("DSC09101.ARW", 51)
+        server.culling.addItem(listOf(fingerprint))
+        phone.sync()
+        tablet.sync()
+        val onPhone = phone.photoByFingerprint(fingerprint)!!
+        phone.editExposure(onPhone.id, 0.3f)
+        val uuid = phone.legacyPushVersion(onPhone.id)
+        // No preview went up for it.
+        tablet.sync()
+        assertThat(tablet.inbox().map { it.recordId }).containsExactly(uuid)
+        val afterFirst = server.itemLookups
+        assertThat(afterFirst).isGreaterThan(0)
+        assertThat(runBlocking { tablet.db.metaDao().get(SyncStore.KEY_RECOVERY_MISSES) }).isNotNull()
+
+        // Not again the same day.
+        repeat(3) {
+            tablet.now += 60 * 60 * 1000L
+            tablet.sync()
+        }
+        assertThat(server.itemLookups).isEqualTo(afterFirst)
+        // A day after the miss: one pass again; then two days, then four.
+        tablet.now += 24 * 60 * 60 * 1000L
+        tablet.sync()
+        val afterSecond = server.itemLookups
+        assertThat(afterSecond).isGreaterThan(afterFirst)
+        tablet.now += 24 * 60 * 60 * 1000L
+        tablet.sync()
+        assertThat(server.itemLookups).isEqualTo(afterSecond)
+        assertThat(tablet.inbox().map { it.recordId }).containsExactly(uuid)
+        assertThat(tablet.exposure(tablet.photoByFingerprint(fingerprint)!!.id)).isEqualTo(0f)
+
+        // The preview shows up later: found on the next due pass, applied, not pushed (another device made it).
+        putEdit(uuid, server.culling.items.keys.single(), server.devices.getValue(phone.key), phone.now)
+        val rev = server.record("version", uuid)!!.rev
+        tablet.now += 2 * 24 * 60 * 60 * 1000L
+        tablet.sync()
+        assertThat(tablet.exposure(tablet.photoByFingerprint(fingerprint)!!.id)).isEqualTo(0.3f)
+        assertThat(tablet.inbox()).isEmpty()
+        assertThat(server.record("version", uuid)!!.rev).isEqualTo(rev)
+        assertThat(server.copies()).isEmpty()
+    }
+
+    @Test
+    fun `unpairing keeps edited Server photos and the next pairing pushes what the server did not hold`() {
+        val phone = device("Phone")
+        val synced = nas("DSC09201.ARW", 61)
+        val unsynced = nas("DSC09202.ARW", 62)
+        val plain = nas("DSC09203.ARW", 63)
+        phone.sync()
+        phone.editExposure(phone.photoByFingerprint(synced)!!.id, 0.5f)
+        phone.sync()
+        val syncedUuid = phone.versions(phone.photoByFingerprint(synced)!!.id).single().uuid
+        assertThat(server.record("version", syncedUuid)).isNotNull()
+        phone.editExposure(phone.photoByFingerprint(unsynced)!!.id, -0.5f)
+        val unsyncedUuid = phone.versions(phone.photoByFingerprint(unsynced)!!.id).single().uuid
+
+        runBlocking {
+            phone.store.forget()
+            phone.engine.resetCursors()
+        }
+        // Edited Server photos stay with their edits; the others go.
+        assertThat(phone.exposure(phone.photoByFingerprint(synced)!!.id)).isEqualTo(0.5f)
+        assertThat(phone.exposure(phone.photoByFingerprint(unsynced)!!.id)).isEqualTo(-0.5f)
+        assertThat(phone.photoByFingerprint(plain)).isNull()
+
+        phone.rekey(server.addDevice("Phone"))
+        phone.now += 1_000
+        phone.sync()
+        assertThat(server.record("version", unsyncedUuid)).isNotNull()
+        assertThat(server.copies()).isEmpty()
+        assertThat(phone.pending()).isEqualTo(0)
+        assertThat(phone.exposure(phone.photoByFingerprint(synced)!!.id)).isEqualTo(0.5f)
+
+        val tablet = device("Tablet")
+        tablet.sync()
+        assertThat(tablet.exposure(tablet.photoByFingerprint(synced)!!.id)).isEqualTo(0.5f)
+        assertThat(tablet.exposure(tablet.photoByFingerprint(unsynced)!!.id)).isEqualTo(-0.5f)
+        assertThat(tablet.inbox()).isEmpty()
+        assertThat(server.copies()).isEmpty()
     }
 
     /** The server's record of [versionUuid] as 0.8 left it: without the photo's main-file fingerprint. */

@@ -42,6 +42,8 @@ class FileDocumentTree(private val root: File) : DocumentTree {
         return entry(f)
     }
 
+    override fun delete(documentId: String): Boolean = file(documentId).delete()
+
     override fun uri(documentId: String): Uri = Uri.parse("file://${file(documentId).path}")
 
     private fun entry(f: File): DocumentEntry {

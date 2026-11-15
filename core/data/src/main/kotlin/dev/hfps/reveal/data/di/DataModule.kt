@@ -27,9 +27,10 @@ import dev.hfps.reveal.data.handoff.LocalPreviews
 import dev.hfps.reveal.data.handoff.ServerItems
 import dev.hfps.reveal.data.index.LibraryIndexer
 import dev.hfps.reveal.data.library.DocumentTreeFactory
-import dev.hfps.reveal.data.library.EditSidecars
 import dev.hfps.reveal.data.library.LibraryRepository
 import dev.hfps.reveal.data.library.SidecarSync
+import dev.hfps.reveal.data.library.XmpExport
+import dev.hfps.reveal.data.library.XmpGrants
 import dev.hfps.reveal.data.mask.AiMasks
 import dev.hfps.reveal.data.model.SourceKind
 import dev.hfps.reveal.data.preset.AppBuiltInPresets
@@ -134,14 +135,12 @@ object DataModule {
     fun provideHandoffs(
         @ApplicationContext context: Context,
         database: RevealDatabase,
-        sidecars: SidecarSync,
         previewer: HandoffPreviewer,
         server: ServerItems,
     ): HandoffRepository = HandoffRepository(
         context.contentResolver,
         database,
         LibraryIndexer(database),
-        sidecars = sidecars,
         previewer = previewer,
         server = server,
     )
@@ -152,7 +151,6 @@ object DataModule {
         @ApplicationContext context: Context,
         database: RevealDatabase,
         trees: DocumentTreeFactory,
-        xmp: XmpPreferences,
     ): SidecarSync {
         val version = runCatching {
             context.packageManager.getPackageInfo(context.packageName, 0).versionName
@@ -161,25 +159,34 @@ object DataModule {
             database,
             trees,
             "Reveal $version".trim(),
-            writeEdits = { xmp.writeEdits.value },
+            // Only Export XMP calls the writer (ADR 0026): it always writes the edit with the culling fields.
+            writeEdits = { true },
             device = Build.MODEL.orEmpty(),
         )
     }
 
-    /** The XMP switches of Settings (ADR 0026). */
+    /** Export XMP: the one explicit writer of sidecars (ADR 0026). */
+    @Provides
+    @Singleton
+    fun provideXmpExport(
+        @ApplicationContext context: Context,
+        database: RevealDatabase,
+        sidecars: SidecarSync,
+    ): XmpExport = XmpExport(database, sidecars) { SafDocumentTree(context.contentResolver, it.toUri()) }
+
+    /** Export XMP's folder grants (ADR 0026 "Export XMP"). */
+    @Provides
+    @Singleton
+    fun provideXmpGrants(
+        @ApplicationContext context: Context,
+        database: RevealDatabase,
+        exportPreferences: ExportPreferences,
+    ): XmpGrants = XmpGrants(context.contentResolver, database) { exportPreferences.folderUri }
+
+    /** The XMP switch of Settings (ADR 0026). */
     @Provides
     @Singleton
     fun provideXmpPreferences(@ApplicationContext context: Context): XmpPreferences = XmpPreferences(context)
-
-    /** Writes edited photos' sidecars after their recipe changes (ADR 0026); started by the application. */
-    @Provides
-    @Singleton
-    fun provideEditSidecars(
-        database: RevealDatabase,
-        sidecars: SidecarSync,
-        xmp: XmpPreferences,
-        @DataScope scope: CoroutineScope,
-    ): EditSidecars = EditSidecars(database, sidecars, xmp.writeEdits, isEnabled = { xmp.writeEdits.value }, scope)
 
     @Provides
     @Singleton
@@ -204,6 +211,8 @@ object DataModule {
         previews = previews,
         readEdits = { xmp.readEdits.value },
         grants = readGrants(context),
+        // The debug build's synthetic documents provider (app/src/debug) needs no grant; absent in release.
+        grantFreeAuthorities = setOf("${context.packageName}.synthetic"),
     )
 
     @Provides

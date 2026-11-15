@@ -85,7 +85,6 @@
     <string name="library_action_preset">Apply preset</string>
     <string name="library_action_export">Export</string>
     <string name="library_rating_none">No stars</string>
-    <string name="library_saved_database_only">Saved in Reveal only: the folder is read-only, so no XMP sidecar was written.</string>
     <plurals name="library_removed">
         <item quantity="one">%1$d photo removed from the library. The file stays on the device.</item>
         <item quantity="other">%1$d photos removed from the library. The files stay on the device.</item>
@@ -358,4 +357,38 @@
         <item quantity="one">%1$d photo could not be found on the server.</item>
         <item quantity="other">%1$d photos could not be found on the server.</item>
     </plurals>
+    <!-- Export XMP (W4, ADR 0026): the only way sidecars are written -->
+    <string name="library_action_export_xmp">Export XMP…</string>
+    <string name="library_folder_export_xmp">Export XMP for this folder</string>
+    <plurals name="library_menu_export_xmp">
+        <item quantity="one">Export XMP for this %d photo</item>
+        <item quantity="other">Export XMP for these %d photos</item>
+    </plurals>
+    <string name="xmp_export_title">Export XMP</string>
+    <plurals name="xmp_export_for">
+        <item quantity="one">Write the .xmp sidecar of %d photo</item>
+        <item quantity="other">Write the .xmp sidecars of %d photos</item>
+    </plurals>
+    <string name="xmp_export_next">Next to the photos</string>
+    <string name="xmp_export_next_note">A .xmp beside each file, in the folder it is in.</string>
+    <string name="xmp_export_next_pick">Next to the photos: pick “%1$s”</string>
+    <string name="xmp_export_next_pick_note">Reveal cannot write to this folder yet. Pick it once to write there; Reveal keeps the access only until the export ends.</string>
+    <string name="xmp_export_choose">Choose a folder…</string>
+    <string name="xmp_export_choose_note">Flat .xmp files, named after each photo, in a folder you pick.</string>
+    <string name="xmp_export_choose_only_note">Flat .xmp files, named after each photo, in a folder you pick. Photos that only the server holds, or that other apps handed over, go here.</string>
+    <string name="xmp_export_what">Ratings, labels, flags and the edit. A sidecar that is not valid XMP is never overwritten.</string>
+    <string name="xmp_export_wrong_folder">That folder does not hold these photos. Nothing was written: pick the photos’ folder (or one above it).</string>
+    <string name="xmp_export_cancel">Cancel</string>
+    <string name="xmp_export_channel">XMP export</string>
+    <plurals name="xmp_export_progress">
+        <item quantity="one">Exporting XMP: %1$d of %2$d photo</item>
+        <item quantity="other">Exporting XMP: %1$d of %2$d photos</item>
+    </plurals>
+    <plurals name="xmp_export_queued">
+        <item quantity="one">Exporting XMP for %d photo…</item>
+        <item quantity="other">Exporting XMP for %d photos…</item>
+    </plurals>
+    <string name="xmp_export_done">XMP exported. Written: %1$d</string>
+    <string name="xmp_export_cancelled">XMP export stopped. Written: %1$d</string>
+    <string name="xmp_export_skipped">Skipped. Malformed sidecar: %1$d. Could not be written: %2$d.</string>
 </resources>

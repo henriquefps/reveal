@@ -149,6 +149,21 @@ class DateIndex(
     }
 }
 
+/** What Export XMP is asked for (ADR 0026 "Export XMP"). */
+sealed interface XmpExportRequest {
+    /** The selected photos. */
+    data object Selection : XmpExportRequest
+
+    /** Every photo of one added folder (Manage folders ⋯). */
+    data class Folder(val sourceId: Long) : XmpExportRequest
+
+    /** Every photo the current filters show (the top bar ⋯). */
+    data object Results : XmpExportRequest
+}
+
+/** The open Export XMP sheet: the photos it covers and what the destinations may be. */
+data class XmpExportSheetState(val photoIds: List<Long>, val scope: dev.hfps.reveal.data.library.XmpExportScope)
+
 /** The grid's entries and, when it is grouped by date, its [DateIndex]. */
 @Immutable
 data class GridModel(val entries: List<GridEntry>, val dateIndex: DateIndex? = null)
@@ -210,6 +225,8 @@ data class LibraryUiState(
     val conflictChoice: ConflictChoice? = null,
     /** Asking before deleting the selected virtual copies (their edits go too); null = not asking. */
     val deleteCopiesPrompt: List<Long>? = null,
+    /** The Export XMP destination sheet (ADR 0026), null when closed. */
+    val xmpExport: XmpExportSheetState? = null,
 ) {
     val filters: PhotoFilters get() = query.filters
 
@@ -309,6 +326,8 @@ data class LibraryActions(
     val onExport: () -> Unit = {},
     /** Opens the preset chooser for the selected photos (docs/adr/0019 "Batch"). */
     val onApplyPreset: () -> Unit = {},
+    /** Export XMP (ADR 0026): opens the destination sheet for the selection, a folder or the filter's results. */
+    val onExportXmp: (XmpExportRequest) -> Unit = {},
     /** Deletes the sync conflict copies of the selected photos, here and on the other devices. */
     val onDeleteConflictCopies: () -> Unit = {},
     /** A virtual copy of every selected cell's edit (docs/adr/0025). */

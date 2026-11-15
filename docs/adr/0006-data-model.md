@@ -368,3 +368,16 @@ before); everything new is derived from it off the main thread.
     W3/D month + day headers 21.5 / 15.6; month headers only 14.1 / 10.6; no headers (file-name sort) 8.9 / 8.0.
     A library with a day header every row (a photo every 9 hours) is the worst case for day headers; the default
     stays month + day as before. The one-day library of the first W3/D measurement was not comparable.
+
+## Amendment W4: culling is no longer written back automatically (0.9.0)
+
+Where this ADR says a rating, flag or label is written to the XMP sidecar, read it as: stored in the database (and sent
+to hoard-server, ADR 0027). Reveal writes no sidecar by itself any more; the "Saved in Reveal only" message is gone.
+Sidecars are written only by "Export XMP" (ADR 0026 "Amendment W4"), an explicit action. Reading sidecars (the walk,
+imports, hidden names) is unchanged, and folders are added with a READ grant only.
+
+A sidecar another app creates later no longer overrides what Reveal holds: on the **first read** of a sidecar (never
+read at that path, or its record dropped because the file disappeared) only the fields that hold no value are filled
+(non-default: rating != 0, flag != none, label non-empty; an explicit 0 stars is no value); later reads of the same file
+import the fields that changed since the last read (LWW by mtime). The rule is shared with Hoard and hoard-server; the
+full wording is ADR 0026 "First read of a sidecar".

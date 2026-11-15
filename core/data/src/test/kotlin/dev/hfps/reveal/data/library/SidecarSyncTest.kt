@@ -17,6 +17,7 @@ import dev.hfps.reveal.data.model.CullingField
 import dev.hfps.reveal.data.model.PhotoQuery
 import dev.hfps.reveal.data.model.PickFlag
 import dev.hfps.reveal.data.model.SourceState
+import dev.hfps.reveal.data.storage.DocumentTree
 import dev.hfps.reveal.data.synthetic.SyntheticExif
 import dev.hfps.reveal.data.synthetic.SyntheticShoot
 import dev.hfps.reveal.data.xmp.SidecarCulling
@@ -27,6 +28,7 @@ import dev.hfps.reveal.pipeline.recipe.Light
 import dev.hfps.reveal.pipeline.recipe.Recipe
 import java.io.File
 import java.time.OffsetDateTime
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Before
@@ -131,6 +133,42 @@ class SidecarSyncTest {
         assertThat(File(root, "A.xmp").exists()).isFalse()
     }
 
+    /** A provider whose writes fail after the document was created ([failure] thrown from `writeBytes`). */
+    private class FailingWrites(root: File, private val failure: () -> Throwable) :
+        DocumentTree by FileDocumentTree(root) {
+        override fun writeBytes(documentId: String, bytes: ByteArray) = throw failure()
+    }
+
+    @Test
+    fun `a write cancelled or refused after the create leaves no empty sidecar and the record as it was`() = runTest {
+        File(root, "A.JPG").writeBytes(SyntheticShoot.jpeg(SyntheticShoot.markerOnlyJpeg(10, 10), SyntheticExif()))
+        val sourceId = source(writable = true)
+        LibraryIndexer(db).index(sourceId, FileDocumentTree(root))
+        val id = db.photoDao().rows(PhotoQuerySql.toQuery(PhotoQuery())).single().id
+        db.photoDao().setRating(listOf(id), 4)
+
+        val refused = SidecarSync(db, { FailingWrites(root) { java.io.IOException("refused") } }, "Reveal 0.9.0")
+        assertThat(refused.write(listOf(id))).isEqualTo(SidecarOutcome(0, 1))
+        assertThat(File(root, "A.xmp").exists()).isFalse()
+        assertThat(db.photoDao().get(id)!!.xmpDocumentId).isNull()
+
+        val cancelled = SidecarSync(db, { FailingWrites(root) { CancellationException("cancel") } }, "Reveal 0.9.0")
+        val thrown = runCatching { cancelled.write(listOf(id)) }.exceptionOrNull()
+        assertThat(thrown).isInstanceOf(CancellationException::class.java)
+        assertThat(File(root, "A.xmp").exists()).isFalse()
+        assertThat(db.photoDao().get(id)!!.xmpDocumentId).isNull()
+
+        // Into a chosen folder: the document created for the photo is deleted too.
+        val out = temp.newFolder("out")
+        val write = sync().writeOneInto(id, FailingWrites(out) { java.io.IOException("full") }, "")
+        assertThat(write.outcome).isEqualTo(SidecarOutcome(0, 1))
+        assertThat(out.list().orEmpty().toList()).isEmpty()
+
+        // And the next write works as if nothing happened.
+        assertThat(sync().write(listOf(id))).isEqualTo(SidecarOutcome(1, 0))
+        assertThat(XmpReader.read(File(root, "A.xmp").readBytes())).isEqualTo(XmpFields(rating = 4))
+    }
+
     @Test
     fun `a malformed existing sidecar is not overwritten`() = runTest {
         File(root, "A.JPG").writeBytes(SyntheticShoot.jpeg(SyntheticShoot.markerOnlyJpeg(10, 10), SyntheticExif()))
@@ -139,7 +177,7 @@ class SidecarSyncTest {
         LibraryIndexer(db).index(sourceId, FileDocumentTree(root))
         val id = db.photoDao().rows(PhotoQuerySql.toQuery(PhotoQuery())).single().id
         db.photoDao().setRating(listOf(id), 5)
-        assertThat(sync().write(listOf(id))).isEqualTo(SidecarOutcome(0, 1))
+        assertThat(sync().write(listOf(id))).isEqualTo(SidecarOutcome(0, 0, 1))
         assertThat(File(root, "A.xmp").readText()).isEqualTo("<x:xmpmeta broken")
     }
 

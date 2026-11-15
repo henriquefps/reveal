@@ -5,8 +5,9 @@ service and no server of its own: it talks to the network only in the two cases 
 
 ## Photos
 
-- Originals are never modified: edits are recipes in the app's database (and, when you allow it, ratings in XMP
-  sidecars next to the photos).
+- Originals are never modified: edits are recipes in the app's database. Reveal writes no `.xmp` sidecar on its own,
+  anywhere (phone folders, network shares, hand-offs): only "Export XMP", which you start, writes them, to the place
+  you choose.
 - Every analysis runs on the device, offline: Auto, face and subject detection (an open model run in Reveal's own
   code), lens profiles, previews. Nothing about a photo leaves the device for it.
 - AI masks (subject, background, sky, people and their parts, eyes, lips) are computed on the device by models that

@@ -4,12 +4,14 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.Context
 import android.content.pm.ServiceInfo
+import android.os.Build
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.work.CoroutineWorker
 import androidx.work.ExistingWorkPolicy
 import androidx.work.ForegroundInfo
 import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.WorkInfo
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import androidx.work.workDataOf
@@ -30,6 +32,8 @@ import dev.hfps.reveal.pipeline.recipe.HistoryAction
 import java.io.File
 import java.util.UUID
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -105,6 +109,12 @@ class PresetBatchWorker(context: Context, params: WorkerParameters) : CoroutineW
             setProgress(workDataOf(KEY_DONE to job.done, KEY_TOTAL to total))
             notifications.progress(id, job.done, total, preset.name)
         }
+        // Only the user's Cancel ends the job early; a stop by the system keeps it for WorkManager's next run (each
+        // step is recorded, so it resumes at the next 25 photos).
+        if (isStopped && !cancelledByUser()) {
+            Log.i(TAG, "batch $jobId stopped by the system at ${job.done}/$total: kept")
+            return Result.retry()
+        }
         graph.presets().markUsed(preset.id)
         jobs.delete(jobId)
         Log.i(TAG, "batch $jobId: ${preset.name} on ${job.done}/$total photos, $changed changed")
@@ -158,6 +168,22 @@ class PresetBatchWorker(context: Context, params: WorkerParameters) : CoroutineW
             }
         }
         return changed
+    }
+
+    /**
+     * Whether the stop was the user's Cancel (or the app's): the stop reason on API 31+, below it the work's state
+     * (WorkManager marks it CANCELLED before stopping it; a stop by the system leaves it to be run again).
+     */
+    private suspend fun cancelledByUser(): Boolean = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        stopReason == WorkInfo.STOP_REASON_CANCELLED_BY_APP
+    } else {
+        // Asked after the coroutine was cancelled too.
+        withContext(NonCancellable) {
+            runCatching {
+                WorkManager.getInstance(applicationContext).getWorkInfoByIdFlow(id).first()?.state ==
+                    WorkInfo.State.CANCELLED
+            }.getOrDefault(false)
+        }
     }
 
     private fun foreground(done: Int, total: Int, name: String): ForegroundInfo = ForegroundInfo(

@@ -57,6 +57,12 @@ interface DocumentTree {
     /** Creates a document in a directory and returns its row. The provider may adjust the name. */
     fun create(parentDocumentId: String, name: String, mimeType: String): DocumentEntry
 
+    /**
+     * Deletes a document this app created (an XMP sidecar whose write did not finish). False when it could not be
+     * deleted or the tree cannot delete.
+     */
+    fun delete(documentId: String): Boolean = false
+
     /** The content URI of a document (to hand to the editor or another app). */
     fun uri(documentId: String): Uri
 }
@@ -111,6 +117,9 @@ class SafDocumentTree(
         val id = DocumentsContract.getDocumentId(created)
         return stat(id) ?: DocumentEntry(id, name, mimeType, 0, System.currentTimeMillis())
     }
+
+    override fun delete(documentId: String): Boolean =
+        runCatching { DocumentsContract.deleteDocument(resolver, uri(documentId)) }.getOrDefault(false)
 
     override fun uri(documentId: String): Uri = DocumentsContract.buildDocumentUriUsingTree(treeUri, documentId)
 

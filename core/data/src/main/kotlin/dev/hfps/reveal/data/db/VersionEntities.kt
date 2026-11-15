@@ -114,6 +114,10 @@ interface VersionDao {
 
     // ---- export presets
 
+    /** Export presets whose options mention [text] (a folder's tree URI still in use by one). */
+    @Query("SELECT COUNT(*) FROM export_presets WHERE instr(options_json, :text) > 0")
+    suspend fun exportPresetsMentioning(text: String): Int
+
     @Query("SELECT * FROM export_presets ORDER BY position, id")
     fun observeExportPresets(): Flow<List<ExportPresetEntity>>
 

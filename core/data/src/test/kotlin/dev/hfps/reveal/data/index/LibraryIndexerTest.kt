@@ -12,6 +12,7 @@ import dev.hfps.reveal.data.db.CURRENT_METADATA_VERSION
 import dev.hfps.reveal.data.db.PhotoQuerySql
 import dev.hfps.reveal.data.db.RevealDatabase
 import dev.hfps.reveal.data.db.SourceEntity
+import dev.hfps.reveal.data.library.SidecarSync
 import dev.hfps.reveal.data.model.CullingFilter
 import dev.hfps.reveal.data.model.MetadataState
 import dev.hfps.reveal.data.model.PhotoFilters
@@ -235,6 +236,86 @@ class LibraryIndexerTest {
         index()
         assertThat(rows().first { it.name == "DSC00001.ARW" }.rating).isEqualTo(5)
         assertThat(db.photoDao().get(firstIds.getValue("DSC00001.ARW"))!!.xmpDocumentId).isNull()
+    }
+
+    private fun sidecarFile(name: String, text: String, at: Long) = File(root, name).apply {
+        writeText(text)
+        setLastModified(at)
+    }
+
+    @Test
+    fun `first read of a sidecar fills only the fields that hold no value`() = runTest {
+        jpeg("DSC00001.JPG", "2026:08:07 10:00:00")
+        jpeg("DSC00002.JPG", "2026:08:07 10:00:01")
+        jpeg("DSC00003.JPG", "2026:08:07 10:00:02")
+        index()
+        val ids = rows().associate { it.name to it.id }
+        // DSC00001 has 0 stars (no value); DSC00002 was rated 5 in Reveal; DSC00003 has no flag.
+        db.photoDao().setCulling(ids.getValue("DSC00002.JPG"), 5, null, PickFlag.NONE)
+
+        // darktable creates its sidecars later, with its defaults; the mtime is newer than any decision.
+        val later = System.currentTimeMillis() + 60_000
+        sidecarFile("DSC00001.JPG.xmp", SyntheticShoot.sidecar(rating = 3, creatorTool = "darktable"), later)
+        sidecarFile(
+            "DSC00002.JPG.xmp",
+            SyntheticShoot.sidecar(rating = 1, label = "Red", creatorTool = "darktable"),
+            later,
+        )
+        sidecarFile("DSC00003.JPG.xmp", SyntheticShoot.sidecar(rating = -1, creatorTool = "darktable"), later)
+        index()
+        val first = rows().associateBy { it.name }
+        assertThat(first.getValue("DSC00001.JPG").rating).isEqualTo(3)
+        assertThat(first.getValue("DSC00002.JPG").rating).isEqualTo(5)
+        assertThat(first.getValue("DSC00002.JPG").label).isEqualTo("Red")
+        assertThat(first.getValue("DSC00003.JPG").flag).isEqualTo(PickFlag.REJECT)
+
+        // A later change in the same file is a decision made there: imported (LWW by mtime).
+        sidecarFile(
+            "DSC00002.JPG.xmp",
+            SyntheticShoot.sidecar(rating = 2, label = "Red", creatorTool = "darktable"),
+            later + 1_000,
+        )
+        index()
+        assertThat(rows().first { it.name == "DSC00002.JPG" }.rating).isEqualTo(2)
+    }
+
+    @Test
+    fun `a sidecar removed and created again is a first read again`() = runTest {
+        jpeg("DSC00001.JPG", "2026:08:07 10:00:00")
+        index()
+        val id = rows().single().id
+        sidecarFile("DSC00001.JPG.xmp", SyntheticShoot.sidecar(rating = 3), 1_000_000)
+        index()
+        assertThat(rows().single().rating).isEqualTo(3)
+
+        File(root, "DSC00001.JPG.xmp").delete()
+        index()
+        assertThat(db.cullingDao().sidecar(id)).isNull()
+
+        // Created again: the stars Reveal holds stay, the label it has none for is filled.
+        sidecarFile("DSC00001.JPG.xmp", SyntheticShoot.sidecar(rating = 2, label = "Blue"), 2_000_000)
+        index()
+        assertThat(rows().single().rating).isEqualTo(3)
+        assertThat(rows().single().label).isEqualTo("Blue")
+    }
+
+    @Test
+    fun `a sidecar Export XMP wrote is not imported on the next scan`() = runTest {
+        jpeg("DSC00001.JPG", "2026:08:07 10:00:00")
+        index()
+        val id = rows().single().id
+        db.photoDao().setCulling(id, 4, "Green", PickFlag.PICK)
+        val tree = FileDocumentTree(root)
+        val outcome = SidecarSync(db, { tree }, "Reveal test").write(listOf(id))
+        assertThat(outcome.written).isEqualTo(1)
+        // Changed in Reveal after the export: the scan must not read the exported values back.
+        db.photoDao().setCulling(id, 2, null, PickFlag.NONE)
+
+        val report = index()
+        assertThat(report.sidecarsRead).isEqualTo(0)
+        assertThat(rows().single().rating).isEqualTo(2)
+        assertThat(rows().single().label).isNull()
+        assertThat(db.cullingDao().sidecar(id)?.rating).isEqualTo(4)
     }
 
     @Test

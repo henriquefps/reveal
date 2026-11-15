@@ -39,7 +39,6 @@ import dev.hfps.reveal.pipeline.recipe.Treatment
 import dev.hfps.reveal.pipeline.recipe.WbMode
 import java.io.File
 import java.time.OffsetDateTime
-import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Before
@@ -59,7 +58,7 @@ class SidecarEditsTest {
     private lateinit var edits: EditRepository
     private var clock = 1_778_000_000_000L
     private var sourceId = 0L
-    private val writeOn = MutableStateFlow(true)
+    private var mark = 0L
     private var readOn = true
 
     @Before
@@ -82,11 +81,23 @@ class SidecarEditsTest {
 
     private fun sync() = SidecarSync(db, {
         tree()
-    }, "Reveal 1.0.0", writeEdits = { writeOn.value }, device = "Pixel 9") {
+    }, "Reveal 1.0.0", writeEdits = { true }, device = "Pixel 9") {
         OffsetDateTime.parse("2026-11-13T10:00:00Z")
     }
 
-    private fun writer() = EditSidecars(db, sync(), writeOn, { writeOn.value }, kotlinx.coroutines.test.TestScope())
+    /**
+     * What Export XMP does for edits (the only writer since 0.9.0): every master changed since the last call goes
+     * through [SidecarSync.write]; the app has no automatic writer any more.
+     */
+    private fun writer() = object {
+        suspend fun flush(): Int {
+            val changed = db.editDao().changedMasters(mark)
+            if (changed.isEmpty()) return 0
+            val written = sync().write(changed.map { it.photoId }.distinct(), editsOnly = true).written
+            mark = changed.maxOf { it.updatedAt }
+            return written
+        }
+    }
 
     private suspend fun index(): IndexReport = LibraryIndexer(db, { readOn }) { clock }.index(sourceId, tree())
 
@@ -234,29 +245,13 @@ class SidecarEditsTest {
     }
 
     @Test
-    fun `turning the setting off stops the writes, turning it on writes what changed meanwhile`() = runTest {
-        val id = shoot()
-        writeOn.value = false
-        commit(version(id), Recipe(light = Light(contrast = 20f)))
-        assertThat(writer().flush()).isEqualTo(0)
-        assertThat(File(root, "DSC00001.xmp").exists()).isFalse()
-        // Ratings still travel.
-        db.photoDao().setRating(listOf(id), 4)
-        sync().write(listOf(id))
-        assertThat(String(File(root, "DSC00001.xmp").readBytes())).doesNotContain("reveal:")
-        writeOn.value = true
-        assertThat(writer().flush()).isEqualTo(1)
-        assertThat(String(File(root, "DSC00001.xmp").readBytes())).contains("crs:Contrast2012=\"+20\"")
-    }
-
-    @Test
     fun `an unedited photo gets no sidecar, and a reset updates the one it has`() = runTest {
         val id = shoot()
         val v = version(id)
         commit(v, Recipe(light = Light(exposureEv = 1f)))
         commit(v, Recipe())
         // Only the reset is pending for a new writer: no sidecar was there, none is created for an unedited recipe.
-        db.metaDao().put(dev.hfps.reveal.data.db.MetaEntity(EditSidecars.KEY_WRITTEN, (clock - 500).toString()))
+        mark = clock - 500
         assertThat(writer().flush()).isEqualTo(0)
         assertThat(File(root, "DSC00001.xmp").exists()).isFalse()
         commit(v, Recipe(light = Light(exposureEv = 1f)))

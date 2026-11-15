@@ -88,7 +88,6 @@ class HandoffMergeTest {
         db,
         LibraryIndexer(db) { now },
         handoffTree,
-        sidecars = sidecars(),
     ) { now }
 
     private fun library(previews: LocalPreviews? = null) = LibraryRepository(
@@ -153,62 +152,71 @@ class HandoffMergeTest {
     private fun sidecarOf(stem: String): XmpFields = XmpReader.read(File(folderDir, "$stem.xmp").readBytes())
 
     @Test
-    fun `a hand-off then the folder, one photo, the folder's, with the picks, the edit and its sidecar`() = runTest {
-        val file = File(temp.newFolder("staging"), "DSC00100.JPG")
-        cardFile("DSC00100.JPG").copyTo(file)
-        val version = handOff(media(100, file), HandoffCulling(rating = 3, flag = PickFlag.PICK))
-        edit(version, 0.7f)
-        now = 2_000L
-        addFolder()
-        assertThat(allPhotos()).hasSize(2) // not merged until the folder's fingerprints are compared
+    fun `a hand-off then the folder, one photo, the folder's, with the picks and the edit, no sidecar written`() =
+        runTest {
+            val file = File(temp.newFolder("staging"), "DSC00100.JPG")
+            cardFile("DSC00100.JPG").copyTo(file)
+            val version = handOff(media(100, file), HandoffCulling(rating = 3, flag = PickFlag.PICK))
+            edit(version, 0.7f)
+            now = 2_000L
+            addFolder()
+            assertThat(allPhotos()).hasSize(2) // not merged until the folder's fingerprints are compared
 
-        val report = library().mergeHandoffs(folderId)
+            val report = library().mergeHandoffs(folderId)
 
-        assertThat(report.merged).isEqualTo(1)
-        val photo = allPhotos().single()
-        assertThat(photo.sourceId).isEqualTo(folderId)
-        assertThat(photo.flag).isEqualTo(PickFlag.PICK)
-        assertThat(photo.rating).isEqualTo(3)
-        assertThat(edits.recipe(photo.versionId).light.exposureEv).isEqualTo(0.7f)
-        assertThat(edits.history(photo.versionId).steps).hasSize(1)
-        // The folder's "Picked" filter finds it, "Opened from other apps" still lists it with its batch.
-        val picked = db.photoDao().rows(
-            PhotoQuerySql.toQuery(PhotoQuery(filters = PhotoFilters.folder(folderId).toggle(CullingFilter.PICKED))),
-        )
-        assertThat(picked.map { it.id }).containsExactly(photo.id)
-        assertThat(fromApps().single().id).isEqualTo(photo.id)
-        assertThat(fromApps().single().handoffTitle).isEqualTo("Hoard picks")
-        // Written to the folder's sidecar like any rating change.
-        assertThat(sidecarOf("DSC00100")).isEqualTo(XmpFields(rating = 3, flag = PickFlag.PICK))
-        assertThat(db.photoDao().get(photo.id)!!.xmpDocumentId).isEqualTo("DSC00100.xmp")
-    }
+            assertThat(report.merged).isEqualTo(1)
+            val photo = allPhotos().single()
+            assertThat(photo.sourceId).isEqualTo(folderId)
+            assertThat(photo.flag).isEqualTo(PickFlag.PICK)
+            assertThat(photo.rating).isEqualTo(3)
+            assertThat(edits.recipe(photo.versionId).light.exposureEv).isEqualTo(0.7f)
+            assertThat(edits.history(photo.versionId).steps).hasSize(1)
+            // The folder's "Picked" filter finds it, "Opened from other apps" still lists it with its batch.
+            val picked = db.photoDao().rows(
+                PhotoQuerySql.toQuery(PhotoQuery(filters = PhotoFilters.folder(folderId).toggle(CullingFilter.PICKED))),
+            )
+            assertThat(picked.map { it.id }).containsExactly(photo.id)
+            assertThat(fromApps().single().id).isEqualTo(photo.id)
+            assertThat(fromApps().single().handoffTitle).isEqualTo("Hoard picks")
+            // 0.9.0: nothing writes the folder's sidecar on its own; Export XMP does.
+            assertThat(File(folderDir, "DSC00100.xmp").exists()).isFalse()
+            assertThat(db.photoDao().get(photo.id)!!.xmpDocumentId).isNull()
+        }
 
     @Test
-    fun `the folder then a hand-off with culling values, the folder photo takes them and its sidecar`() = runTest {
-        val card = cardFile("DSC00200.JPG")
-        addFolder()
-        val folderPhoto = allPhotos().single()
+    fun `the folder then a hand-off with culling values, the folder photo takes them and no sidecar is written`() =
+        runTest {
+            val card = cardFile("DSC00200.JPG")
+            addFolder()
+            val folderPhoto = allPhotos().single()
 
-        val version = handOff(media(200, card), HandoffCulling(rating = 4, flag = PickFlag.PICK, label = "Red"))
+            val version = handOff(media(200, card), HandoffCulling(rating = 4, flag = PickFlag.PICK, label = "Red"))
 
-        assertThat(db.photoDao().photoIdOfVersion(version)).isEqualTo(folderPhoto.id)
-        val photo = allPhotos().single()
-        assertThat(photo.flag).isEqualTo(PickFlag.PICK)
-        assertThat(photo.rating).isEqualTo(4)
-        assertThat(photo.label).isEqualTo("Red")
-        assertThat(sidecarOf("DSC00200")).isEqualTo(XmpFields(rating = 4, label = "Red", flag = PickFlag.PICK))
-        assertThat(fromApps().map { it.id }).containsExactly(folderPhoto.id)
-    }
+            assertThat(db.photoDao().photoIdOfVersion(version)).isEqualTo(folderPhoto.id)
+            val photo = allPhotos().single()
+            assertThat(photo.flag).isEqualTo(PickFlag.PICK)
+            assertThat(photo.rating).isEqualTo(4)
+            assertThat(photo.label).isEqualTo("Red")
+            assertThat(File(folderDir, "DSC00200.xmp").exists()).isFalse()
+            assertThat(fromApps().map { it.id }).containsExactly(folderPhoto.id)
+        }
 
     @Test
     fun `a sidecar written on the folder after the previous hand-off wins over values sent again`() = runTest {
         val card = cardFile("DSC00300.JPG")
         addFolder()
         handOff(media(300, card), HandoffCulling(rating = 4))
-        // Someone rates it on the folder afterwards (Reveal or another app writing the sidecar).
+        // Another app creates the folder's sidecar: a first read keeps the 4 stars Reveal holds (ADR 0026).
+        File(folderDir, "DSC00300.xmp").apply {
+            writeBytes(XmpWriter.update(null, XmpFields(rating = 2), "x", "d"))
+            setLastModified(3_000L)
+        }
+        LibraryIndexer(db) { now }.index(folderId, folderTree)
+        assertThat(allPhotos().single().rating).isEqualTo(4)
+        // Someone rates it there afterwards: a change in a file already read.
         now = 5_000L
         File(folderDir, "DSC00300.xmp").apply {
-            writeBytes(XmpWriter.update(readBytes(), XmpFields(rating = 1), "x", "d"))
+            writeBytes(XmpWriter.update(null, XmpFields(rating = 1), "x", "d"))
             setLastModified(4_000L)
         }
         LibraryIndexer(db) { now }.index(folderId, folderTree)
@@ -250,7 +258,8 @@ class HandoffMergeTest {
         val photo = allPhotos().single()
         assertThat(photo.rating).isEqualTo(2) // the sidecar is newer than the hand-off
         assertThat(photo.flag).isEqualTo(PickFlag.PICK) // the folder had no flag
-        assertThat(sidecarOf("DSC00400")).isEqualTo(XmpFields(rating = 2, flag = PickFlag.PICK))
+        // The sidecar stays as it was: the merged pick is in the database only (0.9.0).
+        assertThat(sidecarOf("DSC00400")).isEqualTo(XmpFields(rating = 2))
     }
 
     @Test

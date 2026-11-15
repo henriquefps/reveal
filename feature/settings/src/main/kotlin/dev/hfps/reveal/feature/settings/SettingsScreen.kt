@@ -74,10 +74,7 @@ class SettingsViewModel @Inject constructor(
     private val xmp: XmpPreferences,
 ) : ViewModel() {
     /** Settings → XMP sidecars (ADR 0026). */
-    val writeEdits: StateFlow<Boolean> = xmp.writeEdits
     val readEdits: StateFlow<Boolean> = xmp.readEdits
-
-    fun setWriteEdits(on: Boolean) = xmp.setWriteEdits(on)
 
     fun setReadEdits(on: Boolean) = xmp.setReadEdits(on)
 
@@ -126,7 +123,7 @@ object SettingsTags {
     const val SYNC = "settings_sync"
     const val GALLERY = "settings_gallery"
     const val STORAGE = "settings_storage"
-    const val XMP_WRITE = "settings_xmp_write"
+    const val XMP_NOTE = "settings_xmp_note"
     const val XMP_READ = "settings_xmp_read"
 }
 
@@ -140,7 +137,6 @@ fun SettingsScreen(
 ) {
     val server by viewModel.server.collectAsStateWithLifecycle()
     val gallery by viewModel.galleryAccess.collectAsStateWithLifecycle()
-    val writeEdits by viewModel.writeEdits.collectAsStateWithLifecycle()
     val readEdits by viewModel.readEdits.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
@@ -180,17 +176,12 @@ fun SettingsScreen(
                 permission.launch(GalleryAccess.permissions())
             }
         },
-        xmp = XmpSettings(writeEdits, readEdits, viewModel::setWriteEdits, viewModel::setReadEdits),
+        xmp = XmpSettings(readEdits, viewModel::setReadEdits),
     )
 }
 
 /** The XMP switches as the content shows them (ADR 0026). */
-data class XmpSettings(
-    val writeEdits: Boolean = true,
-    val readEdits: Boolean = true,
-    val onWriteEdits: (Boolean) -> Unit = {},
-    val onReadEdits: (Boolean) -> Unit = {},
-)
+data class XmpSettings(val readEdits: Boolean = true, val onReadEdits: (Boolean) -> Unit = {})
 
 private fun appSettings(context: Context) = Intent(
     Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
@@ -275,21 +266,22 @@ fun SettingsContent(
 /** The XMP sidecar switches (ADR 0026). */
 @Composable
 private fun XmpSection(xmp: XmpSettings) {
-    Eyebrow(stringResource(R.string.settings_section_xmp), Modifier.padding(horizontal = 16.dp))
-    SwitchRow(
-        title = stringResource(R.string.settings_xmp_write),
-        subtitle = stringResource(R.string.settings_xmp_write_note),
-        checked = xmp.writeEdits,
-        onChange = xmp.onWriteEdits,
-        tag = SettingsTags.XMP_WRITE,
-    )
-    SwitchRow(
-        title = stringResource(R.string.settings_xmp_read),
-        subtitle = stringResource(R.string.settings_xmp_read_note),
-        checked = xmp.readEdits,
-        onChange = xmp.onReadEdits,
-        tag = SettingsTags.XMP_READ,
-    )
+    Column {
+        Eyebrow(stringResource(R.string.settings_section_xmp), Modifier.padding(horizontal = 16.dp))
+        SwitchRow(
+            title = stringResource(R.string.settings_xmp_read),
+            subtitle = stringResource(R.string.settings_xmp_read_note),
+            checked = xmp.readEdits,
+            onChange = xmp.onReadEdits,
+            tag = SettingsTags.XMP_READ,
+        )
+        Text(
+            stringResource(R.string.settings_xmp_note),
+            style = RevealTheme.typography.ui,
+            color = RevealTheme.colors.mutedForeground,
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp).testTag(SettingsTags.XMP_NOTE),
+        )
+    }
 }
 
 @Composable

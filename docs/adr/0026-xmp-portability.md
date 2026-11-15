@@ -184,3 +184,84 @@ Fixtures in `core/data/src/test/resources/xmp/` are hand-written in each app's l
 
 An edit-only write no longer touches `xmp:Rating`, `digiKam:PickLabel` or `xmp:Label`, and a sidecar it creates has
 none of them; a sidecar import applies only the culling fields that changed in the file since it was last read.
+
+## Amendment W4: automatic writes removed, Export XMP (0.9.0)
+
+Reveal no longer writes sidecars on its own, anywhere: not for an edit (`EditSidecars` is gone, and with it `meta`
+`xmp.editsWritten`), not for a rating, flag or label change (library, viewer, editor, hand-off culling, merges), not to
+catch a sidecar up (`IndexReport.sidecarsBehind` is informational), not into a hand-off's writable `.xmp` item (those
+are read for import only). Culling and edits travel between apps through hoard-server (ADR 0027, edited previews).
+Reading and importing sidecars is unchanged.
+
+- Settings: the "Write edits to XMP sidecars" switch is gone and its stored `writeEdits` value is removed on first
+  run; "Apply edits from XMP sidecars" stays, with a note that sidecars are written only by Export XMP.
+- Grants: `addSource` and hand-offs take a persistable READ grant only. Grants that already include write are kept
+  (they cannot be taken again once released) and serve Export XMP's "Next to the photos". New folders therefore have
+  `sources.writable = false` unless the provider needs no grant.
+- **Export XMP** (`XmpExport`, `XmpExportWorker`, `XmpExportSheet`) is the only caller of `SidecarSync.write` /
+  `writeInto`. Entry points: the library selection menu, a folder's ⋯ in Manage folders (the whole folder) and the top
+  bar ⋯ ("Export XMP for these N photos": the current filter's results). A sheet asks where:
+  - **Next to the photos** (`<stem>.xmp`, merged into the existing sidecar): offered when every photo is a folder file
+    of an available source Reveal holds a write grant for. When exactly one folder lacks the grant the sheet offers to
+    pick that folder with `ACTION_OPEN_DOCUMENT_TREE` for a one-off write (`XmpDestination.NextToPhotos.oneOff`).
+    The picked tree must be, or contain, that folder (`XmpGrants.covers`: same provider, the source's root document at
+    or below the picked one, else `DocumentsContract.isChildDocument`); otherwise nothing starts and the user is told.
+    Server-only photos and hand-offs never get "next to".
+  - **Choose a folder…**: flat `<stem>.xmp` files in a folder the user picks, for any photo. The photo's own sidecar
+    (read only) is the merge base (a malformed one is left alone and the chosen folder gets a fresh sidecar); a taken
+    name is de-duplicated by the provider, as in the image export, and the file already there is never touched.
+  Content and merge rules are what the automatic writer had: the culling fields and the master version's edit
+  (`reveal:` block + Camera Raw overlap), only fields Reveal knows, never a newer app's `reveal:` block, never a
+  malformed sidecar overwritten. It runs as a WorkManager job (notification with Cancel, job file
+  `files/xmp-jobs/<id>.json`); the result names `SidecarOutcome(written, databaseOnly = unwritable, malformed)`.
+- Grants of picked folders (`XmpGrants`): both pickers take a persisted READ|WRITE grant when the job is queued, so a
+  job resumed after a kill or a reboot still writes; the grant is released when the job ends (done, cancelled by the
+  user, failed) unless another job, a library folder (which keeps its READ, and its WRITE if it had one), the image
+  export's remembered folder or an export preset still uses that tree.
+- Resuming: the job's log (`<id>.log`, append-only) records each photo (`d <photo> <w|u|m>`) and, for a chosen folder,
+  the document created for it (`c <photo> <document>`, written before the document's bytes). A run stopped by the
+  system (`stopReason` other than `STOP_REASON_CANCELLED_BY_APP`) keeps the job and WorkManager runs it again: it skips
+  the photos done and overwrites the documents it created instead of making `(1)` copies; next to the photos the photo
+  records its new sidecar (`photos.xmp_document_id`) before writing it, and an empty document (a write interrupted
+  after the create) is no merge base. Only the user's Cancel ends a job early. `PresetBatchWorker` keeps its job on a
+  system stop the same way.
+- Queue (fix round 2): each job is its own unique work (`xmp-export-<job>`, tags `xmp-export` + `xmp-job:<job>`,
+  `ExistingWorkPolicy.KEEP`), never a chain: with `APPEND_OR_REPLACE` a Cancel or failure of the running job cancelled
+  or failed the queued ones without running them, so their grants and job files were never released. Jobs run one at a
+  time through a process-wide lock in the worker. Enqueue (grants taken, job file, work), a job's end and the sweep
+  share one lock. The sweep (`XmpExportWorker.sweep`, at app start and at each job's end) deletes the files of jobs
+  with no unfinished work (cancelled or failed while queued, a kill between the files and the work) and releases their
+  trees unless a live job uses them.
+- A sidecar document created by a write that then fails or is cancelled (next to the photos or into a chosen folder)
+  is deleted again (`DocumentTree.delete`) and the photo's sidecar record restored; only a kill leaves the empty
+  document, which the next run fills.
+- `sources.writable` is true only when a WRITE grant really is persisted for the tree, or for the debug build's
+  synthetic provider (named explicitly, `LibraryRepository.grantFreeAuthorities`).
+- Tests: `XmpExportTest` (no write through the library's rating/flag, an edit, a hand-off's label, folder-first and
+  merge paths, recorded at the tree; next to, chosen folder, a taken name, malformed kept / fresh copy, reruns without
+  copies, server-only and hand-off refused for "next to", the one-off tree, preference removal), `XmpGrantsTest`,
+  `XmpExportJobsTest`, `XmpExportQueueTest` (cancel keeps the queue, orphan sweep), `XmpExportPickerTest` (rotation while picking), `ReadOnlyGrantsTest`, `LibraryIndexerTest`
+  (first read), `XmpSidecarFlowTest` (instrumented).
+
+### First read of a sidecar (shared with Hoard app 2.2.1 and hoard-server 0.10.1)
+
+Since nothing writes sidecars automatically, another app may create one later for a photo Reveal already rated
+(darktable writes `xmp:Rating="1"` by default). The rule, the same in Reveal, Hoard's import and hoard-server's NAS
+import:
+
+- First read: the sidecar was never read at that path, or its record was dropped because the file disappeared. On a
+  first read the reader fills only the fields it holds NO value for.
+- A field "holds a value" when it is non-default: rating != 0, flag != none, label non-empty, no matter who set it. An
+  explicit 0 stars counts as NO value.
+- Fields that hold a value are kept, whatever the sidecar's mtime.
+- The reader records what it read: path, size, mtime and values. Later reads of the same sidecar import only the
+  fields that differ from the last read (newest by mtime, LWW).
+- Reveal's own Export XMP records what it wrote as read (`sidecar_culling`), so a file it wrote is never a first read.
+- A sidecar missing on a scan forgets its record.
+
+In Reveal: `SidecarImport.apply` (`SidecarImport.held`), the record is `photos.xmp_document_id` + `xmp_modified` (the
+walk re-reads a sidecar whose mtime or document changed; the size is not stored) and `sidecar_culling`; the walk
+deletes the `sidecar_culling` row of a sidecar that is gone. Tests: `LibraryIndexerTest` (0 stars + sidecar 3 -> 3,
+rating 5 + sidecar 1 -> 5, flag none + reject -> reject, export then rescan -> no import, removed then re-created ->
+first read again).
+

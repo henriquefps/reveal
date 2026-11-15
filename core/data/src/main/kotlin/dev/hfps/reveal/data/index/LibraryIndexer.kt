@@ -10,6 +10,7 @@ import dev.hfps.image.format.ShotPairing
 import dev.hfps.image.source.readRange
 import dev.hfps.image.tiff.JpegMarkers
 import dev.hfps.reveal.data.db.CURRENT_METADATA_VERSION
+import dev.hfps.reveal.data.db.HEADER_MISS_PREFIX
 import dev.hfps.reveal.data.db.IndexedFile
 import dev.hfps.reveal.data.db.IndexedPhoto
 import dev.hfps.reveal.data.db.MetaEntity
@@ -167,7 +168,7 @@ class LibraryIndexer(
      */
     suspend fun readServerMetadata(sourceId: Long, tree: DocumentTree, limit: Int): Int {
         // Only photos whose original the server serves: another device's preview-only photo has no header to read.
-        val readable = db.syncDao().serverHeaderCandidates(sourceId, limit).toSet()
+        val readable = db.syncDao().serverHeaderCandidates(sourceId, limit, Long.MAX_VALUE).toSet()
         val read = if (readable.isEmpty()) 0 else readHeaders(sourceId, tree, only = readable, untracked = true) {}
         // Then the camera fields of photos read before W3/D, within the same budget.
         return read + backfillCameras(sourceId, tree, limit - read, server = true)
@@ -216,6 +217,46 @@ class LibraryIndexer(
             done += batch.size
         }
         return done
+    }
+
+    /** A Server photo's header as the server's item describes it (Hoard ADR 0014; ADR 0018 "W3/C"). */
+    data class ServerHeader(
+        /** Camera wall clock as UTC milliseconds (Reveal's capture time convention); null = unknown. */
+        val captureTime: Long?,
+        val offsetMinutes: Int?,
+        val width: Int?,
+        val height: Int?,
+        val orientation: Int?,
+    )
+
+    /**
+     * Writes the Server photos' headers the server described ([headers] by photo id; null = the server has no item for
+     * it: `FAILED`, like an unreadable header), without marking them for sync and without opening any file (ADR 0018
+     * "W3/C": the old range reads mounted an appfuse proxy per photo, 300 per sync).
+     */
+    suspend fun applyServerHeaders(headers: Map<Long, ServerHeader?>, now: Long = System.currentTimeMillis()) {
+        if (headers.isEmpty()) return
+        db.withTransaction {
+            db.metaDao().put(MetaEntity(SyncTriggers.APPLYING, "1"))
+            for ((photoId, header) in headers) {
+                if (header == null) {
+                    // A miss is "not yet" (the item may be indexed later): stays PENDING, retried after a backoff.
+                    db.metaDao().put(MetaEntity(HEADER_MISS_PREFIX + photoId, now.toString()))
+                } else {
+                    db.metaDao().delete(HEADER_MISS_PREFIX + photoId)
+                    photos.setMetadata(
+                        id = photoId,
+                        captureTime = header.captureTime,
+                        offset = header.offsetMinutes,
+                        width = header.width,
+                        height = header.height,
+                        orientation = (header.orientation ?: 1).coerceIn(1, MAX_ORIENTATION),
+                        state = MetadataState.READ,
+                    )
+                }
+            }
+            db.metaDao().delete(SyncTriggers.APPLYING)
+        }
     }
 
     /**
@@ -600,6 +641,9 @@ class LibraryIndexer(
             val lens = cameraText(text)
             return if (lens.none { it.isLetter() } || lens.startsWith("0.0 mm")) "" else lens
         }
+
+        /** A photo the item lookup missed is asked about again after this long. */
+        const val MISS_BACKOFF_MS = 30 * 60 * 1000L
 
         private const val BATCH = 500
         private const val SQL_ARGS = 900

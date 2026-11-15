@@ -286,6 +286,54 @@ class HandoffRepositoryTest {
     }
 
     @Test
+    fun `a hand-off of a file prefers the adopted, edited photo over a NAS photo of the same file`() = runTest {
+        val dir = temp.newFolder("adopted")
+        val file = jpeg(dir, "DSC00099.JPG")
+        val first = media(99, file)
+        val v1 = versionOf(repo.receive(HandoffRequest(listOf(first))))
+        edit(v1, 0.6f)
+        val adopted = rows().single()
+        // The server adopts it (ADR 0018 "W3/C"): a Server photo that keeps `handoff_at` and its edit.
+        val server = db.sourceDao().insert(
+            SourceEntity(
+                treeUri = "reveal-sync:server", rootDocumentId = "", displayName = "", volumeId = null,
+                volumeName = null, state = SourceState.AVAILABLE, writable = false, addedAt = 0,
+                kind = SourceKind.SERVER, backup = false,
+            ),
+        )
+        val sql = db.openHelper.writableDatabase
+        val fileRow = db.photoDao().files(adopted.id).single()
+        sql.execSQL("UPDATE photos SET source_id = $server WHERE id = ${adopted.id}")
+        sql.execSQL(
+            "UPDATE photo_files SET source_id = $server, relative_path = 'handoff/x/DSC00099.JPG', id = 100 " +
+                "WHERE id = ${fileRow.id}",
+        )
+        // A NAS-feed photo of the same file, with a lower file id (it would come first).
+        val nas = db.photoDao().insertPhoto(
+            dev.hfps.reveal.data.db.PhotoEntity(
+                sourceId = server, folder = "NAS", folderDocumentId = "", stemKey = "dsc00099",
+                name = "DSC00099.JPG", format = PhotoFormat.JPEG, hasRaw = false, sortTime = 1, addedAt = 1,
+            ),
+        )
+        db.photoDao().insertVersion(dev.hfps.reveal.data.db.VersionEntity(photoId = nas, createdAt = 1))
+        db.photoDao().insertFiles(
+            listOf(
+                dev.hfps.reveal.data.db.PhotoFileEntity(
+                    id = 50, photoId = nas, sourceId = server, relativePath = "nas/n/DSC00099.JPG",
+                    documentId = "x", name = "DSC00099.JPG", size = fileRow.size, modified = 1,
+                    role = dev.hfps.reveal.data.model.FileRole.RENDERED, fingerprint = fileRow.fingerprint,
+                    onServer = true,
+                ),
+            ),
+        )
+        // Opened again from the same app through another URI: the edited photo, not the NAS one.
+        val copy = File(temp.newFolder("again"), "renamed.jpg").apply { writeBytes(File(file.path!!).readBytes()) }
+        val v2 = versionOf(repo.receive(HandoffRequest(listOf(Uri.fromFile(copy)))))
+        assertThat(v2).isEqualTo(v1)
+        assertThat(edits.recipe(v2).light.exposureEv).isEqualTo(0.6f)
+    }
+
+    @Test
     fun `a photo of an added folder handed over by another app opens with its edits, its files untouched`() = runTest {
         val dir = temp.newFolder("folder")
         val file = File(dir, "DSC00090.JPG").apply {

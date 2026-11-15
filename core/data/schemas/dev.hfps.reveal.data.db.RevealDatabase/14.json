@@ -2,7 +2,7 @@
   "formatVersion": 1,
   "database": {
     "version": 14,
-    "identityHash": "9288cf6d37c90db13641f2f3bd094f39",
+    "identityHash": "5f1a4ef31bf08130a50cc49fd3dbab0e",
     "entities": [
       {
         "tableName": "meta",
@@ -124,7 +124,7 @@
       },
       {
         "tableName": "photos",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `uuid` TEXT NOT NULL DEFAULT '', `source_id` INTEGER NOT NULL, `folder` TEXT NOT NULL, `folder_document_id` TEXT NOT NULL, `stem_key` TEXT NOT NULL, `name` TEXT NOT NULL, `format` TEXT NOT NULL, `has_raw` INTEGER NOT NULL, `sort_time` INTEGER NOT NULL, `capture_time` INTEGER, `capture_offset` INTEGER, `width` INTEGER, `height` INTEGER, `orientation` INTEGER NOT NULL, `rating` INTEGER NOT NULL, `label` TEXT, `flag` TEXT NOT NULL, `has_edit` INTEGER NOT NULL, `metadata_state` TEXT NOT NULL, `camera_make` TEXT, `camera_model` TEXT, `lens` TEXT, `metadata_version` INTEGER NOT NULL DEFAULT 0, `xmp_document_id` TEXT, `xmp_modified` INTEGER, `added_at` INTEGER NOT NULL, `last_opened_at` INTEGER, `handoff_at` INTEGER, `handoff_title` TEXT, `hidden` INTEGER NOT NULL, FOREIGN KEY(`source_id`) REFERENCES `sources`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE )",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `uuid` TEXT NOT NULL DEFAULT '', `source_id` INTEGER NOT NULL, `folder` TEXT NOT NULL, `folder_document_id` TEXT NOT NULL, `stem_key` TEXT NOT NULL, `name` TEXT NOT NULL, `format` TEXT NOT NULL, `has_raw` INTEGER NOT NULL, `sort_time` INTEGER NOT NULL, `capture_time` INTEGER, `capture_offset` INTEGER, `width` INTEGER, `height` INTEGER, `orientation` INTEGER NOT NULL, `rating` INTEGER NOT NULL, `label` TEXT, `flag` TEXT NOT NULL, `has_edit` INTEGER NOT NULL, `metadata_state` TEXT NOT NULL, `xmp_document_id` TEXT, `xmp_modified` INTEGER, `added_at` INTEGER NOT NULL, `last_opened_at` INTEGER, `handoff_at` INTEGER, `handoff_title` TEXT, `hidden` INTEGER NOT NULL, FOREIGN KEY(`source_id`) REFERENCES `sources`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE )",
         "fields": [
           {
             "fieldPath": "id",
@@ -243,28 +243,6 @@
             "notNull": true
           },
           {
-            "fieldPath": "cameraMake",
-            "columnName": "camera_make",
-            "affinity": "TEXT"
-          },
-          {
-            "fieldPath": "cameraModel",
-            "columnName": "camera_model",
-            "affinity": "TEXT"
-          },
-          {
-            "fieldPath": "lens",
-            "columnName": "lens",
-            "affinity": "TEXT"
-          },
-          {
-            "fieldPath": "metadataVersion",
-            "columnName": "metadata_version",
-            "affinity": "INTEGER",
-            "notNull": true,
-            "defaultValue": "0"
-          },
-          {
             "fieldPath": "xmpDocumentId",
             "columnName": "xmp_document_id",
             "affinity": "TEXT"
@@ -356,25 +334,6 @@
             ],
             "orders": [],
             "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_photos_uuid` ON `${TABLE_NAME}` (`uuid`)"
-          },
-          {
-            "name": "index_photos_camera_make_camera_model",
-            "unique": false,
-            "columnNames": [
-              "camera_make",
-              "camera_model"
-            ],
-            "orders": [],
-            "createSql": "CREATE INDEX IF NOT EXISTS `index_photos_camera_make_camera_model` ON `${TABLE_NAME}` (`camera_make`, `camera_model`)"
-          },
-          {
-            "name": "index_photos_lens",
-            "unique": false,
-            "columnNames": [
-              "lens"
-            ],
-            "orders": [],
-            "createSql": "CREATE INDEX IF NOT EXISTS `index_photos_lens` ON `${TABLE_NAME}` (`lens`)"
           }
         ],
         "foreignKeys": [
@@ -393,7 +352,7 @@
       },
       {
         "tableName": "photo_files",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `photo_id` INTEGER NOT NULL, `source_id` INTEGER NOT NULL, `relative_path` TEXT NOT NULL, `document_id` TEXT NOT NULL, `name` TEXT NOT NULL, `size` INTEGER NOT NULL, `modified` INTEGER NOT NULL, `role` TEXT NOT NULL, `fingerprint` TEXT, `unreadable_at` INTEGER, `on_server` INTEGER NOT NULL DEFAULT 0, FOREIGN KEY(`photo_id`) REFERENCES `photos`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE )",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `photo_id` INTEGER NOT NULL, `source_id` INTEGER NOT NULL, `relative_path` TEXT NOT NULL, `document_id` TEXT NOT NULL, `name` TEXT NOT NULL, `size` INTEGER NOT NULL, `modified` INTEGER NOT NULL, `role` TEXT NOT NULL, `fingerprint` TEXT, `unreadable_at` INTEGER, `on_server` INTEGER NOT NULL DEFAULT 0, `checked_at` INTEGER, FOREIGN KEY(`photo_id`) REFERENCES `photos`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE )",
         "fields": [
           {
             "fieldPath": "id",
@@ -465,6 +424,11 @@
             "affinity": "INTEGER",
             "notNull": true,
             "defaultValue": "0"
+          },
+          {
+            "fieldPath": "checkedAt",
+            "columnName": "checked_at",
+            "affinity": "INTEGER"
           }
         ],
         "primaryKey": {
@@ -2018,11 +1982,68 @@
             "version_uuid"
           ]
         }
+      },
+      {
+        "tableName": "server_thumbs",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`fingerprint` TEXT NOT NULL, `item_id` TEXT, `v` TEXT, `state` TEXT NOT NULL, `file` TEXT, `bytes` INTEGER NOT NULL, `updated_at` INTEGER NOT NULL, `last_used` INTEGER NOT NULL, PRIMARY KEY(`fingerprint`))",
+        "fields": [
+          {
+            "fieldPath": "fingerprint",
+            "columnName": "fingerprint",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "itemId",
+            "columnName": "item_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "v",
+            "columnName": "v",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "state",
+            "columnName": "state",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "file",
+            "columnName": "file",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "bytes",
+            "columnName": "bytes",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedAt",
+            "columnName": "updated_at",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastUsed",
+            "columnName": "last_used",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "fingerprint"
+          ]
+        }
       }
     ],
     "setupQueries": [
       "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
-      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '9288cf6d37c90db13641f2f3bd094f39')"
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '5f1a4ef31bf08130a50cc49fd3dbab0e')"
     ]
   }
 }

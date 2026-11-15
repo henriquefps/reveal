@@ -115,3 +115,4 @@ copy-simple
 stack
 camera
 calendar-blank
+push-pin

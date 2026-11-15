@@ -20,7 +20,10 @@ import dagger.hilt.EntryPoint
 import dagger.hilt.InstallIn
 import dagger.hilt.android.EntryPointAccessors
 import dagger.hilt.components.SingletonComponent
+import dev.hfps.reveal.data.storage.AppStart
+import dev.hfps.reveal.data.storage.LibraryThumbsPreferences
 import dev.hfps.reveal.sync.SyncRepository
+import dev.hfps.reveal.sync.thumbs.LibraryThumbs
 import java.io.IOException
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CoroutineScope
@@ -40,6 +43,12 @@ import kotlinx.coroutines.launch
 @InstallIn(SingletonComponent::class)
 interface SyncEntryPoint {
     fun sync(): SyncRepository
+}
+
+@EntryPoint
+@InstallIn(SingletonComponent::class)
+interface LibraryThumbsEntryPoint {
+    fun libraryThumbs(): LibraryThumbs
 }
 
 private fun Context.sync(): SyncRepository =
@@ -84,6 +93,39 @@ class BlobWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
 
     private companion object {
         const val MAX_ATTEMPTS = 8
+    }
+}
+
+/**
+ * The library thumbnails' prefetch (ADR 0018 "W3/C"): the missing thumbnails of the whole library, newest first, while
+ * the network is unmetered and the phone charges or is idle (two requests with those constraints; whichever runs first
+ * does the work, the other finds nothing). Re-enqueues itself while thumbnails are missing; stopped by WorkManager when
+ * a constraint ends (cancellation between batches).
+ */
+class LibraryThumbsWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
+    override suspend fun doWork(): Result = try {
+        val thumbs = EntryPointAccessors.fromApplication(applicationContext, LibraryThumbsEntryPoint::class.java)
+            .libraryThumbs()
+        val report = thumbs.prefetch()
+        when {
+            report.left -> SyncScheduler.libraryThumbs(applicationContext, again = true)
+
+            // The server is still making some: ask again once their retry time has passed, not in 6 h.
+            report.pending > 0 -> SyncScheduler.libraryThumbs(
+                applicationContext,
+                again = true,
+                delayMinutes = LibraryThumbs.PENDING_RETRY_MS / MINUTE_MS,
+            )
+        }
+        Result.success()
+    } catch (e: IOException) {
+        Log.i(TAG, "library thumbnails will retry: ${e.javaClass.simpleName}")
+        if (runAttemptCount < THUMB_ATTEMPTS) Result.retry() else Result.failure()
+    }
+
+    private companion object {
+        const val THUMB_ATTEMPTS = 5
+        const val MINUTE_MS = 60_000L
     }
 }
 
@@ -133,9 +175,50 @@ object SyncScheduler {
         )
     }
 
+    private const val THUMBS_CHARGING = "reveal-thumbs-charging"
+    private const val THUMBS_IDLE = "reveal-thumbs-idle"
+    private const val THUMBS_PERIODIC = "reveal-thumbs-periodic"
+    private const val THUMBS_PERIOD_HOURS = 6L
+
+    /**
+     * The library thumbnails' prefetch (ADR 0018 "W3/C"): unmetered network and storage not low, plus charging (and a
+     * battery not low) for one request, the device idle for the other; a periodic one resumes it every few hours.
+     */
+    fun libraryThumbs(context: Context, again: Boolean = false, delayMinutes: Long = 0) {
+        val work = WorkManager.getInstance(context)
+        val policy = if (again) ExistingWorkPolicy.APPEND_OR_REPLACE else ExistingWorkPolicy.KEEP
+        val charging = whileCharging()
+        val idle = whileIdle()
+        val whileCharging = OneTimeWorkRequestBuilder<LibraryThumbsWorker>().setConstraints(charging)
+            .setInitialDelay(delayMinutes, TimeUnit.MINUTES)
+            .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, BACKOFF_SECONDS, TimeUnit.SECONDS).build()
+        work.enqueueUniqueWork(THUMBS_CHARGING, policy, whileCharging)
+        // WorkManager refuses a backoff on an idle-mode job (it would never be retried while idle anyway).
+        val whileIdle = OneTimeWorkRequestBuilder<LibraryThumbsWorker>().setConstraints(idle)
+            .setInitialDelay(delayMinutes, TimeUnit.MINUTES).build()
+        work.enqueueUniqueWork(THUMBS_IDLE, policy, whileIdle)
+        val periodic = PeriodicWorkRequestBuilder<LibraryThumbsWorker>(THUMBS_PERIOD_HOURS, TimeUnit.HOURS)
+            .setConstraints(charging).build()
+        work.enqueueUniquePeriodicWork(THUMBS_PERIODIC, ExistingPeriodicWorkPolicy.KEEP, periodic)
+    }
+
+    /** Unmetered, storage not low, charging with a battery not low (one request of the prefetch). */
+    private fun whileCharging(): Constraints = Constraints.Builder().setRequiredNetworkType(NetworkType.UNMETERED)
+        .setRequiresStorageNotLow(true).setRequiresCharging(true).setRequiresBatteryNotLow(true).build()
+
+    /** Unmetered, storage not low, the device idle (the other request: never charging and idle together). */
+    private fun whileIdle(): Constraints = Constraints.Builder().setRequiredNetworkType(NetworkType.UNMETERED)
+        .setRequiresStorageNotLow(true).setRequiresDeviceIdle(true).build()
+
+    fun cancelLibraryThumbs(context: Context) {
+        val work = WorkManager.getInstance(context)
+        listOf(THUMBS_CHARGING, THUMBS_IDLE, THUMBS_PERIODIC).forEach(work::cancelUniqueWork)
+    }
+
     fun cancel(context: Context) {
         val work = WorkManager.getInstance(context)
         listOf(NOW, PERIODIC, BLOBS).forEach(work::cancelUniqueWork)
+        cancelLibraryThumbs(context)
     }
 }
 
@@ -149,17 +232,22 @@ class SyncController(
     private val context: Context,
     private val sync: SyncRepository,
     private val scope: CoroutineScope,
+    /** "Keep thumbnails of the whole library" (ADR 0018 "W3/C"); null = never prefetch (tests). */
+    private val thumbs: LibraryThumbsPreferences? = null,
 ) {
     private var foreground: Job? = null
 
     fun start() {
         scope.launch {
-            // Nothing touches WorkManager until the device is paired (or was, to cancel its jobs).
+            // Nothing touches WorkManager until the device is paired (or was, to cancel its jobs), and nothing runs
+            // before the first frame (ADR 0018 "W3/C": the first sync reads server headers and lookups).
+            AppStart.awaitSettled()
             var wasPaired = false
             sync.account.map { it != null }.distinctUntilChanged().collect { paired ->
                 if (paired) {
                     SyncScheduler.periodic(context)
                     SyncScheduler.now(context)
+                    if (thumbs?.keepAll?.value == true) SyncScheduler.libraryThumbs(context)
                 } else if (wasPaired) {
                     SyncScheduler.cancel(context)
                 }
@@ -177,6 +265,7 @@ class SyncController(
                     override fun onStart(owner: LifecycleOwner) {
                         foreground?.cancel()
                         foreground = scope.launch {
+                            AppStart.awaitSettled()
                             while (isActive) {
                                 if (sync.account.value != null) SyncScheduler.now(context)
                                 delay(FOREGROUND_SECONDS * MILLIS)

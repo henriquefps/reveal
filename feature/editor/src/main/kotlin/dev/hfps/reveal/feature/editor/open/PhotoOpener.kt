@@ -17,6 +17,8 @@ import dev.hfps.image.source.CancelToken
 import dev.hfps.image.source.CancelledException
 import dev.hfps.image.source.SourceInputStream
 import dev.hfps.image.source.readRange
+import dev.hfps.reveal.data.storage.FileOpens
+import dev.hfps.reveal.data.storage.LocalCopies
 import dev.hfps.reveal.data.storage.isAccessError
 import dev.hfps.reveal.pipeline.PipelineInput
 import dev.hfps.reveal.pipeline.gl.GlesRequirementException
@@ -81,7 +83,15 @@ class OpenedPhoto(
  * Opens a photo by URI for the editor: preview first, then the screen proxy, mapped to a [PipelineInput]. Reads the
  * document in place through its descriptor (never copies the original). Blocking: call it off the main thread.
  */
-class PhotoOpener(private val resolver: ContentResolver) {
+class PhotoOpener(
+    private val resolver: ContentResolver,
+    /**
+     * Where a very large standard image of another app is copied before it is read in regions (ADR 0018 "W3/C"): the
+     * region source would hold the sender's descriptor (and one of its read slots) while the editor is open. Null =
+     * read in place (tests).
+     */
+    private val copies: Pair<java.io.File, String>? = null,
+) {
 
     /** The document's display name, else the last path segment. */
     fun displayName(uri: Uri): String {
@@ -127,7 +137,8 @@ class PhotoOpener(private val resolver: ContentResolver) {
     /** The document's descriptor; any failure here means the grant or the file is gone (`isAccessError` shapes). */
     @Suppress("TooGenericExceptionCaught")
     private fun openInput(uri: Uri, name: String): ImageInput = try {
-        ImageInput.fromUri(resolver, uri, name)
+        // A busy sender (Hoard ADR 0010, `busy:`) is waited out with the bounded backoff, never "permission lost".
+        FileOpens.openDocument(uri, copies?.second.orEmpty()) { ImageInput.fromUri(resolver, uri, name) }
     } catch (e: IllegalArgumentException) {
         // Thrown by the provider while opening: it no longer serves the URI.
         throw OpenException(OpenError.PERMISSION_LOST, e)
@@ -148,7 +159,7 @@ class PhotoOpener(private val resolver: ContentResolver) {
     fun openFullResolution(uri: Uri, cancel: CancelToken, lens: LensProfile? = null): TileSource =
         openFullSource(uri, cancel).withLens(lens)
 
-    @Suppress("ThrowsCount", "ReturnCount")
+    @Suppress("ThrowsCount", "ReturnCount", "CyclomaticComplexMethod")
     private fun openFullSource(uri: Uri, cancel: CancelToken): TileSource {
         val image = openInput(uri, displayName(uri))
         try {
@@ -169,8 +180,15 @@ class PhotoOpener(private val resolver: ContentResolver) {
             val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
             BitmapFactory.decodeFileDescriptor(fd, null, bounds)
             if (bounds.outWidth.toLong() * bounds.outHeight > FULL_DECODE_MAX_PIXELS) {
-                // Very large: regions on demand (as the library viewer), the document stays open.
-                return RegionTileSource(image.descriptor, orientation) { image.close() }
+                // Very large: regions on demand (as the library viewer), the document stays open; another app's is
+                // copied first and closed (its descriptor never outlives the read).
+                val (dir, own) = copies ?: (null to "")
+                val read = if (dir != null && LocalCopies.isForeign(uri, own)) {
+                    LocalCopies.copy(image, dir, reopen = { openInput(uri, displayName(uri)) })
+                } else {
+                    image
+                }
+                return RegionTileSource(read.descriptor, orientation) { read.close() }
             }
             // A JPEG region decode re-reads everything above the region (about 250 ms per tile at 12 MP on the
             // emulator); one full decode (4 bytes per pixel, the export's own source) makes every tile cheap.

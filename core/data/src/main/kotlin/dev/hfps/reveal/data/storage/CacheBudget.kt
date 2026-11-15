@@ -20,6 +20,15 @@ enum class StorageKind {
     /** Parts of server originals read by range, and server smart previews, while you view them (`cache/sync-*`). */
     SERVER_FILES,
 
+    /**
+     * Whole originals of server photos opened or edited lately (`cache/sync-kept`, ADR 0018 "W3/C"): the last ones
+     * opened are kept for a while, so reopening one is instant.
+     */
+    ORIGINALS_KEPT,
+
+    /** Small thumbnails of every photo the server holds (`no_backup/library-thumbs`, ADR 0018 "W3/C"). */
+    LIBRARY_THUMBNAILS,
+
     /** AI masks and AI Remove fills (`cache/masks`, `cache/inpaint`, docs/adr/0021, 0024): made again when needed. */
     MASKS,
 
@@ -33,8 +42,19 @@ enum class StorageKind {
     LIBRARY,
 }
 
-/** One entry of a cache as the LRU sees it: a file, or the blocks of one remote file. */
-data class CacheItem(val key: String, val bytes: Long, val lastUsed: Long)
+/**
+ * One entry of a cache as the LRU sees it: a file, or the blocks of one remote file. [tier] orders the eviction before
+ * the last use (ADR 0018 "W3/C"): [CacheTier.NORMAL] entries go first, then [CacheTier.PINNED] (originals opened
+ * lately), then [CacheTier.LIBRARY] (the library thumbnails, which make the grid work offline).
+ */
+data class CacheItem(val key: String, val bytes: Long, val lastUsed: Long, val tier: Int = CacheTier.NORMAL)
+
+/** The eviction tiers of [CacheItem.tier]: lower goes first. */
+object CacheTier {
+    const val NORMAL = 0
+    const val PINNED = 1
+    const val LIBRARY = 2
+}
 
 /** A cache [CacheBudget] trims and "Clear cache" empties. Nothing in one is ever the only copy of anything. */
 interface CacheArea {
@@ -94,7 +114,10 @@ class CacheBudget(
         scope.launch(Dispatchers.IO) { runCatching { trim() } }
     }
 
-    /** Deletes the least recently used entries of all areas until they fit the cap; returns the bytes freed. */
+    /**
+     * Deletes entries of all areas until they fit the cap, by tier ([CacheItem.tier]: ordinary caches, then pinned
+     * originals, then library thumbnails) and least recently used within a tier; returns the bytes freed.
+     */
     suspend fun trim(): Long = mutex.withLock {
         val all = areas.flatMap { area -> area.items().map { area to it } }
         var total = all.sumOf { it.second.bytes }
@@ -102,7 +125,7 @@ class CacheBudget(
         if (total <= cap) return@withLock 0L
         val victims = LinkedHashMap<CacheArea, MutableList<String>>()
         var freed = 0L
-        for ((area, item) in all.sortedBy { it.second.lastUsed }) {
+        for ((area, item) in all.sortedWith(compareBy({ it.second.tier }, { it.second.lastUsed }))) {
             if (total <= cap) break
             victims.getOrPut(area) { ArrayList() } += item.key
             total -= item.bytes

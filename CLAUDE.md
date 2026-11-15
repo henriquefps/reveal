@@ -158,7 +158,7 @@ REVEAL_COLOUR_SHEET_DIR=$PWD/build/calibration REVEAL_RENDER_OUT=$PWD/docs/scree
 
 ## Library (`:core:data`, `:feature:library`, M1, ADR 0006)
 
-Room `RevealDatabase` v14 (sources, photos, photo_files, versions, recipes, history, history_cursor, cache_entries; sync tables v6; preset tables v7, ADR 0019; `photo_files.unreadable_at` v8, ADR 0011; `photo_cloud.preview_format` v9; `photo_files.on_server` + `sync_deletes` v10, ADR 0018 FIX/V; `versions.edit_device/edited_at` + data fixes v11, FIX/W; `snapshots` + `export_presets` v12, ADR 0025; culling sync tables v13, ADR 0027; camera/lens columns v14, W3/D);
+Room `RevealDatabase` v15 (sources, photos, photo_files, versions, recipes, history, history_cursor, cache_entries; sync tables v6; preset tables v7, ADR 0019; `photo_files.unreadable_at` v8, ADR 0011; `photo_cloud.preview_format` v9; `photo_files.on_server` + `sync_deletes` v10, ADR 0018 FIX/V; `versions.edit_device/edited_at` + data fixes v11, FIX/W; `snapshots` + `export_presets` v12, ADR 0025; culling sync tables v13, ADR 0027; `server_thumbs` + `photo_files.checked_at` v14, ADR 0018 W3/C; camera/lens columns v15, W3/D);
 schema change = new version + migration (or `AutoMigration`) + exported `core/data/schemas/*.json`, tested by
 `RevealDatabaseMigrationTest`. `LibraryRepository` (sources, SAF grants, volumes, indexing, ratings/flags with XMP
 write-back), `LibraryIndexer` (walk → diff → sidecars → headers → sidecar edits), `XmpReader`/`XmpWriter` (merge, never
@@ -279,6 +279,8 @@ adb -s emulator-<port> logcat -d -s REVEAL_XMP RevealSidecars
 ```
 
 ## Hand-off from other apps (`:core:data/handoff`, ADR 0011)
+
+Hoard<->Reveal contracts (owners, versions, compatibility): github.com/henriquefps/hoard `docs/integration/README.md` (maintained by the coordinator; don't edit it).
 
 `HandoffIntents.parse` (action `dev.hfps.reveal.action.DEVELOP`, `VIEW`, `EDIT`, `SEND`, `SEND_MULTIPLE`; URIs from data +
 ClipData + `EXTRA_STREAM`) -> `HandoffRepository.receive` (pairs by stem and parent, files the photos under the single
@@ -955,6 +957,8 @@ device: push the copies to `files/private` with `run-as`, run with `-e dir /data
 
 ## Sync server (lives in Hoard, ADR 0017)
 
+Hoard<->Reveal contracts (owners, versions, compatibility): github.com/henriquefps/hoard `docs/integration/README.md` (maintained by the coordinator; don't edit it).
+
 The server is **`hoard-server`** in the Hoard repository (github.com/henriquefps/hoard, `server/`; image
 `ghcr.io/henriquefps/hoard-server`, release tags `server-v*`); it replaced `reveal-sync`, which used to live here
 (`sync-server/` is gone; the `sync-server-v*` tags and releases stay as history). The protocol did not change (`/v1`,
@@ -1065,6 +1069,38 @@ adb -s emulator-<port> shell am instrument -w -e syncLinks "'$L1,$L2'" [-e nasSe
 adb -s emulator-<port> shell am instrument -w -e class dev.hfps.reveal.sync.SyncFlowTest -e syncLink "'$(scripts/sync/local-server.sh pair <work dir>)'" -e nasName DSC00002.ARW dev.hfps.reveal.debug.test/androidx.test.runner.AndroidJUnitRunner
 adb -s emulator-<port> logcat -d -s REVEAL_SYNC RevealSync RevealSyncFiles
 scripts/sync/local-server.sh stop <work dir>
+```
+
+Large library (W3/C, 0.9.0, ADR 0018 "W3/C", DB v14): **nothing reads files before the first frame** (`AppStart`:
+`MainActivity` reports it; the walk, `LibraryRepository.scheduleAccessCheck`, `SyncController` and the prefetch wait
+for it). Other apps' documents open through `FileOpens` (≤ 4 at once for background work, counted, `REVEAL_IO`
+opens/s); a `FileNotFoundException` starting with `busy:` (`PROVIDER_BUSY_PREFIX`, Hoard ADR 0010) is retried
+(`FileOpens.gated`: 250 ms doubling to 4 s, ~30 s, the slot is released while waiting; the editor and the export count too via `FileOpens.openDocument`; waiting for a slot never gives up) and is never `isAccessError`. The access check is one paced
+background pass (skips files the server holds, `photo_files.checked_at` < 6 h, documents with a read grant:
+`readGrants`); never per grid query. Hand-offs whose main file the server holds become Server photos in place
+(`SyncStore.adoptNext` after every sync, one photo per transaction, failures marked and skipped: uuid, versions, culling, `handoff_at` kept; only files the server holds move; sidecar link dropped; never deletable by server records or the NAS feed).
+Server headers come from the item lookup (`engine/ServerHeaders`), not range reads. Grid thumbnails of Server photos
+and hand-offs on the server: `ThumbnailRepository` asks `ServerThumbs` (optional binding) = `thumbs/LibraryThumbs`
+(`server_thumbs`, `no_backup/library-thumbs`, 384 px WebP q70, `CacheTier.LIBRARY` evicted last; batched lookup +
+`POST /v1/items/previews` + immutable `?v=` GETs; `prefetch` by `LibraryThumbsWorker`, unmetered + charging/idle;
+Settings -> Storage switch `LibraryThumbsPreferences`); never a provider round trip per cell. Originals the editor or
+the export opens are kept whole (`ServerFiles.keep`, `cache/sync-kept`, served as a plain descriptor); the files of the
+50 photos opened in the last 7 days are `CacheTier.PINNED`. Never gate the provider's proxies on `FileOpens` slots
+(the viewer and the editor hold them for minutes).
+
+```sh
+./gradlew :core:data:testDebugUnitTest --tests '*AccessChecksTest*' --tests '*FileOpensTest*' --tests '*ServerThumbnailsTest*'
+./gradlew :core:sync:testDebugUnitTest --tests '*LibraryThumbsTest*' --tests '*HandoffAdoptionTest*' --tests '*RangeCacheTest*'
+REVEAL_THUMBS_LINK=$(scripts/sync/local-server.sh pair <work dir>) ./gradlew --no-configuration-cache \
+  :core:sync:testDebugUnitTest --tests '*RealServerThumbsTest*'
+adb -s <serial> shell am instrument -w -e class dev.hfps.reveal.handoff.HandoffBusyTest dev.hfps.reveal.debug.test/androidx.test.runner.AndroidJUnitRunner
+# the large library (local server with 20,000+ NAS JPEGs, adb reverse; LargeLibrarySetup keeps the data):
+adb -s <serial> shell am instrument -w -e class dev.hfps.reveal.library.LargeLibrarySetup#prepare -e syncLink "'$L'" [-e handoffDir <dir of NAS copies in files/>] dev.hfps.reveal.debug.test/androidx.test.runner.AndroidJUnitRunner
+adb -s <serial> shell am instrument -w -e class dev.hfps.reveal.library.LargeLibraryFlowTest#startUpDoesNotBurst -e largeLibrary true dev.hfps.reveal.debug.test/androidx.test.runner.AndroidJUnitRunner
+adb -s <serial> shell am instrument -w -e class dev.hfps.reveal.library.LargeLibraryFlowTest#prefetchThenOffline -e phase prefetch dev.hfps.reveal.debug.test/androidx.test.runner.AndroidJUnitRunner
+#   stop the server / adb reverse --remove, then -e phase offline
+adb -s <serial> shell am instrument -w -e class dev.hfps.reveal.library.ReopenAfterEditMeasurement -e name <RAW name prefix> dev.hfps.reveal.debug.test/androidx.test.runner.AndroidJUnitRunner
+adb -s <serial> logcat -d -s REVEAL_W3C REVEAL_IO RevealLibrary RevealLibraryThumbs
 ```
 
 Measurement (skipped without links; exclude it from the full suite like the other measurement classes):

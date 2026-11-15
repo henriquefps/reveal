@@ -18,6 +18,7 @@ import dev.hfps.reveal.data.thumb.PhotoImages
 import dev.hfps.reveal.data.thumb.ThumbnailRepository
 import dev.hfps.reveal.data.xmp.XmpPreferences
 import dev.hfps.reveal.sync.SyncRepository
+import dev.hfps.reveal.sync.thumbs.LibraryThumbs
 
 /**
  * Debug builds only: the app's singletons for instrumented tests (`EntryPointAccessors.fromApplication`), which add
@@ -54,4 +55,6 @@ interface DebugAccess {
     fun editSidecars(): EditSidecars
 
     fun xmpPreferences(): XmpPreferences
+
+    fun libraryThumbs(): LibraryThumbs
 }

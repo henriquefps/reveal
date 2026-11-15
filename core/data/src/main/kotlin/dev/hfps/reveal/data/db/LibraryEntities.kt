@@ -176,6 +176,11 @@ data class PhotoFileEntity(
      * only its RAW backed up.
      */
     @ColumnInfo(name = "on_server", defaultValue = "0") val onServer: Boolean = false,
+    /**
+     * When the background access check last opened this document (ADR 0011 "Unreadable hand-offs", ADR 0018 "W3/C"):
+     * a hand-off is checked again only after a while, never in a burst at start.
+     */
+    @ColumnInfo(name = "checked_at") val checkedAt: Long? = null,
 )
 
 /**

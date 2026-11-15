@@ -41,6 +41,7 @@ import dev.hfps.reveal.data.storage.DocumentTree
 import dev.hfps.reveal.data.storage.SafDocumentTree
 import dev.hfps.reveal.data.storage.StorageVolumes
 import dev.hfps.reveal.data.storage.isAccessError
+import dev.hfps.reveal.data.storage.isProviderBusy
 import dev.hfps.reveal.data.sync.RemoteEdits
 import dev.hfps.reveal.data.sync.ServerTree
 import dev.hfps.reveal.pipeline.recipe.Recipe
@@ -50,6 +51,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -216,6 +218,11 @@ class LibraryRepository(
     private val previews: LocalPreviews? = null,
     /** Settings → "Apply edits from XMP sidecars" (ADR 0026). */
     readEdits: () -> Boolean = { true },
+    /**
+     * Whether this process holds a read grant on a document of another app (persisted or temporary), without opening
+     * it; null = unknown (tests, Reveal's own providers). Lets the access check skip opens (ADR 0018 "W3/C").
+     */
+    private val grants: ((Uri) -> Boolean)? = null,
 ) {
     private val sourceDao = db.sourceDao()
     private val photoDao = db.photoDao()
@@ -309,32 +316,130 @@ class LibraryRepository(
     /**
      * Opens every file marked unreadable again (ADR 0011): a grant given back, a gallery permission, a folder back
      * online clears the mark. Batch and rate-limited (once per [RECHECK_MIN_MS]) unless [force] (the "Try again"
-     * action); [photoIds] narrows it to those photos. Returns how many files stay unreadable, or -1 when skipped.
+     * action); [photoIds] narrows it to those photos. Returns how many files stay unreadable, or -1 when skipped. The
+     * opens go through [FileOpens]' app-wide slots; a busy provider leaves the mark as it is (ADR 0018 "W3/C").
      */
     suspend fun recheckAccess(photoIds: Collection<Long>? = null, force: Boolean = false): Int =
         withContext(Dispatchers.IO) {
             val now = clock()
             if (!force && now - lastRecheck < RECHECK_MIN_MS) return@withContext -1
             lastRecheck = now
-            val trees = HashMap<Long, DocumentTree?>()
-            photoDao.unreadableFiles().filter { photoIds == null || it.photoId in photoIds }.count { file ->
-                val tree = trees.getOrPut(file.sourceId) {
-                    sourceDao.get(file.sourceId)?.let(this@LibraryRepository.trees::open)
-                }
-                val readable = tree != null && canRead(tree, file)
-                if (readable) photoDao.setReadable(file.documentId)
-                !readable
-            }
+            val files = photoDao.unreadableFiles().filter { photoIds == null || it.photoId in photoIds }
+            check(files, AccessPass("recheck", pace = false)).unreadable
         }
 
-    /** Opens [file] once; false when access is refused or it is gone. */
-    private fun canRead(tree: DocumentTree, file: PhotoFileEntity): Boolean = try {
+    /**
+     * Opens [files] one at a time (each in a [FileOpens] slot, retried while its provider is busy) and records what it
+     * found: readable clears `unreadable_at`, refused or gone sets it, busy changes nothing. [pass] says whether to
+     * pace the opens (background) and collects the summary, logged at the end.
+     */
+    @Suppress("LoopWithTooManyJumpStatements")
+    private suspend fun check(files: List<PhotoFileEntity>, pass: AccessPass): AccessPass {
+        val trees = HashMap<Long, DocumentTree?>()
+        val started = clock()
+        for (file in files) {
+            kotlinx.coroutines.currentCoroutineContext().ensureActive()
+            val tree = trees.getOrPut(file.sourceId) { sourceDao.get(file.sourceId)?.let(this.trees::open) }
+            pass.files++
+            if (tree == null) {
+                pass.unreadable++
+                continue
+            }
+            if (file.unreadableAt == null && grants?.invoke(tree.uri(file.documentId)) == true) {
+                // A grant this process holds (persisted, or the sender's temporary one): readable, no open needed.
+                pass.granted++
+                photoDao.setChecked(file.documentId, clock())
+                continue
+            }
+            pass.opened++
+            when (access(tree, file)) {
+                Access.READABLE -> if (file.unreadableAt != null) photoDao.setReadable(file.documentId)
+
+                Access.REFUSED -> {
+                    pass.unreadable++
+                    photoDao.setUnreadable(file.documentId, clock())
+                }
+
+                Access.BUSY -> pass.busy++
+            }
+            photoDao.setChecked(file.documentId, clock())
+            if (pass.pace) kotlinx.coroutines.delay(BACKGROUND_OPEN_GAP_MS)
+        }
+        pass.ms = clock() - started
+        if (pass.files > 0) Log.i(TAG, pass.summary())
+        return pass
+    }
+
+    /** What one access check found (ADR 0018 "W3/C": a summary line instead of nothing). */
+    class AccessPass(val name: String, val pace: Boolean) {
+        var files = 0
+        var granted = 0
+        var opened = 0
+        var unreadable = 0
+        var busy = 0
+        var skippedServer = 0
+        var skippedRecent = 0
+        var ms = 0L
+
+        fun summary() = "access check ($name): files=$files granted=$granted opened=$opened unreadable=$unreadable " +
+            "busy=$busy skippedServer=$skippedServer skippedRecent=$skippedRecent ms=$ms"
+    }
+
+    private enum class Access { READABLE, REFUSED, BUSY }
+
+    /** Opens [file] once (no read). */
+    private fun access(tree: DocumentTree, file: PhotoFileEntity): Access = try {
         tree.openInput(file.documentId, file.name).close()
-        true
+        Access.READABLE
     } catch (e: CancellationException) {
         throw e
     } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
-        !isAccessError(e)
+        when {
+            isProviderBusy(e) -> Access.BUSY
+            isAccessError(e) -> Access.REFUSED
+            else -> Access.READABLE
+        }
+    }
+
+    private val accessJob = java.util.concurrent.atomic.AtomicReference<Job?>(null)
+
+    /**
+     * The background access check (ADR 0018 "W3/C", ADR 0011): after the app settled ([AppStart]), the hand-off
+     * documents and the files marked unreadable are checked one at a time, paced, in [FileOpens]' slots; files the
+     * server holds are skipped (their thumbnail, viewer and editor read the server copy), and so are files checked in
+     * the last [CHECK_INTERVAL_MS] unless [again] (a gallery permission changed: every unreadable file is opened). One
+     * pass at a time; a new request while one runs is dropped (it covers it), except [again], which restarts it.
+     */
+    fun scheduleAccessCheck(again: Boolean = false) {
+        val running = accessJob.get()
+        if (running?.isActive == true && !again) return
+        running?.cancel()
+        val job = scope.launch(Dispatchers.IO) {
+            dev.hfps.reveal.data.storage.AppStart.awaitSettled()
+            backgroundAccessCheck(again)
+        }
+        accessJob.set(job)
+    }
+
+    /** One background access pass (see [scheduleAccessCheck]); returns its summary. */
+    suspend fun backgroundAccessCheck(again: Boolean = false): AccessPass = withContext(Dispatchers.IO) {
+        val pass = AccessPass(if (again) "again" else "background", pace = true)
+        val handoff = sourceDao.handoff()?.id
+        val recent = clock() - CHECK_INTERVAL_MS
+        val candidates = (photoDao.unreadableFiles() + (handoff?.let { photoDao.handoffFiles() }.orEmpty()))
+            .distinctBy { it.id }
+            .filter { file ->
+                when {
+                    file.onServer -> false.also { pass.skippedServer++ }
+                    again && file.unreadableAt != null -> true
+                    file.checkedAt != null && file.checkedAt > recent -> false.also { pass.skippedRecent++ }
+                    else -> true
+                }
+            }
+            .sortedBy { it.checkedAt ?: 0 }
+        check(candidates, pass)
+        if (candidates.isEmpty()) Log.i(TAG, pass.summary())
+        pass
     }
 
     @Volatile
@@ -452,7 +557,6 @@ class LibraryRepository(
             }
             if (reindex && state == SourceState.AVAILABLE) index(source.id)
         }
-        checkHandoffs()
         backfillHandoffCameras()
     }
 
@@ -477,29 +581,12 @@ class LibraryRepository(
     /**
      * Which hand-off documents Reveal can still read (ADR 0011 "Unreadable hand-offs"): a temporary grant ends with
      * the process, a gallery permission given or taken changes it. Marks and clears `unreadable_at`; returns how many
-     * cannot be read. Opens each document once (no read).
+     * cannot be read. Opens each document once (no read), one at a time in [FileOpens]' slots; a busy provider changes
+     * nothing. Explicit only (tests, a gallery permission change): the app's own checks are [scheduleAccessCheck]'s.
      */
     suspend fun checkHandoffs(): Int = withContext(Dispatchers.IO) {
-        val source = sourceDao.handoff() ?: return@withContext 0
-        val tree = trees.open(source)
-        var unreadable = 0
-        for (file in photoDao.handoffFiles()) {
-            val readable = try {
-                tree.openInput(file.documentId, file.name).close()
-                true
-            } catch (e: CancellationException) {
-                throw e
-            } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
-                !isAccessError(e)
-            }
-            if (readable) {
-                if (file.unreadableAt != null) photoDao.setReadable(file.documentId)
-            } else {
-                unreadable++
-                photoDao.setUnreadable(file.documentId, clock())
-            }
-        }
-        unreadable
+        sourceDao.handoff() ?: return@withContext 0
+        check(photoDao.handoffFiles(), AccessPass("handoffs", pace = false)).unreadable
     }
 
     /** The source's state now. Never throws. */
@@ -896,6 +983,12 @@ class LibraryRepository(
         private const val KEY_GROUPING = "library.grouping"
         private const val SQL_ARGS = 900
         private const val RECHECK_MIN_MS = 30_000L
+
+        /** A file checked this recently is not opened again by the background check. */
+        const val CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000L
+
+        /** The pause between two opens of the background check (at most about 10 per second). */
+        private const val BACKGROUND_OPEN_GAP_MS = 100L
         private const val MAX_RATING = 5
     }
 }

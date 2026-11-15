@@ -30,8 +30,9 @@ import androidx.sqlite.db.SupportSQLiteDatabase
  * | 13 | Culling sync and edited previews (ADR 0027): `culling_records`, `culling_files`, `culling_pending`, |
  * |    | `sidecar_culling`, `edit_uploads` |
  * |    | ([Migration12To13] fills `sidecar_culling` from the photos' sidecar values) |
- * | 14 | Dates and cameras (ADR 0006 "W3/D"): `photos.camera_make` / `camera_model` / `lens` / `metadata_version` |
- * |    | and their indexes ([Migration13To14]: Server photos without a capture time sort by their file's time or |
+ * | 14 | Large libraries (ADR 0018 "W3/C"): `server_thumbs` (library thumbnails), `photo_files.checked_at` |
+ * | 15 | Dates and cameras (ADR 0006 "W3/D"): `photos.camera_make` / `camera_model` / `lens` / `metadata_version` |
+ * |    | and their indexes ([Migration14To15]: Server photos without a capture time sort by their file's time or |
  * |    | go to "No date") |
  *
  * Open it with [configure] (migrations and the sync triggers of [SyncTriggers]).
@@ -64,6 +65,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         CullingPendingEntity::class,
         SidecarCullingEntity::class,
         EditUploadEntity::class,
+        ServerThumbEntity::class,
     ],
     version = RevealDatabase.VERSION,
     exportSchema = true,
@@ -73,7 +75,8 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         AutoMigration(from = 7, to = 8), AutoMigration(from = 8, to = 9),
         AutoMigration(from = 9, to = 10), AutoMigration(from = 11, to = 12),
         AutoMigration(from = 12, to = 13, spec = RevealDatabase.Migration12To13::class),
-        AutoMigration(from = 13, to = 14, spec = RevealDatabase.Migration13To14::class),
+        AutoMigration(from = 13, to = 14),
+        AutoMigration(from = 14, to = 15, spec = RevealDatabase.Migration14To15::class),
     ],
 )
 abstract class RevealDatabase : RoomDatabase() {
@@ -97,6 +100,8 @@ abstract class RevealDatabase : RoomDatabase() {
 
     abstract fun editUploadDao(): EditUploadDao
 
+    abstract fun serverThumbDao(): ServerThumbDao
+
     /**
      * 12 -> 13 (ADR 0027): the culling tables are new; `sidecar_culling` starts as what each photo's sidecar held when
      * it was last applied (the photo's own values: before 0.8 a sidecar import set all three), so the first change of
@@ -114,12 +119,12 @@ abstract class RevealDatabase : RoomDatabase() {
     }
 
     /**
-     * 13 -> 14 (ADR 0006 "W3/D"): the camera columns start empty (null = not read; the indexer reads them again in the
+     * 14 -> 15 (ADR 0006 "W3/D"): the camera columns start empty (null = not read; the indexer reads them again in the
      * background). A Server photo without a capture time sorted by the time its record arrived, which is no date of
      * the photo: it now sorts by its NAS file's time, else at 0 (the grid's "No date" group). `sort_time` is watched
      * by no sync trigger.
      */
-    class Migration13To14 : AutoMigrationSpec {
+    class Migration14To15 : AutoMigrationSpec {
         override fun onPostMigrate(db: SupportSQLiteDatabase) {
             db.execSQL(
                 "UPDATE photos SET sort_time = COALESCE((SELECT MAX(f.modified) FROM photo_files f WHERE " +
@@ -131,7 +136,7 @@ abstract class RevealDatabase : RoomDatabase() {
 
     companion object {
         const val NAME = "reveal.db"
-        const val VERSION = 14
+        const val VERSION = 15
 
         /** Every manual migration, for `Room.databaseBuilder(...).addMigrations(*MIGRATIONS)`. */
         val MIGRATIONS: Array<Migration> get() = arrayOf(MIGRATION_4_5, MIGRATION_10_11)

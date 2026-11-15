@@ -429,9 +429,40 @@ class RevealDatabaseMigrationTest {
     }
 
     @Test
-    fun `13 to 14 adds unread camera fields and dates Server photos by their file or not at all`() {
+    fun `13 to 14 adds the library thumbnails and the access check time`() {
         val name = "migration-13-14.db"
         helper.createDatabase(name, 13).use { db ->
+            db.execSQL(
+                "INSERT INTO sources (id, tree_uri, root_document_id, display_name, state, writable, added_at, kind, " +
+                    "backup) VALUES (1, 'content://t', 'r', 'DCIM', 'AVAILABLE', 1, 0, 'FOLDER', 1)",
+            )
+            db.execSQL(
+                "INSERT INTO photos (id, uuid, source_id, folder, folder_document_id, stem_key, name, format, " +
+                    "has_raw, sort_time, orientation, rating, flag, has_edit, metadata_state, added_at, hidden) " +
+                    "VALUES (1, 'u1', 1, '', '', 'a', 'A.ARW', 'RAW', 1, 0, 1, 0, 'NONE', 0, 'READ', 0, 0)",
+            )
+            db.execSQL(
+                "INSERT INTO photo_files (id, photo_id, source_id, relative_path, document_id, name, size, modified, " +
+                    "role, on_server) VALUES (1, 1, 1, 'A.ARW', 'd', 'A.ARW', 1, 1, 'RAW', 0)",
+            )
+        }
+        helper.runMigrationsAndValidate(name, 14, true, *RevealDatabase.MIGRATIONS).use { db ->
+            db.query("SELECT checked_at FROM photo_files").use { c ->
+                assertThat(c.moveToFirst()).isTrue()
+                assertThat(c.isNull(0)).isTrue()
+            }
+            db.query("SELECT COUNT(*) FROM server_thumbs").use { c ->
+                assertThat(c.moveToFirst()).isTrue()
+                assertThat(c.getInt(0)).isEqualTo(0)
+            }
+        }
+    }
+
+
+    @Test
+    fun `14 to 15 adds unread camera fields and dates Server photos by their file or not at all`() {
+        val name = "migration-14-15.db"
+        helper.createDatabase(name, 14).use { db ->
             db.execSQL(
                 "INSERT INTO sources (id, tree_uri, root_document_id, display_name, state, writable, added_at, kind, " +
                     "backup) VALUES (1, 'content://t', 'r', 'DCIM', 'AVAILABLE', 1, 0, 'FOLDER', 1), " +
@@ -460,7 +491,7 @@ class RevealDatabaseMigrationTest {
             photo(3, 2, 999_999, null).also { file(3, 2, 333) }
             photo(4, 2, 999_999, null).also { file(4, 2, 0) }
         }
-        helper.runMigrationsAndValidate(name, 14, true, *RevealDatabase.MIGRATIONS).use { db ->
+        helper.runMigrationsAndValidate(name, 15, true, *RevealDatabase.MIGRATIONS).use { db ->
             db.query(
                 "SELECT id, sort_time, camera_make, camera_model, lens, metadata_version FROM photos ORDER BY id",
             ).use { c ->

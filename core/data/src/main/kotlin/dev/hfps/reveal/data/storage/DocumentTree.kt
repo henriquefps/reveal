@@ -85,8 +85,10 @@ class SafDocumentTree(
         }
     }.getOrNull()
 
-    override fun openInput(documentId: String, name: String): ImageInput =
-        ImageInput.fromUri(resolver, uri(documentId), name)
+    override fun openInput(documentId: String, name: String): ImageInput {
+        FileOpens.count()
+        return ImageInput.fromUri(resolver, uri(documentId), name)
+    }
 
     override fun readBytes(documentId: String, maxBytes: Int): ByteArray {
         val stream = resolver.openInputStream(uri(documentId)) ?: throw FileNotFoundException(documentId)

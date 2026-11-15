@@ -46,7 +46,8 @@ import org.junit.runner.RunWith
  *
  * ```
  * D=$(mktemp -d) && scripts/sync/local-server.sh start $D 3474 app/src/androidTest/assets/faces/studio-trio.jpg
- * REVEAL_HANDOFF_DIR=$D REVEAL_HANDOFF_LINKS=$(for i in 1 2; do scripts/sync/local-server.sh pair $D; done | paste -sd,) \
+ * L=$(for i in 1 2; do scripts/sync/local-server.sh pair $D; done | paste -sd,)
+ * REVEAL_HANDOFF_DIR=$D REVEAL_HANDOFF_LINKS=$L \
  *   ./gradlew --no-configuration-cache :core:sync:testDebugUnitTest --tests '*RealServerHandoffTest*'
  * scripts/sync/local-server.sh stop $D
  * ```
@@ -121,6 +122,7 @@ class RealServerHandoffTest {
     }
 
     @Test
+    @Suppress("LongMethod")
     fun aNasItemABackedUpItemAndAReplacedItemResolve_withTheCullingOfTheServer() {
         val reveal = checkNotNull(PairingLink.parse(links[0])).let {
             val paired = SyncApi(

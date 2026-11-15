@@ -260,7 +260,7 @@ class MainActivity : ComponentActivity() {
             val outcome = handoffs.receive(request)
             if (key != null) batches.touch(key)
             if (silentMember) {
-                batches.silentFinished(key!!)
+                batches.silentFinished(key)
                 finish()
                 @Suppress("DEPRECATION")
                 overridePendingTransition(0, 0)

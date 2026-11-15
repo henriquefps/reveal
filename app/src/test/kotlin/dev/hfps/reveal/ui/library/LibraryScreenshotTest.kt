@@ -28,6 +28,7 @@ import dev.hfps.image.format.ExifTime
 import dev.hfps.reveal.data.db.FilterCounts
 import dev.hfps.reveal.data.db.PhotoRow
 import dev.hfps.reveal.data.edit.VersionInfo
+import dev.hfps.reveal.data.handoff.ServerIssue
 import dev.hfps.reveal.data.index.IndexPhase
 import dev.hfps.reveal.data.index.IndexProgress
 import dev.hfps.reveal.data.library.SourceItem
@@ -45,6 +46,7 @@ import dev.hfps.reveal.designsystem.theme.RevealTheme
 import dev.hfps.reveal.feature.library.AddFolderBackupContent
 import dev.hfps.reveal.feature.library.FilterSheetContent
 import dev.hfps.reveal.feature.library.GalleryAccessContent
+import dev.hfps.reveal.feature.library.HandoffServerContent
 import dev.hfps.reveal.feature.library.LibraryActions
 import dev.hfps.reveal.feature.library.LibraryContent
 import dev.hfps.reveal.feature.library.LibraryUiState
@@ -52,8 +54,6 @@ import dev.hfps.reveal.feature.library.ManageFoldersContent
 import dev.hfps.reveal.feature.library.PasteEditsContent
 import dev.hfps.reveal.feature.library.SyncBadge
 import dev.hfps.reveal.feature.library.ThumbnailSource
-import dev.hfps.reveal.data.handoff.ServerIssue
-import dev.hfps.reveal.feature.library.HandoffServerContent
 import dev.hfps.reveal.feature.library.UnavailableContent
 import dev.hfps.reveal.feature.library.UnavailableInfo
 import dev.hfps.reveal.feature.library.UnavailableReason

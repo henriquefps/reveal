@@ -143,26 +143,28 @@ class HandoffServerRefsTest {
     }
 
     @Test
-    fun `a photo already in the library under a member fingerprint is that photo, without asking the server`() = runTest {
-        val dir = temp.newFolder("local")
-        val bytes = SyntheticShoot.jpeg(SyntheticShoot.markerOnlyJpeg(600, 400), SyntheticExif()) + "local".toByteArray()
-        val print = FileFingerprint.of(bytes)
-        val uri = Uri.fromFile(File(dir, "IMG_1.JPG").apply { writeBytes(bytes) })
-        repo.receive(HandoffRequest(listOf(uri)))
-        val before = rows().single()
-        now = 20_000
-        val outcome = repo.receive(
-            request(refs(ServerItemRef(id(5), fingerprint = "v1:other", fingerprints = listOf("v1:other", print)))),
-        )
-        outcome as HandoffOutcome.OpenEditor
-        assertThat(server.itemCalls).isEmpty()
-        val after = rows()
-        assertThat(after).hasSize(1)
-        assertThat(after.single().id).isEqualTo(before.id)
-        assertThat(after.single().handoffAt).isEqualTo(20_000)
-        assertThat(db.syncDao().serverSource()).isNull()
-        assertThat(server.pulls).isEqualTo(1)
-    }
+    fun `a photo already in the library under a member fingerprint is that photo, without asking the server`() =
+        runTest {
+            val dir = temp.newFolder("local")
+            val bytes =
+                SyntheticShoot.jpeg(SyntheticShoot.markerOnlyJpeg(600, 400), SyntheticExif()) + "local".toByteArray()
+            val print = FileFingerprint.of(bytes)
+            val uri = Uri.fromFile(File(dir, "IMG_1.JPG").apply { writeBytes(bytes) })
+            repo.receive(HandoffRequest(listOf(uri)))
+            val before = rows().single()
+            now = 20_000
+            val outcome = repo.receive(
+                request(refs(ServerItemRef(id(5), fingerprint = "v1:other", fingerprints = listOf("v1:other", print)))),
+            )
+            outcome as HandoffOutcome.OpenEditor
+            assertThat(server.itemCalls).isEmpty()
+            val after = rows()
+            assertThat(after).hasSize(1)
+            assertThat(after.single().id).isEqualTo(before.id)
+            assertThat(after.single().handoffAt).isEqualTo(20_000)
+            assertThat(db.syncDao().serverSource()).isNull()
+            assertThat(server.pulls).isEqualTo(1)
+        }
 
     @Test
     fun `the item id wins over a fingerprint that is not one of its members`() = runTest {
@@ -265,7 +267,9 @@ class HandoffServerRefsTest {
         val dir = temp.newFolder("mixed")
         val uri = Uri.fromFile(
             File(dir, "IMG_9.JPG").apply {
-                writeBytes(SyntheticShoot.jpeg(SyntheticShoot.markerOnlyJpeg(600, 400), SyntheticExif()) + "9".toByteArray())
+                writeBytes(
+                    SyntheticShoot.jpeg(SyntheticShoot.markerOnlyJpeg(600, 400), SyntheticExif()) + "9".toByteArray(),
+                )
             },
         )
         val outcome = repo.receive(
@@ -380,7 +384,9 @@ class HandoffServerRefsTest {
         val dir = temp.newFolder(name)
         return Uri.fromFile(
             File(dir, "$name.JPG").apply {
-                writeBytes(SyntheticShoot.jpeg(SyntheticShoot.markerOnlyJpeg(600, 400), SyntheticExif()) + name.toByteArray())
+                writeBytes(
+                    SyntheticShoot.jpeg(SyntheticShoot.markerOnlyJpeg(600, 400), SyntheticExif()) + name.toByteArray(),
+                )
             },
         )
     }

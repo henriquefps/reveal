@@ -29,7 +29,7 @@ class HandoffBatches(
     private val scope: CoroutineScope,
     private val clock: () -> Long = System::currentTimeMillis,
 ) {
-    /** [at]: the `handoff_at` every photo of the batch gets; [follower]: an earlier intent of this batch came before. */
+    /** [at]: the `handoff_at` of every photo of the batch; [follower]: an earlier intent of the batch came first. */
     class Join(val at: Long, val follower: Boolean)
 
     @Serializable
@@ -52,7 +52,8 @@ class HandoffBatches(
         runCatching { json.decodeFromString(State.serializer(), it) }.getOrNull()
     }
 
-    private suspend fun save(state: State) = db.metaDao().put(MetaEntity(KEY, json.encodeToString(State.serializer(), state)))
+    private suspend fun save(state: State) =
+        db.metaDao().put(MetaEntity(KEY, json.encodeToString(State.serializer(), state)))
 
     /** Joins (or starts) the batch [key]: the same stamp for every intent inside the window. */
     suspend fun join(key: String): Join = mutex.withLock {
@@ -86,9 +87,8 @@ class HandoffBatches(
             delay(SETTLE_MS)
             val show = mutex.withLock {
                 val state = load()
-                if (state != null && state.key == key && !state.claimed && !state.shown &&
-                    clock() - state.touched >= SETTLE_MS - SLACK_MS
-                ) {
+                val open = state != null && state.key == key && !state.claimed && !state.shown
+                if (state != null && open && clock() - state.touched >= SETTLE_MS - SLACK_MS) {
                     save(state.copy(shown = true))
                     true
                 } else {

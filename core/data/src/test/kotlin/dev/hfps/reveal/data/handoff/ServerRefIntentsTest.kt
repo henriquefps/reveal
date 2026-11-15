@@ -9,7 +9,7 @@ import dev.hfps.reveal.data.model.PickFlag
 import org.junit.Test
 import org.junit.runner.RunWith
 
-/** The server-reference extras and `CULLING_VERSION` 2 of ADR 0011 "Amendment W3/H": every key, limit and malformed case. */
+/** The server-reference extras and `CULLING_VERSION` 2 of ADR 0011 "Amendment W3/H": keys, limits, malformed. */
 @RunWith(AndroidJUnit4::class)
 class ServerRefIntentsTest {
     private val server = "5b1c0a52-0000-4000-8000-000000000001"
@@ -23,7 +23,11 @@ class ServerRefIntentsTest {
             for ((k, v) in more) {
                 when (v) {
                     is String -> putString(k, v)
-                    is Array<*> -> @Suppress("UNCHECKED_CAST") putStringArray(k, v as Array<String>)
+
+                    is Array<*> ->
+                        @Suppress("UNCHECKED_CAST")
+                        putStringArray(k, v as Array<String>)
+
                     is Int -> putInt(k, v)
                 }
             }

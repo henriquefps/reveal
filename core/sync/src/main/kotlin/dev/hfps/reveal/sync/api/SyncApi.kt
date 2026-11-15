@@ -869,11 +869,7 @@ data class ItemsLookupResponse(
 
 /** Where the server holds a file: `nas` (a folder path) or `backup` (an uploaded blob). */
 @Serializable
-data class ItemLocationRecord(
-    val source: String = "",
-    val folderName: String = "",
-    val path: String = "",
-)
+data class ItemLocationRecord(val source: String = "", val folderName: String = "", val path: String = "")
 
 /** One member file of an item (Hoard ADR 0014). */
 @Serializable

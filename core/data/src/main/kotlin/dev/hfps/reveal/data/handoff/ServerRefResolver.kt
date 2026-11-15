@@ -106,7 +106,7 @@ internal class ServerRefResolver(
         data object Unreachable : Fetched
     }
 
-    @Suppress("LongMethod")
+    @Suppress("LongMethod", "CyclomaticComplexMethod")
     private suspend fun resolvePaired(refs: ServerRefs, title: String?, refresh: Boolean, at: Long?): ServerBatch {
         val now = at ?: clock()
         val local = localHits(refs.items, refresh)
@@ -150,8 +150,7 @@ internal class ServerRefResolver(
         for (ref in refs.items) {
             val photoId = byItem[ref.itemId] ?: continue
             photos.setHandoffAt(photoId, now, title)
-            val version = photos.firstVersion(photoId) ?: continue
-            served += ServedPhoto(ref.itemId, photoId, version)
+            photos.firstVersion(photoId)?.let { served += ServedPhoto(ref.itemId, photoId, it) }
         }
         if (unreachable.isNotEmpty()) keepUnreachable(refs.serverId, title, unreachable) else clearUnreachable()
         // The server's decisions for these shots (Hoard has pushed its own before sending): best effort.
@@ -213,6 +212,7 @@ internal class ServerRefResolver(
      * The item behind [ref]: `GET /v1/items/{id}` following one `replacedBy`; an unknown id falls back to a fingerprint
      * lookup (the sender's); a tombstone without a replacement is gone.
      */
+    @Suppress("ReturnCount")
     private suspend fun fetch(ref: ServerItemRef): Fetched {
         var result = server.item(ref.itemId)
         if (result is ServerItemResult.Gone && result.replacedBy != null) result = server.item(result.replacedBy)

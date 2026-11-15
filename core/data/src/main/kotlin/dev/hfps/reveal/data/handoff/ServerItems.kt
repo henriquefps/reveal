@@ -20,7 +20,11 @@ data class ServerFileInfo(
     fun named(fallback: String? = null): ServerFileInfo = if (name.isNotBlank()) {
         this
     } else {
-        copy(name = fallback?.takeIf { it.isNotBlank() } ?: "${fingerprint.removePrefix("v1:").take(NAME_HEX)}.${extension()}")
+        copy(
+            name =
+                fallback?.takeIf { it.isNotBlank() }
+                    ?: "${fingerprint.removePrefix("v1:").take(NAME_HEX)}.${extension()}",
+        )
     }
 
     private fun extension(): String = when (val f = format.lowercase().trim().removePrefix(".")) {

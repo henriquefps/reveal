@@ -54,11 +54,8 @@ sealed interface HandoffOutcome {
     ) : HandoffOutcome
 
     /** Several shots: show them in "Opened from other apps". */
-    data class OpenLibrary(
-        val photoIds: List<Long>,
-        val notFound: Int = 0,
-        val issue: ServerIssue? = null,
-    ) : HandoffOutcome
+    data class OpenLibrary(val photoIds: List<Long>, val notFound: Int = 0, val issue: ServerIssue? = null) :
+        HandoffOutcome
 
     /** Only server references and none opened: [issue] (pair, another server, unreachable) and/or [notFound]. */
     data class ServerRefs(val issue: ServerIssue?, val notFound: Int = 0) : HandoffOutcome
@@ -162,7 +159,7 @@ class HandoffRepository(
         }
     }
 
-    @Suppress("LongMethod")
+    @Suppress("LongMethod", "CyclomaticComplexMethod")
     private suspend fun receiveUris(request: HandoffRequest, batch: ServerBatch?): HandoffOutcome {
         val persisted = HashSet<Uri>()
         val items = request.uris.mapNotNull { uri ->
@@ -179,7 +176,8 @@ class HandoffRepository(
         if (displayable.isEmpty()) {
             // Keep M0's behaviour for a single unrecognised name: the editor opens it by URI and explains.
             val single = imageItems.singleOrNull()
-            return if (batch != null && (batch.photos.isNotEmpty() || batch.issue != null || batch.notFound > 0)) {
+            val serverHasSay = batch != null && (batch.photos.isNotEmpty() || batch.issue != null)
+            return if (serverHasSay || (batch != null && batch.notFound > 0)) {
                 serverOutcome(batch)
             } else if (single != null && request.uris.size == 1) {
                 HandoffOutcome.OpenUri(single.uri)
@@ -225,7 +223,13 @@ class HandoffRepository(
             initial != null || total == 1 ->
                 HandoffOutcome.OpenEditor(first.second.versionId, total == 1, total > 1, notFound, issue)
 
-            else -> HandoffOutcome.OpenLibrary(stored.map { it.second.photoId } + served.map { it.photoId }, notFound, issue)
+            else -> HandoffOutcome.OpenLibrary(
+                stored.map {
+                    it.second.photoId
+                } + served.map { it.photoId },
+                notFound,
+                issue,
+            )
         }
     }
 
@@ -497,9 +501,8 @@ class HandoffRepository(
     /** [values] with each dated field kept only when it beats what Reveal holds for it (per-field last writer). */
     private suspend fun byLastWriter(photoId: Long, values: HandoffCulling): HandoffCulling {
         suspend fun wins(field: CullingField, at: Long?, device: String?): Boolean {
-            if (at == null) return true
-            val mine = held(photoId, field) ?: return true
-            return CullingStamp(at, device).beats(mine)
+            val mine = if (at == null) null else held(photoId, field)
+            return at == null || mine == null || CullingStamp(at, device).beats(mine)
         }
         val rating = wins(CullingField.RATING, values.ratingAt, values.ratingDevice)
         val flag = wins(CullingField.FLAG, values.flagAt, values.flagDevice)

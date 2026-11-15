@@ -254,7 +254,9 @@ object HandoffIntents {
         }
         val label = item.typed<String>(KEY_LABEL)?.trim()?.take(MAX_LABEL)
         val time = { key: String -> item.typed<Long>(key)?.takeIf { it > 0 } }
-        val device = { key: String -> item.typed<String>(key)?.trim()?.takeIf { it.isNotEmpty() && it.length <= MAX_ID } }
+        val device = { key: String ->
+            item.typed<String>(key)?.trim()?.takeIf { it.isNotEmpty() && it.length <= MAX_ID }
+        }
         return HandoffCulling(
             rating = rating,
             flag = flag,

@@ -15,6 +15,7 @@ import dev.hfps.reveal.data.di.DataScope
 import dev.hfps.reveal.data.export.Authorship
 import dev.hfps.reveal.data.export.ExportPreferences
 import dev.hfps.reveal.data.handoff.LocalPreviews
+import dev.hfps.reveal.data.handoff.ServerItems
 import dev.hfps.reveal.data.library.DocumentTreeFactory
 import dev.hfps.reveal.data.storage.CacheBudget
 import dev.hfps.reveal.data.storage.LibraryThumbsPreferences
@@ -35,13 +36,12 @@ import dev.hfps.reveal.sync.engine.SyncEngine
 import dev.hfps.reveal.sync.engine.SyncStore
 import dev.hfps.reveal.sync.engine.SyncedSetting
 import dev.hfps.reveal.sync.files.ServerFiles
+import dev.hfps.reveal.sync.handoff.SyncServerItems
 import dev.hfps.reveal.sync.thumbs.LibraryThumbs
 import dev.hfps.reveal.sync.work.SyncController
 import java.io.ByteArrayOutputStream
 import java.io.File
 import javax.inject.Singleton
-import dev.hfps.reveal.data.handoff.ServerItems
-import dev.hfps.reveal.sync.handoff.SyncServerItems
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.serialization.json.JsonElement
 

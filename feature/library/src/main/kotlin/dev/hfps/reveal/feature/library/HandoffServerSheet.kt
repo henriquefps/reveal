@@ -1,3 +1,5 @@
+@file:Suppress("MatchingDeclarationName")
+
 package dev.hfps.reveal.feature.library
 
 import androidx.compose.foundation.layout.Arrangement
@@ -37,12 +39,7 @@ object HandoffServerTags {
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun HandoffServerSheet(
-    issue: ServerIssue?,
-    notFound: Int,
-    onPair: () -> Unit,
-    onDismiss: () -> Unit,
-) {
+fun HandoffServerSheet(issue: ServerIssue?, notFound: Int, onPair: () -> Unit, onDismiss: () -> Unit) {
     RevealBottomSheet(onDismissRequest = onDismiss) {
         HandoffServerContent(issue, notFound, onPair, onDismiss)
     }
@@ -59,7 +56,8 @@ fun HandoffServerContent(
     val colors = RevealTheme.colors
     val notPaired = issue is ServerIssue.NotPaired
     Column(
-        modifier = modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 8.dp).testTag(HandoffServerTags.SHEET),
+        modifier = modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 8.dp)
+            .testTag(HandoffServerTags.SHEET),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {

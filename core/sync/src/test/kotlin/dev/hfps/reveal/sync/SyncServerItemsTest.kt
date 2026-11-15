@@ -90,7 +90,15 @@ class SyncServerItemsTest {
                 "files",
                 buildJsonArray {
                     add(
-                        file("v1:cc", "rendered", "IMG.JPG", buildJsonObject { put("source", "backup"); put("sha256", "x") }),
+                        file(
+                            "v1:cc",
+                            "rendered",
+                            "IMG.JPG",
+                            buildJsonObject {
+                                put("source", "backup")
+                                put("sha256", "x")
+                            },
+                        ),
                     )
                 },
             )

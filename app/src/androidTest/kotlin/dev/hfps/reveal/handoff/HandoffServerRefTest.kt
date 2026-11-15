@@ -73,13 +73,12 @@ class HandoffServerRefTest {
         paired = true
     }
 
-    private fun send(refs: ServerRefs, uri: Uri? = null, title: String = stem): Intent =
-        HandoffIntents.serverExtras(
-            Intent(HandoffIntents.ACTION_DEVELOP).setClass(context, MainActivity::class.java)
-                .putExtra(HandoffIntents.EXTRA_TITLE, title)
-                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION),
-            refs,
-        ).also { if (uri != null) it.setData(uri) }
+    private fun send(refs: ServerRefs, uri: Uri? = null, title: String = stem): Intent = HandoffIntents.serverExtras(
+        Intent(HandoffIntents.ACTION_DEVELOP).setClass(context, MainActivity::class.java)
+            .putExtra(HandoffIntents.EXTRA_TITLE, title)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION),
+        refs,
+    ).also { if (uri != null) it.setData(uri) }
 
     private fun item() = ServerItemRef(UUID.randomUUID().toString(), "v1:" + "%064x".format(System.nanoTime()))
 
@@ -145,7 +144,10 @@ class HandoffServerRefTest {
         ActivityScenario.launch<MainActivity>(send(refs)).use {
             waitForSheet(HandoffServerTags.OK)
         }
-        android.util.Log.i("REVEAL_HANDOFF_TEST", "500 server items resolved in ${(System.nanoTime() - started) / 1_000_000} ms")
+        android.util.Log.i(
+            "REVEAL_HANDOFF_TEST",
+            "500 server items resolved in ${(System.nanoTime() - started) / 1_000_000} ms",
+        )
     }
 
     /** A real JPEG in the debug provider, as another app would share it: its document id and URI. */

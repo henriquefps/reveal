@@ -56,7 +56,7 @@ class SyncServerItems(
                 .associate { it.fingerprint to it.itemId }
         } catch (e: CancellationException) {
             throw e
-        } catch (e: IOException) {
+        } catch (@Suppress("SwallowedException") e: IOException) {
             null
         }
     }
@@ -84,8 +84,7 @@ class SyncServerItems(
                 mainFingerprint = record.mainFingerprint,
                 files = record.files.map { ServerFileInfo(it.fingerprint, it.role, it.name, it.size, it.format) },
                 originalSource = if (nas != null || locations.isEmpty()) "nas" else "backup",
-                folder = listOfNotNull(nas?.folderName?.takeIf { it.isNotEmpty() }, directory.takeIf { it.isNotEmpty() })
-                    .joinToString("/"),
+                folder = listOfNotNull(nas?.folderName, directory).filter { it.isNotEmpty() }.joinToString("/"),
                 sortTime = record.sortTime,
                 width = record.width,
                 height = record.height,

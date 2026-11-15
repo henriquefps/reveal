@@ -10,6 +10,7 @@ import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
+import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -134,23 +135,29 @@ class MainActivity : ComponentActivity() {
                     },
                 )
                 PresetLinkHost(presetLink)
-                val notice by serverNotice.collectAsStateWithLifecycle()
-                notice?.let { shown ->
-                    HandoffServerSheet(
-                        issue = shown.issue,
-                        notFound = shown.notFound,
-                        onPair = {
-                            // The batch stays kept: pairing with that server opens it (watchServer).
-                            serverNotice.value = null
-                            navController.navigate(SyncSettingsRoute)
-                        },
-                        onDismiss = {
-                            serverNotice.value = null
-                            if (shown.issue is ServerIssue.NotPaired) lifecycleScope.launch { handoffs.dropPending() }
-                        },
-                    )
-                }
+                ServerNoticeHost(navController)
             }
+        }
+    }
+
+    /** The notice of a hand-off of server references (docs/adr/0011 "Amendment W3/H"), until dismissed. */
+    @Composable
+    private fun ServerNoticeHost(navController: NavController) {
+        val notice by serverNotice.collectAsStateWithLifecycle()
+        notice?.let { shown ->
+            HandoffServerSheet(
+                issue = shown.issue,
+                notFound = shown.notFound,
+                onPair = {
+                    // The batch stays kept: pairing with that server opens it (watchServer).
+                    serverNotice.value = null
+                    navController.navigate(SyncSettingsRoute)
+                },
+                onDismiss = {
+                    serverNotice.value = null
+                    if (shown.issue is ServerIssue.NotPaired) lifecycleScope.launch { handoffs.dropPending() }
+                },
+            )
         }
     }
 

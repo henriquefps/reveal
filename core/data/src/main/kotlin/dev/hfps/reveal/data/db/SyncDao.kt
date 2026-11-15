@@ -268,11 +268,17 @@ interface SyncDao {
 
     /**
      * Hand-off photos whose main file (the RAW of a pair, else the rendering) the server holds (ADR 0018 "W3/C"): they
-     * become Server photos ([adoptFile], [adoptPhoto]) so nothing opens the sender's URI to show or edit them.
+     * become Server photos ([adoptFile], [adoptPhoto]) so nothing opens the sender's URI to show or edit them. A file
+     * that is a readable local MediaStore copy (`content://media/...`, W4) stays where it is: adoption exists to stop
+     * reading over the sender's proxy, and a local copy is faster and works offline; an unreadable one is adopted. A
+     * Downloads original Reveal keeps itself (`file:` under `handoff-originals`) is never adopted: adoption would drop
+     * the row and leave the copy behind.
      */
     @Query(
         "SELECT p.id FROM photos p JOIN sources s ON s.id = p.source_id WHERE s.kind = 'HANDOFF' AND EXISTS " +
             "(SELECT 1 FROM photo_files f WHERE f.photo_id = p.id AND f.on_server = 1 AND f.fingerprint IS NOT NULL " +
+            "AND (f.document_id NOT LIKE 'content://media/%' OR f.unreadable_at IS NOT NULL) " +
+            "AND f.document_id NOT LIKE 'file:%/handoff-originals/%' " +
             "AND f.id = (SELECT m.id FROM photo_files m WHERE m.photo_id = p.id AND m.role IN ('RAW', 'RENDERED') " +
             "ORDER BY CASE m.role WHEN 'RAW' THEN 0 ELSE 1 END, m.id LIMIT 1)) AND NOT EXISTS (SELECT 1 FROM meta x " +
             "WHERE x.`key` = '$ADOPT_FAILED_PREFIX' || p.id AND CAST(x.value AS INTEGER) > :failedSince) " +

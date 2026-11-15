@@ -321,6 +321,59 @@ class HandoffServerRefsTest {
     }
 
     @Test
+    fun `chunks of URI items, server items and both are one batch, each chunk with its own culling`() = runTest {
+        serve(item(1), item(2), item(3))
+        fun jpeg(n: Int) = Uri.fromFile(
+            File(temp.newFolder("chunk$n"), "IMG_$n.JPG").apply {
+                writeBytes(
+                    SyntheticShoot.jpeg(SyntheticShoot.markerOnlyJpeg(600, 400), SyntheticExif()) + "$n".toByteArray(),
+                )
+            },
+        )
+        val first = jpeg(1)
+        // Chunk 0: URI + server item, the initial URI; chunk 1: URIs only; chunk 2: server items only (all one title).
+        val c0 = repo.receive(
+            HandoffRequest(
+                uris = listOf(first),
+                server = refs(ServerItemRef(id(1))),
+                initial = first,
+                title = "Split",
+                batchIndex = 0,
+                batchCount = 3,
+                batchAt = 5_000L,
+            ),
+        )
+        val c1 = repo.receive(
+            HandoffRequest(
+                uris = listOf(jpeg(2), jpeg(3)),
+                title = "Split",
+                batchIndex = 1,
+                batchCount = 3,
+                batchAt = 5_000L,
+            ),
+        )
+        val c2 = repo.receive(
+            HandoffRequest(
+                uris = emptyList(),
+                server = refs(ServerItemRef(id(2)), ServerItemRef(id(3))),
+                title = "Split",
+                batchIndex = 2,
+                batchCount = 3,
+                batchAt = 5_000L,
+            ),
+        )
+        // The initial photo opens from chunk 0 only; the later chunks are silent members (library outcomes).
+        assertThat(c0).isInstanceOf(HandoffOutcome.OpenEditor::class.java)
+        assertThat(HandoffRequest(emptyList(), batchIndex = 1).silentMember).isTrue()
+        assertThat(c1).isInstanceOf(HandoffOutcome.OpenLibrary::class.java)
+        assertThat(c2).isInstanceOf(HandoffOutcome.OpenLibrary::class.java)
+        val photos = rows()
+        assertThat(photos).hasSize(6)
+        assertThat(photos.map { it.handoffAt }.distinct()).containsExactly(5_000L)
+        assertThat(photos.map { it.handoffTitle }.distinct()).containsExactly("Split")
+    }
+
+    @Test
     fun `not paired keeps the batch, pairing with that server resolves it`() = runTest {
         server.pairing = null
         serve(item(1), item(2))

@@ -5,6 +5,7 @@ import dev.hfps.image.ImageInput
 import dev.hfps.reveal.data.storage.DocumentTree
 import dev.hfps.reveal.pipeline.preview.SmartPreviewMaker
 import java.io.File
+import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -65,14 +66,25 @@ class HandoffPreviewer(
         val raw: Document?,
         val rendered: Document?,
         val smart: Boolean,
+        /** Whether the documents can still be read when its smart preview's turn comes (W4: the grant's holder). */
+        val readable: () -> Boolean = { true },
+        /**
+         * The fingerprint whose previews this shot replaces (a RAW that joined the JPEG of an earlier chunk: the JPEG's
+         * own previews): deleted once this shot's display preview is made, never before.
+         */
+        val replaces: String? = null,
     )
 
     /** A document of the hand-off tree: its id (the content URI) and name. */
     data class Document(val id: String, val name: String)
 
-    private val lock = Mutex()
+    private val displayLock = Mutex()
+    private val smartLock = Mutex()
     private val jobs = ArrayList<Job>()
     private val editors = MutableStateFlow(0)
+
+    /** Fingerprints that are no longer a shot's main file ([retire]): their queued previews do nothing. */
+    private val retired: MutableSet<String> = ConcurrentHashMap.newKeySet()
 
     /** Until when (Unix ms) an editor this hand-off opens is expected: it is created after `receive` returns. */
     @Volatile
@@ -91,22 +103,41 @@ class HandoffPreviewer(
 
     fun editorClosed() = editors.update { (it - 1).coerceAtLeast(0) }
 
-    /** Previews [shots] in order, after the ones scheduled before: every display image, then the smart previews. */
-    fun schedule(shots: List<Shot>) {
-        if (shots.isEmpty()) return
-        val job = scope.launch {
-            lock.withLock {
-                shots.forEach { display(it) }
+    /**
+     * [fingerprint] is no longer a shot's main file (a RAW of a later chunk joined its JPEG): previews still queued for
+     * it are skipped. The previews already made stay until the new main file's display preview replaces them
+     * ([Shot.replaces]).
+     */
+    fun retire(fingerprint: String) {
+        retired += fingerprint
+    }
+
+    /**
+     * Previews [shots] in order, after the ones scheduled before: every display image, then the smart previews. Display
+     * images never wait behind smart previews (those wait for the editor to close). Returns the job of these shots'
+     * display images (a hand-off's holder waits for it before it lets its grant go, ADR 0011 "Amendment W4"); a smart
+     * preview is made only while its shot is still [Shot.readable].
+     */
+    fun schedule(shots: List<Shot>): Job {
+        if (shots.isEmpty()) return Job().apply { complete() }
+        // A main file again (the same photo handed over anew, alone): its previews are wanted.
+        retired.removeAll(shots.map { it.fingerprint }.toSet())
+        val displays = scope.launch { displayLock.withLock { shots.forEach { display(it) } } }
+        val smarts = scope.launch {
+            displays.join()
+            smartLock.withLock {
                 for (shot in shots.filter { it.smart }) {
                     quiet()
-                    smart(shot)
+                    if (shot.readable()) smart(shot)
                 }
             }
         }
         synchronized(jobs) {
             jobs.removeAll { it.isCompleted }
-            jobs += job
+            jobs += displays
+            jobs += smarts
         }
+        return displays
     }
 
     /** Waits for every scheduled preview (tests, and the access check that follows a hand-off). */
@@ -115,6 +146,7 @@ class HandoffPreviewer(
     }
 
     private fun display(shot: Shot) = guarded {
+        if (shot.fingerprint in retired) return@guarded
         if (previews.display(shot.fingerprint) == null) {
             write({ previews.putDisplay(shot.fingerprint, it) }) { out ->
                 open(shot.raw).use { raw ->
@@ -122,9 +154,15 @@ class HandoffPreviewer(
                 }
             }
         }
+        // The replaced main file's previews go only once this one exists (a failed RAW keeps the JPEG's).
+        val replaced = shot.replaces
+        if (replaced != null && replaced in retired && previews.display(shot.fingerprint) != null) {
+            previews.delete(listOf(replaced))
+        }
     }
 
     private fun smart(shot: Shot) = guarded {
+        if (shot.fingerprint in retired) return@guarded
         if (previews.smart(shot.fingerprint) == null) {
             write({ previews.putSmart(shot.fingerprint, it) }) { out ->
                 tree.openInput(shot.main.id, shot.main.name).use { making.smart(it, out) }

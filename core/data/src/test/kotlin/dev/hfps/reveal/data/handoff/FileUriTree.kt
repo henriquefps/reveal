@@ -24,6 +24,23 @@ internal class FileUriTree : DocumentTree {
     /** Every open, by document id. */
     val opens = ArrayList<String>()
 
+    /** MediaStore `RELATIVE_PATH` per document (W4 pairing); none = not a MediaStore row. */
+    val relativePaths = HashMap<String, String>()
+
+    /** Documents that can be listed (stat) but not opened: a grant gone between the listing and the read. */
+    val refusedOpens = HashSet<String>()
+
+    /** Called before each open (a test's gate: it may block until the test lets the open go on). */
+    @Volatile
+    var onOpen: (String) -> Unit = {}
+
+    /** Whether the sender's grant still covers a document (false: the open is refused, as when the grant ended). */
+    @Volatile
+    var granted: (String) -> Boolean = { true }
+
+    /** The display name per document when it differs from the file's (an extensionless Downloads item). */
+    val names = HashMap<String, String>()
+
     private fun file(id: String): File {
         if (id in refused) throw SecurityException("no access to $id")
         val left = busy[id] ?: 0
@@ -37,10 +54,21 @@ internal class FileUriTree : DocumentTree {
     override fun children(documentId: String): List<DocumentEntry> = emptyList()
 
     override fun stat(documentId: String): DocumentEntry? = runCatching { file(documentId) }.getOrNull()
-        ?.takeIf { it.isFile }?.let { DocumentEntry(documentId, it.name, "", it.length(), it.lastModified()) }
+        ?.takeIf { it.isFile }?.let {
+            DocumentEntry(
+                documentId,
+                names[documentId] ?: it.name,
+                "",
+                it.length(),
+                it.lastModified(),
+                relativePath = relativePaths[documentId],
+            )
+        }
 
     override fun openInput(documentId: String, name: String): ImageInput {
-        opens += documentId
+        synchronized(opens) { opens += documentId }
+        onOpen(documentId)
+        if (documentId in refusedOpens || !granted(documentId)) throw SecurityException("no access to $documentId")
         return ImageInput.fromFile(file(documentId))
     }
 

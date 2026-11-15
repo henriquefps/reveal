@@ -106,6 +106,8 @@
     <string name="storage_server_files_note">Partes de originais e prévias do seu servidor, guardadas enquanto você as vê</string>
     <string name="storage_handoff_previews">Fotos de outros apps</string>
     <string name="storage_handoff_previews_note">Prévias de fotos que outros apps compartilharam com o Reveal</string>
+    <string name="storage_handoff_originals">Originais de outros apps</string>
+    <string name="storage_handoff_originals_note">Arquivos que outros apps entregaram para o Reveal guardar (como fotos CR3). São a única cópia que o Reveal consegue ler, então Limpar cache não mexe neles; remover a foto os apaga.</string>
     <string name="storage_handoff_previews_kept">%1$s são a única cópia de fotos e ficam</string>
     <string name="storage_masks">Máscaras e preenchimentos de IA</string>
     <string name="storage_masks_note">Máscaras e preenchimentos da Remoção, refeitos quando preciso</string>

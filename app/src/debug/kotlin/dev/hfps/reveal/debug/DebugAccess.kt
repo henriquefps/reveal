@@ -8,8 +8,10 @@ import dev.hfps.reveal.data.edit.EditRepository
 import dev.hfps.reveal.data.edit.VersionRepository
 import dev.hfps.reveal.data.editor.EditorLayoutPreferences
 import dev.hfps.reveal.data.export.ExportPresetRepository
+import dev.hfps.reveal.data.handoff.GalleryAccess
 import dev.hfps.reveal.data.handoff.HandoffPreviewer
 import dev.hfps.reveal.data.handoff.HandoffRepository
+import dev.hfps.reveal.data.handoff.LocalOriginals
 import dev.hfps.reveal.data.library.LibraryRepository
 import dev.hfps.reveal.data.library.XmpExport
 import dev.hfps.reveal.data.mask.AiMasks
@@ -54,6 +56,10 @@ interface DebugAccess {
     fun exportPresets(): ExportPresetRepository
 
     fun xmpExport(): XmpExport
+
+    fun galleryAccess(): GalleryAccess
+
+    fun localOriginals(): LocalOriginals
 
     fun xmpPreferences(): XmpPreferences
 

@@ -2,6 +2,9 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+
     <application
         android:name=".RevealApplication"
         android:allowBackup="false"
@@ -149,6 +152,12 @@
                 <data android:mimeType="image/x-samsung-srw" />
             </intent-filter>
         </activity>
+        <!-- Holds a hand-off's read grant (its intent's ClipData) until the copies and previews that need it are done,
+             so the activity can finish (ADR 0011 "Amendment W4", "Grant service"). -->
+        <service
+            android:name=".handoff.HandoffGrantService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
     </application>
 
 </manifest>

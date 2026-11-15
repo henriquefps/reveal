@@ -58,6 +58,7 @@ import dev.hfps.reveal.feature.library.AddFolderBackupContent
 import dev.hfps.reveal.feature.library.DateGrouping
 import dev.hfps.reveal.feature.library.FilterSheetContent
 import dev.hfps.reveal.feature.library.GalleryAccessContent
+import dev.hfps.reveal.feature.library.GalleryOffer
 import dev.hfps.reveal.feature.library.GoToDateContent
 import dev.hfps.reveal.feature.library.HandoffServerContent
 import dev.hfps.reveal.feature.library.LibraryActions
@@ -650,18 +651,37 @@ class PhoneLibraryScreenshotTest : LibraryScreenshotBase("phone") {
         composeRule.onRoot().captureRoboImage("src/test/screenshots/library/$file.png")
     }
 
-    /** The once-only gallery access offer (ADR 0011 "Gallery access"). */
-    @Test fun galleryAccess() {
+    /** Hoard's offer with limited ("selected photos") access: what stays openable (ADR 0011 "Amendment W4"). */
+    @Test fun galleryAccessPartial() = galleryOffer(
+        "phone_gallery_access_partial_light",
+        GalleryOffer.HOARD,
+        true,
+        false,
+    )
+
+    /** Hoard's offer on receipt of its MediaStore copies (ADR 0011 "Amendment W4"). */
+    @Test fun galleryAccessHoard() = galleryOffer("phone_gallery_access_hoard_dark", GalleryOffer.HOARD, false, true)
+
+    /** The once-only gallery access offer for a gallery share that can no longer be read (ADR 0011). */
+    @Test fun galleryAccess() = galleryOffer("phone_gallery_access_dark", GalleryOffer.SHARED, false, true)
+
+    private fun galleryOffer(file: String, offer: GalleryOffer, partial: Boolean, dark: Boolean) {
         composeRule.setContent {
-            RevealTheme(darkTheme = true) {
+            RevealTheme(darkTheme = dark) {
                 Box(Modifier.fillMaxSize().background(RevealTheme.colors.background), Alignment.BottomCenter) {
                     Surface(color = RevealTheme.colors.card, shape = RevealTheme.shapes.sheet) {
-                        GalleryAccessContent(onAllow = {}, onDecline = {}, modifier = Modifier.padding(top = 24.dp))
+                        GalleryAccessContent(
+                            onAllow = {},
+                            onDecline = {},
+                            modifier = Modifier.padding(top = 24.dp),
+                            offer = offer,
+                            partial = partial,
+                        )
                     }
                 }
             }
         }
-        composeRule.onRoot().captureRoboImage("src/test/screenshots/library/phone_gallery_access_dark.png")
+        composeRule.onRoot().captureRoboImage("src/test/screenshots/library/$file.png")
     }
 
     /** Adding a folder while paired: what it backs up (FIX/V). */

@@ -117,7 +117,7 @@ class TestDevice(
     fun addHandoffPhoto(
         stem: String,
         jpeg: ByteArray,
-        uri: String = "content://media/external/images/media/${stem.hashCode()}",
+        uri: String = "content://dev.hfps.hoard.stream/h/${stem.hashCode()}/$stem.JPG",
     ): Long = runBlocking {
         val source = db.sourceDao().handoff()?.id ?: db.sourceDao().insert(
             SourceEntity(

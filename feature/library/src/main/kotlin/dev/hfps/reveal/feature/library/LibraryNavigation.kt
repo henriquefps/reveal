@@ -196,21 +196,33 @@ fun LibraryScreen(
     }
     ExportSheetHost(request = exportRequest, onDismiss = { exportRequest = null })
     val galleryOffer by viewModel.galleryOffer.collectAsStateWithLifecycle()
+    // The offer that launched the system dialog (null: the unavailable photo's sheet): only its own answer is kept.
+    var galleryAskedBy by rememberSaveable { mutableStateOf<GalleryOffer?>(null) }
     val galleryPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
-        viewModel.onGalleryAccessResult()
+        viewModel.onGalleryAccessResult(galleryAskedBy)
+        galleryAskedBy = null
     }
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { viewModel.onResumed() }
-    if (galleryOffer) {
+    val galleryPartial by viewModel.galleryPartial.collectAsStateWithLifecycle()
+    galleryOffer?.let { offer ->
         GalleryAccessSheet(
-            onAllow = { galleryPermission.launch(GalleryAccess.permissions()) },
-            onDecline = viewModel::declineGalleryAccess,
+            offer = offer,
+            partial = galleryPartial,
+            onAllow = {
+                galleryAskedBy = offer
+                galleryPermission.launch(GalleryAccess.permissions())
+            },
+            onDecline = { viewModel.declineGalleryAccess(offer) },
         )
     }
     state.unavailableInfo?.let { info ->
         UnavailableSheet(
             info = info,
             onOpenApp = actions.onOpenSender,
-            onGallery = { galleryPermission.launch(GalleryAccess.permissions()) },
+            onGallery = {
+                galleryAskedBy = null
+                galleryPermission.launch(GalleryAccess.permissions())
+            },
             onTryAgain = { actions.onTryAgain(listOf(info.photoId)) },
             onRemove = { actions.onForget(listOf(info.photoId)) },
             onDismiss = actions.onUnavailableDismiss,

@@ -536,3 +536,136 @@ Item limit 500; the tiebreak is the ordinal `deviceId`; Hoard learns Reveal's pa
   the same file opens it (a Server photo is reusable like a folder photo). Its sidecar link goes (no sidecar for server
   items, "Amendment W3/H"). Only the files the server holds move, and the photo never becomes deletable by the
   server's records or the NAS feed (docs/adr/0018 "Hand-offs the server holds become Server photos").
+
+## Amendment W4: local copies (0.9.0)
+
+**Sender rule (Hoard 2.2.0).** A server-held photo still comes as a server reference (W3/H, unchanged). A photo already
+on the phone comes as its `content://media/...` URI. Every other photo (SMB not on the server, USB/SD/SAF) is copied
+by Hoard into MediaStore and handed over as a `content://media/...` URI in the usual DEVELOP intent (ClipData, `TITLE`,
+`INITIAL_URI`, `CULLING` v2 keyed by those URIs, `BATCH_INDEX`/`BATCH_COUNT` when split): RAW and JPEG into
+`Pictures/Hoard/<batch>/` (`MediaStore.Images`), and the formats Images refuses (CR3) into `Download/Hoard/<batch>/`
+(`MediaStore.Downloads`, `application/octet-stream`, the real name kept), never sidecars. Only
+`FLAG_GRANT_READ_URI_PERMISSION`: no persistable grant, no write grant, no sidecar items. Hoard's SMB streaming links
+(`content://dev.hfps.hoard.stream/...`) are the **legacy** path: not used for new hand-offs, but the links already in
+existing libraries keep working (`busy:` handling stays).
+
+**Sender contract: a shot's members stay in one chunk** (agreed with Hoard's coordinator): when Hoard splits a batch
+over several intents, a RAW and its JPEG (and any other member of the shot) go in the same intent. Reveal keeps a
+safety net for a sender that does not (item 5).
+
+**Reveal.**
+1. *Gallery access on receipt.* When **Hoard** (the referrer package `dev.hfps.hoard*`, `HandoffApps.isHoard`; the
+   debug build's `HandoffHostActivity` plays it in tests) hands over documents of the `MediaStore.Images` collection
+   (`GalleryAccess.isMediaImages`: `content://media/...` outside `/downloads/`, which is copied instead, item 3) and
+   access is not FULL, Reveal offers the permission once ("To open photos from Hoard, Reveal needs access to all your
+   photos"): `GalleryAccess.noteHoardMedia` on receipt, `shouldOfferForMedia(hoardMedia, state, mediaAsked)`. A batch
+   shows it in the library (`LibraryViewModel.galleryOffer` = `GalleryOffer.HOARD`); a single photo shows it over the
+   editor (`MainActivity.EditorGalleryOffer`, the same design-system sheet, non-blocking). The batch opens meanwhile
+   from the temporary grant. PARTIAL gets a variant that says only the selected photos stay openable. Its answer is
+   its own (`mediaAsked`, separate from the older gallery-share offer's `asked`, whose text is unchanged:
+   `GalleryOffer.SHARED`); Settings → Gallery access changes it.
+2. *Media URIs are stable references* under FULL (and for the selected photos under PARTIAL): re-openable without
+   grants. The access check (`recheckAccess`, `checkHandoffs`, the background pass) simply opens them through
+   `FileOpens`: readable stays readable, only a real refusal (`isAccessError`) marks a file unreadable, `busy:` never
+   does. `takePersistableUriPermission` is never tried on them (`persist` skips authority `media`).
+3. *Downloads originals are kept locally.* `READ_MEDIA_IMAGES` does not cover `MediaStore.Downloads`, so a hand-off
+   file at `content://media/<volume>/downloads/<id>` (detected by URI, confirmed by its name and magic bytes, never by
+   MIME) is copied, while the intent's grant is valid, into `noBackupFilesDir/handoff-originals/<fingerprint>.<ext>`
+   (`LocalOriginals`, through the tree's `FileOpens` slot, `busy:` retried) and the file row is repointed at the copy
+   (`document_id` = the `file:` URI; `relative_path` keeps the sender's URI, so the same URI handed over again finds
+   the row and its fingerprint without reading). It is read from there from then on, never marked unreadable when the
+   grant ends, and uploaded from there; identity stays by fingerprint. Only files filed under the hand-off source are
+   copied (a shot that is a folder's or a Server photo keeps its own files, `StoredShot.foreign`). A copy already kept
+   (same fingerprint and size) is filed again without opening the URI, so a failed re-copy never orphans it, and
+   forgetting / the retention / a merge delete copies **by fingerprint** whatever the rows point at, unless a row
+   still files under the copy (`deleteCopies`). Copies are refused when they would leave less than 200 MiB
+   (`StorageManager.getAllocatableBytes`; reported as "not enough space", the photo keeps its URI and falls back to
+   its preview); `*.tmp` files of an interrupted copy are swept before the first copy. An item without an extension is
+   classified by its first bytes (and named after them) before the name filter, so an extensionless Downloads file is
+   not dropped. It is *not* a cache: the budget never evicts it (a copy may be the only
+   readable one), it has its own row in Settings → Storage (`StorageKind.HANDOFF_ORIGINALS`, not part of "Clear
+   cache"), and only forgetting the photo, the retention, or merging it into a folder photo that has the file deletes it.
+4. *Identity* is the v1 fingerprint as before: a Hoard copy, the NAS/server original and an earlier hand-off of the
+   same content are one photo (`HandoffMerge`, folder-first and hand-off-first paths).
+5. *Pairing* across collections: a CR3 in Downloads and its JPEG in Images arrive in one intent with different parents.
+   The parent key of a MediaStore document (`HandoffRepository.parentKey(uri, relativePath)`) is its `RELATIVE_PATH`
+   without the top-level folder (`Pictures/`, `DCIM/`, `Download/`), read by `HandoffTree.stat`: Hoard's
+   `Pictures/Hoard/<batch>/` and `Download/Hoard/<batch>/` pair by stem, a camera's `DCIM/Camera/IMG_0001.JPG` never
+   pairs with a Hoard `IMG_0001.CR3`. A file at a collection's root (`Pictures/`, `DCIM/`, `Download/` with no
+   subfolder) keys on its full relative path (`media-root:<path>`): it pairs only with files of that same root. Without its path (not queryable) a MediaStore URI pairs only within its
+   collection. Safety net for split batches: a single file whose shot an earlier chunk of the same batch (same
+   `handoff_at` stamp) filed under the same key and stem joins that photo when the photo lacks its role
+   (`PhotoDao.batchShot`, `joinEarlierChunk`); when a RAW joins, the display preview made for the JPEG alone (keyed
+   by the JPEG's fingerprint) is deleted, the shot's preview is the RAW's from then on.
+6. *Adoption (W3/C) leaves local copies alone:* `SyncDao.adoptableHandoffs` skips a main file that is a readable
+   `content://media/` file (an unreadable one is adopted as before) and never adopts a kept Downloads original
+   (`file:` under `handoff-originals`): adoption would drop the row and orphan the copy.
+7. No write grants are asked on these URIs and no sidecar is written for them (ADR 0026 "Amendment W4").
+8. *Chunks.* Media-URI items split at 200 per intent use the same `BATCH_INDEX`/`BATCH_COUNT` scheme as server items;
+   `HandoffIntents`, `HandoffBatches` and `MainActivity` treat URI-only, server-only and mixed chunks alike: one
+   shared stamp and title (one entry in "Opened from other apps"), notices shown once, culling applied per chunk, the
+   initial photo opens from index 0 only. The hand-off retention (400 photos) never cuts the newest batch.
+9. *The grant's holder waits for what needs it.* Each intent is received in the app's scope (`HandoffIngests.receive`:
+   the batch join, `receiveStaged`, the silent member's notices; keyed per intent and saved in the activity's state;
+   it holds no reference to the activity), so a recreated activity (rotation) re-attaches instead of dropping a batch
+   half-way; the activity follows it. `HandoffRepository.receiveStaged` returns the outcome once the photo to open
+   first is filed (and its Downloads original kept): index 0 opens the editor or the library then. The rest (the
+   other copies, 2 at a time through `FileOpens`, and the display previews of the shots whose documents only the
+   intent's grant covers) completes `Received.settled` in the background. Under FULL access Images documents need no
+   waiting. A smart preview of a grant-only document is made only while someone holds the grant
+   (`Ingest.holderAlive`); otherwise it comes from the display preview or the server later.
+10. *Grant service (fix round 2).* An activity's intent grant ends when the activity is destroyed, and Reveal's
+   activity sits in the sender's task (Hoard starts it without `NEW_TASK`), so neither keeping the activity nor
+   `moveTaskToBack` works: back must return to Hoard. Instead `MainActivity` starts `HandoffGrantService` (app module,
+   a short dataSync foreground service, notification "Copying N photos from Hoard", no Cancel) for every URI hand-off,
+   with the intent's URIs as `ClipData` + `FLAG_GRANT_READ_URI_PERMISSION`: the system grants them to that start, and
+   the start keeps them until it is stopped. Each start holds its ingest (`Ingest.handOver`, taken before the start so
+   the grant never looks gone in between; `takeHandOver` in the service) until it settles, then lets go; starts
+   are stopped in order (`stopSelfResult(id)` drops every delivered start up to `id` with its grants), so a later
+   start that settles first waits for earlier ones (`START_REDELIVER_INTENT`; a redelivery after a kill whose ingest is
+   gone stops at once). Back returns to the sender as for any activity, and a silent member (index > 0) finishes at
+   once instead of staying invisible over Hoard until `settled`. Holders are counted (the activity, the service); the
+   activity lets go in `onDestroy` when finishing (every intent it received, `onNewIntent` included).
+   When `startForegroundService` is refused (background-start restrictions), nothing is held beyond the activity: a
+   silent member stays until `settled` as before, a shown one finishes on back.
+   What could not be kept is reported once (`Ingest.claimSettledNotice`: the activity when it is still there, else
+   the service): originals refused for lack of space (`Settled.noSpace`) and copies the ended grant refused
+   (`Settled.notCopied`, `isAccessError`: "N photos could not be copied; Reveal will use their previews").
+   A silent member recreated after its process died (its ingest is gone) receives its intent again while the grant
+   still works (`checkCallingOrSelfUriPermission`), else finishes.
+   `LocalOriginals` sweeps its `.tmp` files once, when the store is created (the app's start), never from a copy:
+   a sweep from a copy deleted the temporary files of copies running beside it.
+11. *Grant service (fix round 3).* Started only when a document needs the grant after the activity is gone
+   (`HandoffGrants.needing`): a Downloads document (copied), a `MediaStore.Images` document while the photo permission
+   is not FULL (its previews), another provider's document without a persistable grant. An ordinary gallery share under
+   FULL starts nothing. The notification counts those documents and names the sender (`HandoffApps.senderLabel`: the
+   app serving a URI, else the referrer) or is neutral ("Copying N photos…"). It is never a background service: a
+   start whose `startForeground` fails (a background-start refusal, Android 15's exhausted dataSync time) settles at
+   once and returns `START_NOT_STICKY`; `onTimeout(startId, fgsType)` (Android 15's limit) settles every start and
+   stops the service; the copies left lose the grant and are reported as not copied. The start bookkeeping is
+   `GrantStarts` (pure, unit-tested). The settled notice and a silent member's `done` run in the app's scope
+   (`HandoffIngests.whenSettled`), so they outlive the service. A redelivered start (`START_FLAG_REDELIVERY`) whose
+   ingest died with the process receives its request again from the activity's intent it carries (`EXTRA_REQUEST`,
+   with the batch key and media flag) under the start's own grant; copies already kept are reused by fingerprint
+   and the photos found again by fingerprint, so a second receive is harmless.
+   A RAW that joins its JPEG from an earlier chunk retires the JPEG's fingerprint (`HandoffPreviewer.retire`): the
+   earlier chunk's queued display and smart previews for it do nothing, and the JPEG's existing previews are deleted
+   only once the RAW's display preview exists (`Shot.replaces`); a RAW that cannot be previewed keeps the JPEG's.
+
+Tests: `HandoffMediaTest` (JVM: offer state machine and its own answer, Hoard-only Images trigger, no persistable
+grant, cross-collection pairing by relative path (DCIM never pairs with Hoard), a RAW in a later chunk joining its
+JPEG, kept original + revoked grant + restart + forget, no copy for a folder's photo, a kept copy reused when the URI
+cannot be opened, forget by fingerprint, free-space refusal, `.tmp` sweep at creation with two copies running together,
+the grant held by the service after the activity left (every copy made) and, without it, the refused copies counted,
+root-folder keys, a joined RAW dropping the JPEG's preview (only after its own exists; a queued JPEG preview
+skipped), a request received again after the process died (photos and copies reused), an extensionless Downloads item, a silent
+chunk whose grant is revoked after it settled (display previews made, no smart preview attempted), access check,
+identity incl. a Server photo, URI chunks, retention), `HandoffServerRefsTest` (URI/server/mixed chunks),
+`HandoffAdoptionTest` (kept originals never adopted), `ReadOnlyGrantsTest`, `HandoffGrantsTest` (which documents
+start the service), app `GrantStartsTest` (ordered stops, refused foreground, time limit); instrumented `HandoffMediaTest` (real
+MediaStore Images/Downloads, read grant only through `HandoffHostActivity`, 600 URIs in 3 chunks of 200, the editor's
+offer once, a batch that survives `recreate()` mid-ingest), `HandoffGrantServiceTest` (shell-owned Downloads files
+granted by `am start --grant-read-uri-permission` as three silent members: each activity leaves before any copy, every
+copy completes through the service's grant, the grants end when it stops; with the service start disabled the same
+copies fail with `SecurityException`).
+

@@ -19,6 +19,8 @@ data class DocumentEntry(
     val size: Long,
     val modified: Long,
     val flags: Int = 0,
+    /** MediaStore's `RELATIVE_PATH` (`Pictures/Hoard/<batch>/`) of a `content://media` document; null elsewhere. */
+    val relativePath: String? = null,
 ) {
     val isDirectory: Boolean get() = mimeType == Document.MIME_TYPE_DIR
 }

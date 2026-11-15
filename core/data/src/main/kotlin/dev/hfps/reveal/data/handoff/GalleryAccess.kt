@@ -31,12 +31,20 @@ class GalleryAccess(private val context: Context) {
     private val preferences = context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
     private val current = MutableStateFlow(read())
     private val askedState = MutableStateFlow(preferences.getBoolean(KEY_ASKED, false))
+    private val mediaAskedState = MutableStateFlow(preferences.getBoolean(KEY_MEDIA_ASKED, false))
+    private val hoardMediaState = MutableStateFlow(preferences.getBoolean(KEY_HOARD_MEDIA, false))
 
     /** The permission as last read ([refresh] after a permission result or when the app comes back). */
     val state: StateFlow<GalleryAccessState> = current.asStateFlow()
 
     /** The library's offer was answered (allowed or declined): it is not shown again. */
     val asked: StateFlow<Boolean> = askedState.asStateFlow()
+
+    /** The offer made on receipt of Hoard's MediaStore photos was answered (its own flag, ADR 0011 "Amendment W4"). */
+    val mediaAsked: StateFlow<Boolean> = mediaAskedState.asStateFlow()
+
+    /** Hoard handed over photos of the `MediaStore.Images` collection ([noteHoardMedia]). */
+    val hoardMedia: StateFlow<Boolean> = hoardMediaState.asStateFlow()
 
     /** Reads the permission again; true when it changed. */
     fun refresh(): Boolean {
@@ -51,6 +59,30 @@ class GalleryAccess(private val context: Context) {
         askedState.value = true
     }
 
+    fun setMediaAsked() {
+        preferences.edit { putBoolean(KEY_MEDIA_ASKED, true) }
+        mediaAskedState.value = true
+    }
+
+    /** A hand-off from Hoard held `MediaStore.Images` URIs: the media offer may be shown (once). */
+    fun noteHoardMedia() {
+        if (hoardMediaState.value) return
+        preferences.edit { putBoolean(KEY_HOARD_MEDIA, true) }
+        hoardMediaState.value = true
+    }
+
+    /** Forgets that the offers were answered and that Hoard sent media (instrumented tests only). */
+    fun resetAskedForTests() {
+        preferences.edit {
+            putBoolean(KEY_ASKED, false)
+            putBoolean(KEY_MEDIA_ASKED, false)
+            putBoolean(KEY_HOARD_MEDIA, false)
+        }
+        askedState.value = false
+        mediaAskedState.value = false
+        hoardMediaState.value = false
+    }
+
     private fun read(): GalleryAccessState = stateOf(Build.VERSION.SDK_INT) {
         ContextCompat.checkSelfPermission(context, it) == PackageManager.PERMISSION_GRANTED
     }
@@ -58,6 +90,8 @@ class GalleryAccess(private val context: Context) {
     companion object {
         private const val PREFERENCES = "gallery_access"
         private const val KEY_ASKED = "asked"
+        private const val KEY_MEDIA_ASKED = "mediaAsked"
+        private const val KEY_HOARD_MEDIA = "hoardMedia"
 
         /** `READ_MEDIA_IMAGES` (Android 13; named here, not through `Manifest`, so older SDK levels compile it). */
         const val IMAGES = "android.permission.READ_MEDIA_IMAGES"
@@ -92,10 +126,25 @@ class GalleryAccess(private val context: Context) {
         fun isMediaStore(documentId: String): Boolean = documentId.startsWith("content://media/")
 
         /**
+         * A document of the `MediaStore.Images` side that the photo permission covers: a MediaStore URI outside the
+         * Downloads collection (Downloads files are copied while the grant lives instead, `LocalOriginals`).
+         */
+        fun isMediaImages(documentId: String): Boolean = isMediaStore(documentId) && "/downloads/" !in documentId
+
+        /**
          * Whether the library offers the permission now: a MediaStore hand-off cannot be read, Reveal has no access to
          * the gallery, and the offer was never answered.
          */
         fun shouldOffer(unreadable: List<String>, state: GalleryAccessState, asked: Boolean): Boolean =
             !asked && state == GalleryAccessState.NONE && unreadable.any(::isMediaStore)
+
+        /**
+         * Whether to offer the permission on receipt of Hoard's MediaStore photos (ADR 0011 "Amendment W4": Hoard hands
+         * over `content://media/...` URIs of the Images collection): once ([mediaAsked], its own flag), while access is
+         * not FULL, in the library for a batch or in the editor for a single photo. With [GalleryAccessState.PARTIAL]
+         * the sheet explains that only the selected photos stay openable. Settings changes the answer later.
+         */
+        fun shouldOfferForMedia(hoardMedia: Boolean, state: GalleryAccessState, mediaAsked: Boolean): Boolean =
+            !mediaAsked && hoardMedia && state != GalleryAccessState.FULL
     }
 }

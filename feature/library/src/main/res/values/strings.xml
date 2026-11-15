@@ -168,6 +168,9 @@
     <string name="library_local_preview">Preview only: Reveal can no longer read the original. Share it to Reveal again for the full photo</string>
     <string name="library_gallery_access_title">Keep reading photos from your gallery?</string>
     <string name="library_gallery_access_body">Photos shared from the gallery can only be read while Reveal is open, so some now show their preview only. Allow access to photos and Reveal can read them again any time: full thumbnails, full-size exports and backups. Selected photos only is fine. Reveal only reads them, it never changes them. You can change this later in Settings.</string>
+    <string name="library_gallery_access_hoard_title">Allow access to all your photos?</string>
+    <string name="library_gallery_access_hoard_body">To open photos from Hoard, Reveal needs access to all your photos. The photos you just received open now; with access they stay openable later, with full thumbnails, full-size exports and backups. Reveal only reads them, it never changes them. You can change this later in Settings.</string>
+    <string name="library_gallery_access_hoard_body_partial">Reveal can read only the photos you selected, so photos from Hoard that you did not select can show a preview only. To open every photo from Hoard, allow access to all your photos. Reveal only reads them, it never changes them. You can change this later in Settings.</string>
     <string name="library_gallery_access_allow">Allow access to photos</string>
     <string name="library_gallery_access_decline">Not now</string>
     <string name="library_action_delete_conflicts">Delete conflict copies</string>

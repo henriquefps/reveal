@@ -151,6 +151,39 @@ class HandoffAdoptionTest {
     }
 
     @Test
+    fun `a readable local MediaStore copy stays where it is, an unreadable one is adopted`() {
+        val bytes = Random(31).nextBytes(2048)
+        val uri = "content://media/external_primary/images/media/31"
+        val photo = phone.addHandoffPhoto("MEDIA", bytes, uri = uri)
+        server.addNasFile("nas", "NAS", "2026/MEDIA.JPG", bytes, FileFingerprint.of(bytes))
+        phone.sync()
+        // Hoard's copy in MediaStore is faster than the server and works offline: not moved to the Server source.
+        assertThat(runBlocking { phone.store.adoptNext() }).isEqualTo(SyncStore.Adopted(0, 0))
+        assertThat(runBlocking { phone.db.sourceDao().get(phone.photo(photo).sourceId)!!.kind })
+            .isEqualTo(SourceKind.HANDOFF)
+        // The permission is gone and the file cannot be read: the server's copy takes over, as for any hand-off.
+        runBlocking { phone.db.photoDao().setUnreadable(uri, phone.now) }
+        assertThat(runBlocking { phone.store.adoptNext() }.moved).isEqualTo(1)
+        assertThat(runBlocking { phone.db.sourceDao().get(phone.photo(photo).sourceId)!!.kind })
+            .isEqualTo(SourceKind.SERVER)
+    }
+
+    @Test
+    fun `a Downloads original Reveal keeps itself is never adopted, readable or not`() {
+        val bytes = Random(37).nextBytes(2048)
+        val uri = "file:///data/user/0/dev.hfps.reveal/no_backup/handoff-originals/v1_37.cr3"
+        val photo = phone.addHandoffPhoto("KEPT", bytes, uri = uri)
+        server.addNasFile("nas", "NAS", "2026/KEPT.CR3", bytes, FileFingerprint.of(bytes))
+        phone.sync()
+        // Adoption would drop the row and leave the copy behind: the copy stays the photo's file.
+        assertThat(runBlocking { phone.store.adoptNext() }).isEqualTo(SyncStore.Adopted(0, 0))
+        runBlocking { phone.db.photoDao().setUnreadable(uri, phone.now) }
+        assertThat(runBlocking { phone.store.adoptNext() }).isEqualTo(SyncStore.Adopted(0, 0))
+        assertThat(runBlocking { phone.db.sourceDao().get(phone.photo(photo).sourceId)!!.kind })
+            .isEqualTo(SourceKind.HANDOFF)
+    }
+
+    @Test
     fun `a photo whose adoption fails is marked and skipped, the others still move`() {
         val ids = handoffsOnServer("A1", "A2", "A3", same = null)
         // Distinct files so each photo is its own: give them their own prints.

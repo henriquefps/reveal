@@ -25,21 +25,37 @@ object GalleryAccessTags {
     const val DECLINE = "gallery-access-decline"
 }
 
+/** Which offer of the photo permission (ADR 0011 "Gallery access", "Amendment W4"); each is answered once. */
+enum class GalleryOffer {
+    /** A photo the gallery shared can no longer be read ("selected photos only" is fine). */
+    SHARED,
+
+    /** Hoard handed over its MediaStore copies: every photo is needed (the partial grant covers only the selected). */
+    HOARD,
+}
+
 /**
- * The once-only offer of the "Photos and videos" permission (ADR 0011 "Gallery access"): shown when a photo the gallery
- * shared can no longer be read. Allowing opens the system's permission dialog (where "selected photos only" is fine);
- * "Not now" is remembered, and Settings can turn it on later.
+ * The once-only offers of the "Photos and videos" permission (ADR 0011 "Gallery access", "Amendment W4"): [offer]
+ * says which (and its text). Allowing opens the system's permission dialog; "Not now" is remembered, and Settings can
+ * turn it on later. Shown by the library, and by the app over the editor for a single photo from Hoard.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-internal fun GalleryAccessSheet(onAllow: () -> Unit, onDecline: () -> Unit) {
+fun GalleryAccessSheet(offer: GalleryOffer, partial: Boolean, onAllow: () -> Unit, onDecline: () -> Unit) {
     RevealBottomSheet(onDismissRequest = onDecline) {
-        GalleryAccessContent(onAllow, onDecline)
+        GalleryAccessContent(onAllow, onDecline, offer = offer, partial = partial)
     }
 }
 
 @Composable
-fun GalleryAccessContent(onAllow: () -> Unit, onDecline: () -> Unit, modifier: Modifier = Modifier) {
+fun GalleryAccessContent(
+    onAllow: () -> Unit,
+    onDecline: () -> Unit,
+    modifier: Modifier = Modifier,
+    offer: GalleryOffer = GalleryOffer.SHARED,
+    partial: Boolean = false,
+) {
+    val hoard = offer == GalleryOffer.HOARD
     Column(
         modifier = modifier.fillMaxWidth().padding(
             horizontal = 20.dp,
@@ -48,12 +64,20 @@ fun GalleryAccessContent(onAllow: () -> Unit, onDecline: () -> Unit, modifier: M
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         Text(
-            stringResource(R.string.library_gallery_access_title),
+            stringResource(
+                if (hoard) R.string.library_gallery_access_hoard_title else R.string.library_gallery_access_title,
+            ),
             style = RevealTheme.typography.title,
             color = RevealTheme.colors.foreground,
         )
         Text(
-            stringResource(R.string.library_gallery_access_body),
+            stringResource(
+                when {
+                    !hoard -> R.string.library_gallery_access_body
+                    partial -> R.string.library_gallery_access_hoard_body_partial
+                    else -> R.string.library_gallery_access_hoard_body
+                },
+            ),
             style = RevealTheme.typography.body,
             color = RevealTheme.colors.mutedForeground,
         )

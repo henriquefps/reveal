@@ -24,8 +24,10 @@ import dev.hfps.reveal.data.handoff.Fallback
 import dev.hfps.reveal.data.handoff.HandoffBackup
 import dev.hfps.reveal.data.handoff.HandoffFallbacks
 import dev.hfps.reveal.data.handoff.HandoffMerge
+import dev.hfps.reveal.data.handoff.LocalOriginals
 import dev.hfps.reveal.data.handoff.LocalPreviews
 import dev.hfps.reveal.data.handoff.MergeReport
+import dev.hfps.reveal.data.handoff.deleteCopies
 import dev.hfps.reveal.data.index.IndexProgress
 import dev.hfps.reveal.data.index.IndexReport
 import dev.hfps.reveal.data.index.LibraryIndexer
@@ -228,6 +230,8 @@ class LibraryRepository(
      * named explicitly, never inferred from a missing grant row.
      */
     private val grantFreeAuthorities: Set<String> = emptySet(),
+    /** The originals Reveal keeps of hand-offs whose grant ended (MediaStore Downloads, W4); null in tests. */
+    private val originals: LocalOriginals? = null,
 ) {
     private val sourceDao = db.sourceDao()
     private val photoDao = db.photoDao()
@@ -483,8 +487,11 @@ class LibraryRepository(
         val handoff = sourceDao.handoff()?.id
         val (gone, hide) = photoDao.getAll(photoIds).partition { it.sourceId == handoff }
         gone.map { it.id }.chunked(SQL_ARGS).forEach { ids ->
-            previews?.delete(photoDao.filesOf(ids).mapNotNull { it.fingerprint })
+            val files = photoDao.filesOf(ids)
+            previews?.delete(files.mapNotNull { it.fingerprint })
             photoDao.deletePhotos(ids)
+            // By fingerprint, whatever the rows pointed at, unless another row still files under the copy (W4).
+            originals?.let { deleteCopies(photoDao, it, files.mapNotNull { file -> file.fingerprint }) }
         }
         hide.map { it.id }.chunked(SQL_ARGS).forEach { photoDao.setHidden(it, true) }
         photoIds.size
@@ -692,6 +699,7 @@ class LibraryRepository(
         if (report.merged > 0) {
             Log.i(TAG, "Merged ${report.merged} hand-off photos into source $sourceId")
             previews?.delete(report.fingerprints)
+            originals?.let { deleteCopies(photoDao, it, report.fingerprints) }
         }
         report
     }

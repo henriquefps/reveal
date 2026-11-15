@@ -32,6 +32,9 @@ class HandoffTree(private val resolver: ContentResolver) : DocumentTree {
      * unknown columns, hence one query per shape.
      */
     fun stat(uri: Uri): DocumentEntry? = query(uri, STAT_COLUMNS, COLUMN_LAST_MODIFIED, 1)
+        // MediaStore (W4): its RELATIVE_PATH pairs a RAW in Downloads with its JPEG in Pictures (`parentKey`).
+        ?: uri.takeIf { it.authority == MediaStore.AUTHORITY }
+            ?.let { query(it, MEDIA_PATH_COLUMNS, MediaStore.MediaColumns.DATE_MODIFIED, MILLIS_PER_SECOND) }
         ?: query(uri, MEDIA_STAT_COLUMNS, MediaStore.MediaColumns.DATE_MODIFIED, MILLIS_PER_SECOND)
         ?: query(uri, arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE), null, 1)
 
@@ -44,12 +47,15 @@ class HandoffTree(private val resolver: ContentResolver) : DocumentTree {
                 val size = c.getColumnIndex(OpenableColumns.SIZE).takeIf { it >= 0 && !c.isNull(it) }?.let(c::getLong)
                 val modified = mtimeColumn?.let(c::getColumnIndex)?.takeIf { it >= 0 && !c.isNull(it) }
                     ?.let { c.getLong(it) * mtimeScale }
+                val relativePath = c.getColumnIndex(MediaStore.MediaColumns.RELATIVE_PATH)
+                    .takeIf { it >= 0 && !c.isNull(it) }?.let(c::getString)
                 DocumentEntry(
                     documentId = uri.toString(),
                     name = name ?: uri.lastPathSegment.orEmpty().substringAfterLast('/'),
                     mimeType = resolver.getType(uri).orEmpty(),
                     size = size ?: 0,
                     modified = modified ?: 0,
+                    relativePath = relativePath,
                 )
             }
         }.getOrNull()
@@ -98,5 +104,6 @@ class HandoffTree(private val resolver: ContentResolver) : DocumentTree {
         val STAT_COLUMNS = arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE, COLUMN_LAST_MODIFIED)
         val MEDIA_STAT_COLUMNS =
             arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE, MediaStore.MediaColumns.DATE_MODIFIED)
+        val MEDIA_PATH_COLUMNS = MEDIA_STAT_COLUMNS + MediaStore.MediaColumns.RELATIVE_PATH
     }
 }

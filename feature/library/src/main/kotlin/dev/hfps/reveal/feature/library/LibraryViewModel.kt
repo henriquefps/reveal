@@ -15,6 +15,7 @@ import dev.hfps.reveal.data.edit.EditRepository
 import dev.hfps.reveal.data.edit.HistoryWriter
 import dev.hfps.reveal.data.edit.VersionRepository
 import dev.hfps.reveal.data.handoff.GalleryAccess
+import dev.hfps.reveal.data.handoff.GalleryAccessState
 import dev.hfps.reveal.data.library.AddSourceResult
 import dev.hfps.reveal.data.library.LibraryRepository
 import dev.hfps.reveal.data.library.XmpDestination
@@ -126,20 +127,53 @@ class LibraryViewModel @Inject constructor(
     private val xmpExport: XmpExport,
     private val xmpGrants: XmpGrants,
 ) : ViewModel() {
+    /** An offer was answered in this screen's lifetime: no second one until a later visit. */
+    private val galleryAnswered = MutableStateFlow(false)
+
     /**
-     * Offer the "Photos and videos" permission now (ADR 0011 "Gallery access"): a photo the gallery shared can no
-     * longer be read, Reveal has no gallery access, and the offer was never answered.
+     * The "Photos and videos" offer to show now, if any (ADR 0011 "Gallery access", "Amendment W4"): Hoard handed over
+     * its MediaStore copies and access is not FULL ([GalleryOffer.HOARD], its own flag), or a photo the gallery shared
+     * can no longer be read and Reveal has no gallery access ([GalleryOffer.SHARED]); each is answered once. Once one
+     * is answered, the other waits for a later visit (never two sheets back to back).
      */
-    val galleryOffer: StateFlow<Boolean> =
-        combine(library.unreadableHandoffs(), gallery.state, gallery.asked, GalleryAccess::shouldOffer)
-            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT), false)
+    val galleryOffer: StateFlow<GalleryOffer?> =
+        combine(
+            library.unreadableHandoffs(),
+            gallery.hoardMedia,
+            gallery.state,
+            gallery.asked,
+            gallery.mediaAsked,
+        ) { unreadable, hoardMedia, state, asked, mediaAsked ->
+            when {
+                GalleryAccess.shouldOfferForMedia(hoardMedia, state, mediaAsked) -> GalleryOffer.HOARD
+                GalleryAccess.shouldOffer(unreadable, state, asked) -> GalleryOffer.SHARED
+                else -> null
+            }
+        }.combine(galleryAnswered) { offer, answered -> offer.takeUnless { answered } }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT), null)
+
+    /** The offer explains that only the selected photos stay readable (Android 14+ "Allow limited access"). */
+    val galleryPartial: StateFlow<Boolean> = gallery.state.map { it == GalleryAccessState.PARTIAL }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT), false)
 
     /** "Not now": remembered, never offered again (Settings can turn it on). */
-    fun declineGalleryAccess() = gallery.setAsked()
+    fun declineGalleryAccess(offer: GalleryOffer) = answer(offer)
 
-    /** The system dialog answered: the documents it opened are readable again (thumbnails, export, backup). */
-    fun onGalleryAccessResult() {
-        gallery.setAsked()
+    private fun answer(offer: GalleryOffer?) {
+        galleryAnswered.value = true
+        when (offer) {
+            GalleryOffer.HOARD -> gallery.setMediaAsked()
+            GalleryOffer.SHARED, null -> gallery.setAsked()
+        }
+    }
+
+    /**
+     * The system dialog answered ([askedBy] = the offer that launched it, null from the unavailable photo's sheet):
+     * only that offer's answer is kept (the Hoard media offer's `mediaAsked` is never set by another), and the
+     * documents it opened are readable again (thumbnails, export, backup).
+     */
+    fun onGalleryAccessResult(askedBy: GalleryOffer?) {
+        answer(askedBy)
         gallery.refresh()
         library.scheduleAccessCheck(again = true)
     }

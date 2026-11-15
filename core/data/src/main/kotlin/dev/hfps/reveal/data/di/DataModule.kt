@@ -3,6 +3,7 @@ package dev.hfps.reveal.data.di
 import android.app.ActivityManager
 import android.content.Context
 import android.os.Build
+import android.os.storage.StorageManager
 import androidx.core.net.toUri
 import androidx.room.Room
 import dagger.Module
@@ -19,10 +20,13 @@ import dev.hfps.reveal.data.editor.EditorLayoutPreferences
 import dev.hfps.reveal.data.export.ExportPreferences
 import dev.hfps.reveal.data.export.ExportPresetRepository
 import dev.hfps.reveal.data.handoff.GalleryAccess
+import dev.hfps.reveal.data.handoff.GalleryAccessState
 import dev.hfps.reveal.data.handoff.HandoffBatches
+import dev.hfps.reveal.data.handoff.HandoffIngests
 import dev.hfps.reveal.data.handoff.HandoffPreviewer
 import dev.hfps.reveal.data.handoff.HandoffRepository
 import dev.hfps.reveal.data.handoff.HandoffTree
+import dev.hfps.reveal.data.handoff.LocalOriginals
 import dev.hfps.reveal.data.handoff.LocalPreviews
 import dev.hfps.reveal.data.handoff.ServerItems
 import dev.hfps.reveal.data.index.LibraryIndexer
@@ -117,6 +121,20 @@ object DataModule {
     fun provideLocalPreviews(@ApplicationContext context: Context): LocalPreviews =
         LocalPreviews(File(context.noBackupFilesDir, "handoff-previews"))
 
+    /** Originals of hand-offs that only a temporary grant covers (ADR 0011 "Amendment W4"): kept, never evicted. */
+    @Provides
+    @Singleton
+    fun provideLocalOriginals(@ApplicationContext context: Context): LocalOriginals {
+        val storage = context.getSystemService(StorageManager::class.java)
+        return LocalOriginals(
+            File(context.noBackupFilesDir, LocalOriginals.DIR_NAME),
+            // Unknown (the volume cannot say): the copy is tried, and a write that fails leaves no partial file.
+            usableSpace = { dir ->
+                runCatching { storage.getAllocatableBytes(storage.getUuidForPath(dir)) }.getOrDefault(Long.MAX_VALUE)
+            },
+        )
+    }
+
     @Provides
     @Singleton
     fun provideHandoffPreviewer(
@@ -137,13 +155,31 @@ object DataModule {
         database: RevealDatabase,
         previewer: HandoffPreviewer,
         server: ServerItems,
+        originals: LocalOriginals,
+        gallery: GalleryAccess,
+        @DataScope scope: CoroutineScope,
     ): HandoffRepository = HandoffRepository(
         context.contentResolver,
         database,
         LibraryIndexer(database),
         previewer = previewer,
+        originals = originals,
         server = server,
+        background = scope,
+        mediaReadable = {
+            gallery.refresh()
+            gallery.state.value == GalleryAccessState.FULL
+        },
     )
+
+    /** Hand-offs received in the app's scope, re-attached by a recreated activity (ADR 0011 "Amendment W4"). */
+    @Provides
+    @Singleton
+    fun provideHandoffIngests(
+        @DataScope scope: CoroutineScope,
+        handoffs: HandoffRepository,
+        batches: HandoffBatches,
+    ): HandoffIngests = HandoffIngests(scope, handoffs, batches)
 
     @Provides
     @Singleton
@@ -200,6 +236,7 @@ object DataModule {
         @DataScope scope: CoroutineScope,
         previews: LocalPreviews,
         xmp: XmpPreferences,
+        originals: LocalOriginals,
     ): LibraryRepository = LibraryRepository(
         context.contentResolver,
         database,
@@ -213,6 +250,7 @@ object DataModule {
         grants = readGrants(context),
         // The debug build's synthetic documents provider (app/src/debug) needs no grant; absent in release.
         grantFreeAuthorities = setOf("${context.packageName}.synthetic"),
+        originals = originals,
     )
 
     @Provides
@@ -385,6 +423,7 @@ object DataModule {
         database: RevealDatabase,
         budget: CacheBudget,
         previews: LocalPreviews,
+        originals: LocalOriginals,
         // The areas register when they are made: make sure the thumbnails, the masks and the fills are.
         @Suppress("UNUSED_PARAMETER") thumbnails: ThumbnailRepository,
         @Suppress("UNUSED_PARAMETER") masks: MaskCacheArea,
@@ -394,6 +433,7 @@ object DataModule {
         db = database,
         budget = budget,
         previews = previews,
+        originals = originals,
         cacheDir = context.cacheDir,
         uploadsDir = File(context.noBackupFilesDir, "sync-previews"),
         database = {

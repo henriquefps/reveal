@@ -1,6 +1,7 @@
 package dev.hfps.reveal.data.storage
 
 import dev.hfps.reveal.data.db.RevealDatabase
+import dev.hfps.reveal.data.handoff.LocalOriginals
 import dev.hfps.reveal.data.handoff.LocalPreviews
 import java.io.File
 import kotlinx.coroutines.Dispatchers
@@ -39,6 +40,8 @@ class AppStorage(
     private val uploadsDir: File?,
     private val database: () -> List<File>,
     private val areaDirs: Set<String> = AREA_DIRS,
+    /** The originals Reveal keeps of hand-offs (W4); they are never part of "Clear cache". */
+    private val originals: LocalOriginals? = null,
     private val clock: () -> Long = System::currentTimeMillis,
 ) {
     suspend fun usage(): StorageUsage = withContext(Dispatchers.IO) {
@@ -49,6 +52,8 @@ class AppStorage(
         }
         val local = previewFiles()
         bytes[StorageKind.HANDOFF_PREVIEWS] = local.sumOf { it.file.length() }
+        // Hand-off originals (W4): the only readable copy of their photos, so never part of "Clear cache".
+        bytes[StorageKind.HANDOFF_ORIGINALS] = originals?.files().orEmpty().sumOf { it.length() }
         bytes[StorageKind.OTHER] = otherFiles().sumOf { it.length() } + (uploadsDir?.let(::sizeOf) ?: 0L)
         bytes[StorageKind.LIBRARY] = database().filter { it.isFile }.sumOf { it.length() }
         StorageUsage(bytes, keptPreviews = local.filter { it.keep }.sumOf { it.file.length() })

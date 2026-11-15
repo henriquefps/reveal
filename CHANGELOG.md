@@ -29,6 +29,14 @@ All notable changes to Reveal are documented here. The format follows
   folder or one above it.
 
 ### Changed
+- Photos handed over by Hoard as copies in your gallery (MediaStore) now work like any other photo: Reveal asks once
+  for access to all your photos so they stay openable later, keeps its own copy of the files the gallery cannot share
+  (such as CR3, in Settings → Storage → "Originals from other apps", never cleared automatically), pairs a RAW in
+  Downloads with its JPEG in Pictures, and no longer moves a readable local copy to the server's. Big batches (split
+  in chunks of 200) arrive as one entry and are never cut by the 400-photo retention. The "Copying photos"
+  notification appears only while files that need the sender's permission are copied or previewed (never for an
+  ordinary gallery share with full photo access), names the sending app, stops at Android 15's time limit instead of
+  crashing, and a batch interrupted by the system killing Reveal resumes from where it was.
 - Reveal no longer writes `.xmp` sidecars on its own, anywhere (edits, ratings, flags, labels, hand-offs): they travel
   through the server, and Export XMP writes sidecars when you ask. The "Write edits to XMP sidecars" setting is gone.
   New folders and hand-offs are granted read access only; reading existing sidecars is unchanged.
@@ -41,6 +49,19 @@ All notable changes to Reveal are documented here. The format follows
 - Server photos without a capture time sort by their NAS file's time, or go to "No date", instead of the time their
   record arrived.
 ### Fixed
+- Photos from Hoard (W4): a camera's `IMG_0001.JPG` no longer pairs with a Hoard `IMG_0001.CR3` of the same name; a
+  RAW and its JPEG that arrive in different parts of a big batch still become one photo; the originals Reveal keeps
+  for Hoard's Downloads copies are no longer left behind (backups of photos the server holds, a failed re-copy, a
+  shot that is a folder's photo); a copy that would fill the phone is refused and reported; a batch keeps going when
+  the screen rotates; the parts of a big batch stay until their previews are made, so photos do not end up blank.
+- The photo access offer for Hoard's photos is asked once on its own, only for Hoard's photos (also over the editor
+  for a single photo), and the older offer for gallery shares has its own wording again.
+- Photos from Hoard: going back to Hoard right away no longer stops the copies of its photos half-way (Reveal keeps
+  access while it copies, with a short "Copying N photos from Hoard" notification), the extra parts of a big batch no
+  longer stay open over Hoard, a copy that still fails is reported ("N photos could not be copied; Reveal will use
+  their previews"), and two copies at once no longer delete each other's temporary files. Files at the top of
+  Pictures, DCIM or Download pair only with files there.
+- The photo access offer for Hoard's photos is marked answered only when it was that offer you answered.
 - A preset batch or XMP export that Android stops in the background (not your Cancel) is resumed instead of dropped.
 - Export XMP to a chosen folder: a photo whose own sidecar is malformed now gets a fresh sidecar there (its own file
   is still left alone).

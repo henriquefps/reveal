@@ -341,6 +341,33 @@ REVEAL_HANDOFF_DIR=$D REVEAL_HANDOFF_LINKS=$(for i in 1 2; do scripts/sync/local
 adb -s <serial> shell am instrument -w -e class dev.hfps.reveal.handoff.HandoffServerRefTest [-e syncLink "'$(scripts/sync/local-server.sh pair <work dir>)'"] dev.hfps.reveal.debug.test/androidx.test.runner.AndroidJUnitRunner
 ```
 
+W4 local copies (ADR 0011 "Amendment W4"): Hoard 2.2.0 copies non-server photos into MediaStore (`Pictures/Hoard/<batch>`,
+and `Download/Hoard/<batch>` for what Images refuses, e.g. CR3) and hands over `content://media/...` URIs with a read grant
+only (no persistable grant, no write, no sidecar; chunks of 200 with `BATCH_INDEX/COUNT`, a shot's members in one chunk;
+SMB streaming links are legacy). Gallery offer: only for Hoard (`HandoffApps.isHoard(referrer)`) Images documents
+(`GalleryAccess.isMediaImages`, `noteHoardMedia`), its own answer `mediaAsked` (`GalleryOffer.HOARD`; the older share offer
+is `GalleryOffer.SHARED`/`asked`), in the library for a batch and over the editor for one photo (`MainActivity`). Media
+URIs are never persisted; pairing key = MediaStore `RELATIVE_PATH` minus its top folder (`parentKey(uri, relativePath)`),
+plus `joinEarlierChunk` for a split shot. `handoff/LocalOriginals` copies a Downloads file while the grant lives into
+`noBackupFilesDir/handoff-originals/<fingerprint>.<ext>` (free-space margin, `.tmp` sweep, existing copy reused) and
+`PhotoDao.repointFile` changes `document_id` only (`relative_path` keeps the URI); never evicted
+(`StorageKind.HANDOFF_ORIGINALS`), deleted by fingerprint (`deleteCopies`) on forget/retention/merge; never adopted
+(`SyncDao.adoptableHandoffs`). Receiving runs in the app's scope (`HandoffIngests`, re-attached after recreation):
+`receiveStaged` returns the outcome once the first photo is in, `Received.settled` when the rest (copies 2 at a time,
+display previews of grant-only shots) is done (`noSpace`, `notCopied` reported once, `HandoffNotices`). The intent's
+grant is passed to `HandoffGrantService` (app, dataSync FGS, URIs as ClipData + FLAG_GRANT_READ, starts stopped in
+order by `GrantStarts`; started only when `HandoffGrants.needing` finds documents that need the grant; a failed
+`startForeground` or `onTimeout` settles and stops, never a background service; a redelivered start whose ingest died
+re-receives its `EXTRA_REQUEST`; notices via `HandoffIngests.whenSettled`) until the ingest settles, so back returns to Hoard and silent chunks finish at once; `HandoffIngests.receive`
+holds no activity; holders are counted (`handOver`/`holderGone`), smart previews of grant-only documents need one.
+`LocalOriginals` sweeps `.tmp` only when created. Grant test: `HandoffGrantServiceTest` (shell-owned Downloads files,
+`am start --grant-read-uri-permission`; emulator is fine, no GL).
+```sh
+./gradlew :core:data:testDebugUnitTest --tests '*HandoffMediaTest*' --tests '*HandoffServerRefsTest*' --tests '*ReadOnlyGrantsTest*' && ./gradlew :core:sync:testDebugUnitTest --tests '*HandoffAdoptionTest*'
+adb -s <serial> shell pm grant dev.hfps.reveal.debug android.permission.READ_MEDIA_IMAGES   # FULL; `pm revoke` = NONE (kills the app)
+adb -s <serial> shell am instrument -w -e class dev.hfps.reveal.handoff.HandoffMediaTest dev.hfps.reveal.debug.test/androidx.test.runner.AndroidJUnitRunner   # run in FULL and in NONE
+```
+
 One photo across sources (ADR 0011, 0.5.1): a hand-off and a folder file of the same fingerprint are the folder's photo.
 Folder first: `HandoffRepository.store` opens it (`foreign`), sets `handoff_at`, applies the culling values
 (`applyFolderCulling`) and writes the folder sidecar (`SidecarSync`). Hand-off first: `LibraryRepository.mergeHandoffs`

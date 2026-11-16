@@ -6,6 +6,8 @@ All notable changes to Reveal are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-11-15
+
 ### Added
 - Navigate a large library by date (W3/D, docs/adr/0006 "W3/D"): the grid groups photos under a header per month
   (with its photo count) and, by default, a sub-header per day; "Group by month" / "Group by day" in the sort menu

@@ -56,6 +56,13 @@ class ImageCoreLogicTest {
         assertEquals(ImageKind.JPEG, ImageFormats.classify("x.JPEG").kind)
         assertEquals(ImageKind.HEIF, ImageFormats.classify("x.HIF").kind)
         assertEquals(ImageKind.OTHER, ImageFormats.classify("notes.txt").kind)
+        // Screenshots and stickers (Hoard's phone backup mirrors them): PNG, WebP and GIF are displayable stills.
+        assertEquals(ImageKind.PNG, ImageFormats.classify("Screenshot_1.png").kind)
+        assertEquals(ImageKind.WEBP, ImageFormats.classify("STK-1.webp").kind)
+        assertEquals(ImageKind.GIF, ImageFormats.classify("loop.GIF").kind)
+        assertTrue(ImageFormats.classify("loop.gif").isDisplayable)
+        assertEquals(ImageKind.GIF, ImageFormats.classify("loop.gif", "GIF89a".toByteArray()).kind)
+        assertEquals(ImageKind.GIF, ImageFormats.classify("renamed.jpg", "GIF87a".toByteArray()).kind)
         assertEquals(ImageKind.OTHER, ImageFormats.classify(".jpg").kind)
 
         val jpeg = byteArrayOf(0xFF.toByte(), 0xD8.toByte(), 0xFF.toByte(), 0xE1.toByte())

@@ -56,6 +56,7 @@
     <string name="library_format_heif">HEIF</string>
     <string name="library_format_png">PNG</string>
     <string name="library_format_webp">WebP</string>
+    <string name="library_format_gif">GIF</string>
     <plurals name="library_stars">
         <item quantity="one">%1$d estrela</item>
         <item quantity="many">%1$d estrelas</item>

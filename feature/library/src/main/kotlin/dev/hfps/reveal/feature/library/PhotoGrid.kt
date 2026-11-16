@@ -824,4 +824,5 @@ internal fun formatName(format: PhotoFormat): Int = when (format) {
     PhotoFormat.HEIF -> R.string.library_format_heif
     PhotoFormat.PNG -> R.string.library_format_png
     PhotoFormat.WEBP -> R.string.library_format_webp
+    PhotoFormat.GIF -> R.string.library_format_gif
 }

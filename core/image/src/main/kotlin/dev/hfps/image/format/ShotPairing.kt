@@ -29,7 +29,7 @@ object ShotPairing {
     /**
      * Groups a folder listing into shots by case-insensitive stem (`DSC07668.ARW` + `dsc07668.jpg`).
      * Non-image files are ignored. When a stem has several RAWs or renderings, the first by
-     * preference (JPEG over HEIF over PNG/WebP; then name) wins and the rest go to [Shot.others].
+     * preference (JPEG over HEIF over PNG/WebP/GIF; then name) wins and the rest go to [Shot.others].
      * Shots are returned sorted by stem (natural order); callers re-sort by capture time once EXIF is
      * known.
      */

@@ -38,6 +38,9 @@ enum class PhotoFormat {
     HEIF,
     PNG,
     WEBP,
+
+    /** A GIF (its first frame). Older apps read an unknown format from the file names (`SyncStore.formatOf`). */
+    GIF,
 }
 
 /**

@@ -40,8 +40,8 @@ data class StandardDecodeResult(
 )
 
 /**
- * JPEG, HEIF/HEIC, PNG and WebP through the platform decoders (`BitmapFactory`, `BitmapRegionDecoder`) into the
- * same linear working encoding as a RAW (see [LinearImage]).
+ * JPEG, HEIF/HEIC, PNG and WebP through the platform decoders (`BitmapFactory`, `BitmapRegionDecoder`; GIF too, as its
+ * first frame, through `BitmapFactory` only) into the same linear working encoding as a RAW (see [LinearImage]).
  *
  * Working encoding: the pixels are decoded in the file's **own colour space** (sRGB, Display P3, Adobe RGB, an
  * embedded ICC profile the platform understands) with no gamut conversion, then linearised with that space's transfer

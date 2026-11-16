@@ -289,7 +289,8 @@ class PhotoImages(
 
     private fun openRegion(input: ImageInput): RegionSource? {
         val kind = ImageFormats.classify(input.name).kind
-        if (kind == ImageKind.RAW || kind == ImageKind.OTHER) {
+        // BitmapRegionDecoder reads JPEG, PNG, WebP and HEIF only: a GIF is shown whole (first frame).
+        if (kind == ImageKind.RAW || kind == ImageKind.OTHER || kind == ImageKind.GIF) {
             input.close()
             return null
         }

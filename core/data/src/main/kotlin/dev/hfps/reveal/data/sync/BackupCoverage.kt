@@ -59,6 +59,9 @@ object BackupCoverage {
      * among others, only the `raw` type does (Hoard ADR 0024 "`GET /v1/backup/roots`").
      */
     private val MEDIA_STORE_RAWS = setOf("dng", "cr2", "nef", "nrw", "arw", "orf", "pef", "raf", "rw2", "srw")
+
+    /** Stills MediaStore lists, screenshots and stickers included (Hoard 0.12.0 mirrors PNG, WebP and GIF too). */
+    private val IMAGE_KINDS = setOf(ImageKind.JPEG, ImageKind.HEIF, ImageKind.PNG, ImageKind.WEBP, ImageKind.GIF)
     private val VIDEOS = setOf("mp4", "mov", "m4v", "3gp", "webm", "mkv")
 
     private val json = Json { ignoreUnknownKeys = true }
@@ -117,7 +120,7 @@ object BackupCoverage {
         return when {
             type.isRaw && extension in MEDIA_STORE_RAWS -> setOf(TYPE_RAW, TYPE_IMAGE)
             type.isRaw -> setOf(TYPE_RAW)
-            type.kind in setOf(ImageKind.JPEG, ImageKind.HEIF, ImageKind.PNG, ImageKind.WEBP) -> setOf(TYPE_IMAGE)
+            type.kind in IMAGE_KINDS -> setOf(TYPE_IMAGE)
             else -> emptySet()
         }
     }

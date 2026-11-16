@@ -18,6 +18,7 @@ object OriginalCopy {
         "avif" to "image/avif",
         "png" to "image/png",
         "webp" to "image/webp",
+        "gif" to "image/gif",
         "tif" to "image/tiff",
         "tiff" to "image/tiff",
         "dng" to "image/x-adobe-dng",

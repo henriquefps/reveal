@@ -15,6 +15,8 @@ All notable changes to Reveal are documented here. The format follows
   it needed backing up, the server still does not have it. Two devices never upload the same file at the same time.
 - Photos Hoard frees from the phone after backing them up stay in Reveal as server photos, with their edits, versions,
   ratings and flags.
+- GIFs are photos too: they show in the library (badge "GIF") and open in the editor as their first frame.
+  Screenshots, stickers and GIFs that Hoard backs up from the phone show as server photos like any other.
 
 ### Changed
 - "Originals over Wi-Fi only" now says it applies to the originals Reveal still uploads itself.

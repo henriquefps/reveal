@@ -881,8 +881,8 @@ both. Every addition is used only when `GET /v1/server` lists its feature; again
   `com.android.externalstorage.documents` (`primary:DCIM/Camera` = volume `primary`, path `DCIM/Camera`) to a location;
   any other provider is never covered. A folder is covered by an **active** root whose volume equals it (any case) and
   whose path is equal or a prefix at `/`; a file is covered when its kind is in the root's `types` (`image` = JPEG,
-  HEIF, PNG, WebP and the RAWs MediaStore lists; `raw` = every RAW, CR3 included; `sidecar`; `video`; anything else is
-  never covered).
+  HEIF, PNG, WebP, GIF and the RAWs MediaStore lists; `raw` = every RAW, CR3 included; `sidecar`; `video`; anything
+  else is never covered).
 - `BlobUploader.originals`: a candidate (`backupCandidates`: backup-on folders and edited photos, the shot's main
   file, which is the RAW of a pair) whose file is covered starts a **24-hour grace** (`photo_cloud.candidate_at`, set the
   first time it is seen as a candidate, never reused from `edited_at`); `backupCandidates(limit, waitedSince)` leaves
@@ -961,4 +961,30 @@ must never lose its edits because of that.
 **Without `backup`:** Reveal applies today's rule as soon as the paired server answered `GET /v1/server` **in this run**
 without `backup` (never a stored features list): such a server cannot have freed anything, and keeping deletions for a
 week on every current server would be a visible regression (accepted by the orchestrator). Offline, or before the next
-sync, photos still wait (bounded by the walk's 7 days). `RealServerBackupTest` waits for hoard-server 0.12.0.
+sync, photos still wait (bounded by the walk's 7 days).
+
+### Against the real server (R1b)
+
+`RealServerBackupTest` (`:core:sync`, JVM, `REVEAL_BACKUP_DIR`) runs every rule above against hoard-server 0.12.0 with
+two device keys on one phone: Reveal's (`TestDevice`) and a raw HTTP "Hoard" that claims Reveal's physical device and
+drives `POST /v1/backup/roots`, `PATCH .../roots/{id}`, `POST /v1/backup/report` and uploads with `claim: false`. What
+the real server showed, against R1's reading of Hoard ADR 0024 and `FakeSyncServer`:
+
+- **Unchanged and confirmed**: roots in `physicalDevice.backup` with `types`, `active` and upper-case card volumes;
+  entry and location paths relative to the volume; `GET /v1/items?folder=<rootId>&path=` with `path` relative to the
+  root (as the fake does); `mirror` locations with `onDevice`/`gone` next to a `backup` location; `in_progress` with
+  `retryAfter: 300` while another device's upload is live, `exists` once it completes, `created` once it is abandoned;
+  `409 mirror` on `DELETE /v1/originals` after the photo's record is tombstoned; the reserved `SD card <UUID>` prefix
+  (`422` for a root).
+- **Items follow a report a moment later**: right after `removed` (`freed`), the folder query can still say
+  `onDevice: true`. FreedPhotos treats that as "the walk missed it" and asks again in 6 hours; no change was needed
+  (Hoard reports a free-up as soon as the system deleted the files, long before a walk notices).
+- **`freed-adopt` was not kept** by the first 0.12.0 build (unknown features were dropped): fixed in hoard-server 0.12.0
+  (schema 11), which stores it and lists it in `features` and `physicalDevice.devices[].features`. Reveal parses the
+  latter (`DeviceEntry.features`, optional) only for the test.
+- **A bad report entry is refused on its own** (`state: "refused"` with `reason`), not a `422` for the whole batch.
+  Reveal never reports, so nothing changed here.
+- **PNG, WebP and GIF** are mirrored (screenshots, stickers): Reveal now knows GIF (`ImageKind.GIF`, `PhotoFormat.GIF`,
+  badge "GIF"; shown and edited as its first frame, never through `BitmapRegionDecoder`, which has no GIF), so a folder
+  GIF is a photo, Hoard's `image` type covers it, and a mirror item of any of the three becomes a Server photo, adopted
+  or handed over. Older apps read an unknown `format` from the file names (`SyncStore.formatOf`).

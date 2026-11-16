@@ -58,6 +58,9 @@ class BackupCoverageTest {
     @Test
     fun `types and the stored form`() {
         assertThat(BackupCoverage.typesOf("a.HEIC")).containsExactly("image")
+        assertThat(BackupCoverage.typesOf("Screenshot_1.png")).containsExactly("image")
+        assertThat(BackupCoverage.typesOf("STK-1.webp")).containsExactly("image")
+        assertThat(BackupCoverage.typesOf("loop.gif")).containsExactly("image")
         assertThat(BackupCoverage.typesOf("a.arw")).containsExactly("raw", "image")
         assertThat(BackupCoverage.typesOf("a.cr3")).containsExactly("raw")
         assertThat(BackupCoverage.typesOf("a.xmp")).containsExactly("sidecar")

@@ -1916,6 +1916,7 @@ class SyncStore(
                 rendered?.kind == ImageKind.HEIF -> PhotoFormat.HEIF
                 rendered?.kind == ImageKind.PNG -> PhotoFormat.PNG
                 rendered?.kind == ImageKind.WEBP -> PhotoFormat.WEBP
+                rendered?.kind == ImageKind.GIF -> PhotoFormat.GIF
                 else -> PhotoFormat.JPEG
             }
         }

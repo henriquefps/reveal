@@ -705,6 +705,7 @@ class LibraryIndexer(
                 ImageKind.HEIF -> PhotoFormat.HEIF
                 ImageKind.PNG -> PhotoFormat.PNG
                 ImageKind.WEBP -> PhotoFormat.WEBP
+                ImageKind.GIF -> PhotoFormat.GIF
                 else -> PhotoFormat.JPEG
             }
         }

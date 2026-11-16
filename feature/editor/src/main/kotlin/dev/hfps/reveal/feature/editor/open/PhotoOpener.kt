@@ -179,7 +179,8 @@ class PhotoOpener(
             val fd = image.descriptor.fileDescriptor
             val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
             BitmapFactory.decodeFileDescriptor(fd, null, bounds)
-            if (bounds.outWidth.toLong() * bounds.outHeight > FULL_DECODE_MAX_PIXELS) {
+            // BitmapRegionDecoder has no GIF: a GIF (first frame) is always decoded whole.
+            if (bounds.outWidth.toLong() * bounds.outHeight > FULL_DECODE_MAX_PIXELS && type.kind != ImageKind.GIF) {
                 // Very large: regions on demand (as the library viewer), the document stays open; another app's is
                 // copied first and closed (its descriptor never outlives the read).
                 val (dir, own) = copies ?: (null to "")

@@ -596,6 +596,11 @@ data class DeviceEntry(
     val platform: String = "",
     val manufacturer: String? = null,
     val model: String? = null,
+    /**
+     * What the device declared in `PATCH /v1/device` (`culling`, `freed-adopt`; Hoard ADR 0024): Hoard's free up reads
+     * Reveal's `freed-adopt` here. Null when the server does not list it.
+     */
+    val features: List<String>? = null,
 )
 
 /** A physical device this one may belong to: [match] `model` (same manufacturer and model) or `other`. */

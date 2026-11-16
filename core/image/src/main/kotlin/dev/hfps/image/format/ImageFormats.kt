@@ -4,7 +4,17 @@
 package dev.hfps.image.format
 
 /** Broad family of an image file. */
-enum class ImageKind { JPEG, HEIF, PNG, WEBP, RAW, OTHER }
+enum class ImageKind {
+    JPEG,
+    HEIF,
+    PNG,
+    WEBP,
+
+    /** A GIF: shown and edited as its first frame (the platform decoder's still). */
+    GIF,
+    RAW,
+    OTHER,
+}
 
 /** Camera RAW container formats the core knows. */
 enum class RawFormat(val extensions: Set<String>) {
@@ -31,7 +41,7 @@ data class ImageType(val kind: ImageKind, val raw: RawFormat? = null) {
 }
 
 /** Container signature found in the first bytes of a file. */
-enum class Magic { JPEG, PNG, WEBP, HEIF, TIFF_LE, TIFF_BE, ORF, RW2, RAF, CR3, UNKNOWN }
+enum class Magic { JPEG, PNG, WEBP, GIF, HEIF, TIFF_LE, TIFF_BE, ORF, RW2, RAF, CR3, UNKNOWN }
 
 object ImageFormats {
 
@@ -43,6 +53,7 @@ object ImageFormats {
         listOf("heic", "heif", "hif", "avif").forEach { put(it, ImageType(ImageKind.HEIF)) }
         put("png", ImageType(ImageKind.PNG))
         put("webp", ImageType(ImageKind.WEBP))
+        put("gif", ImageType(ImageKind.GIF))
         RawFormat.entries.forEach { format -> format.extensions.forEach { put(it, ImageType(ImageKind.RAW, format)) } }
     }
 
@@ -76,6 +87,8 @@ object ImageFormats {
 
             Magic.WEBP -> ImageType(ImageKind.WEBP)
 
+            Magic.GIF -> ImageType(ImageKind.GIF)
+
             Magic.HEIF -> ImageType(ImageKind.HEIF)
 
             Magic.CR3 -> ImageType(ImageKind.RAW, RawFormat.CR3)
@@ -106,6 +119,8 @@ object ImageFormats {
             at(0, 0x89, 0x50, 0x4E, 0x47) -> Magic.PNG
 
             ascii(0, "RIFF") && ascii(8, "WEBP") -> Magic.WEBP
+
+            ascii(0, "GIF87a") || ascii(0, "GIF89a") -> Magic.GIF
 
             ascii(0, "FUJIFILMCCD-RAW") -> Magic.RAF
 

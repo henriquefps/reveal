@@ -1241,4 +1241,11 @@ adb -s emulator-<port> shell am instrument -w -e class dev.hfps.reveal.library.H
 D=$(mktemp -d) && scripts/sync/local-server.sh start $D 3476 app/src/androidTest/assets/faces/studio-trio.jpg
 REVEAL_REPO=$PWD REVEAL_TRASH_DIR=$D REVEAL_TRASH_LINK=$(scripts/sync/local-server.sh pair $D) \
   ./gradlew --no-configuration-cache :core:sync:testDebugUnitTest --tests '*RealServerTrashTest*'; scripts/sync/local-server.sh stop $D
+# phone backup against hoard-server 0.12.0+ (backup): two keys on one phone ("Reveal" + a raw "Hoard" client grouped by
+# the same-phone claim): roots/types, grace + wait/in_progress, 409 mirror, freed-adopt, refused entries, PNG/WebP/GIF.
+# The test mints its own links; until server-v0.12.0 is pinned, add HOARD_SERVER_IMAGE=<local build of Hoard main>.
+D=$(mktemp -d) && scripts/sync/local-server.sh start $D 3477
+REVEAL_REPO=$PWD REVEAL_BACKUP_DIR=$D ./gradlew --no-configuration-cache :core:sync:testDebugUnitTest \
+  --tests '*RealServerBackupTest*'; scripts/sync/local-server.sh stop $D
+./gradlew :core:data:testDebugUnitTest --tests '*StillFormatsTest*'   # PNG/WebP/GIF badges, coverage, platform decode
 ```

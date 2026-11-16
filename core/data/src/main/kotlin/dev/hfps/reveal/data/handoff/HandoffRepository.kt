@@ -355,6 +355,7 @@ class HandoffRepository(
             type.kind == ImageKind.HEIF -> "heic"
             type.kind == ImageKind.PNG -> "png"
             type.kind == ImageKind.WEBP -> "webp"
+            type.kind == ImageKind.GIF -> "gif"
             else -> return item
         }
         return Item(item.uri, item.entry.copy(name = "${item.name}.$extension"))

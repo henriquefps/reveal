@@ -6,6 +6,8 @@ All notable changes to Reveal are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-11-16
+
 ### Added
 - Hoard's trash: photos of the server's NAS folders that you move to Hoard's trash leave the library instead of
   becoming photos that fail to open. A new Sync filter, "In Hoard's trash", lists them (as placeholders; they cannot be

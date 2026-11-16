@@ -37,8 +37,7 @@ import mockwebserver3.RecordedRequest
  * kept as a copy), fingerprint lookups, chunked resumable uploads, ranges and the NAS feed. Hooks let a test break an
  * upload half-way.
  */
-class FakeSyncServer : Dispatcher() {
-    val serverId = "858e1b9d-0000-4000-8000-000000000001"
+class FakeSyncServer(val serverId: String = "858e1b9d-0000-4000-8000-000000000001") : Dispatcher() {
     private val json = Json { ignoreUnknownKeys = true }
 
     class Record(
@@ -87,10 +86,19 @@ class FakeSyncServer : Dispatcher() {
     val patchCount = AtomicInteger()
     var chunkSize = 1024L
 
+    /** Refuse `POST /v1/items/lookup` with this `400` code (null: answer it). */
+    var refuseItemLookups: String? = null
+
     /** Answer the next N authenticated requests with `429` + `Retry-After: 1`. */
     var rateLimitNext = 0
 
     private val server = MockWebServer().also { it.dispatcher = this }
+
+    /** `limits.maxPushChanges` of `/v1/server`, enforced like hoard-server (a longer push is `422 invalid_change`). */
+    var maxPushChanges = 500
+
+    /** Every `Authorization` header this server received, in order (a key must never reach the wrong server). */
+    val authorizations: MutableList<String> = java.util.Collections.synchronizedList(ArrayList())
 
     /** `features` of `/v1/server`: empty = a server before hoard-server 0.7.0 (no culling, no device identity). */
     val features = ArrayList<String>()
@@ -136,6 +144,17 @@ class FakeSyncServer : Dispatcher() {
         return key
     }
 
+    /** Revokes a device as the admin page does: its key answers `401`, it is no longer listed (ADR 0017). */
+    @Synchronized
+    fun revoke(deviceId: String) {
+        devices.entries.removeIf { it.value == deviceId }
+        deviceNames.remove(deviceId)
+    }
+
+    /** How many `POST /v1/items/lookup` requests were answered. */
+    @Volatile
+    var itemLookups = 0
+
     /** How many culling pages were asked for (a hand-off's pull, a sync run's). */
     @Volatile
     var cullingPages = 0
@@ -154,6 +173,7 @@ class FakeSyncServer : Dispatcher() {
                 },
             )
         }
+        request.headers["Authorization"]?.let { authorizations += it }
         val device = request.headers["Authorization"]?.removePrefix("Bearer ")?.let { devices[it] }
             ?: return error(401, "unauthorized")
         if (rateLimitNext > 0) {
@@ -172,7 +192,7 @@ class FakeSyncServer : Dispatcher() {
                     put(
                         "limits",
                         buildJsonObject {
-                            put("maxPushChanges", 500)
+                            put("maxPushChanges", maxPushChanges)
                             put("maxPullLimit", 500)
                             put("chunkSize", chunkSize)
                         },
@@ -208,8 +228,11 @@ class FakeSyncServer : Dispatcher() {
 
             path == "/v1/fingerprints/lookup" -> lookup(request)
 
-            path == "/v1/items/lookup" && "items" in features ->
+            path == "/v1/items/lookup" && "items" in features -> {
+                itemLookups++
+                refuseItemLookups?.let { return error(400, it) }
                 ok(edits.lookup(json.parseToJsonElement(request.body!!.utf8()).jsonObject))
+            }
 
             path == "/v1/items/previews" && method == "POST" && "previews" in features -> previews.warm(request)
 
@@ -409,6 +432,8 @@ class FakeSyncServer : Dispatcher() {
 
     private fun push(device: String, request: RecordedRequest): MockResponse {
         val changes = json.parseToJsonElement(request.body!!.utf8()).jsonObject["changes"]!!.jsonArray
+        // hoard-server: too many changes is one invalid_change for the whole request, without an index.
+        if (changes.size > maxPushChanges) return error(422, "invalid_change")
         changes.forEachIndexed { index, c ->
             val o = c.jsonObject
             val deleted = o["deleted"]?.jsonPrimitive?.booleanOrNull ?: false

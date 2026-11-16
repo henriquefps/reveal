@@ -7,6 +7,7 @@ import dev.hfps.reveal.data.db.MetaEntity
 import dev.hfps.reveal.data.db.RevealDatabase
 import dev.hfps.reveal.sync.account.ClientDevice
 import dev.hfps.reveal.sync.api.DeviceReport
+import dev.hfps.reveal.sync.api.ItemsLookupResponse
 import dev.hfps.reveal.sync.api.PushChange
 import dev.hfps.reveal.sync.api.ServerInfo
 import dev.hfps.reveal.sync.api.SyncApi
@@ -47,15 +48,19 @@ class SyncEngine(
     private val clock: () -> Long = System::currentTimeMillis,
 ) {
     private val library = serverLibrary ?: ServerLibrary(db, store, clock)
+
+    /** Off only in tests that replay what a build before the W5 recovery did ([recoverParked]). */
+    var parkedRecovery = true
     private val meta = db.metaDao()
     val culling = CullingSync(db, clock)
 
     /**
      * Runs a sync against [api]. [serverId] is the paired server's id (another one throws [ServerChangedException]).
      */
-    suspend fun sync(api: SyncApi, serverId: String): SyncReport {
+    suspend fun sync(api: SyncApi, serverId: String, deviceId: String? = null): SyncReport {
         val info = api.server()
         if (info.serverId != serverId) throw ServerChangedException(serverId, info.serverId)
+        deviceId?.let { store.noteOwnDevice(it) }
         // Culling per field through the server's culling records (ADR 0027), when it has them; otherwise inside the
         // photo records, as before. The capability is declared before any photo record goes up under this version,
         // so the server stops bridging this device's records (Hoard ADR 0016 "Client rules" 5).
@@ -68,7 +73,9 @@ class SyncEngine(
         val first = meta.get(KEY_TRACKING) != serverId
         if (first) {
             // A first sync pulls before it pushes, so photos both devices already have adopt the server's ids.
-            store.startTracking()
+            store.startTracking(serverId)
+            // This installation's earlier devices: their records under local unpushed edits are rebased, not copied.
+            store.ownAuthors = ownDevices(api, info).ids
         }
         var pulled = 0
         var copies = 0
@@ -83,6 +90,8 @@ class SyncEngine(
             val stats = pull(api, info, deviceName)
             pulled += stats.applied
             copies += stats.copies
+            // Edits the server has no record of (an edited Server photo kept by an unpairing) go up as new.
+            store.markUnrecordedEdits()
             meta.put(MetaEntity(KEY_TRACKING, serverId))
         }
         val (pushedFirst, conflicts) = push(api, info)
@@ -94,14 +103,9 @@ class SyncEngine(
         val retried = store.retryInbox(deviceName)
         pulled += retried.applied
         copies += retried.copies
+        pushed += recoverParked(api, info, deviceName)
         parked = db.syncDao().inbox().size
-        // 0.5.4 (FIX/W), once and after a pull (so nothing newer is overwritten): this device's rotated photos go up
-        // again with their orientation, which older versions never sent (other devices showed them stretched).
-        if (meta.get(KEY_ORIENTATION) != ORIENTATION_VERSION) {
-            val marked = db.syncDao().markOrientedPhotosDirty(clock())
-            if (marked > 0) pushed += push(api, info).first
-            meta.put(MetaEntity(KEY_ORIENTATION, ORIENTATION_VERSION))
-        }
+        pushed += upgrades(api, info, first)
         val cullingReport = if (serverCulling) culling.run(api, info) else null
         val nas = pullNas(api, info)
         val lookups = lookup(api, info)
@@ -115,6 +119,164 @@ class SyncEngine(
         }
         meta.put(MetaEntity(KEY_LAST_SYNC, clock().toString()))
         return SyncReport(pushed, conflicts, pulled, copies, parked, nas, lookups, cleaned, cullingReport)
+    }
+
+    /** The one-off steps of updates that run after a pull ([sync]); returns how many changes they pushed. */
+    private suspend fun upgrades(api: SyncApi, info: ServerInfo, first: Boolean): Int {
+        var count = 0
+        // 0.5.4 (FIX/W), once and after a pull (so nothing newer is overwritten): this device's rotated photos go up
+        // again with their orientation, which older versions never sent (other devices showed them stretched).
+        if (meta.get(KEY_ORIENTATION) != ORIENTATION_VERSION) {
+            val marked = db.syncDao().markOrientedPhotosDirty(clock())
+            if (marked > 0) count += push(api, info).first
+            meta.put(MetaEntity(KEY_ORIENTATION, ORIENTATION_VERSION))
+        }
+        // 0.9.0 (W5), once and after a pull (every local revision is the server's latest, so a version pushed again
+        // never turns a newer edit of another device into a conflict copy): edited versions whose photo the server
+        // never heard of go up with their photo, and this device's edited versions go up again naming their photo's
+        // current id and main-file fingerprint. A first sync with a server needs none: everything just went up.
+        // The repair's versions of unknown author, checked one run later (after this run's pull): pushed if unchanged.
+        if (store.checkRepairs() > 0) count += push(api, info).first
+        if (meta.get(KEY_VERSION_PHOTOS) != VERSION_PHOTOS_VERSION) {
+            val marked = if (first) 0 else store.repairVersionPhotos(store.ownDevices())
+            if (marked > 0) count += push(api, info).first
+            meta.put(MetaEntity(KEY_VERSION_PHOTOS, VERSION_PHOTOS_VERSION))
+        }
+        return count
+    }
+
+    // ------------------------------------------------------------------ parked versions (W5 recovery)
+
+    /**
+     * Parked versions whose photo this device cannot find (ADR 0018 "W5 recovery": a 0.8 record, or one an old
+     * unpairing orphaned) are looked for in the server's edited previews: `POST /v1/items/lookup` answers each item
+     * with its edits, so an edit named after the version gives its item, and the item's matched member gives the local
+     * photo. No `/v1` call finds an item by version id, so the lookup goes over the fingerprints of the photos whose
+     * records the server may never have had (Server photos and hand-offs, newest shot first), [RECOVERY_LOOKUPS] pages
+     * per run, resumable, and only while such versions exist; a version a whole pass did not find is looked for again
+     * after a day, then less and less often ([SyncStore.searchDue]). A found version is applied here (every device
+     * recovers by itself) and pushed again only with proof that this installation made it ([proveRecovered]).
+     * Returns how many changes it pushed.
+     */
+    private suspend fun recoverParked(api: SyncApi, info: ServerInfo, deviceName: (String) -> String?): Int {
+        val orphans = if (parkedRecovery && info.has(FEATURE_ITEMS)) store.parkedOrphans() else emptyList()
+        if (orphans.isNotEmpty()) {
+            val found = searchOrphans(api, orphans)
+            val placed = store.recover(found, orphans, deviceName)
+            if (placed > 0) log("recovered $placed parked version(s) through the server's edited previews")
+        }
+        if (!parkedRecovery || !store.hasPendingProof()) return 0
+        val own = ownDevices(api, info)
+        val marked = store.proveRecovered(hopeless = { own.final && it !in own.claimable }) { it in own.ids }
+        return if (marked > 0) push(api, info).first else 0
+    }
+
+    /**
+     * One paced pass (or the rest of one) over the lookup pages, by photo id (photos added meanwhile come last, so no
+     * page shifts); returns version uuid -> a main-file fingerprint. A lookup the server refuses for good (not a
+     * transient answer, not a lost key) ends the pass like a miss: the versions back off instead of asking every run.
+     */
+    private suspend fun searchOrphans(api: SyncApi, orphans: List<ParkedOrphan>): Map<String, String> {
+        val now = clock()
+        val wanted = orphans.map { it.uuid }.toSet()
+        val state = store.recoverySearch()
+        val due = wanted.filter { store.searchDue(it, now) }.toSet()
+        if (state == null && due.isEmpty()) return emptyMap()
+        val looking = (state?.second ?: due).intersect(wanted) + due
+        val found = HashMap<String, String>()
+        val (after, ended) = lookupPages(api, state?.first ?: 0L, looking, found)
+        if (ended) {
+            store.saveRecoverySearch(null)
+            for (uuid in store.missed(looking - found.keys, now)) {
+                log("parked version ${uuid.take(SHORT)}: no edited preview names it; looked for again later")
+            }
+        } else {
+            store.saveRecoverySearch(after to looking)
+        }
+        return found
+    }
+
+    /**
+     * Up to [RECOVERY_LOOKUPS] pages of the pass after photo id [start], adding to [found]; returns the last photo id
+     * asked about and whether the pass ended (every page read, everything found, or a lookup refused for good).
+     */
+    private suspend fun lookupPages(
+        api: SyncApi,
+        start: Long,
+        looking: Set<String>,
+        found: MutableMap<String, String>,
+    ): Pair<Long, Boolean> {
+        var after = start
+        var pages = 0
+        var ended = false
+        try {
+            while (!ended && pages++ < RECOVERY_LOOKUPS) {
+                val page = store.recoveryFingerprints(RECOVERY_PAGE, after)
+                page.lastOrNull()?.let { after = it.photoId }
+                val asked = page.mapNotNull { it.fingerprint }.distinct()
+                if (asked.isNotEmpty()) found += editsNaming(api.itemsLookup(asked), asked, looking)
+                ended = page.size < RECOVERY_PAGE || found.keys.containsAll(looking)
+            }
+        } catch (e: SyncHttpException) {
+            if (e.transient || e.unauthorized) throw e
+            log("recovery lookup refused (${e.code}): looked for again later")
+            ended = true
+        }
+        return after to ended
+    }
+
+    /** The versions of [looking] an item of [answer] has an edit of, each with the item's member among [asked]. */
+    private fun editsNaming(
+        answer: ItemsLookupResponse,
+        asked: List<String>,
+        looking: Set<String>,
+    ): Map<String, String> {
+        val askedSet = asked.toSet()
+        val members = answer.matches.filter { it.fingerprint in askedSet }.groupBy { it.itemId }
+        val found = HashMap<String, String>()
+        for (item in answer.items) {
+            val matched = members[item.id].orEmpty()
+            val member = matched.firstOrNull { it.role == "main" } ?: matched.firstOrNull() ?: continue
+            item.edits.filter {
+                it.versionId in looking
+            }.forEach { found.putIfAbsent(it.versionId, member.fingerprint) }
+        }
+        return found
+    }
+
+    /**
+     * This installation's device ids ([SyncStore.ownDevices]) and, on a server with device identity, every device of
+     * its physical device (Hoard ADR 0017): a pairing claimed into its old physical device ("same phone?") proves the
+     * old id, which is the physical device's id when it was its first device (hoard-server keeps a revoked device's
+     * id as its physical device's id, and lists only live devices in it, in `GET /v1/devices` too).
+     */
+    private suspend fun ownDevices(api: SyncApi, info: ServerInfo): OwnDevices {
+        val own = HashSet(store.ownDevices())
+        meta.get(KEY_PHYSICAL_DEVICE)?.let { own += it }
+        val identity = info.has(FEATURE_DEVICE_IDENTITY)
+        val view = if (identity) runCatching { api.device() }.getOrNull() else null
+        if (view != null) {
+            store.noteOwnDevice(view.deviceId)
+            own += view.deviceId
+            view.physicalDevice?.id?.let { meta.put(MetaEntity(KEY_PHYSICAL_DEVICE, it)) }
+            own += listOfNotNull(view.physicalDevice?.id) + view.physicalDevice?.devices.orEmpty().map { it.id }
+        }
+        // Final: the server's view was read (or it has none to give); only a claim into one of its candidates (a
+        // physical device whose id is an old device's, ADR 0017 "same phone?") can prove more later.
+        return OwnDevices(
+            own,
+            view != null || !identity,
+            view?.candidates.orEmpty().map {
+                it.physicalDeviceId
+            }.toSet(),
+        )
+    }
+
+    /** [ownDevices]' answer: the ids, whether it is final, the physical devices this device may still join. */
+    private data class OwnDevices(val ids: Set<String>, val final: Boolean, val claimable: Set<String>)
+
+    private fun log(message: String) {
+        runCatching { Log.i(TAG, message) }
     }
 
     /**
@@ -133,6 +295,7 @@ class SyncEngine(
         if (meta.get(KEY_DEVICE_REPORTED) == signature) return
         try {
             val view = api.reportDevice(report)
+            store.noteOwnDevice(view.deviceId)
             meta.put(MetaEntity(KEY_DEVICE_REPORTED, signature))
             view.physicalDevice?.id?.let { meta.put(MetaEntity(KEY_PHYSICAL_DEVICE, it)) }
         } catch (e: SyncHttpException) {
@@ -190,7 +353,7 @@ class SyncEngine(
     }
 
     private suspend fun refuse(change: PushChange, stamp: Long) {
-        db.syncDao().clean(change.kind, change.id, stamp)
+        store.refused(change, stamp)
     }
 
     // ------------------------------------------------------------------ pull
@@ -280,6 +443,18 @@ class SyncEngine(
     /** Last successful sync (Unix ms), or null. */
     suspend fun lastSync(): Long? = meta.get(KEY_LAST_SYNC)?.toLongOrNull()
 
+    /**
+     * The same server under a new device (a re-pair whose old key no longer works, ADR 0018 "W5 (f)"): what was
+     * reported about the old device goes; cursors, records and culling state stay.
+     */
+    suspend fun forgetDevice() {
+        // The old physical device's id is the old device's own when it created it (hoard-server): proof of authorship
+        // for that device's records ([ownDevices]) even if the new device is never claimed into it.
+        meta.get(KEY_PHYSICAL_DEVICE)?.let { store.noteOwnDevice(it) }
+        meta.delete(KEY_DEVICE_REPORTED)
+        meta.delete(KEY_PHYSICAL_DEVICE)
+    }
+
     /** Forgets the cursors (unpair, another server). */
     suspend fun resetCursors() {
         val keys = listOf(
@@ -290,6 +465,7 @@ class SyncEngine(
             KEY_CLEANUP,
             KEY_CLEANUP_PULLED,
             KEY_ORIENTATION,
+            KEY_VERSION_PHOTOS,
             KEY_DEVICE_REPORTED,
             KEY_PHYSICAL_DEVICE,
         )
@@ -321,6 +497,15 @@ class SyncEngine(
         /** This device's rotated photos were pushed again with their orientation (FIX/W). */
         const val KEY_ORIENTATION = "sync.orientation"
         const val ORIENTATION_VERSION = "1"
+
+        /** Edited versions were pushed again with their photo (ADR 0018 "W5"). */
+        const val KEY_VERSION_PHOTOS = "sync.versionPhotos"
+
+        /** The W5 recovery's lookups: pages per run and fingerprints per page (the lookup's limit). */
+        private const val RECOVERY_LOOKUPS = 5
+        private const val RECOVERY_PAGE = 1000
+        private const val SHORT = 8
+        const val VERSION_PHOTOS_VERSION = "1"
         private const val DEFAULT_PUSH = 500
         private const val DEFAULT_PULL = 500
         private const val DEFAULT_LOOKUP = 1000

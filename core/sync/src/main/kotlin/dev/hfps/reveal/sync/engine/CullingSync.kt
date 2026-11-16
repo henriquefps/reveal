@@ -99,9 +99,11 @@ class CullingSync(private val db: RevealDatabase, private val clock: () -> Long 
             val before = pushed + refused
             val outgoing = ArrayList<Pair<PendingCulling, CullingChange>>()
             db.withTransaction {
+                val foreign = keptForeignPhotoIds()
                 for (change in pending) {
-                    val value = wireValue(change)
+                    val value = if (change.photoId in foreign) null else wireValue(change)
                     if (value == null) {
+                        // Also a photo kept from another server (SyncStore.keptPhotos): it stays on this device.
                         // A label the server would refuse (too long, control characters): it stays on this device.
                         dao.refused(
                             change.photoId,
@@ -135,6 +137,13 @@ class CullingSync(private val db: RevealDatabase, private val clock: () -> Long 
             if (pushed + refused == before) break
         }
         return pushed to refused
+    }
+
+    /** Local ids of the photos an unpairing kept from another server ([SyncStore.keptPhotos]). */
+    private suspend fun keptForeignPhotoIds(): Set<Long> {
+        val uuids = db.metaDao().get(SyncStore.KEY_KEPT_PHOTOS)?.split(',')?.map { it.substringBefore('@') }
+            ?.filter { it.isNotEmpty() }.orEmpty()
+        return uuids.mapNotNullTo(HashSet()) { db.syncDao().photoByUuid(it)?.id }
     }
 
     /** Records the server's answer to one change; false when it was refused. */

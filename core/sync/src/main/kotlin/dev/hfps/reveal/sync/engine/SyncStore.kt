@@ -6,6 +6,7 @@ import androidx.room.withTransaction
 import dev.hfps.image.format.ImageFormats
 import dev.hfps.image.format.ImageKind
 import dev.hfps.reveal.data.db.ADOPT_FAILED_PREFIX
+import dev.hfps.reveal.data.db.EditedVersion
 import dev.hfps.reveal.data.db.FingerprintMatch
 import dev.hfps.reveal.data.db.HistoryCursorEntity
 import dev.hfps.reveal.data.db.HistoryEntity
@@ -70,6 +71,9 @@ data class ApplyStats(
     val versions: MutableSet<Long> = LinkedHashSet(),
 )
 
+/** A parked version whose photo this device cannot find ([SyncStore.parkedOrphans]); [author] = the record's device. */
+data class ParkedOrphan(val uuid: String, val rev: Long, val author: String)
+
 /**
  * The database side of sync (ADR 0018): reads the dirty records into pushable changes, applies pulled records, NAS
  * files and fingerprint lookups, and keeps the Server source. Everything a pull writes runs with the change-tracking
@@ -99,27 +103,118 @@ class SyncStore(
 
     // ------------------------------------------------------------------ pairing
 
-    /** A first sync with a server: every local photo and version is to be pushed, settings included. */
-    suspend fun startTracking() = db.withTransaction {
+    /**
+     * A first sync with [serverId]: every local photo and version is to be pushed, settings included. What an
+     * unpairing kept of a Server source ([forget]) is this server's again only when it came from this server: its
+     * photos are ordinary Server photos again and its edits the server was not known to hold go up as new (unless the
+     * first pull shows it has the same edit, [sameEdit]). Kept photos of another server stay on this device only
+     * ([keptPhotos]): never pushed, their names and edits never reach this server.
+     */
+    suspend fun startTracking(serverId: String) = db.withTransaction {
         val now = clock()
         sync.markAllPhotos(now)
         sync.markAllVersions(now)
         sync.markAllPresets(now)
         sync.markAllExportPresets(now)
+        val (ownEdits, otherEdits) = keptEntries(KEY_KEPT_EDITS).partition { it.origin == serverId }
+        ownEdits.map { it.uuid }.chunked(CHUNK).forEach { sync.markVersionsNew(it, now) }
+        putKept(KEY_KEPT_EDITS, otherEdits)
+        putKept(KEY_KEPT_PHOTOS, keptEntries(KEY_KEPT_PHOTOS).filter { it.origin != serverId })
         for (setting in settings) meta.delete(settingKey(setting.key))
     }
 
-    /** Unpairing (or a different server behind the same URL): forgets every sync row and the Server source. */
+    /**
+     * After a first sync's pull: edited versions this server has no record of (an edited Server photo an unpairing
+     * kept from this server, or a local edit the server lost) go up as new. Never a kept photo of another server
+     * ([keptPhotos]). Returns how many.
+     */
+    suspend fun markUnrecordedEdits(): Int = db.withTransaction {
+        val foreign = keptPhotos()
+        val missing = sync.editedVersions()
+            .filter {
+                it.copyOf == null && it.photoUuid !in foreign && sync.record(Kinds.VERSION, it.versionUuid) == null
+            }
+            .map { it.versionUuid }
+        missing.chunked(CHUNK).forEach { sync.markVersionsNew(it, clock()) }
+        missing.size
+    }
+
+    /**
+     * Unpairing (or a different server behind the same URL): forgets every sync row and the Server source. Its edited
+     * photos stay, each remembered with the server it came from (`sync.tracking`, "?" when unknown), so only a pairing
+     * with that server ever pushes them ([startTracking]).
+     */
     suspend fun forget() = db.withTransaction {
-        sync.clearRecords()
         sync.clearCloud()
         sync.clearUploads()
         sync.clearAliases()
         sync.clearInbox()
         sync.clearDeletes()
         sync.clearOnServer()
-        sync.deleteServerSource()
+        // Never an edit lost with the Server source (ADR 0018 "W5"): an edited Server photo stays with its versions;
+        // the ones whose edit the server was not known to hold are pushed by the next pairing with it.
+        val unsynced = sync.unsyncedServerEdits()
+        sync.clearRecords()
+        sync.deleteUneditedServerPhotos()
+        sync.deleteEmptyServerSource()
+        val origin = meta.get(SyncEngine.KEY_TRACKING) ?: UNKNOWN_ORIGIN
+        val keptPhotos = keptEntries(KEY_KEPT_PHOTOS).associate { it.uuid to it.origin }.toMutableMap()
+        // Before 0.9.0's origins, kept edits had none: their photos are of an unknown server.
+        keptEntries(KEY_KEPT_EDITS).filter { it.origin == UNKNOWN_ORIGIN }.forEach { edit ->
+            sync.versionByUuid(edit.uuid)?.let {
+                photos.get(it.photoId)
+            }?.let { keptPhotos.putIfAbsent(it.uuid, UNKNOWN_ORIGIN) }
+        }
+        for (uuid in sync.serverPhotoUuids()) keptPhotos.putIfAbsent(uuid, origin)
+        val remaining = sync.serverPhotoUuids().toSet()
+        putKept(KEY_KEPT_PHOTOS, keptPhotos.filterKeys { it in remaining }.map { Kept(it.key, it.value) })
+        val keptEdits = keptEntries(KEY_KEPT_EDITS).associate { it.uuid to it.origin }.toMutableMap()
+        for (edit in unsynced) keptEdits.putIfAbsent(edit.versionUuid, keptPhotos[edit.photoUuid] ?: origin)
+        putKept(KEY_KEPT_EDITS, keptEdits.map { Kept(it.key, it.value) })
         for (setting in settings) meta.delete(settingKey(setting.key))
+        meta.delete(KEY_REPAIR_CHECKS)
+        meta.delete(KEY_HELD_VERSIONS)
+        for (key in RECOVERY_KEYS) meta.delete(key)
+    }
+
+    /**
+     * Photos (uuids) an unpairing kept from a server other than the paired one: they stay on this device only, shown
+     * as today (unavailable without their server), and nothing about them is pushed ([photoChange], [versionChange],
+     * [markUnrecordedEdits], culling). Empty once paired again with the server they came from ([startTracking]).
+     */
+    suspend fun keptPhotos(): Set<String> = keptEntries(KEY_KEPT_PHOTOS).mapTo(HashSet()) { it.uuid }
+
+    /** How many edited photos [keptPhotos] holds (the "Remove photos from the previous server" confirmation). */
+    suspend fun keptPhotoCount(): Int = keptPhotos().count { uuid -> sync.photoByUuid(uuid) != null }
+
+    /**
+     * "Remove photos from the previous server": deletes the [keptPhotos] with their edits (they cannot open without
+     * that server). Returns how many photos went.
+     */
+    suspend fun removeKeptPhotos(): Int = quietly {
+        // Quietly: deleting them marks nothing for the paired server, which never heard of them.
+        val ids = keptPhotos().mapNotNull { sync.photoByUuid(it)?.id }
+        ids.chunked(CHUNK).forEach { photos.deletePhotos(it) }
+        meta.delete(KEY_KEPT_PHOTOS)
+        meta.delete(KEY_KEPT_EDITS)
+        sync.deleteEmptyServerSource()
+        ids.size
+    }
+
+    private data class Kept(val uuid: String, val origin: String)
+
+    private suspend fun keptEntries(key: String): List<Kept> =
+        meta.get(key)?.split(',')?.filter { it.isNotEmpty() }?.map {
+            val at = it.indexOf(KEPT_SEPARATOR)
+            if (at < 0) Kept(it, UNKNOWN_ORIGIN) else Kept(it.substring(0, at), it.substring(at + 1))
+        }.orEmpty()
+
+    private suspend fun putKept(key: String, entries: List<Kept>) {
+        if (entries.isEmpty()) {
+            meta.delete(key)
+        } else {
+            meta.put(MetaEntity(key, entries.joinToString(",") { it.uuid + KEPT_SEPARATOR + it.origin }))
+        }
     }
 
     // ------------------------------------------------------------------ push
@@ -134,27 +229,190 @@ class SyncStore(
         db.withTransaction { readOutgoing(limit, maxData) }
 
     private suspend fun readOutgoing(limit: Int, maxData: Int): OutgoingBatch {
+        // The server refuses a push of more than [limit] changes as a whole (hoard-server: 422 `invalid_change` without
+        // an index, so nothing could ever go up again): settings, records and the photos added ahead of their versions
+        // all count.
+        val settingsOut = settingChanges()
+        foreign = keptPhotos()
+        val room = limit - settingsOut.size
+        if (room <= 0) return OutgoingBatch(settingsOut.take(limit), read = settingsOut.size)
         val out = ArrayList<Outgoing>()
-        val records = sync.dirty((limit - settings.size).coerceAtLeast(1))
+        // Photos whose record is in this batch: a version's photo goes up before it (ADR 0018 "W5").
+        val photosInBatch = HashSet<String>()
+        val records = sync.dirty(room)
         for (record in records) {
-            val change = when (record.kind) {
-                Kinds.PHOTO -> photoChange(record)
-                Kinds.VERSION -> versionChange(record, maxData)
-                Kinds.PRESET -> presetSync.change(record)
-                Kinds.SETTING -> exportPresetSync.change(record)
-                else -> null
-            }
-            if (change == null) {
-                sync.clean(record.kind, record.recordId, record.modifiedAt)
-            } else {
-                out += Outgoing(change, record.modifiedAt)
-            }
+            // The batch is full, or this version's photo would not fit with it: the version stays dirty and its photo
+            // (marked dirty by [photoFirst]) leads the next round.
+            if (out.size >= room || !offer(record, out, photosInBatch, room, maxData)) break
         }
-        out += settingChanges()
+        out += settingsOut
         return OutgoingBatch(out, read = records.size)
     }
 
+    /** Adds [record]'s change to [out] (a version after its photo), holds or cleans it; false when there is no room. */
+    private suspend fun offer(
+        record: SyncRecordEntity,
+        out: MutableList<Outgoing>,
+        photosInBatch: MutableSet<String>,
+        room: Int,
+        maxData: Int,
+    ): Boolean {
+        var first: PhotoFirst? = null
+        val change = when (record.kind) {
+            Kinds.PHOTO -> photoChange(record)?.also { photosInBatch += it.id }
+
+            Kinds.VERSION -> versionChange(record, maxData)?.let { version ->
+                first = version.photo?.let { photoFirst(it, photosInBatch, out, room = out.size + 2 <= room) }
+                version.change
+            }
+
+            Kinds.PRESET -> presetSync.change(record)
+
+            Kinds.SETTING -> exportPresetSync.change(record)
+
+            else -> null
+        }
+        when {
+            first == PhotoFirst.NO_ROOM -> return false
+
+            first == PhotoFirst.HELD -> hold(record)
+
+            change == null -> {
+                sync.clean(record.kind, record.recordId, record.modifiedAt)
+                if (record.kind == Kinds.VERSION) unhold(record.recordId)
+            }
+
+            else -> out += Outgoing(change, record.modifiedAt)
+        }
+        return true
+    }
+
+    private enum class PhotoFirst { READY, HELD, NO_ROOM }
+
+    /** [keptPhotos] while a batch is read: their records are cleaned, never pushed. */
+    private var foreign: Set<String> = emptySet()
+
+    /**
+     * Makes sure the server knows [photo] before a version naming it goes up (ADR 0018 "W5"): a photo whose record the
+     * server never accepted (a NAS photo made quietly from the feed, a hand-off, a photo whose record was never pushed)
+     * joins this batch ahead of the version, so another device can map it by its fingerprint and the version applies
+     * there instead of waiting in its inbox forever. [PhotoFirst.HELD] while the photo cannot be described yet (its
+     * main file has no fingerprint): the version is held back until then ([hold]). [PhotoFirst.NO_ROOM] when the photo
+     * would have to join but the batch has no [room] for it and the version: the photo is marked dirty, so it goes up
+     * first next round.
+     */
+    private suspend fun photoFirst(
+        photo: PhotoEntity,
+        inBatch: MutableSet<String>,
+        out: MutableList<Outgoing>,
+        room: Boolean,
+    ): PhotoFirst {
+        // A photo record the server refused is not offered again in this process (the version goes up alone).
+        if (photo.uuid in inBatch || photo.uuid in refusedPhotos) return PhotoFirst.READY
+        val record = sync.record(Kinds.PHOTO, photo.uuid)
+        // Accepted already, or deleted from the server on purpose (ServerLibrary): never brought back from here.
+        if (record != null && (record.rev > 0 || record.deleted)) return PhotoFirst.READY
+        val data = photoData(photo)
+        val marked = when {
+            record == null -> SyncRecordEntity(Kinds.PHOTO, photo.uuid, 0, dirty = true, modifiedAt = clock())
+            !record.dirty -> record.copy(dirty = true)
+            else -> record
+        }
+        if (marked != record) sync.putRecord(marked)
+        // Without a fingerprint the record waits (and is pushed once the indexer fills it in: its trigger marks it).
+        if (data == null) return PhotoFirst.HELD
+        if (!room) return PhotoFirst.NO_ROOM
+        out += Outgoing(
+            PushChange(
+                kind = Kinds.PHOTO,
+                id = photo.uuid,
+                baseRev = marked.rev,
+                modifiedAt = marked.modifiedAt,
+                data = json.encodeToJsonElement(PhotoData.serializer(), data),
+            ),
+            marked.modifiedAt,
+        )
+        inBatch += photo.uuid
+        return PhotoFirst.READY
+    }
+
+    /** Photo records the server refused (`invalid_change`) since this process started. */
+    private val refusedPhotos: MutableSet<String> = java.util.Collections.synchronizedSet(HashSet())
+
+    /**
+     * The server refused this change (`invalid_change`): it is dropped from the run, and a photo is not re-offered. A
+     * refused photo's held versions go up on their own (they would otherwise wait for a record that never comes).
+     */
+    suspend fun refused(change: PushChange, stamp: Long) = db.withTransaction {
+        if (change.kind == Kinds.PHOTO) refusedPhotos += change.id
+        sync.clean(change.kind, change.id, stamp)
+        if (change.kind == Kinds.VERSION) unhold(change.id)
+        if (change.kind == Kinds.PHOTO) releaseHeld(change.id)
+    }
+
+    /**
+     * A version waiting for its photo's record (ADR 0018 "W5"): not dirty, so it is not offered again, and listed in
+     * `meta` [KEY_HELD_VERSIONS]; its [SyncRecordEntity.rev] stays the server's (a version the server has already, e.g.
+     * one 0.8 pushed without its photo, goes up on top of its real revision once released: never as a create, which
+     * the server would lose to its own state and keep as a conflict copy). Released by [releaseHeld].
+     */
+    private suspend fun hold(record: SyncRecordEntity) {
+        sync.putRecord(record.copy(dirty = false))
+        val held = heldVersions()
+        if (record.recordId !in held) putHeld(held + record.recordId)
+    }
+
+    /** The versions [hold] keeps back (version uuids); versions deleted since are dropped from the list on the way. */
+    private suspend fun heldVersions(): Set<String> {
+        val listed = meta.get(KEY_HELD_VERSIONS)?.split(',')?.filterTo(LinkedHashSet()) { it.isNotEmpty() }.orEmpty()
+        if (listed.isEmpty()) return listed
+        val live = listed.filterTo(LinkedHashSet()) { sync.versionByUuid(it) != null }
+        if (live.size != listed.size) putHeld(live)
+        return live
+    }
+
+    private suspend fun putHeld(held: Set<String>) = when {
+        held.isEmpty() -> meta.delete(KEY_HELD_VERSIONS)
+        else -> meta.put(MetaEntity(KEY_HELD_VERSIONS, held.joinToString(",")))
+    }
+
+    /** [versionUuid] went up (or needs nothing on the server): no longer held. */
+    private suspend fun unhold(versionUuid: String) {
+        val held = heldVersions()
+        if (versionUuid in held) putHeld(held - versionUuid)
+    }
+
+    /** True when [versionUuid] is held back by [hold]: local work the pull must not overwrite. */
+    private suspend fun isHeld(versionUuid: String): Boolean = versionUuid in heldVersions()
+
+    /**
+     * The photo [photoUuid] (its id, or an alias of it) is known to the server now: its held versions are marked to go
+     * up with the next push, at the revision they have (their edit time kept).
+     */
+    private suspend fun releaseHeld(photoUuid: String) {
+        // Holds of an earlier W5 build (rev -1): pushed as creates, as that build did.
+        sync.releaseHeldVersions(photoUuid)
+        val held = heldVersions()
+        if (held.isEmpty()) return
+        val photoId = sync.photoByUuid(photoUuid)?.id ?: sync.alias(photoUuid) ?: return
+        val left = LinkedHashSet<String>()
+        for (uuid in held) {
+            val version = sync.versionByUuid(uuid)
+            val record = sync.record(Kinds.VERSION, uuid)
+            when {
+                // Gone (deleted, or its photo forgotten): nothing to hold any more.
+                version == null || record == null -> Unit
+
+                version.photoId == photoId -> sync.putRecord(record.copy(dirty = true))
+
+                else -> left += uuid
+            }
+        }
+        if (left.size != held.size) putHeld(left)
+    }
+
     private suspend fun photoChange(record: SyncRecordEntity): PushChange? {
+        if (record.recordId in foreign) return null
         if (record.deleted) {
             // A hand-off photo merged into a folder photo (ADR 0011 "One photo across sources"): the server's copy of
             // it goes; its versions now name the folder photo.
@@ -196,13 +454,25 @@ class SyncStore(
         )
     }
 
+    /** One version change to push and the photo it names. */
+    private data class VersionChange(val change: PushChange, val photo: PhotoEntity?)
+
     @Suppress("CyclomaticComplexMethod", "ComplexCondition")
-    private suspend fun versionChange(record: SyncRecordEntity, maxData: Int): PushChange? {
+    private suspend fun versionChange(record: SyncRecordEntity, maxData: Int): VersionChange? {
+        // A held version (rev -1) that changed again is still new to the server.
+        val baseRev = record.rev.coerceAtLeast(0)
+        // A version of another server's kept photo that was never pushed here: its tombstone stays local too.
+        if (record.deleted && record.rev <= 0 && foreign.isNotEmpty()) return null
         if (record.deleted) {
-            return PushChange(Kinds.VERSION, record.recordId, record.rev, record.modifiedAt, deleted = true)
+            return VersionChange(
+                PushChange(Kinds.VERSION, record.recordId, record.rev, record.modifiedAt, deleted = true),
+                null,
+            )
         }
         val version = sync.versionByUuid(record.recordId) ?: return null
         val photo = photos.get(version.photoId) ?: return null
+        // A photo kept from another server: this server never hears of it or its edits.
+        if (photo.uuid in foreign) return null
         val recipe = edits.recipe(version.id)
         val steps = edits.history(version.id)
         val snapshots = db.versionDao().snapshots(version.id)
@@ -214,6 +484,7 @@ class SyncStore(
             return null
         }
         val cursor = edits.cursor(version.id) ?: (steps.size - 1)
+        val photoFingerprint = mainFile(photos.files(photo.id))?.fingerprint
         var history = steps.map { StepData(parse(it.recipeJson), parse(it.labelsJson)) }
         var offset = 0
         var data: JsonElement
@@ -228,6 +499,7 @@ class SyncStore(
                     history = history,
                     cursor = (cursor - offset).coerceAtLeast(-1),
                     snapshots = snapshots.map { SnapshotData(it.uuid, it.name, parse(it.recipeJson), it.createdAt) },
+                    photoFingerprint = photoFingerprint,
                 ),
             )
             // A record is at most 2 MiB (ADR 0017): the oldest steps go first; undo then stops at the oldest kept one.
@@ -236,7 +508,7 @@ class SyncStore(
             history = history.drop(drop)
             offset += drop
         }
-        return PushChange(Kinds.VERSION, version.uuid, record.rev, record.modifiedAt, data = data)
+        return VersionChange(PushChange(Kinds.VERSION, version.uuid, baseRev, record.modifiedAt, data = data), photo)
     }
 
     private suspend fun settingChanges(): List<Outgoing> = settings.mapNotNull { setting ->
@@ -267,8 +539,10 @@ class SyncStore(
             }
             return@withTransaction
         }
+        if (change.kind == Kinds.VERSION) unhold(change.id)
         if (result.status == STATUS_APPLIED || result.winner == WINNER_INCOMING) {
             sync.pushed(change.kind, change.id, result.rev, outgoing.stamp)
+            if (change.kind == Kinds.PHOTO && !change.deleted) releaseHeld(change.id)
         } else {
             // The server's state won: stay at our old base so the pull that follows (or the inbox, if it was pulled
             // already) applies it; for a version our losing state comes back as a copy.
@@ -321,6 +595,7 @@ class SyncStore(
         return stats
     }
 
+    @Suppress("CyclomaticComplexMethod")
     private suspend fun applyOne(
         record: FeedRecord,
         deviceName: (String) -> String?,
@@ -330,9 +605,22 @@ class SyncStore(
         reassert = false
         val local = sync.record(record.kind, record.id)
         val placed = when {
+            // This installation's own edit, from before an unpair (ADR 0018 "W5 (f)"): settled, nothing to apply.
+            sameEdit(local, record) -> {
+                stats.skipped++
+                return
+            }
+
+            // This installation's own record under a local edit it never pushed: rebased, pushed as an update.
+            rebaseOwn(local, record) -> {
+                stats.skipped++
+                return
+            }
+
             // Unpushed local work: the next push carries the old baseRev and the server decides (ADR 0017); the
-            // server's state waits in the inbox and applies after that push if it is still the newest.
-            local != null && local.dirty -> false
+            // server's state waits in the inbox and applies after that push if it is still the newest. A held version
+            // ([hold]) is unpushed work too.
+            local != null && (local.dirty || (record.kind == Kinds.VERSION && isHeld(record.id))) -> false
 
             // Already applied, or older than what the push left (our state won). A live record whose photo or version
             // is gone from this device (its folder was removed before 0.5.3, a forgotten hand-off) is placed again:
@@ -380,6 +668,58 @@ class SyncStore(
         stats.applied++
     }
 
+    /**
+     * A version this device never pushed to this server (rev 0, dirty: a first sync with a server it was paired with
+     * before, ADR 0018 "W5 (f)") whose edit is the server's (recipe, name, position, snapshot ids): not a conflict. The
+     * local record takes the server's revision and the record is not applied (this device's history and author stay;
+     * the server's record was this installation's own, under its previous device). It is pushed again on top of that
+     * revision unless the server's record also names the photo by its current id and main-file fingerprint: a record
+     * of 0.8 or older, or one naming the id the photo had before it adopted another device's, would otherwise never be
+     * repaired (the W5 repair skips first syncs). True when [record] is settled that way.
+     */
+    private suspend fun sameEdit(local: SyncRecordEntity?, record: FeedRecord): Boolean {
+        if (local == null || record.kind != Kinds.VERSION || record.deleted) return false
+        if (!local.dirty || local.rev != 0L || local.deleted) return false
+        val data = decode(record.data, VersionData.serializer()) ?: return false
+        val version = sync.versionByUuid(record.id) ?: return false
+        if (!holdsEdit(version, data)) return false
+        val photo = photos.get(version.photoId)
+        val fingerprint = photo?.let { mainFile(photos.files(it.id))?.fingerprint }
+        val named = photo != null && data.photoId == photo.uuid && data.photoFingerprint == fingerprint
+        sync.putRecord(local.copy(rev = record.rev, dirty = !named || fingerprint == null))
+        return true
+    }
+
+    /**
+     * This installation's earlier devices ([ownAuthors], [ownDevices]); set by [SyncEngine] before a first sync's pull.
+     */
+    @Volatile
+    var ownAuthors: Set<String> = emptySet()
+
+    /**
+     * A version this device never pushed to this server (rev 0, dirty: a first sync, an edit kept by an unpairing)
+     * whose edit differs from the server's record, when that record's author is this installation (an earlier device
+     * id, or one of its physical device): the local edit was made on top of it. The local record takes the server's
+     * revision and stays dirty, so the push is a clean update instead of a base-0 conflict copy. True when rebased.
+     */
+    private suspend fun rebaseOwn(local: SyncRecordEntity?, record: FeedRecord): Boolean {
+        if (local == null || record.kind != Kinds.VERSION || record.deleted) return false
+        if (!local.dirty || local.rev != 0L || local.deleted) return false
+        if (record.deviceId.isEmpty()) return false
+        if (record.deviceId !in ownAuthors && record.deviceId !in ownDevices()) return false
+        if (sync.versionByUuid(record.id) == null) return false
+        sync.putRecord(local.copy(rev = record.rev))
+        return true
+    }
+
+    /** True when [version]'s edit (recipe, name, position, snapshot ids) is the one [data] describes. */
+    private suspend fun holdsEdit(version: VersionEntity, data: VersionData): Boolean {
+        val recipe = edits.recipe(version.id)?.json?.let(::parse) ?: parse(RecipeCodec.Default.encode(DEFAULT_RECIPE))
+        val snapshots = db.versionDao().snapshots(version.id).map { it.uuid }.sorted()
+        return recipe == data.recipe && version.name == data.name && version.position == data.position &&
+            snapshots == data.snapshots.orEmpty().map { it.id }.sorted()
+    }
+
     /** [record] is already applied (or older than what our push left) and its photo or version is still here. */
     private suspend fun applied(local: SyncRecordEntity, record: FeedRecord, fromInbox: Boolean): Boolean =
         (local.rev > record.rev || (local.rev == record.rev && !fromInbox)) && (record.deleted || present(record))
@@ -413,13 +753,39 @@ class SyncStore(
         sync.photoByUuid(uuid)?.let { return it }
         sync.alias(uuid)?.let { id -> photos.get(id)?.let { return it } }
         if (fingerprint == null) return null
-        val file = sync.mainFilesByFingerprint(listOf(fingerprint)).firstOrNull() ?: return null
-        val photo = photos.get(file.photoId) ?: return null
+        return photoByFingerprint(uuid, fingerprint)
+    }
+
+    /**
+     * The local photo whose main file is [fingerprint], for a server photo id [uuid] this device does not know (a
+     * photo record, or a version naming a photo whose record has not arrived, ADR 0018 "W5"). Several photos with
+     * that main file (the same file in two folders): the oldest one that is not hidden. A photo the server never had
+     * under its own id (no record, or rev 0) takes [uuid], so every device names it the same; its old id stays an alias
+     * (records that named it, e.g. a version pushed before the adoption, still find it). Else [uuid] becomes an alias.
+     */
+    private suspend fun photoByFingerprint(uuid: String, fingerprint: String): PhotoEntity? {
+        val candidates = sync.photosWithMainFile(fingerprint)
+        if (candidates.isEmpty()) return null
+        val photo = if (candidates.size == 1) {
+            candidates.single()
+        } else {
+            (candidates.firstOrNull { !it.hidden } ?: candidates.first()).also {
+                runCatching {
+                    android.util.Log.i(
+                        TAG,
+                        "photo ${uuid.take(DEVICE_SHORT)}: ${candidates.size} local photos share its main file, " +
+                            "matched photo ${it.id}",
+                    )
+                }
+            }
+        }
         val ours = sync.record(Kinds.PHOTO, photo.uuid)
-        return if (ours == null || ours.rev == 0L) {
+        return if (ours == null || (ours.rev == 0L && !ours.deleted)) {
             // Never on the server under our id: adopt the server's, so both devices name it the same.
             sync.deleteRecord(Kinds.PHOTO, photo.uuid)
             sync.setPhotoUuid(photo.id, uuid)
+            sync.deleteAlias(uuid)
+            sync.putAlias(SyncAliasEntity(photo.uuid, photo.id))
             photo.copy(uuid = uuid)
         } else {
             sync.putAlias(SyncAliasEntity(uuid, photo.id))
@@ -433,7 +799,10 @@ class SyncStore(
             val photo = sync.photoByUuid(record.id) ?: return true
             // Another server id still names this photo (another device merged a hand-off into its folder photo, ADR
             // 0011 "One photo across sources"): the photo lives on under that id.
-            val survivor = sync.aliasesOf(photo.id).firstOrNull()
+            // Only an id the server holds a live record of: an alias kept from an adoption never was one.
+            val survivor = sync.aliasesOf(photo.id).firstOrNull { alias ->
+                sync.record(Kinds.PHOTO, alias)?.let { it.rev > 0 && !it.deleted } == true
+            }
             if (survivor != null) {
                 sync.deleteAlias(survivor)
                 sync.setPhotoUuid(photo.id, survivor)
@@ -477,6 +846,8 @@ class SyncStore(
             )
         }
         if (photo.sourceId == serverSource().id) refreshServerPhoto(photo, data)
+        // The photo is on the server under this id now (adopted, or our own record seen again): its held versions go.
+        releaseHeld(record.id)
         return true
     }
 
@@ -584,7 +955,14 @@ class SyncStore(
             return true
         }
         val data = decode(record.data, VersionData.serializer()) ?: return true
-        val photo = sync.photoByUuid(data.photoId) ?: sync.alias(data.photoId)?.let { photos.get(it) } ?: return false
+        val photo = sync.photoByUuid(data.photoId) ?: sync.alias(data.photoId)?.let { photos.get(it) }
+            ?: existing?.let { photos.get(it.photoId) }
+            ?: (data.photoFingerprint ?: recoveredFingerprint(record.id))?.let { fingerprint ->
+                // Found by its main file: the server knows the photo under [data.photoId] (it took that id, or the id
+                // is an alias of it now), so this device's held versions of it go up without waiting for its record.
+                photoByFingerprint(data.photoId, fingerprint)?.also { releaseHeld(data.photoId) }
+            }
+            ?: return false
         val copyDevice = record.copyOf?.let { deviceName(record.deviceId) ?: record.deviceId.take(DEVICE_SHORT) }
         val target = existing ?: placeVersion(photo.id, record.id, data, record.copyOf)
         val updated = target.copy(
@@ -723,6 +1101,268 @@ class SyncStore(
         } else {
             sync.deleteRecord(Kinds.VERSION, version.uuid)
         }
+    }
+
+    // ------------------------------------------------------------------ W5 repair
+
+    /**
+     * The one-off repair of ADR 0018 "W5" (after a pull, so every local revision is the server's latest): before 0.9.0
+     * an edited version could go up naming a photo the server never heard of (a NAS photo made quietly from the feed, a
+     * hand-off), and other devices parked it forever. Two cases are marked to push:
+     * - an edited version whose photo has no accepted record: the photo and the version (the push sends the photo
+     *   first);
+     * - an edited version of this device already on the server whose photo the server knows: pushed again, with its
+     *   original time and the photo's main-file fingerprint, so it names the photo's current id (the photo may have
+     *   adopted another device's id after the version went up). A Server photo made from another device's record and
+     *   conflict copies are left alone: their ids never changed. Only a version this device is known to have edited
+     *   ([authoredHere]) goes at once; one whose author is unknown (an edit older than 0.5.4 that may be another
+     *   device's, pulled) is only listed, and [checkRepairs] pushes it on the next run if no pull changed it meanwhile.
+     * Returns how many versions it marked.
+     */
+    suspend fun repairVersionPhotos(own: Set<String> = emptySet()): Int = db.withTransaction {
+        val now = clock()
+        var marked = 0
+        val checks = ArrayList<String>()
+        for (row in sync.editedVersions()) {
+            val photo = sync.record(Kinds.PHOTO, row.photoUuid)
+            val version = sync.record(Kinds.VERSION, row.versionUuid)
+            val repaired = when {
+                photo?.deleted == true || version?.deleted == true -> false
+                photo == null || photo.rev <= 0 -> markWithPhoto(row, photo, version, now)
+                version == null || !isRepushed(row, version, own) -> false
+                authoredHere(row, version, own) -> true.also { sync.putRecord(version.copy(dirty = true)) }
+                else -> false.also { checks += "${row.versionUuid}$CHECK_REV${version.rev}" }
+            }
+            if (repaired) marked++
+        }
+        if (checks.isEmpty()) {
+            meta.delete(
+                KEY_REPAIR_CHECKS,
+            )
+        } else {
+            meta.put(MetaEntity(KEY_REPAIR_CHECKS, checks.joinToString(",")))
+        }
+        marked
+    }
+
+    /**
+     * The versions [repairVersionPhotos] left to check (author unknown), after this run's pull: each one still at the
+     * revision it had then (no device changed it for a whole sync interval) and with nothing local to push is marked to
+     * go up again; one another device changed meanwhile is left alone (its new record names the photo itself). Returns
+     * how many it marked; the list is gone afterwards.
+     */
+    suspend fun checkRepairs(): Int = db.withTransaction {
+        val list = meta.get(KEY_REPAIR_CHECKS) ?: return@withTransaction 0
+        var marked = 0
+        for (entry in list.split(',')) {
+            val rev = entry.substringAfter(CHECK_REV, "").toLongOrNull()
+            val record = sync.record(Kinds.VERSION, entry.substringBefore(CHECK_REV))
+            if (record != null && record.rev == rev && record.isSettled) {
+                sync.putRecord(record.copy(dirty = true))
+                marked++
+            }
+        }
+        meta.delete(KEY_REPAIR_CHECKS)
+        marked
+    }
+
+    /** Nothing local to push and not a tombstone. */
+    private val SyncRecordEntity.isSettled: Boolean
+        get() = !dirty && !deleted
+
+    /**
+     * True when this device made [row]'s current edit: `edit_device` says so (0.5.4+), or it is unknown (an edit older
+     * than 0.5.4) and the history holds steps committed here. A pulled record writes its whole history at once (every
+     * step one time, [writeEdit]); steps made in the editor were committed one by one, at different times.
+     */
+    private suspend fun authoredHere(row: EditedVersion, record: SyncRecordEntity, own: Set<String>): Boolean {
+        if (row.editDevice == EditRepository.THIS_DEVICE) return true
+        // Pulled under one of this installation's own device ids (an id is only shortened when it was not listed).
+        if (row.editDevice != null && own.any { it.take(DEVICE_SHORT) == row.editDevice }) return true
+        if (row.editDevice != null) return false
+        val version = sync.versionByUuid(record.recordId) ?: return false
+        return edits.history(version.id).map { it.createdAt }.distinct().size > 1
+    }
+
+    /** Marks a version and its photo that the server never accepted ([repairVersionPhotos]). */
+    private suspend fun markWithPhoto(
+        row: EditedVersion,
+        photo: SyncRecordEntity?,
+        version: SyncRecordEntity?,
+        now: Long,
+    ): Boolean {
+        when {
+            photo == null -> sync.putRecord(SyncRecordEntity(Kinds.PHOTO, row.photoUuid, 0, modifiedAt = now))
+            !photo.dirty -> sync.putRecord(photo.copy(dirty = true))
+        }
+        when {
+            version == null ->
+                sync.putRecord(SyncRecordEntity(Kinds.VERSION, row.versionUuid, 0, modifiedAt = row.editedAt ?: now))
+
+            !version.dirty -> sync.putRecord(version.copy(dirty = true, rev = version.rev.coerceAtLeast(0)))
+        }
+        return true
+    }
+
+    /** This device's own clean edit on the server, of a photo whose id may have changed ([repairVersionPhotos]). */
+    private fun isRepushed(row: EditedVersion, version: SyncRecordEntity, own: Set<String>): Boolean =
+        // Its own edit or one of unknown author ([authoredHere] tells them apart); never another device's.
+        version.rev > 0 && !version.dirty && row.copyOf == null && !row.fromRecord &&
+            (row.editDevice.isNullOrEmpty() || own.any { it.take(DEVICE_SHORT) == row.editDevice })
+
+    // ------------------------------------------------------------------ parked versions recovered (W5)
+
+    /**
+     * Parked versions whose photo this device cannot find (ADR 0018 "W5 recovery"): a record of 0.8 or of an unpaired
+     * install names a photo id the server never had and carries no main-file fingerprint. The server's edited previews
+     * (Hoard ADR 0020) still name its item, so [SyncEngine] looks them up; this lists what it looks for.
+     */
+    suspend fun parkedOrphans(): List<ParkedOrphan> {
+        val recovered = recoveredFingerprints()
+        return sync.inbox().filter { it.kind == Kinds.VERSION && it.recordId !in recovered }.mapNotNull { entry ->
+            val record = runCatching { json.decodeFromString(FeedRecord.serializer(), entry.json) }.getOrNull()
+                ?: return@mapNotNull null
+            val data = decode(record.data, VersionData.serializer()) ?: return@mapNotNull null
+            val orphan = !record.deleted && record.copyOf == null && data.photoFingerprint == null &&
+                sync.versionByUuid(record.id) == null
+            if (orphan) ParkedOrphan(record.id, record.rev, record.deviceId) else null
+        }
+    }
+
+    /** Main-file fingerprints the recovery looks up, a page at a time after photo id [after]. */
+    suspend fun recoveryFingerprints(limit: Int, after: Long): List<dev.hfps.reveal.data.db.RecoveryKey> =
+        sync.recoveryFingerprints(limit, after)
+
+    /**
+     * The photos of parked versions, found through the server's edited previews ([found]: version uuid -> a main-file
+     * fingerprint of its item): the inbox is retried with them, as if the records carried the fingerprint, and each
+     * version placed that way waits for proof that this installation made it ([proveRecovered]). Returns how many
+     * versions were placed.
+     */
+    suspend fun recover(found: Map<String, String>, orphans: List<ParkedOrphan>, deviceName: (String) -> String?): Int {
+        if (found.isEmpty()) return 0
+        db.withTransaction { putList(KEY_RECOVERED_FP, recoveredEntries() + found.map { "${it.key}=${it.value}" }) }
+        retryInbox(deviceName)
+        return db.withTransaction {
+            val placed = orphans.filter { it.uuid in found && sync.versionByUuid(it.uuid) != null }
+            val pending = proofEntries().filter { e -> placed.none { it.uuid == e.substringBefore(CHECK_REV) } } +
+                placed.map { "${it.uuid}$CHECK_REV${it.rev}$CHECK_REV${it.author}" }
+            putList(KEY_RECOVERY_PROOF, pending)
+            // Placed: the version is local now, later records find it by its own id.
+            putList(KEY_RECOVERED_FP, recoveredEntries().filter { e -> placed.none { e.startsWith("${it.uuid}=") } })
+            clearMisses(placed.map { it.uuid })
+            placed.size
+        }
+    }
+
+    /** Recovered versions still waiting for proof that this installation made them. */
+    suspend fun hasPendingProof(): Boolean = meta.get(KEY_RECOVERY_PROOF) != null
+
+    /**
+     * Pushes again the recovered versions whose server author [ownDevice] proves to be this installation (one of its
+     * own device ids, or a device of its physical device): on the server's revision, naming the photo's current id and
+     * main-file fingerprint, so every device finds it without the server's previews. Without proof nothing is pushed
+     * (the alias is enough here) and the version stays listed; one whose record changed meanwhile (another device
+     * pushed it, or it was edited here) is dropped, and so is one whose author [hopeless] says can never be proven (the
+     * server's view of this device was read and no claim it offers could prove it), so the view is not asked for
+     * every sync forever. Returns how many it marked.
+     */
+    suspend fun proveRecovered(hopeless: (String) -> Boolean = { false }, ownDevice: (String) -> Boolean): Int =
+        db.withTransaction {
+            var marked = 0
+            val left = proofEntries().filter { entry ->
+                val parts = entry.split(CHECK_REV)
+                val record = sync.record(Kinds.VERSION, parts[0])
+                val rev = parts.getOrNull(1)?.toLongOrNull()
+                when {
+                    record == null || record.rev != rev || !record.isSettled -> false
+
+                    ownDevice(parts.getOrNull(2).orEmpty()) -> false.also {
+                        sync.putRecord(record.copy(dirty = true))
+                        marked++
+                    }
+
+                    else -> !hopeless(parts.getOrNull(2).orEmpty())
+                }
+            }
+            putList(KEY_RECOVERY_PROOF, left)
+            marked
+        }
+
+    /**
+     * Where a recovery pass stopped: the last photo id it asked about and the versions it looks for; null between
+     * passes.
+     */
+    suspend fun recoverySearch(): Pair<Long, Set<String>>? {
+        val value = meta.get(KEY_RECOVERY_SEARCH) ?: return null
+        val offset = value.substringBefore('|').toLongOrNull() ?: return null
+        return offset to value.substringAfter('|', "").split(',').filter { it.isNotEmpty() }.toSet()
+    }
+
+    suspend fun saveRecoverySearch(state: Pair<Long, Set<String>>?) {
+        if (state == null) {
+            meta.delete(KEY_RECOVERY_SEARCH)
+        } else {
+            meta.put(MetaEntity(KEY_RECOVERY_SEARCH, "${state.first}|${state.second.joinToString(",")}"))
+        }
+    }
+
+    /**
+     * True when a pass should look for [uuid]: never looked for, or its last miss is old enough (a day, doubling with
+     * each miss up to [MAX_MISS_BACKOFF_DAYS]): no lookup storm for a version no preview names.
+     */
+    suspend fun searchDue(uuid: String, now: Long): Boolean {
+        val miss = misses()[uuid] ?: return true
+        val days = (1L shl (miss.second - 1).coerceIn(0, MISS_SHIFT_CAP)).coerceAtMost(MAX_MISS_BACKOFF_DAYS)
+        return now - miss.first >= days * DAY_MS
+    }
+
+    /** A whole pass did not find [uuids]; returns the ones missed for the first time (logged once). */
+    suspend fun missed(uuids: Collection<String>, now: Long): List<String> = db.withTransaction {
+        val all = misses().toMutableMap()
+        val first = uuids.filter { it !in all }
+        for (uuid in uuids) all[uuid] = now to ((all[uuid]?.second ?: 0) + 1)
+        putList(KEY_RECOVERY_MISSES, all.map { "${it.key}$CHECK_REV${it.value.first}$CHECK_REV${it.value.second}" })
+        first
+    }
+
+    private suspend fun clearMisses(uuids: List<String>) {
+        if (uuids.isEmpty()) return
+        val left = misses().filterKeys { it !in uuids }
+        putList(KEY_RECOVERY_MISSES, left.map { "${it.key}$CHECK_REV${it.value.first}$CHECK_REV${it.value.second}" })
+    }
+
+    private suspend fun misses(): Map<String, Pair<Long, Int>> = list(KEY_RECOVERY_MISSES).mapNotNull { entry ->
+        val parts = entry.split(CHECK_REV)
+        val at = parts.getOrNull(1)?.toLongOrNull() ?: return@mapNotNull null
+        parts[0] to (at to (parts.getOrNull(2)?.toIntOrNull() ?: 1))
+    }.toMap()
+
+    /** The device ids this installation was paired under (ADR 0018 "W5 recovery"), kept across unpairing. */
+    suspend fun ownDevices(): Set<String> = list(KEY_OWN_DEVICES).toSet()
+
+    /** Records [deviceId] as one of this installation's own (every pairing, every sync). */
+    suspend fun noteOwnDevice(deviceId: String) {
+        if (deviceId.isEmpty() || deviceId.contains(',')) return
+        val own = list(KEY_OWN_DEVICES)
+        if (deviceId !in own) putList(KEY_OWN_DEVICES, own + deviceId)
+    }
+
+    private suspend fun recoveredFingerprint(versionUuid: String): String? = recoveredFingerprints()[versionUuid]
+
+    private suspend fun recoveredFingerprints(): Map<String, String> =
+        recoveredEntries().associate { it.substringBefore('=') to it.substringAfter('=') }
+
+    private suspend fun recoveredEntries(): List<String> = list(KEY_RECOVERED_FP)
+
+    private suspend fun proofEntries(): List<String> = list(KEY_RECOVERY_PROOF)
+
+    private suspend fun list(key: String): List<String> =
+        meta.get(key)?.split(',')?.filter { it.isNotEmpty() }.orEmpty()
+
+    private suspend fun putList(key: String, values: List<String>) {
+        val distinct = values.distinct()
+        if (distinct.isEmpty()) meta.delete(key) else meta.put(MetaEntity(key, distinct.joinToString(",")))
     }
 
     // ------------------------------------------------------------------ conflict chooser
@@ -1047,6 +1687,7 @@ class SyncStore(
     private data class SettingState(val value: String)
 
     companion object {
+        private const val TAG = "RevealSync"
         const val STATUS_APPLIED = "applied"
         const val WINNER_INCOMING = "incoming"
         const val SOURCE_NAS = "nas"
@@ -1075,6 +1716,48 @@ class SyncStore(
         private val DEFAULT_RECIPE = dev.hfps.reveal.pipeline.recipe.Recipe()
 
         private fun settingKey(key: String) = "sync.setting.$key"
+
+        /** `meta`: versions held back until their photo is on the server ([hold]): version uuids, `,` joined. */
+        const val KEY_HELD_VERSIONS = "sync.heldVersions"
+
+        /**
+         * `meta`: edited Server photos' versions an unpairing kept without the server holding them ([forget]):
+         * `uuid@origin server id`, `,` joined.
+         */
+        const val KEY_KEPT_EDITS = "sync.keptEdits"
+
+        /** `meta`: the Server photos an unpairing kept ([forget]), `uuid@origin server id`, `,` joined. */
+        const val KEY_KEPT_PHOTOS = "sync.keptPhotos"
+
+        /** The origin of kept entries whose server is not known (kept before 0.9.0 recorded it). */
+        const val UNKNOWN_ORIGIN = "?"
+        private const val KEPT_SEPARATOR = '@'
+
+        /** `meta`: parked versions' photos found through the server's previews: `uuid=fingerprint`, `,` joined. */
+        const val KEY_RECOVERED_FP = "sync.recovery.fingerprints"
+
+        /** `meta`: recovered versions waiting for proof of authorship: `uuid@rev@author device id`, `,` joined. */
+        const val KEY_RECOVERY_PROOF = "sync.recovery.proof"
+
+        /** `meta`: the recovery pass in progress: `last photo id|uuid,uuid`. */
+        const val KEY_RECOVERY_SEARCH = "sync.recovery.search"
+
+        /** `meta`: versions a whole pass did not find: `uuid@at@misses`, `,` joined. */
+        const val KEY_RECOVERY_MISSES = "sync.recovery.misses"
+
+        /** `meta`: this installation's device ids, every pairing (never forgotten). */
+        const val KEY_OWN_DEVICES = "sync.ownDevices"
+
+        private val RECOVERY_KEYS =
+            listOf(KEY_RECOVERED_FP, KEY_RECOVERY_PROOF, KEY_RECOVERY_SEARCH, KEY_RECOVERY_MISSES)
+        private const val CHUNK = 500
+        private const val DAY_MS = 24L * 60 * 60 * 1000
+        private const val MAX_MISS_BACKOFF_DAYS = 30L
+        private const val MISS_SHIFT_CAP = 5
+
+        /** `meta`: versions the W5 repair left to check on the next run ([checkRepairs]): `uuid@rev`, `,` joined. */
+        const val KEY_REPAIR_CHECKS = "sync.versionPhotos.checks"
+        private const val CHECK_REV = "@"
 
         fun mainFile(files: List<PhotoFileEntity>): PhotoFileEntity? =
             files.firstOrNull { it.role == FileRole.RAW } ?: files.firstOrNull { it.role == FileRole.RENDERED }

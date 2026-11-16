@@ -49,6 +49,30 @@ All notable changes to Reveal are documented here. The format follows
 - Server photos without a capture time sort by their NAS file's time, or go to "No date", instead of the time their
   record arrived.
 ### Fixed
+- Sync (W5, docs/adr/0018 "Amendment W5"): an edit of a photo from the server's NAS folders (or of a photo opened
+  from another app) that nobody had rated, flagged or labelled never reached the other devices. The photo now goes to
+  the server before its edit, an edit finds its photo on the other device by the file itself, and the first sync after
+  updating sends such edits again (they then show up on the other devices). Applying a preset to hundreds of such
+  photos no longer stops sync for good (the push stays within the server's limit of 500 changes).
+- Pairing again with the same server (a new address, a new QR) no longer registers a new device: Reveal keeps its
+  device, its place next to Hoard on the same phone and everything it had synced. When the old device was removed
+  from the server, the new one keeps the sync state and rejoins Hoard's phone. A re-pair or a pairing after unpairing
+  no longer turns every edited photo into a conflict copy. Reveal sends its device key only to the server it is
+  paired with (a pairing code naming no server, or another one, never receives it), and on its own only when the host
+  stays the same (a new port, or https; never from https down to unencrypted http on a public address): any other host
+  first asks "Same server at <host>?", with a warning when the
+  address is neither https nor private ("New device" pairs again without sending the key). Settings → Sync has "Pair
+  with a new code" for a server that moved.
+- "Pair with a new code" no longer unpairs silently when the code is for another server: a code naming another server
+  is refused with "Switch server" (through the usual Unpair confirmation; it pairs first, so a failed pairing keeps
+  the paired server and everything it synced), and a code naming none that turns out to be
+  another server asks "This code is for another server" (Cancel keeps everything; the dialog says the other server
+  already registered this device, to remove there).
+- An edit held back while its photo's file was being read now goes up on its own when the server refuses that photo,
+  instead of waiting forever.
+- An edit of a photo whose file Reveal had not finished reading, already on the server from an earlier version, no
+  longer becomes a conflict copy when it goes up again; and it goes up as soon as another device's edit names that
+  photo.
 - Photos from Hoard (W4): a camera's `IMG_0001.JPG` no longer pairs with a Hoard `IMG_0001.CR3` of the same name; a
   RAW and its JPEG that arrive in different parts of a big batch still become one photo; the originals Reveal keeps
   for Hoard's Downloads copies are no longer left behind (backups of photos the server holds, a failed re-copy, a

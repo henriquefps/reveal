@@ -17,21 +17,24 @@ import dev.hfps.reveal.data.model.PickFlag
 import dev.hfps.reveal.data.model.SourceState
 import dev.hfps.reveal.data.preset.PresetRepository
 import dev.hfps.reveal.pipeline.recipe.Recipe
+import dev.hfps.reveal.pipeline.recipe.RecipeCodec
 import dev.hfps.reveal.pipeline.recipe.RecipeDiff
 import dev.hfps.reveal.sync.account.ClientDevice
+import dev.hfps.reveal.sync.api.PushChange
 import dev.hfps.reveal.sync.api.SyncApi
 import dev.hfps.reveal.sync.engine.SyncEngine
 import dev.hfps.reveal.sync.engine.SyncReport
 import dev.hfps.reveal.sync.engine.SyncStore
 import dev.hfps.reveal.sync.engine.SyncedSetting
+import dev.hfps.reveal.sync.engine.VersionData
 import kotlinx.coroutines.runBlocking
 
 /** One simulated device: its own in-memory database, sync store and engine, paired with [key]. */
 class TestDevice(
     val name: String,
-    private val url: String,
-    val key: String,
-    private val serverId: String,
+    private var url: String,
+    key: String,
+    private var serverId: String,
     settings: List<SyncedSetting> = emptyList(),
     var now: Long = 1_700_000_000_000L,
     device: ClientDevice? = null,
@@ -46,7 +49,23 @@ class TestDevice(
         db,
         java.io.File(System.getProperty("java.io.tmpdir"), "reveal-covers-$name-${System.nanoTime()}"),
     ) { now }
-    val api = SyncApi(url, key)
+    var key: String = key
+        private set
+    var api = SyncApi(url, key)
+        private set
+
+    /** Paired again under another device [key] (same database; what the database keeps is the caller's business). */
+    fun rekey(key: String) {
+        this.key = key
+        api = SyncApi(url, key)
+    }
+
+    /** Paired with another server ([url], [serverId]) under [key] (same database). */
+    fun switchServer(url: String, key: String, serverId: String) {
+        this.url = url
+        this.serverId = serverId
+        rekey(key)
+    }
     val folder: Long = runBlocking {
         db.sourceDao().insert(
             SourceEntity(
@@ -175,6 +194,32 @@ class TestDevice(
     }
 
     fun pending(): Int = runBlocking { db.syncDao().dirty(10_000).size }
+
+    /**
+     * What 0.8 pushed for an edit of a photo without a record (ADR 0018 "W5"): the version alone, naming this device's
+     * id for the photo and without its fingerprint. Returns the version's uuid.
+     */
+    fun legacyPushVersion(photoId: Long): String = runBlocking {
+        val version = versions(photoId).first()
+        val data = VersionData(
+            photoId = photo(photoId).uuid,
+            recipe = SyncApi.json.parseToJsonElement(RecipeCodec.Default.encode(recipe(version.id))),
+        )
+        val local = checkNotNull(db.syncDao().record("version", version.uuid))
+        val result = api.push(
+            listOf(
+                PushChange(
+                    "version",
+                    version.uuid,
+                    0,
+                    local.modifiedAt,
+                    data = SyncApi.json.encodeToJsonElement(VersionData.serializer(), data),
+                ),
+            ),
+        ).results.single()
+        db.syncDao().putRecord(local.copy(rev = result.rev, dirty = false))
+        version.uuid
+    }
 
     // ------------------------------------------------------------------ culling (ADR 0027)
 

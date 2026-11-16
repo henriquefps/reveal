@@ -1087,6 +1087,37 @@ FIX/W (0.5.4, ADR 0018 amendment, DB v11): `photo.data.orientation` (Server phot
 `feature/settings/storage/StorageScreen.kt`). A new disk cache: make it a `CacheArea`, register it with the budget,
 cap it at `budget::cap`, and add its directory to `AppStorage.AREA_DIRS`.
 
+Photo before version (W5, 0.9.0, ADR 0018 "Amendment W5"): NAS photos and quietly filed hand-offs have random
+uuids and no `photo` record, so `SyncStore.readOutgoing` puts a version's photo change ahead of it when the photo has
+no accepted record (`photoFirst`); a photo without a fingerprint yet holds its versions (not dirty, rev kept, listed in `meta` `sync.heldVersions`;
+`SyncStore.releaseHeld` when the photo's record is accepted or pulled, or a pulled version finds it by fingerprint;
+never overload `rev` for it: a release must push on the real `baseRev`);
+the batch stays within the server's `maxPushChanges` counting the added photos (`FakeSyncServer` refuses more, as
+hoard-server does). An adopting photo keeps its old id as an alias.
+`VersionData.photoFingerprint` (main file) lets `applyVersion` find the photo by fingerprint (oldest non-hidden when
+ambiguous) and alias the record's photo id. One-off `repairVersionPhotos` (meta `sync.versionPhotos`, after the pull,
+skipped on a first sync): edited versions of photos the server never had + this device's edited versions again (their
+original `modifiedAt`; versions of unknown author only via `checkRepairs` on the next run, meta
+`sync.versionPhotos.checks`). Tests: `VersionPhotoSyncTest`, `RealServerVersionPhotoTest` (`REVEAL_VERSION_DIR`,
+`REVEAL_VERSION_LINKS`, two links). Re-pair with the same server (W5 (f)): `SyncRepository.pair` first tries the
+current key at the link's address only when its `server=` is the account's (`sameDevice`: same device, only the
+URL changes); a refused key pairs a new device
+but keeps the sync state (`SyncEngine.forgetDevice`) and claims the previous physical device when offered; no
+self-revoke exists in `/v1`. The key goes on its own only to the account's own host (a port or scheme change);
+any other host asks "Same server at <host>?" (`keyReuseQuestion`, `KeyReuse.CONFIRMED/DECLINED`;
+`ServerAddresses.keySafe` only words the warning). While paired, a code for another server never unpairs silently
+(W5 (g)): `server=` naming another one = `PairProblem.PAIRED_ELSEWHERE` ("Switch server" via Unpair); none and the
+server answers as another = `ServerSwitchException`, the new pairing kept in memory until `switchServer()` /
+`cancelSwitch()`. A refused photo record releases its held versions. `SyncStore.sameEdit` avoids conflict copies on a first sync (and re-pushes a record naming a stale photo id). Test: `RePairTest`.
+W5 recovery (ADR 0018 "W5 recovery"): parked versions whose photo nobody can find (records of an old re-pair that
+deleted the edited Server photos) are found through Hoard's edited previews (`SyncEngine.recoverParked`: paced
+`POST /v1/items/lookup` over Server/hand-off main fingerprints, `edits[].versionId` + `matches`; misses back off from a
+day) and applied on every device; pushed again only with proof of authorship (`sync.ownDevices`, or the physical
+device from `GET /v1/device`). `forget()` keeps edited Server photos (`sync.keptPhotos`/`sync.keptEdits` with their origin server: only a pairing with that
+server pushes them, `startTracking(serverId)`; elsewhere `keptPhotos()` are never pushed, `removeKeptPhotos`); a local
+edit on top of this installation's own record is rebased on a first sync (`rebaseOwn`), not copied.
+Tests: `VersionPhotoSyncTest`, `KeptServerPhotosTest`, `RealServerRecoveryTest` (`REVEAL_RECOVERY_DIR`; `local-server.sh revoke`).
+
 Culling with hoard-server (R0.8, ADR 0027, DB v13; only when `/v1/server` lists `culling`, else culling stays in
 `photo` records): `engine/CullingSync` (seed once per server, push `POST /v1/culling` per field by main fingerprint,
 pull `GET /v1/items/changes?include=culling` with its own cursor, mirror every record in `culling_records` +

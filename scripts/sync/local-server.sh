@@ -12,6 +12,7 @@
 #                                                                        whose url is [url] (default the loopback)
 #   scripts/sync/local-server.sh reindex <work dir>                      walk the NAS folder again (after files were
 #                                                                        added to <work dir>/mnt/nas/Shoots)
+#   scripts/sync/local-server.sh revoke <work dir> <device id>           revoke a device as the admin page does
 #   scripts/sync/local-server.sh stop  <work dir>                        stop it and delete the work directory
 #
 # The pinned server version is HOARD_SERVER_VERSION below (the only place; bump it when Reveal moves to a newer server).
@@ -21,7 +22,7 @@ set -euo pipefail
 HOARD_SERVER_VERSION="0.9.0"
 image="${HOARD_SERVER_IMAGE:-ghcr.io/henriquefps/hoard-server:$HOARD_SERVER_VERSION}"
 
-cmd="${1:?start|pair|reindex|stop}"; dir="${2:?work dir}"
+cmd="${1:?start|pair|reindex|revoke|stop}"; dir="${2:?work dir}"
 admin() { # method path [json]
   curl -fsS -X "$1" -b "$dir/cookies" -c "$dir/cookies" -H 'Content-Type: application/json' -H 'X-Hoard-Admin: 1' \
     "http://127.0.0.1:$port$2" ${3:+--data "$3"}
@@ -56,9 +57,13 @@ case "$cmd" in
     port="$(cat "$dir/port")"
     admin POST /admin/api/nas/reindex > /dev/null
     ;;
+  revoke)
+    port="$(cat "$dir/port")"
+    admin POST "/admin/api/devices/${3:?device id}/revoke" > /dev/null
+    ;;
   stop)
     [ -f "$dir/port" ] && docker rm -f "$(name)" > /dev/null 2>&1 || true
     rm -rf "$dir"
     ;;
-  *) echo "usage: $0 start|pair|reindex|stop" >&2; exit 2 ;;
+  *) echo "usage: $0 start|pair|reindex|revoke|stop" >&2; exit 2 ;;
 esac

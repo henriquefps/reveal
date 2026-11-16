@@ -55,6 +55,7 @@ import dev.hfps.reveal.feature.settings.R
 import dev.hfps.reveal.sync.ClaimException
 import dev.hfps.reveal.sync.PairException
 import dev.hfps.reveal.sync.PairProblem
+import dev.hfps.reveal.sync.ServerSwitchException
 import dev.hfps.reveal.sync.SyncProblem
 import dev.hfps.reveal.sync.SyncRepository
 import dev.hfps.reveal.sync.SyncStatus
@@ -86,6 +87,18 @@ sealed interface PairingState {
     data object Working : PairingState
 
     data class Failed(val problem: PairProblem) : PairingState
+
+    /**
+     * The link is for the paired server at another host (ADR 0018 "W5 (f)"): reuse this device's key there only if the
+     * user says it is the same server. [protected] false (neither https nor private) adds a warning.
+     */
+    data class ConfirmKeyReuse(val host: String, val protected: Boolean = false) : PairingState
+
+    /**
+     * A code without `server=` paired with another server while paired (ADR 0018 "W5 (g)"): switch (forget this
+     * server's sync state) or cancel. A device named [deviceName] is already registered on [serverName].
+     */
+    data class ConfirmSwitch(val serverName: String, val deviceName: String) : PairingState
 }
 
 /** Everything the Sync screen shows. */
@@ -118,6 +131,16 @@ data class SyncActions(
     val onThisDevice: () -> Unit = {},
     val onSamePhone: (String) -> Unit = {},
     val onNotSamePhone: () -> Unit = {},
+    /** The answer to [PairingState.ConfirmKeyReuse]: true = same server, false = pair as a new device. */
+    val onKeyReuse: (Boolean) -> Unit = {},
+    val onKeyReuseCancel: () -> Unit = {},
+    /**
+     * After the Unpair confirmation opened by "Switch server" ([PairProblem.PAIRED_ELSEWHERE]): pair, and only then
+     * forget the paired server.
+     */
+    val onSwitchServer: () -> Unit = {},
+    /** The answer to [PairingState.ConfirmSwitch]: true = switch, false = keep the paired server. */
+    val onConfirmSwitch: (Boolean) -> Unit = {},
 )
 
 /** Test tags of the Sync screen. */
@@ -143,6 +166,14 @@ object SyncTags {
     const val SAME_PHONE = "sync_same_phone"
     const val SAME_PHONE_YES = "sync_same_phone_yes"
     const val SAME_PHONE_NO = "sync_same_phone_no"
+    const val PAIR_AGAIN = "sync_pair_again"
+    const val KEY_REUSE = "sync_key_reuse"
+    const val KEY_REUSE_YES = "sync_key_reuse_yes"
+    const val KEY_REUSE_NO = "sync_key_reuse_no"
+    const val SWITCH_SERVER = "sync_switch_server"
+    const val SWITCH = "sync_switch"
+    const val SWITCH_YES = "sync_switch_yes"
+    const val SWITCH_NO = "sync_switch_no"
 
     fun folder(id: Long) = "sync_folder_$id"
 }
@@ -178,7 +209,16 @@ class SyncSettingsViewModel @Inject constructor(
 
     fun cancelScan() = pairing.update { PairingState.Idle }
 
-    /** Pairs with the link of a scanned QR or a pasted text. */
+    /** The link waiting for the answer to [PairingState.ConfirmKeyReuse]. */
+    private var confirming: PairingLink? = null
+
+    /** The code for another server waiting for "Switch server" ([PairProblem.PAIRED_ELSEWHERE]). */
+    private var switching: PairingLink? = null
+
+    /**
+     * Pairs with the link of a scanned QR or a pasted text; a link for the paired server at another host asks first
+     * whether it is the same server ([PairingState.ConfirmKeyReuse]).
+     */
     fun pair(text: String) {
         val link = PairingLink.parse(text)
         if (link == null) {
@@ -187,13 +227,83 @@ class SyncSettingsViewModel @Inject constructor(
         }
         pairing.update { PairingState.Working }
         viewModelScope.launch {
+            val question = sync.keyReuseQuestion(link)
+            if (question != null) {
+                confirming = link
+                pairing.update { PairingState.ConfirmKeyReuse(question.host, question.protected) }
+            } else {
+                pair(link, SyncRepository.KeyReuse.AUTO)
+            }
+        }
+    }
+
+    /**
+     * "Switch server", confirmed in the Unpair dialog: pair with the code, and only once that worked forget the paired
+     * server. A failed pairing keeps the paired server and shows the error.
+     */
+    fun switchServer() {
+        val link = switching ?: return
+        switching = null
+        pairing.update { PairingState.Working }
+        viewModelScope.launch {
             try {
-                sync.pair(link)
+                sync.pairSwitching(link)
                 pairing.update { PairingState.Idle }
                 SyncScheduler.now(context)
             } catch (e: PairException) {
                 pairing.update { PairingState.Failed(e.problem) }
             }
+        }
+    }
+
+    /** The answer to [PairingState.ConfirmSwitch]: switch to the server just paired, or keep the paired one. */
+    fun confirmSwitch(switch: Boolean) {
+        if (!switch) {
+            sync.cancelSwitch()
+            pairing.update { PairingState.Idle }
+            return
+        }
+        pairing.update { PairingState.Working }
+        viewModelScope.launch {
+            if (sync.switchServer() != null) {
+                pairing.update { PairingState.Idle }
+                SyncScheduler.now(context)
+            } else {
+                pairing.update { PairingState.Idle }
+            }
+        }
+    }
+
+    override fun onCleared() {
+        // A switch nobody answered: the paired server stays, the other server's key is dropped.
+        sync.cancelSwitch()
+    }
+
+    /** The user's answer: the same server (reuse the key) or not (a normal pairing as a new device). */
+    fun answerKeyReuse(same: Boolean) {
+        val link = confirming ?: return
+        confirming = null
+        pairing.update { PairingState.Working }
+        viewModelScope.launch {
+            pair(link, if (same) SyncRepository.KeyReuse.CONFIRMED else SyncRepository.KeyReuse.DECLINED)
+        }
+    }
+
+    fun cancelKeyReuse() {
+        confirming = null
+        pairing.update { PairingState.Idle }
+    }
+
+    private suspend fun pair(link: PairingLink, keyReuse: SyncRepository.KeyReuse) {
+        try {
+            sync.pair(link, keyReuse)
+            pairing.update { PairingState.Idle }
+            SyncScheduler.now(context)
+        } catch (e: PairException) {
+            switching = link.takeIf { e.problem == PairProblem.PAIRED_ELSEWHERE }
+            pairing.update { PairingState.Failed(e.problem) }
+        } catch (e: ServerSwitchException) {
+            pairing.update { PairingState.ConfirmSwitch(e.serverName, e.deviceName) }
         }
     }
 
@@ -267,6 +377,10 @@ fun SyncSettingsScreen(
             onThisDevice = onThisDevice,
             onSamePhone = viewModel::samePhone,
             onNotSamePhone = viewModel::notSamePhone,
+            onKeyReuse = viewModel::answerKeyReuse,
+            onKeyReuseCancel = viewModel::cancelKeyReuse,
+            onSwitchServer = viewModel::switchServer,
+            onConfirmSwitch = viewModel::confirmSwitch,
         ),
         modifier = modifier,
     )
@@ -304,12 +418,18 @@ fun SyncSettingsContent(
         if (state.account != null) {
             SamePhoneDialog(state.samePhone, onJoin = actions.onSamePhone, onDismiss = actions.onNotSamePhone)
         }
+        val pairing = state.pairing
+        if (pairing is PairingState.ConfirmKeyReuse) {
+            KeyReuseDialog(pairing, onAnswer = actions.onKeyReuse, onDismiss = actions.onKeyReuseCancel)
+        }
+        if (pairing is PairingState.ConfirmSwitch && state.account != null) {
+            SwitchServerDialog(pairing, state.account, onAnswer = actions.onConfirmSwitch)
+        }
     }
 }
 
 @Composable
 private fun Unpaired(pairing: PairingState, actions: SyncActions, modifier: Modifier = Modifier) {
-    var link by rememberSaveable { mutableStateOf("") }
     Column(modifier, verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Eyebrow(stringResource(R.string.sync_section_pair))
@@ -324,6 +444,44 @@ private fun Unpaired(pairing: PairingState, actions: SyncActions, modifier: Modi
                 color = RevealTheme.colors.mutedForeground,
             )
         }
+        PairControls(pairing, actions)
+    }
+}
+
+/** "Pair with a new code" while paired (the same server at a new address, ADR 0018 "W5 (f)"). */
+@Composable
+private fun PairAgain(
+    open: Boolean,
+    onOpen: () -> Unit,
+    pairing: PairingState,
+    actions: SyncActions,
+    onSwitchServer: () -> Unit,
+) {
+    if (open || pairing != PairingState.Idle) {
+        Text(
+            stringResource(R.string.sync_pair_again_hint),
+            style = RevealTheme.typography.ui,
+            color = RevealTheme.colors.mutedForeground,
+            modifier = Modifier.padding(horizontal = 16.dp),
+        )
+        PairControls(pairing, actions, onSwitchServer)
+    } else {
+        GhostButton(
+            text = stringResource(R.string.sync_pair_again),
+            onClick = onOpen,
+            icon = PhosphorRegular.QrCode,
+            modifier = Modifier.padding(horizontal = 16.dp).testTag(SyncTags.PAIR_AGAIN),
+        )
+    }
+}
+
+/** Scan or paste a pairing link (unpaired, or pairing again with a new code). */
+@Composable
+private fun PairControls(pairing: PairingState, actions: SyncActions, onSwitchServer: (() -> Unit)? = null) {
+    var link by rememberSaveable { mutableStateOf("") }
+    val busy = pairing == PairingState.Working || pairing is PairingState.ConfirmKeyReuse ||
+        pairing is PairingState.ConfirmSwitch
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         if (pairing == PairingState.Scanning) {
             PairingScanner(onLink = actions.onScanned, onClose = actions.onCancelScan)
         } else {
@@ -332,23 +490,15 @@ private fun Unpaired(pairing: PairingState, actions: SyncActions, modifier: Modi
                     text = stringResource(R.string.sync_scan),
                     onClick = actions.onScan,
                     icon = PhosphorRegular.QrCode,
-                    enabled = pairing != PairingState.Working,
+                    enabled = !busy,
                     modifier = Modifier.fillMaxWidth().testTag(SyncTags.SCAN),
                 )
                 LinkField(link, { link = it.take(MAX_LINK) })
                 SecondaryButton(
-                    text = stringResource(
-                        if (pairing ==
-                            PairingState.Working
-                        ) {
-                            R.string.sync_pairing
-                        } else {
-                            R.string.sync_pair
-                        },
-                    ),
+                    text = stringResource(if (busy) R.string.sync_pairing else R.string.sync_pair),
                     onClick = { actions.onPaste(link) },
                     icon = PhosphorRegular.LinkSimple,
-                    enabled = link.isNotBlank() && pairing != PairingState.Working,
+                    enabled = link.isNotBlank() && !busy,
                     modifier = Modifier.fillMaxWidth().testTag(SyncTags.PAIR),
                 )
                 if (pairing is PairingState.Failed) {
@@ -358,6 +508,14 @@ private fun Unpaired(pairing: PairingState, actions: SyncActions, modifier: Modi
                         color = RevealTheme.colors.destructive,
                         modifier = Modifier.testTag(SyncTags.PAIR_ERROR),
                     )
+                    if (pairing.problem == PairProblem.PAIRED_ELSEWHERE && onSwitchServer != null) {
+                        GhostButton(
+                            text = stringResource(R.string.sync_switch_server),
+                            onClick = onSwitchServer,
+                            icon = PhosphorRegular.Swap,
+                            modifier = Modifier.testTag(SyncTags.SWITCH_SERVER),
+                        )
+                    }
                 }
             }
         }
@@ -401,6 +559,10 @@ private fun Paired(
     val context = LocalContext.current
     val status = state.status
     var confirmUnpair by rememberSaveable { mutableStateOf(false) }
+    // The Unpair confirmation opened by "Switch server": confirming it also pairs with the other server's code.
+    var switchServer by rememberSaveable { mutableStateOf(false) }
+    // "Pair with a new code" (the same server at a new address, ADR 0018 "W5 (f)"): closes once the account changes.
+    var pairAgain by rememberSaveable(account.url, account.deviceId) { mutableStateOf(false) }
     Column(modifier, verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Eyebrow(stringResource(R.string.sync_section_server), Modifier.padding(horizontal = 16.dp))
         RevealListRow(
@@ -417,6 +579,16 @@ private fun Paired(
                 modifier = Modifier.padding(horizontal = 16.dp),
             )
         }
+        PairAgain(
+            open = pairAgain,
+            onOpen = { pairAgain = true },
+            pairing = state.pairing,
+            actions = actions,
+            onSwitchServer = {
+                switchServer = true
+                confirmUnpair = true
+            },
+        )
         RevealListRow(
             title = stringResource(R.string.device_title),
             subtitle = stringResource(R.string.device_row_subtitle),
@@ -543,7 +715,10 @@ private fun Paired(
         Column(Modifier.padding(16.dp)) {
             GhostButton(
                 text = stringResource(R.string.sync_unpair),
-                onClick = { confirmUnpair = true },
+                onClick = {
+                    switchServer = false
+                    confirmUnpair = true
+                },
                 modifier = Modifier.testTag(SyncTags.UNPAIR),
             )
         }
@@ -565,7 +740,8 @@ private fun Paired(
                         text = stringResource(R.string.sync_unpair),
                         onClick = {
                             confirmUnpair = false
-                            actions.onUnpair()
+                            if (switchServer) actions.onSwitchServer() else actions.onUnpair()
+                            switchServer = false
                         },
                         modifier = Modifier.testTag(SyncTags.UNPAIR_CONFIRM),
                     )
@@ -654,6 +830,7 @@ private fun PairProblem.text(): Int = when (this) {
     PairProblem.OTHER_SERVER -> R.string.sync_pair_other_server
     PairProblem.UNREACHABLE -> R.string.sync_pair_unreachable
     PairProblem.SERVER_ERROR -> R.string.sync_pair_server_error
+    PairProblem.PAIRED_ELSEWHERE -> R.string.sync_pair_paired_elsewhere
 }
 
 private fun host(url: String): String = runCatching {
@@ -667,3 +844,97 @@ private fun host(url: String): String = runCatching {
 private fun size(context: Context, bytes: Long): String = Formatter.formatShortFileSize(context, bytes)
 
 private const val MAX_LINK = 2000
+
+/** "Same server at <host>?": reuse this device's key at another host (a warning when not https nor private). */
+@Composable
+private fun KeyReuseDialog(question: PairingState.ConfirmKeyReuse, onAnswer: (Boolean) -> Unit, onDismiss: () -> Unit) {
+    val host = question.host
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = RevealTheme.colors.card,
+        shape = RevealTheme.shapes.card,
+        modifier = Modifier.testTag(SyncTags.KEY_REUSE),
+        title = { Text(stringResource(R.string.sync_key_reuse_title, host), style = RevealTheme.typography.title) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    stringResource(R.string.sync_key_reuse_body),
+                    style = RevealTheme.typography.body,
+                    color = RevealTheme.colors.mutedForeground,
+                )
+                if (!question.protected) {
+                    Text(
+                        stringResource(R.string.sync_key_reuse_cleartext),
+                        style = RevealTheme.typography.ui,
+                        color = RevealTheme.colors.warning,
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            PrimaryButton(
+                text = stringResource(R.string.sync_key_reuse_yes),
+                onClick = { onAnswer(true) },
+                modifier = Modifier.testTag(SyncTags.KEY_REUSE_YES),
+            )
+        },
+        dismissButton = {
+            GhostButton(
+                text = stringResource(R.string.sync_key_reuse_no),
+                onClick = { onAnswer(false) },
+                modifier = Modifier.testTag(SyncTags.KEY_REUSE_NO),
+            )
+        },
+    )
+}
+
+/**
+ * "This code is for another server": a code without `server=` paired with another server while paired (ADR 0018
+ * "W5 (g)"). Switch = forget this server's sync state and keep the new pairing; Cancel = keep the paired server (the
+ * device the other server registered stays there: the dialog says so).
+ */
+@Composable
+private fun SwitchServerDialog(
+    question: PairingState.ConfirmSwitch,
+    account: SyncAccount,
+    onAnswer: (Boolean) -> Unit,
+) {
+    val unnamed = stringResource(R.string.sync_server_unnamed)
+    val current = account.serverName.ifBlank { unnamed }
+    val other = question.serverName.ifBlank { unnamed }
+    AlertDialog(
+        onDismissRequest = { onAnswer(false) },
+        containerColor = RevealTheme.colors.card,
+        shape = RevealTheme.shapes.card,
+        modifier = Modifier.testTag(SyncTags.SWITCH),
+        title = { Text(stringResource(R.string.sync_switch_title), style = RevealTheme.typography.title) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    stringResource(R.string.sync_switch_body, other, current),
+                    style = RevealTheme.typography.body,
+                    color = RevealTheme.colors.mutedForeground,
+                )
+                Text(
+                    stringResource(R.string.sync_switch_registered, question.deviceName, other),
+                    style = RevealTheme.typography.ui,
+                    color = RevealTheme.colors.mutedForeground,
+                )
+            }
+        },
+        confirmButton = {
+            PrimaryButton(
+                text = stringResource(R.string.sync_switch_yes),
+                onClick = { onAnswer(true) },
+                modifier = Modifier.testTag(SyncTags.SWITCH_YES),
+            )
+        },
+        dismissButton = {
+            GhostButton(
+                text = stringResource(R.string.sync_cancel),
+                onClick = { onAnswer(false) },
+                modifier = Modifier.testTag(SyncTags.SWITCH_NO),
+            )
+        },
+    )
+}

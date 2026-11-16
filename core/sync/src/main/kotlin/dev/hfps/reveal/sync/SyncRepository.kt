@@ -7,6 +7,7 @@ import dev.hfps.reveal.data.index.LibraryIndexer
 import dev.hfps.reveal.data.library.DocumentTreeFactory
 import dev.hfps.reveal.sync.account.ClientDevice
 import dev.hfps.reveal.sync.account.PairingLink
+import dev.hfps.reveal.sync.account.ServerAddresses
 import dev.hfps.reveal.sync.account.SyncAccount
 import dev.hfps.reveal.sync.account.SyncAccountStore
 import dev.hfps.reveal.sync.account.SyncOptions
@@ -14,6 +15,7 @@ import dev.hfps.reveal.sync.api.DeviceCandidate
 import dev.hfps.reveal.sync.api.DeviceEntry
 import dev.hfps.reveal.sync.api.DeviceView
 import dev.hfps.reveal.sync.api.PairRequest
+import dev.hfps.reveal.sync.api.PairResponse
 import dev.hfps.reveal.sync.api.PhysicalDevice
 import dev.hfps.reveal.sync.api.SyncApi
 import dev.hfps.reveal.sync.api.SyncHttpException
@@ -28,6 +30,8 @@ import dev.hfps.reveal.sync.engine.SyncReport
 import dev.hfps.reveal.sync.engine.SyncStore
 import dev.hfps.reveal.sync.files.ServerFiles
 import java.io.IOException
+import java.net.URI
+import java.util.Locale
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -94,9 +98,37 @@ enum class ClaimProblem { SAME_APP, NOT_FOUND, UNREACHABLE, SERVER_ERROR }
 class ClaimException(val problem: ClaimProblem, cause: Throwable? = null) : IOException(problem.name, cause)
 
 /** Why pairing failed. */
-enum class PairProblem { INVALID_LINK, INVALID_TOKEN, OTHER_SERVER, UNREACHABLE, SERVER_ERROR }
+enum class PairProblem {
+    INVALID_LINK,
+    INVALID_TOKEN,
+    OTHER_SERVER,
+    UNREACHABLE,
+    SERVER_ERROR,
+
+    /**
+     * Pairing again while paired (ADR 0018 "W5 (g)"): the code's `server=` names another server than the paired one.
+     * Nothing was sent; switching servers goes through Unpair first.
+     */
+    PAIRED_ELSEWHERE,
+}
 
 class PairException(val problem: PairProblem, cause: Throwable? = null) : IOException(problem.name, cause)
+
+/**
+ * Pairing again while paired (ADR 0018 "W5 (g)"): the code had no `server=` and the server that answered is not the
+ * paired one. Nothing local changed; the new pairing waits in memory for [SyncRepository.switchServer] (forget this
+ * server, keep the new one) or [SyncRepository.cancelSwitch]. The pairing already registered a device named
+ * [deviceName] on [serverName] (`/v1` has no way for a client to remove itself): a cancel leaves it there.
+ */
+class ServerSwitchException(val serverName: String, val deviceName: String) : IOException("other server")
+
+/** The question before reusing the key at a new address of the paired server (ADR 0018 "W5 (f)"). */
+data class KeyReuseQuestion(
+    /** The new address's host, as shown to the user. */
+    val host: String,
+    /** https, or only a private network reaches it ([ServerAddresses.keySafe]): no warning in the question. */
+    val protected: Boolean,
+)
 
 /**
  * The app's sync (ADR 0018): pairing, the options, the status, and one sync run (metadata, then blobs) for the
@@ -175,54 +207,237 @@ class SyncRepository(
         return newApi(account.url, key)
     }
 
-    /** Pairs with the server of [link]; the device key goes to the Keystore. Throws [PairException]. */
-    suspend fun pair(link: PairingLink): SyncAccount = withContext(Dispatchers.IO) {
-        val response = try {
-            newApi(link.url, null).pair(
-                PairRequest(
-                    token = link.token,
-                    deviceName = clientInfo.deviceName,
-                    platform = clientInfo.platform,
-                    appVersion = clientInfo.appVersion,
-                    app = clientInfo.device?.app,
-                    manufacturer = clientInfo.device?.manufacturer,
-                    model = clientInfo.device?.model,
-                ),
-            )
-        } catch (e: SyncHttpException) {
-            throw PairException(
-                if (e.code == "invalid_pairing_token") PairProblem.INVALID_TOKEN else PairProblem.SERVER_ERROR,
-                e,
-            )
-        } catch (e: IOException) {
-            throw PairException(PairProblem.UNREACHABLE, e)
-        } catch (e: IllegalArgumentException) {
-            throw PairException(PairProblem.INVALID_LINK, e)
+    /**
+     * Pairs with the server of [link]; the device key goes to the Keystore. Throws [PairException].
+     *
+     * Pairing again with the server this installation is paired with (its address changed, ADR 0018 "W5 (f)") keeps
+     * everything: when the current key still works at the link's address the device stays the same (no new device on
+     * the server, its physical device and Hoard's grouping kept, the pairing token unused); otherwise the new device
+     * keeps the library's sync state (records, cursors, culling) and joins the physical device the previous one was in
+     * when the server offers it.
+     */
+    suspend fun pair(link: PairingLink, keyReuse: KeyReuse = KeyReuse.AUTO): SyncAccount = withContext(Dispatchers.IO) {
+        pendingSwitch = null
+        val current = accounts.account.value
+        // Pairing again names the paired server or none: another server goes through Unpair (ADR 0018 "W5 (g)").
+        if (current != null && link.serverId != null && link.serverId != current.serverId) {
+            throw PairException(PairProblem.PAIRED_ELSEWHERE)
         }
+        sameDevice(link, keyReuse)?.let { return@withContext it }
+        val response = requestPairing(link)
+        if (link.serverId != null && link.serverId != response.serverId) throw PairException(PairProblem.OTHER_SERVER)
+        val paired = accounts.account.value
+        if (paired != null && paired.serverId != response.serverId) {
+            // A code without `server=` for another server: never forget the paired one without asking. Nothing local
+            // changes until the user chooses (the new key stays in memory only).
+            pendingSwitch = PendingSwitch(link, response, paired)
+            throw ServerSwitchException(response.serverName, clientInfo.deviceName)
+        }
+        val previous = paired
+        val previousGroup = previous?.let { db.metaDao().get(SyncEngine.KEY_PHYSICAL_DEVICE) }
+        val account = mutex.withLock {
+            if (previous == null) {
+                // A new pairing starts from nothing: whatever an earlier server knew does not apply.
+                forgetLocked()
+            } else {
+                // The same server under a new device: the library's sync state stays (its revisions are the server's);
+                // only what was reported about the old device goes, so the new one declares itself on its next sync.
+                engine.forgetDevice()
+            }
+            saveLocked(link, response)
+        }
+        // The previous device of this installation was in a physical device (with Hoard): the new one goes back there
+        // when the server offers it (the old device is no longer live in it). The user answered that question already.
+        val rejoin = previousGroup?.takeIf { group ->
+            group != previous.deviceId && response.candidates.any { it.physicalDeviceId == group }
+        }
+        if (rejoin != null) {
+            runCatching { claim(rejoin) }.onFailure { Log.w(TAG, "re-pair: could not rejoin the previous phone") }
+        }
+        account
+    }
+
+    /** `POST /v1/pair` with [link]'s token; failures as [PairException]. */
+    private fun requestPairing(link: PairingLink): PairResponse = try {
+        newApi(link.url, null).pair(
+            PairRequest(
+                token = link.token,
+                deviceName = clientInfo.deviceName,
+                platform = clientInfo.platform,
+                appVersion = clientInfo.appVersion,
+                app = clientInfo.device?.app,
+                manufacturer = clientInfo.device?.manufacturer,
+                model = clientInfo.device?.model,
+            ),
+        )
+    } catch (e: SyncHttpException) {
+        throw PairException(
+            if (e.code == "invalid_pairing_token") PairProblem.INVALID_TOKEN else PairProblem.SERVER_ERROR,
+            e,
+        )
+    } catch (e: IOException) {
+        throw PairException(PairProblem.UNREACHABLE, e)
+    } catch (e: IllegalArgumentException) {
+        throw PairException(PairProblem.INVALID_LINK, e)
+    }
+
+    private suspend fun saveLocked(link: PairingLink, response: PairResponse): SyncAccount {
+        val account =
+            SyncAccount(
+                link.url,
+                response.serverId,
+                response.serverName,
+                response.deviceId,
+                System.currentTimeMillis(),
+            )
+        accounts.save(account, response.apiKey)
+        // This installation's device ids are kept for good: proof of authorship for the W5 recovery.
+        store.noteOwnDevice(response.deviceId)
+        response.physicalDeviceId?.let { db.metaDao().put(MetaEntity(SyncEngine.KEY_PHYSICAL_DEVICE, it)) }
+        // The device was reported with the pairing itself: the first sync does not need to send it again unless it
+        // also declares culling (the signature includes the features).
+        candidates.update { response.candidates.filter(DeviceCandidate::modelMatch) }
+        runtime.update { SyncStatus() }
+        return account
+    }
+
+    /** A pairing with another server waiting for the user's answer ([ServerSwitchException]); memory only. */
+    private class PendingSwitch(val link: PairingLink, val response: PairResponse, val from: SyncAccount)
+
+    @Volatile
+    private var pendingSwitch: PendingSwitch? = null
+
+    /**
+     * "Switch" after a [ServerSwitchException]: Unpair, then keep the pairing just made with the other server (its
+     * token is spent, so it is not asked again). Null when there is nothing waiting, or the paired account changed
+     * meanwhile (nothing is done then).
+     */
+    suspend fun switchServer(): SyncAccount? = withContext(Dispatchers.IO) {
+        val pending = pendingSwitch ?: return@withContext null
+        pendingSwitch = null
+        mutex.withLock {
+            if (accounts.account.value != pending.from) return@withLock null
+            accounts.clear()
+            forgetLocked()
+            dismissCandidates()
+            saveLocked(pending.link, pending.response)
+        }
+    }
+
+    /**
+     * "Switch server" after a [PairProblem.PAIRED_ELSEWHERE] (ADR 0018 "W5 (g)"): pairs with [link]'s server first, and
+     * only once that worked forgets the paired server and keeps the new account, like [switchServer]. A failed pairing
+     * throws [PairException] and leaves the paired server and its sync state as they were. Null when the paired account
+     * changed meanwhile (the new pairing is dropped then).
+     */
+    suspend fun pairSwitching(link: PairingLink): SyncAccount? = withContext(Dispatchers.IO) {
+        pendingSwitch = null
+        val from = accounts.account.value ?: return@withContext pair(link)
+        val response = requestPairing(link)
         if (link.serverId != null && link.serverId != response.serverId) throw PairException(PairProblem.OTHER_SERVER)
         mutex.withLock {
-            // A new pairing starts from nothing: whatever an earlier server knew does not apply.
+            if (accounts.account.value != from) return@withLock null
+            accounts.clear()
             forgetLocked()
-            val account =
-                SyncAccount(
-                    link.url,
-                    response.serverId,
-                    response.serverName,
-                    response.deviceId,
-                    System.currentTimeMillis(),
-                )
-            accounts.save(account, response.apiKey)
-            response.physicalDeviceId?.let { db.metaDao().put(MetaEntity(SyncEngine.KEY_PHYSICAL_DEVICE, it)) }
-            // The device was reported with the pairing itself: the first sync does not need to send it again unless
-            // it also declares culling (the signature includes the features).
-            candidates.update { response.candidates.filter(DeviceCandidate::modelMatch) }
-            runtime.update { SyncStatus() }
-            account
+            dismissCandidates()
+            saveLocked(link, response)
         }
+    }
+
+    /** "Cancel" after a [ServerSwitchException]: the paired server stays; the other server's key is dropped. */
+    fun cancelSwitch() {
+        pendingSwitch = null
+    }
+
+    /**
+     * The current device again, at [link]'s address, when this installation is paired with that server and its key
+     * still works there (`GET /v1/server` answers with the same server and device ids); null otherwise.
+     *
+     * The key is a secret of the paired server: it is only ever sent to an address the link proves to be that server,
+     * i.e. a link whose `server=` (hoard-server prints it in every pairing code) is the account's server id. A link
+     * without one, or naming another server, pairs normally and never sees the key (`/v1` has no unauthenticated way to
+     * ask an address which server it is: `/v1/health` names none, and `/v1/server` needs a key). Even then it goes on
+     * its own only to the host the account already uses (a new port or scheme there, never from https down to a
+     * cleartext address the key is not safe at, [ServerAddresses.keySafe]); anything else only when the user confirmed
+     * it ([keyReuseQuestion], [KeyReuse.CONFIRMED]), and never after a [KeyReuse.DECLINED].
+     */
+    @Suppress("ReturnCount")
+    private suspend fun sameDevice(link: PairingLink, keyReuse: KeyReuse): SyncAccount? {
+        val account = accounts.account.value ?: return null
+        if (link.serverId == null || link.serverId != account.serverId) return null
+        // Another host goes only after the user said it is the same server.
+        if (keyReuse == KeyReuse.DECLINED) return null
+        if (keyReuse == KeyReuse.AUTO && !quietReuse(link, account)) return null
+        val key = accounts.apiKey() ?: return null
+        val info = try {
+            newApi(link.url, key).server()
+        } catch (e: SyncHttpException) {
+            // A revoked key (`401`) or a server that refuses: pair as a new device.
+            Log.i(TAG, "re-pair: the current key is not accepted (${e.code}), pairing a new device")
+            return null
+        } catch (_: IOException) {
+            return null
+        } catch (_: IllegalArgumentException) {
+            return null
+        }
+        if (info.serverId != account.serverId || info.deviceId != account.deviceId) return null
+        return mutex.withLock {
+            val moved = account.copy(url = link.url)
+            accounts.save(moved, key)
+            runtime.update { SyncStatus() }
+            moved
+        }
+    }
+
+    /**
+     * "Same server at <host>?" before [pair]ing with [link] (ADR 0018 "W5 (f)"), or null when no question is needed:
+     * the link is for another server (or names none), there is no key, or the address is on the host the account
+     * already uses (a port or scheme change that is not https -> cleartext, unless the address is [ServerAddresses
+     * .keySafe]). Any other host asks, whatever its scheme, and so does such a downgrade; [KeyReuseQuestion.protected]
+     * only changes the wording. The answer is passed to [pair] as [KeyReuse.CONFIRMED] or [KeyReuse.DECLINED].
+     */
+    suspend fun keyReuseQuestion(link: PairingLink): KeyReuseQuestion? = withContext(Dispatchers.IO) {
+        val account = accounts.account.value
+        when {
+            account == null || link.serverId == null || link.serverId != account.serverId -> null
+            quietReuse(link, account) || accounts.apiKey() == null -> null
+            else -> KeyReuseQuestion(ServerAddresses.host(link.url) ?: link.url, ServerAddresses.keySafe(link.url))
+        }
+    }
+
+    /**
+     * The key may go to [link] without asking: the host the account already uses, and not moved from https to an
+     * address where the key would travel in cleartext over a network that is not private.
+     */
+    private fun quietReuse(link: PairingLink, account: SyncAccount): Boolean {
+        if (!sameHost(link, account)) return false
+        val downgrade = scheme(account.url) == "https" && scheme(link.url) != "https"
+        return !downgrade || ServerAddresses.keySafe(link.url)
+    }
+
+    private fun scheme(url: String): String? = runCatching { URI(url).scheme }.getOrNull()?.lowercase(Locale.ROOT)
+
+    private fun sameHost(link: PairingLink, account: SyncAccount): Boolean {
+        val host = ServerAddresses.host(link.url)
+        return link.url.trimEnd('/') == account.url.trimEnd('/') ||
+            (host != null && host.equals(ServerAddresses.host(account.url), ignoreCase = true))
+    }
+
+    /** Whether [pair] may try this installation's key at a new address of the same server (ADR 0018 "W5 (f)"). */
+    enum class KeyReuse {
+        /** Only on the host the account already uses (a new port or scheme there; never https -> unsafe cleartext). */
+        AUTO,
+
+        /** The user confirmed the address is the same server: any address. */
+        CONFIRMED,
+
+        /** The user said no: a normal pairing (a new device keeping the library's sync state). */
+        DECLINED,
     }
 
     /** Forgets the server: the key, the cursors, the Server source and the cached server files. Local photos stay. */
     suspend fun unpair() = withContext(Dispatchers.IO) {
+        pendingSwitch = null
         mutex.withLock {
             accounts.clear()
             forgetLocked()
@@ -346,7 +561,7 @@ class SyncRepository(
         try {
             // Previews no longer needed stop being named before the push, so the blob run can drop them.
             uploader.markDrops()
-            val report = engine.sync(api, account.serverId)
+            val report = engine.sync(api, account.serverId, account.deviceId)
             // After the push: the server keeps an original while a live record names it.
             val deleted = uploader.deleteOriginals(api)
             if (deleted > 0) Log.i(TAG, "deleted $deleted originals from the server")

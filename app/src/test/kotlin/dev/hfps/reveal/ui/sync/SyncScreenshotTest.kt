@@ -84,6 +84,36 @@ class SyncScreenshotTest {
         }
     }
 
+    @Test fun keyReuseDark() = shoot("phone_key_reuse_dark") {
+        RevealTheme(darkTheme = true) {
+            SyncSettingsContent(
+                paired.copy(pairing = PairingState.ConfirmKeyReuse("203.0.113.7", protected = false)),
+                SyncActions(),
+                now = now,
+            )
+        }
+    }
+
+    @Test fun switchServerDark() = shoot("phone_switch_server_dark") {
+        RevealTheme(darkTheme = true) {
+            SyncSettingsContent(
+                paired.copy(pairing = PairingState.ConfirmSwitch("Studio NAS", "Pixel 8")),
+                SyncActions(),
+                now = now,
+            )
+        }
+    }
+
+    @Test fun pairedElsewhereLight() = shoot("phone_paired_elsewhere_light") {
+        RevealTheme(darkTheme = false) {
+            SyncSettingsContent(
+                paired.copy(pairing = PairingState.Failed(PairProblem.PAIRED_ELSEWHERE)),
+                SyncActions(),
+                now = now,
+            )
+        }
+    }
+
     @Test fun serverGrid() = shoot("phone_library_server_light") {
         val rows: List<PhotoRow> = LibrarySamples.rows.take(9).mapIndexed { i, row ->
             row.copy(remote = true, cloudOriginal = i % 3 != 2, cloudPreview = true)

@@ -1237,7 +1237,7 @@ sync (fingerprint, else `GET /v1/items?folder=<rootId>&path=` mirror location + 
 ./gradlew :core:sync:testDebugUnitTest --tests '*HoardTrashTest*' --tests '*PhoneBackupTest*' --tests '*FreedAdoptTest*' --tests '*SyncServerItemsTest*'
 ./gradlew :core:data:testDebugUnitTest --tests '*VanishedPhotosTest*' --tests '*BackupCoverageTest*' --tests '*RevealDatabaseMigrationTest*'
 adb -s emulator-<port> shell am instrument -w -e class dev.hfps.reveal.library.HoardTrashFlowTest dev.hfps.reveal.debug.test/androidx.test.runner.AndroidJUnitRunner
-# against hoard-server 0.11.0+ (trash; HOARD_SERVER_IMAGE=<image> until the pin moves): trash, restore, purge on the NAS dir
+# against the pinned hoard-server (0.11.0+, trash): trash, restore, purge on the NAS dir
 D=$(mktemp -d) && scripts/sync/local-server.sh start $D 3476 app/src/androidTest/assets/faces/studio-trio.jpg
 REVEAL_REPO=$PWD REVEAL_TRASH_DIR=$D REVEAL_TRASH_LINK=$(scripts/sync/local-server.sh pair $D) \
   ./gradlew --no-configuration-cache :core:sync:testDebugUnitTest --tests '*RealServerTrashTest*'; scripts/sync/local-server.sh stop $D

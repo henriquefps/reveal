@@ -29,7 +29,7 @@ import org.junit.runner.RunWith
  * link. Skipped without them; run with `--no-configuration-cache`:
  *
  * ```
- * D=$(mktemp -d) && HOARD_SERVER_IMAGE=<0.11.0 image> scripts/sync/local-server.sh start $D 3476 \
+ * D=$(mktemp -d) && scripts/sync/local-server.sh start $D 3476 \
  *   app/src/androidTest/assets/faces/studio-trio.jpg
  * REVEAL_TRASH_DIR=$D REVEAL_TRASH_LINK=$(scripts/sync/local-server.sh pair $D) \
  *   ./gradlew --no-configuration-cache :core:sync:testDebugUnitTest --tests '*RealServerTrashTest*'

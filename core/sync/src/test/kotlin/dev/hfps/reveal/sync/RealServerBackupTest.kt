@@ -457,20 +457,34 @@ class RealServerBackupTest {
     @Test
     fun aBadEntryIsRefusedOnItsOwnAndTheRestOfTheReportApplies() {
         val phone = phone()
-        val root = phone.hoard.addRoot("primary", "DCIM/Camera", listOf("image"))
+        // The whole primary volume, and a card's DCIM.
+        val volume = phone.hoard.addRoot("primary", "", listOf("image"))
+        val card = phone.hoard.addRoot("1a2b-3c4d", "DCIM", listOf("image"))
         val good = bytes()
-        val notes = bytes()
+        val other = bytes()
         val report = phone.hoard.report(
-            root,
+            volume,
             listOf(
                 entry("DCIM/Camera/${unique("PXL_K", "jpg")}", good),
-                entry("DCIM/Camera/${unique("notes", "txt")}", notes),
-                entry("Pictures/${unique("PXL_L", "jpg")}", notes),
+                entry("DCIM/Camera/${unique("notes", "txt")}", other),
+                // The tree keeps other volumes under "SD card <UUID>/": never a primary path.
+                entry("SD card 1A2B-3C4D/DCIM/${unique("PXL_L", "jpg")}", other),
+                entry("DCIM/../${unique("PXL_M", "jpg")}", other),
             ),
         )
         assertThat(report.status).isEqualTo(200)
-        assertThat(report.states()).containsExactly("missing", "refused", "refused").inOrder()
-        assertThat(report.reasons()).containsExactly(null, "unsupported_type", "outside_root").inOrder()
+        assertThat(report.states()).containsExactly("missing", "refused", "refused", "refused").inOrder()
+        assertThat(report.reasons())
+            .containsExactly(null, "unsupported_type", "reserved_prefix", "invalid_path").inOrder()
+        val outside = phone.hoard.report(
+            card,
+            listOf(
+                entry("DCIM/${unique("IMG_N", "jpg")}", bytes()),
+                entry("Pictures/${unique("IMG_O", "jpg")}", other),
+            ),
+        )
+        assertThat(outside.states()).containsExactly("missing", "refused").inOrder()
+        assertThat(outside.reasons()).containsExactly(null, "outside_root").inOrder()
     }
 
     /**

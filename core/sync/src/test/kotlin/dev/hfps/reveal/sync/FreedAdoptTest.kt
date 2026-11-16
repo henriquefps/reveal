@@ -43,7 +43,14 @@ class FreedAdoptTest {
         url = server.start()
         server.hoard()
         server.backup()
-        phone = TestDevice("Phone", url, server.addDevice("Phone"), server.serverId)
+        // A device that reports itself: its physical device id is known after the first sync (ownership needs it).
+        phone = TestDevice(
+            "Phone",
+            url,
+            server.addDevice("Phone"),
+            server.serverId,
+            device = dev.hfps.reveal.sync.account.ClientDevice("reveal", "Google", "Pixel 8"),
+        )
         camera = runBlocking {
             phone.db.sourceDao().insert(
                 SourceEntity(
@@ -271,9 +278,11 @@ class FreedAdoptTest {
         assertThat(get(printed)).isNotNull()
         assertThat(get(byPath)).isNotNull()
 
-        // Answered later: the server has nothing for either, so today's rule applies then.
+        // Not asked again at once (the next pass waits an hour), then answered: the server has nothing for either.
         server.refuseItemLookups = null
         server.refuseFolderQueries = false
+        assertThat(phone.sync().freed.deleted).isEqualTo(0)
+        phone.now += FreedPhotos.FIRST_RETRY_MS + 1
         assertThat(phone.sync().freed.deleted).isEqualTo(2)
     }
 
@@ -291,6 +300,7 @@ class FreedAdoptTest {
         assertThat(first.adopted).isEqualTo(FreedPhotos.MAX_ITEM_READS)
         assertThat(first.deleted).isEqualTo(0)
         assertThat(first.kept).isEqualTo(1)
+        phone.now += FreedPhotos.FIRST_RETRY_MS + 1
         assertThat(phone.sync().freed.adopted).isEqualTo(1)
         assertThat(ids.all { get(it)!!.sourceId == serverSource() }).isTrue()
     }
@@ -361,6 +371,16 @@ class FreedAdoptTest {
         phone.now += FreedPhotos.BACKOFF_MS + 1
         phone.sync()
         assertThat(server.folderQueries).isGreaterThan(queries)
+    }
+
+    @Test
+    fun `before this phone's physical device is known nothing unmatched is deleted`() {
+        runBlocking { phone.db.metaDao().delete(dev.hfps.reveal.sync.engine.SyncEngine.KEY_PHYSICAL_DEVICE) }
+        val id = photo("PXL_60.jpg", bytes(60), 0)
+        vanish(id)
+
+        assertThat(phone.sync().freed.deleted).isEqualTo(0)
+        assertThat(get(id)).isNotNull()
     }
 
     @Test

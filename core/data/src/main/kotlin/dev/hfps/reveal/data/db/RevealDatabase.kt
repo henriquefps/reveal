@@ -34,7 +34,8 @@ import androidx.sqlite.db.SupportSQLiteDatabase
  * | 15 | Dates and cameras (ADR 0006 "W3/D"): `photos.camera_make` / `camera_model` / `lens` / `metadata_version` |
  * |    | and their indexes ([Migration14To15]: Server photos without a capture time sort by their file's time or |
  * |    | go to "No date") |
- * | 16 | Hoard's trash and phone backup (ADR 0018 "R1"): `photo_files.trashed_at` / `vanished_at`, |
+ * | 16 | Hoard's trash and phone backup (ADR 0018 "R1"): `photo_files.trashed_at` / `vanished_at` / |
+ * |    | `vanish_asked_at` / `vanish_retries`, |
  * |    | `photos.forgotten_at`, `photo_cloud.lost_at` / `candidate_at`, `sync_uploads.retry_at` |
  *
  * Open it with [configure] (migrations and the sync triggers of [SyncTriggers]).

@@ -446,9 +446,13 @@ interface SyncDao {
     /** Files of folder photos a walk no longer lists, waiting for the server's word (`photo_files.vanished_at`). */
     @Query(
         "SELECT f.* FROM photo_files f JOIN sources s ON s.id = f.source_id WHERE s.kind = 'FOLDER' AND " +
-            "f.vanished_at IS NOT NULL ORDER BY f.photo_id, f.id",
+            "f.vanished_at IS NOT NULL ORDER BY COALESCE(f.vanish_asked_at, 0), f.photo_id, f.id",
     )
     suspend fun vanishedFiles(): List<PhotoFileEntity>
+
+    /** The freed-adopt pass asked about [photoId] without an answer it could act on ([retries] in a row). */
+    @Query("UPDATE photo_files SET vanish_asked_at = :at, vanish_retries = :retries WHERE photo_id = :photoId")
+    suspend fun vanishAsked(photoId: Long, at: Long, retries: Int)
 
     /** A freed file becomes the server's: its fingerprint (the item's), document id and path in the Server source. */
     @Query(

@@ -833,7 +833,8 @@ Hoard 2.3+ moves rejects into a trash the server sees (Hoard ADR 0023, hoard-ser
 up the phone itself into a per-phone mirror (Hoard ADR 0024, hoard-server 0.12.0, feature `backup`). Reveal follows
 both. Every addition is used only when `GET /v1/server` lists its feature; against older servers Reveal behaves as
 0.9.0, except for the purge fix below. Database v16 (auto-migration): `photo_files.trashed_at` / `vanished_at`,
-`photos.forgotten_at`, `photo_cloud.lost_at` / `candidate_at`, `sync_uploads.retry_at`.
+`photos.forgotten_at`, `photo_cloud.lost_at` / `candidate_at`, `sync_uploads.retry_at`,
+`photo_files.vanish_asked_at` / `vanish_retries`.
 
 ### The in-trash state (`trash`)
 
@@ -921,11 +922,15 @@ must never lose its edits because of that.
   - `gone: "freed"` → **adopted**; `gone: "deleted"`, an unknown value or no mirror location → adopted only when the
     photo carries an edit (a non-default recipe, a named or copied version, snapshots), else deleted;
   - `onDevice: true` (Hoard still sees it: the walk missed it) → it keeps waiting (the walk's bound applies) and is
-    not asked about again for 6 hours (`FreedPhotos.BACKOFF_MS`, `meta` `sync.freed.backoff`): no page walk per sync;
+    not asked about again for 6 hours (`FreedPhotos.BACKOFF_MS`): no page walk per sync;
   - no item → deleted, as before, but **only when the server fully answered**: the item lookup named nothing for its
     files or its item was read, or (a photo known only by its path) its directory's folder query was read to the end,
     or it is under no root of this phone and has no fingerprint. A refused lookup or folder query, a listing cut at
-    `MAX_PAGES`, the per-pass item-read cap (`MAX_ITEM_READS`, 500) or a backoff keep it for a later pass.
+    `MAX_PAGES`, the per-pass item-read cap (`MAX_ITEM_READS`, 500), a failed adoption or a backoff keep it for a
+    later pass. Every kept photo backs off (`photo_files.vanish_asked_at` / `vanish_retries`: 1 hour doubling to 6),
+    and the pass reads the oldest asked first, so photos without an answer never starve the read cap.
+  - Before this phone's physical device id is known (its first device report), nothing unmatched is deleted: whose
+    mirror location is whose cannot be judged yet.
   - Only **this phone's** mirror locations count (its root ids, or its physical device id from `meta`
     `sync.device.physical`): another phone's location at the same volume and path is never this file.
   - The pass acts on what it read: deleting or adopting re-checks, in its transaction, that the photo still has

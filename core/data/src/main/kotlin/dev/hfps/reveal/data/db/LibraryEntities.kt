@@ -199,6 +199,13 @@ data class PhotoFileEntity(
      * it was deleted (then it goes, as before). Null = listed by the last walk. A walk that lists it again clears it.
      */
     @ColumnInfo(name = "vanished_at") val vanishedAt: Long? = null,
+    /**
+     * While [vanishedAt] is set: when the freed-adopt pass last asked the server about this photo without an answer it
+     * could act on, and how many times in a row ([vanishRetries]); the next ask waits 1 hour, doubling to 6 hours,
+     * oldest asked first (ADR 0018 "R1").
+     */
+    @ColumnInfo(name = "vanish_asked_at") val vanishAskedAt: Long? = null,
+    @ColumnInfo(name = "vanish_retries", defaultValue = "0") val vanishRetries: Int = 0,
 )
 
 /**

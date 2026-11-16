@@ -4,7 +4,6 @@ package dev.hfps.reveal.sync.engine
 
 import android.util.Log
 import androidx.room.withTransaction
-import dev.hfps.reveal.data.db.MetaEntity
 import dev.hfps.reveal.data.db.PhotoEntity
 import dev.hfps.reveal.data.db.PhotoFileEntity
 import dev.hfps.reveal.data.db.RevealDatabase
@@ -59,11 +58,12 @@ class FreedPhotos(
         if (!info.has(SyncEngine.FEATURE_BACKUP)) return FreedReport(deleted = delete(expected))
         val roots = BackupCoverage.decode(meta.get(BackupCoverage.META_ROOTS))
         val mine = Owner(roots.map { it.id }.toSet(), meta.get(SyncEngine.KEY_PHYSICAL_DEVICE))
-        val backoff = backoff().filterKeys { it in waiting.keys }
         val now = clock()
+        // Oldest asked first (the query's order), so photos without an answer never starve the per-pass read cap.
         val all = waiting.mapNotNull { (photoId, files) -> candidate(photoId, files) }
-        // Photos the mirror last saw on the phone are not asked about again for a while (each one cost a page walk).
-        val resting = all.filter { (backoff[it.photo.id] ?: 0L) > now - BACKOFF_MS }
+        // Photos asked about recently without an answer to act on wait (1 h doubling to 6 h; 6 h when the mirror saw
+        // them on the phone): no page walk or item read for them on every sync.
+        val resting = all.filter { resting(it.files.first(), now) }
         val candidates = all - resting.toSet()
         val answers = Answers()
         byLocation(api, roots, mine, candidates, answers)
@@ -71,19 +71,27 @@ class FreedPhotos(
         var adopted = 0
         var kept = resting.size
         val deletes = HashMap<Long, Set<Long>>()
-        val nextBackoff = HashMap(backoff)
         for (candidate in candidates) {
             currentCoroutineContext().ensureActive()
             val id = candidate.photo.id
-            when (decide(candidate, answers.found[id], id in answers.answered)) {
-                Decision.ADOPT -> if (adopt(candidate, checkNotNull(answers.found[id]))) adopted++ else kept++
+            val retries = candidate.files.first().vanishRetries
+            when (decide(candidate, answers.found[id], id in answers.answered, mine)) {
+                Decision.ADOPT -> if (adopt(candidate, checkNotNull(answers.found[id]), mine)) {
+                    adopted++
+                } else {
+                    kept++
+                    sync.vanishAsked(id, now, retries + 1)
+                }
 
                 Decision.RECHECK -> {
                     kept++
-                    nextBackoff[id] = now
+                    sync.vanishAsked(id, now, MAX_RETRIES)
                 }
 
-                Decision.KEEP -> kept++
+                Decision.KEEP -> {
+                    kept++
+                    sync.vanishAsked(id, now, retries + 1)
+                }
 
                 Decision.DELETE -> deletes[id] = expected.getValue(id)
             }
@@ -91,7 +99,6 @@ class FreedPhotos(
         // Photos whose source or row went meanwhile have nothing left to decide.
         val gone = waiting.keys - all.map { it.photo.id }.toSet()
         for (id in gone) deletes[id] = expected.getValue(id)
-        saveBackoff(nextBackoff.filterKeys { it in waiting.keys && it !in deletes })
         val report = FreedReport(adopted, delete(deletes), kept)
         if (report != FreedReport()) log("vanished folder photos: $report")
         return report
@@ -132,7 +139,21 @@ class FreedPhotos(
         return Candidate(photo, files, base?.child(photo.folder), photos.isEdited(photoId))
     }
 
-    private fun decide(candidate: Candidate, match: Match?, answered: Boolean): Decision {
+    /** Whether [file]'s photo was asked about too recently to be asked again ([vanishAsked]'s backoff). */
+    private fun resting(file: PhotoFileEntity, now: Long): Boolean {
+        val asked = file.vanishAskedAt ?: return false
+        val wait = (FIRST_RETRY_MS shl (file.vanishRetries - 1).coerceIn(0, MAX_RETRIES)).coerceAtMost(BACKOFF_MS)
+        return asked > now - wait
+    }
+
+    private fun decide(candidate: Candidate, match: Match?, answered: Boolean, mine: Owner): Decision {
+        val decision = decideMatch(candidate, match, answered)
+        // Before this phone's physical device is known (its first device report), whose mirror location is whose cannot
+        // be judged: nothing is deleted then.
+        return if (decision == Decision.DELETE && mine.physical == null) Decision.KEEP else decision
+    }
+
+    private fun decideMatch(candidate: Candidate, match: Match?, answered: Boolean): Decision {
         // No item: deleted only when the server fully answered that it has none; any gap keeps it for a later pass.
         match ?: return if (answered) Decision.DELETE else Decision.KEEP
         val location = match.location
@@ -282,12 +303,13 @@ class FreedPhotos(
     }
 
     /** Adopts [candidate] with its item's fingerprints for the files it can name (by fingerprint, else by path). */
-    private suspend fun adopt(candidate: Candidate, match: Match): Boolean {
+    private suspend fun adopt(candidate: Candidate, match: Match, mine: Owner): Boolean {
         val files = HashMap<Long, String>()
         for (local in candidate.files) {
             val print = local.fingerprint?.takeIf { p -> match.item.files.any { it.fingerprint == p } }
                 ?: candidate.folder?.child(local.name)?.let { path ->
-                    match.item.files.firstOrNull { f -> f.locations.any { isAt(it, path) } }?.fingerprint
+                    match.item.files.firstOrNull { f -> f.locations.any { isAt(it, path) && mine.owns(it) } }
+                        ?.fingerprint
                 }
                 ?: match.item.files.firstOrNull { it.name.equals(local.name, ignoreCase = true) }?.fingerprint
             if (print != null) files[local.id] = print
@@ -322,20 +344,6 @@ class FreedPhotos(
         return removed
     }
 
-    /** `meta` [KEY_BACKOFF]: photo id -> when the mirror last said the phone still has it. */
-    private suspend fun backoff(): Map<Long, Long> = meta.get(KEY_BACKOFF).orEmpty().split(',').mapNotNull { entry ->
-        val (id, at) = entry.split('=').takeIf { it.size == 2 } ?: return@mapNotNull null
-        (id.toLongOrNull() ?: return@mapNotNull null) to (at.toLongOrNull() ?: return@mapNotNull null)
-    }.toMap()
-
-    private suspend fun saveBackoff(entries: Map<Long, Long>) {
-        if (entries.isEmpty()) {
-            meta.delete(KEY_BACKOFF)
-        } else {
-            meta.put(MetaEntity(KEY_BACKOFF, entries.entries.joinToString(",") { "${it.key}=${it.value}" }))
-        }
-    }
-
     private fun relative(root: BackupRoot, folder: StorageLocation): String {
         val base = root.path.trim('/')
         val path = folder.path.trim('/')
@@ -359,10 +367,12 @@ class FreedPhotos(
         private const val SQL_ARGS = 900
         private const val SECOND = 1000L
 
-        /** A photo the mirror still sees on the phone is asked about again after this long. */
+        /**
+         * The longest wait before asking about a photo again: one the mirror still sees on the phone waits this long,
+         * one without an answer to act on waits [FIRST_RETRY_MS] doubling up to it.
+         */
         const val BACKOFF_MS = 6L * 60 * 60 * 1000
-
-        /** `meta`: [BACKOFF_MS] stamps, `photoId=time`, `,` joined. */
-        const val KEY_BACKOFF = "sync.freed.backoff"
+        const val FIRST_RETRY_MS = 60L * 60 * 1000
+        private const val MAX_RETRIES = 4
     }
 }

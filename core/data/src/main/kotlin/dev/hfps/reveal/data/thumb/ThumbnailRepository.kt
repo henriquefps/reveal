@@ -164,7 +164,9 @@ class ThumbnailRepository(
         val kind = photo?.let { db.sourceDao().get(it.sourceId) }?.kind
         val server = kind == SourceKind.SERVER
         // A Server photo's thumbnail comes from a file the server holds (FIX/V).
-        val files = photos.files(photoId).let { all -> if (server) ServerTree.reachable(all) { it.onServer } else all }
+        val files = photos.files(photoId).let { all ->
+            if (server) ServerTree.reachable(all, ServerTree::servable) else all
+        }
         val main = files.firstOrNull { it.role == FileRole.RAW } ?: files.firstOrNull { it.role == FileRole.RENDERED }
         if (photo == null || main == null) return null
         val identity = FileIdentity(photo.sourceId.toString(), main.relativePath, main.size, main.modified)

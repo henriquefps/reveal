@@ -69,6 +69,8 @@
     <string name="sync_originals_subtitle">Fotos que só este aparelho tem são enviadas uma vez: as fotos que você editar, e todas as fotos de uma pasta marcada como “Tudo”. Fotos que o servidor já tem, como as das pastas do NAS, nunca são.</string>
     <string name="sync_folders_hint">Cada pasta faz backup dos originais das fotos que você editar; ligue uma para fazer backup de todas as fotos dela. Voltar para “Só as fotos que você editar” não apaga os originais que já estão no servidor.</string>
     <string name="sync_wifi_only">Originais só pelo Wi-Fi</string>
+    <string name="sync_wifi_only_subtitle">Vale para os originais que o próprio Reveal ainda envia: as pastas que o Hoard já guarda no backup deste celular ficam com o Hoard.</string>
+    <string name="sync_folder_hoard">Backup feito pelo Hoard neste celular</string>
     <string name="sync_handoff_backup">Fotos abertas de outros apps</string>
     <string name="sync_section_folders">O que cada pasta envia</string>
     <string name="sync_folder_everything">Tudo: todas as fotos que o servidor ainda não tem</string>

@@ -35,6 +35,12 @@ class FakeEdits(private val culling: FakeCulling, private val now: () -> Long) {
     val puts = ArrayList<Pair<String, Boolean>>()
     val deletes = ArrayList<String>()
 
+    /**
+     * Items in Hoard's trash (hoard-server 0.11.0, Hoard ADR 0023): the lookup lists their fingerprints as `missing`
+     * and a PUT answers `404`, while the stored edits stay.
+     */
+    val trashed = HashSet<String>()
+
     /** Answer the next PUT with this error (`status` to `code`, `reason`). */
     var failNext: Triple<Int, String, String?>? = null
 
@@ -65,7 +71,7 @@ class FakeEdits(private val culling: FakeCulling, private val now: () -> Long) {
             failNext = null
             return Answer.Error(status, code, reason?.let { buildJsonObject { put("reason", it) } })
         }
-        if (itemId !in culling.items) return Answer.Error(404, "not_found", null)
+        if (itemId !in culling.items || itemId in trashed) return Answer.Error(404, "not_found", null)
         val digest = request.headers["X-Hoard-Recipe-Digest"] ?: return Answer.Error(400, "invalid_request", null)
         val at = minOf(request.headers["X-Hoard-Edited-At"]!!.toLong(), now() + 600_000)
         val label = URLDecoder.decode(request.headers["X-Hoard-Label"].orEmpty(), "UTF-8")
@@ -139,7 +145,7 @@ class FakeEdits(private val culling: FakeCulling, private val now: () -> Long) {
     fun lookup(body: JsonObject): JsonObject {
         val fps = body["fingerprints"]!!.jsonArray.map { it.jsonPrimitive.content }
         val matches = fps.mapNotNull { fp ->
-            culling.items.entries.firstOrNull { fp in it.value }?.let { fp to it.key }
+            culling.items.entries.firstOrNull { fp in it.value && it.key !in trashed }?.let { fp to it.key }
         }
         return buildJsonObject {
             put(

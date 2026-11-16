@@ -9,5 +9,8 @@ object ViewerTags {
     const val INFO_ORIGINAL = "viewer-info-original"
     const val VERSIONS = "viewer-versions"
 
+    /** The note of a photo in Hoard's trash (ADR 0018 "R1"). */
+    const val IN_TRASH = "viewer-in-trash"
+
     fun star(n: Int) = "viewer-star-$n"
 }

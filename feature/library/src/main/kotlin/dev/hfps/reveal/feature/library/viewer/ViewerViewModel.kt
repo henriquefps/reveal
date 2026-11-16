@@ -56,6 +56,9 @@ interface ViewerPages {
 
     /** Nothing can show the photo (`PhotoAvailability`): the viewer draws the placeholder and its explanation. */
     suspend fun isUnavailable(id: Long): Boolean = false
+
+    /** The photo is in Hoard's trash (ADR 0018 "R1"): the viewer draws a note, never the image or the editor. */
+    suspend fun isInTrash(id: Long): Boolean = false
 }
 
 /** One viewer page: a photo's version (the photo's first one, or a virtual copy, docs/adr/0025). */
@@ -209,6 +212,8 @@ class ViewerViewModel @Inject constructor(
     override suspend fun originalPlace(id: Long): OriginalPlace? = library.originalPlace(id)
 
     override suspend fun isUnavailable(id: Long): Boolean = library.isUnavailable(id)
+
+    override suspend fun isInTrash(id: Long): Boolean = library.isInTrash(id)
 
     /** Explains why [id] cannot be shown and what to do (the placeholder's button). */
     fun explain(id: Long) {

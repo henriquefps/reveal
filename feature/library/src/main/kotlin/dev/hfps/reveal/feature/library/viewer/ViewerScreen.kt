@@ -169,6 +169,7 @@ fun ViewerScreen(
                             val conflict by produceState(false, p.id, state.conflictsResolved) {
                                 value = viewModel.hasConflict(p.id)
                             }
+                            val inTrash by produceState(false, p.id, state.reloads) { value = pages.isInTrash(p.id) }
                             ViewerControls(
                                 photo = p,
                                 onRate = { viewModel.rate(p.id, it) },
@@ -179,12 +180,18 @@ fun ViewerScreen(
                                 } else {
                                     null
                                 },
-                                onEdit = {
-                                    val versionId = currentPage?.versionId
-                                    if (versionId != null) {
-                                        onEdit(versionId, viewModel.strip)
-                                    } else {
-                                        scope.launch { viewModel.versionOf(p.id)?.let { onEdit(it, viewModel.strip) } }
+                                onEdit = if (inTrash) {
+                                    null
+                                } else {
+                                    {
+                                        val versionId = currentPage?.versionId
+                                        if (versionId != null) {
+                                            onEdit(versionId, viewModel.strip)
+                                        } else {
+                                            scope.launch {
+                                                viewModel.versionOf(p.id)?.let { onEdit(it, viewModel.strip) }
+                                            }
+                                        }
                                     }
                                 },
                             )
@@ -302,7 +309,7 @@ private fun ViewerControls(
     onRate: (Int) -> Unit,
     onFlag: (PickFlag) -> Unit,
     onInfo: () -> Unit,
-    onEdit: () -> Unit,
+    onEdit: (() -> Unit)?,
     modifier: Modifier = Modifier,
     onResolveConflict: (() -> Unit)? = null,
 ) {
@@ -360,12 +367,15 @@ private fun ViewerControls(
                     modifier = Modifier.padding(end = 8.dp).testTag(ConflictTags.VIEWER_RESOLVE),
                 )
             }
-            PrimaryButton(
-                text = stringResource(R.string.viewer_edit),
-                onClick = onEdit,
-                icon = PhosphorRegular.PencilSimple,
-                modifier = Modifier.testTag(ViewerTags.EDIT),
-            )
+            // A photo in Hoard's trash is never edited (R1): no Edit button.
+            if (onEdit != null) {
+                PrimaryButton(
+                    text = stringResource(R.string.viewer_edit),
+                    onClick = onEdit,
+                    icon = PhosphorRegular.PencilSimple,
+                    modifier = Modifier.testTag(ViewerTags.EDIT),
+                )
+            }
         }
     }
 }
@@ -387,6 +397,10 @@ private fun ViewerPage(
     val window = LocalWindowInfo.current.containerSize
     val longEdge = maxOf(window.width, window.height).coerceAtLeast(MIN_DISPLAY_EDGE)
     val image by produceState<Loaded?>(null, id, versionId, reloads) {
+        if (pages.isInTrash(id)) {
+            value = Loaded.InTrash(pages.detail(id)?.photo?.name.orEmpty())
+            return@produceState
+        }
         val display = pages.display(id, versionId, longEdge)
         value = if (display == null) {
             if (pages.isUnavailable(id)) {
@@ -425,6 +439,8 @@ private fun ViewerPage(
         }
 
         is Loaded.Unavailable -> UnavailablePage(loaded.name, onExplain)
+
+        is Loaded.InTrash -> InTrashPage(loaded.name)
 
         is Loaded.Image -> {
             val detail = rememberDetail(id, versionId, loaded, zoom, pages, active)
@@ -473,6 +489,34 @@ private fun UnavailablePage(name: String, onExplain: () -> Unit) {
     }
 }
 
+/** A photo in Hoard's trash (ADR 0018 "R1"): what happened and how it comes back; nothing to open or edit. */
+@Composable
+private fun InTrashPage(name: String) {
+    Column(
+        Modifier.fillMaxSize().padding(24.dp).testTag(ViewerTags.IN_TRASH),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+    ) {
+        Box(Modifier.size(UnavailableBox).clip(RevealTheme.shapes.card)) {
+            UnavailablePlaceholder(name, stringResource(R.string.library_in_trash_label))
+        }
+        Text(
+            stringResource(R.string.viewer_in_trash_title),
+            style = RevealTheme.typography.title,
+            color = RevealTheme.colors.foreground,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.padding(top = 20.dp),
+        )
+        Text(
+            stringResource(R.string.viewer_in_trash_body),
+            style = RevealTheme.typography.body,
+            color = RevealTheme.colors.mutedForeground,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.padding(top = 8.dp),
+        )
+    }
+}
+
 private val UnavailableBox = 180.dp
 
 private sealed interface Loaded {
@@ -480,6 +524,9 @@ private sealed interface Loaded {
 
     /** No file, no preview: the placeholder with its explanation (FIX/U). */
     class Unavailable(val name: String) : Loaded
+
+    /** In Hoard's trash: a note, never the image (R1). */
+    class InTrash(val name: String) : Loaded
 
     class Image(val bitmap: ImageBitmap, val fullSize: IntSize, val developed: Boolean) : Loaded
 }

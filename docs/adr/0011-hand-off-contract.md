@@ -669,3 +669,8 @@ granted by `am start --grant-read-uri-permission` as three silent members: each 
 copy completes through the service's grant, the grants end when it stops; with the service start disabled the same
 copies fail with `SecurityException`).
 
+
+## Amendment R1 (0.10.0, docs/adr/0018 "R1")
+
+Hand-offs are never covered by Hoard's phone backup (only `ExternalStorageProvider` folders can be): their originals
+follow "Photos opened from other apps" as before, uploaded at once when they are candidates.

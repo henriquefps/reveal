@@ -381,3 +381,14 @@ read at that path, or its record dropped because the file disappeared) only the 
 (non-default: rating != 0, flag != none, label non-empty; an explicit 0 stars is no value); later reads of the same file
 import the fields that changed since the last read (LWW by mtime). The rule is shared with Hoard and hoard-server; the
 full wording is ADR 0026 "First read of a sidecar".
+
+## Amendment R1 (0.10.0, docs/adr/0018 "R1")
+
+- The home lists neither Server photos in Hoard's trash (`PhotoQuerySql.IN_TRASH_SQL`, shown only with the Sync
+  filter's "In Hoard's trash", token `s:IN_TRASH`) nor folder photos waiting for the server's word after their files
+  vanished (`VANISHED_SQL`, `photo_files.vanished_at`). A Server photo the server lost (`photo_cloud.lost_at`) is
+  listed as unavailable.
+- A walk no longer deletes a photo whose every file is gone while paired (or, unpaired, one with an edit): it waits up
+  to 7 days for the sync engine's freed-adopt pass (docs/adr/0018 "R1").
+- "Remove from Reveal" stamps `photos.forgotten_at`; only such photos come back by themselves when their file is back
+  on the server.

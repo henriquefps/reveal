@@ -15,7 +15,7 @@ backup).
   cloud library.
 - A backup of his photos and edits on his own server, not a third-party cloud.
 - The same model as his other apps' sync servers (Markdown Previewer `markdown-preview-sync`, Designer
-  `designer-sync`): one small Go program, data in one folder he owns, running on `cachyos-fps`,
+  `designer-sync`): one small Go program, data in one folder he owns, running on the home Linux machine,
   reached through Cloudflare Tunnel (or Tailscale) away from home.
 
 ## How Reveal holds photos today
@@ -50,7 +50,7 @@ background, is the content address for uploads.
    fingerprint the server already has (it is in an indexed NAS folder, or another device uploaded it)
    is never uploaded again: editing a NAS photo syncs only its edits. A per-folder switch turns the
    backup off (decided with the owner, 2026-11-11).
-4. **The SMB share:** `cachyos-fps` is on the same network as the NAS, so the server can index NAS
+4. **The SMB share:** the home Linux machine is on the same network as the NAS, so the server can index NAS
    folders directly and serve them, with no upload from the phone. The tablet then sees the NAS shoots
    and their edits even away from home, through the tunnel.
 
@@ -88,7 +88,7 @@ on the LAN/Tailscale unless the owner enables it through the tunnel):
 - Status: photos, previews, originals, pending uploads, errors.
 
 Docker Compose mounts the volumes: `/data` (database and settings), the backup root (for example a
-folder on the NAS or on `cachyos-fps`'s disk) and the NAS shoots read-only. The UI only picks among
+folder on the NAS or on the home Linux machine's disk) and the NAS shoots read-only. The UI only picks among
 those mounts, so the container never sees anything else.
 
 ### App side

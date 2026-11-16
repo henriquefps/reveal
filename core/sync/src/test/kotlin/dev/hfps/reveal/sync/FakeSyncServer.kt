@@ -4,6 +4,8 @@
     "ReturnCount",
     "LongParameterList",
     "LoopWithTooManyJumpStatements",
+    "LargeClass",
+    "ComplexCondition",
 )
 
 package dev.hfps.reveal.sync
@@ -254,8 +256,11 @@ class FakeSyncServer(val serverId: String = "858e1b9d-0000-4000-8000-00000000000
             }
 
             method == "GET" && url.pathSegments.size == 3 && path.startsWith("/v1/items/") &&
-                path != "/v1/items/changes" && "items" in features ->
+                path != "/v1/items/changes" && "items" in features -> {
+                itemReads++
+                onItemRead?.invoke()
                 itemRecords[url.pathSegments[2]]?.let(::ok) ?: error(404, "not_found")
+            }
 
             path == "/v1/culling" && method == "POST" && "culling" in features ->
                 ok(culling.push(device, json.parseToJsonElement(request.body!!.utf8()).jsonObject))
@@ -278,12 +283,14 @@ class FakeSyncServer(val serverId: String = "858e1b9d-0000-4000-8000-00000000000
             }
 
             path == "/v1/device" && "device-identity" in features && method == "GET" ->
-                ok(culling.view(device, deviceNames))
+                ok(withBackup(culling.view(device, deviceNames)))
 
             path == "/v1/device" && "device-identity" in features && method == "PATCH" -> {
                 culling.patch(device, json.parseToJsonElement(request.body!!.utf8()).jsonObject)
-                ok(culling.view(device, deviceNames))
+                ok(withBackup(culling.view(device, deviceNames)))
             }
+
+            path == "/v1/items" && method == "GET" && "items" in features -> folderItems(request)
 
             path == "/v1/device/claim" && "device-identity" in features -> {
                 val target = json.parseToJsonElement(request.body!!.utf8()).jsonObject["physicalDeviceId"]
@@ -337,6 +344,10 @@ class FakeSyncServer(val serverId: String = "858e1b9d-0000-4000-8000-00000000000
     /** ADR 0017 "Deleting an original": an uploaded original no live photo record names. */
     private fun deleteOriginal(fp: String): MockResponse {
         if (deleteOriginalUnsupported) return error(405, "method_not_allowed")
+        // Hoard ADR 0024: a mirror entry names it; nothing is deleted.
+        if ("backup" in features && fp in mirrorFingerprints) {
+            return error(409, "conflict", buildJsonObject { put("reason", "mirror") })
+        }
         val sha = originals[fp]
         if (sha == null) {
             return if (nasBytes.containsKey(fp)) {
@@ -592,7 +603,17 @@ class FakeSyncServer(val serverId: String = "858e1b9d-0000-4000-8000-00000000000
 
     private fun createUpload(device: String, request: RecordedRequest): MockResponse {
         val o = json.parseToJsonElement(request.body!!.utf8()).jsonObject
+        uploadRequests += o
         val sha = o["sha256"]!!.jsonPrimitive.content
+        val wait = o["wait"]?.jsonPrimitive?.booleanOrNull == true
+        if (wait && "backup" in features && sha in inProgress && !blobs.containsKey(sha)) {
+            return ok(
+                buildJsonObject {
+                    put("status", "in_progress")
+                    inProgress.getValue(sha)?.let { put("retryAfter", it) }
+                },
+            )
+        }
         val fp = o["fingerprint"]?.jsonPrimitive?.content
         if ((o["kind"]!!.jsonPrimitive.content == "preview") == (fp != null)) return error(422, "invalid_request")
         if (blobs.containsKey(sha)) {
@@ -737,6 +758,214 @@ class FakeSyncServer(val serverId: String = "858e1b9d-0000-4000-8000-00000000000
     }
 
     fun record(kind: String, id: String): Record? = records[kind to id]
+
+    // ------------------------------------------------------------------ Hoard's trash (hoard-server 0.11.0)
+
+    /** Turns on `trash` (Hoard ADR 0023): the NAS feed's `trashed`. */
+    fun trash() {
+        if ("trash" !in features) features += "trash"
+    }
+
+    /** The NAS file at [path] moved into Hoard's trash: its row removed with `trashed` (the server still serves it). */
+    fun trashNasFile(folderId: String, path: String) {
+        val live = lastNasRow(folderId, path)
+        nasFiles += JsonObject(live + mapOf("removed" to JsonPrimitive(true), "trashed" to JsonPrimitive(true)))
+    }
+
+    /** Restored from Hoard's trash: the same row live again (same path and fingerprint). */
+    fun restoreNasFile(folderId: String, path: String) {
+        val row = nasFiles.last { it.matches(folderId, path) && it["removed"]?.jsonPrimitive?.boolean == false }
+        nasFiles += row
+    }
+
+    /** Emptied from Hoard's trash (or deleted on the NAS): the row removed without `trashed`, the bytes gone. */
+    fun purgeNasFile(folderId: String, path: String) {
+        val live = lastNasRow(folderId, path)
+        nasFiles += JsonObject(live - "trashed" + mapOf("removed" to JsonPrimitive(true)))
+        live["fingerprint"]?.jsonPrimitive?.content?.let { nasBytes.remove(it) }
+    }
+
+    private fun JsonObject.matches(folderId: String, path: String) =
+        this["folderId"]?.jsonPrimitive?.content == folderId && this["path"]?.jsonPrimitive?.content == path
+
+    private fun lastNasRow(folderId: String, path: String): JsonObject = nasFiles.last {
+        it.matches(folderId, path) && it["fingerprint"] != null
+    }
+
+    // ------------------------------------------------------------------ phone backup (hoard-server 0.12.0)
+
+    /** One backup root of a physical device (Hoard ADR 0024). */
+    class Root(
+        val id: String,
+        val physicalDeviceId: String,
+        val volume: String,
+        val path: String,
+        val types: List<String>,
+        var active: Boolean,
+    )
+
+    val roots = ArrayList<Root>()
+
+    /** `sha256` -> `retryAfter` (null = absent) of uploads another device has running: `wait` answers `in_progress`. */
+    val inProgress = HashMap<String, Long?>()
+
+    /** Every `POST /v1/uploads` body, in order. */
+    val uploadRequests: MutableList<JsonObject> = java.util.Collections.synchronizedList(ArrayList())
+
+    /** Fingerprints a mirror entry names: `DELETE /v1/originals` answers `409 mirror`. */
+    val mirrorFingerprints = HashSet<String>()
+
+    /** Turns on `backup` (Hoard ADR 0024): roots in `GET /v1/device`, `wait`, `409 mirror`, mirror locations. */
+    fun backup() {
+        if ("backup" !in features) features += "backup"
+    }
+
+    /** A root of [physicalDeviceId] (a device id: each device is its own physical device unless claimed). */
+    fun addRoot(
+        physicalDeviceId: String,
+        volume: String,
+        path: String,
+        types: List<String> = listOf("image", "video", "raw", "sidecar"),
+        active: Boolean = true,
+    ): Root = Root(UUID.randomUUID().toString(), physicalDeviceId, volume, path, types, active).also { roots += it }
+
+    /**
+     * A phone file Hoard backed up (Hoard ADR 0024 "Mirror items"): an item with a `backup` location (its bytes stored
+     * as an original) and a `mirror` location at [phonePath] on [volume] of [root], with [onDevice] and [gone]. Returns
+     * the item id.
+     */
+    fun addMirrorItem(
+        root: Root,
+        volume: String,
+        phonePath: String,
+        bytes: ByteArray,
+        modifiedAt: Long,
+        onDevice: Boolean,
+        gone: String?,
+        role: String = "rendered",
+    ): String {
+        putOriginal(bytes, device = "hoard")
+        val fp = dev.hfps.image.source.FileFingerprint.of(bytes)
+        mirrorFingerprints += fp
+        val id = culling.addItem(listOf(fp))
+        itemRecords[id] = buildJsonObject {
+            put("id", id)
+            put("rev", 1)
+            put("deleted", false)
+            put("mainFingerprint", fp)
+            put(
+                "files",
+                buildJsonArray {
+                    add(
+                        buildJsonObject {
+                            put("fingerprint", fp)
+                            put("role", role)
+                            put("name", phonePath.substringAfterLast('/'))
+                            put("size", bytes.size)
+                            put(
+                                "locations",
+                                buildJsonArray {
+                                    add(
+                                        buildJsonObject {
+                                            put("source", "backup")
+                                            put("sha256", originals.getValue(fp))
+                                        },
+                                    )
+                                    add(
+                                        buildJsonObject {
+                                            put("source", "mirror")
+                                            put("physicalDeviceId", root.physicalDeviceId)
+                                            put("deviceName", "Phone")
+                                            put("rootId", root.id)
+                                            put("volume", volume)
+                                            put("path", phonePath)
+                                            put("modifiedAt", modifiedAt)
+                                            put("onDevice", onDevice)
+                                            gone?.let { put("gone", it) }
+                                        },
+                                    )
+                                },
+                            )
+                        },
+                    )
+                },
+            )
+        }
+        return id
+    }
+
+    /** Answer `GET /v1/items?folder=` with `400` (a server that refuses the query). */
+    var refuseFolderQueries = false
+
+    /** Called on every `GET /v1/items/{id}` (a test changes the device's database while the server answers). */
+    var onItemRead: (() -> Unit)? = null
+
+    /** How many `GET /v1/items/{id}` were answered. */
+    @Volatile
+    var itemReads = 0
+
+    /** How many `GET /v1/items?folder=` pages were answered. */
+    @Volatile
+    var folderQueries = 0
+
+    /** `GET /v1/items?folder=<root>&path=<dir>`: the items with a mirror location under that directory of the root. */
+    private fun folderItems(request: RecordedRequest): MockResponse {
+        val url = request.url
+        val folder = url.queryParameter("folder") ?: return error(400, "invalid_request")
+        val root = roots.firstOrNull { it.id == folder } ?: return error(400, "invalid_request")
+        if (refuseFolderQueries) return error(400, "invalid_request")
+        folderQueries++
+        val dir = listOf(root.path, url.queryParameter("path").orEmpty()).filter { it.isNotEmpty() }.joinToString("/")
+        val limit = url.queryParameter("limit")?.toInt() ?: 200
+        val from = url.queryParameter("cursor")?.toInt() ?: 0
+        val all = itemRecords.values.filter { item ->
+            item["files"]!!.jsonArray.any { f ->
+                f.jsonObject["locations"]!!.jsonArray.any { l ->
+                    val o = l.jsonObject
+                    val path = o["path"]?.jsonPrimitive?.content.orEmpty()
+                    o["source"]?.jsonPrimitive?.content == "mirror" && o["rootId"]?.jsonPrimitive?.content == root.id &&
+                        (dir.isEmpty() || path.startsWith("$dir/"))
+                }
+            }
+        }
+        val page = all.drop(from).take(limit)
+        val more = from + page.size < all.size
+        return ok(
+            buildJsonObject {
+                put("items", JsonArray(page))
+                put("cursor", if (more) JsonPrimitive((from + page.size).toString()) else JsonNull)
+                put("hasMore", more)
+            },
+        )
+    }
+
+    /** `physicalDevice.backup` of the device view, with `backup` on (its roots, `[]` when none). */
+    private fun withBackup(view: JsonObject): JsonObject {
+        if ("backup" !in features) return view
+        val physical = view["physicalDevice"]!!.jsonObject
+        val group = physical["id"]!!.jsonPrimitive.content
+        val backup = buildJsonObject {
+            put(
+                "roots",
+                buildJsonArray {
+                    roots.filter { it.physicalDeviceId == group }.forEach { root ->
+                        add(
+                            buildJsonObject {
+                                put("id", root.id)
+                                put("volume", root.volume)
+                                put("path", root.path)
+                                put("app", "hoard")
+                                put("active", root.active)
+                                put("since", 1_700_000_000_000L)
+                                put("types", buildJsonArray { root.types.forEach { add(JsonPrimitive(it)) } })
+                            },
+                        )
+                    }
+                },
+            )
+        }
+        return JsonObject(view + ("physicalDevice" to JsonObject(physical + ("backup" to backup))))
+    }
 
     /** Stores [bytes] as an uploaded original (as a device's backup would). */
     @Synchronized

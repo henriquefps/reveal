@@ -6,6 +6,27 @@ All notable changes to Reveal are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- Hoard's trash: photos of the server's NAS folders that you move to Hoard's trash leave the library instead of
+  becoming photos that fail to open. A new Sync filter, "In Hoard's trash", lists them (as placeholders; they cannot be
+  opened or edited there). Restoring them in Hoard brings them back with their edits, ratings and flags.
+- One backup per phone with Hoard: folders of this phone that Hoard's backup covers show "Backed up by Hoard" in
+  Settings › Sync and Manage folders. Reveal leaves their originals to Hoard and uploads one itself only if, a day after
+  it needed backing up, the server still does not have it. Two devices never upload the same file at the same time.
+- Photos Hoard frees from the phone after backing them up stay in Reveal as server photos, with their edits, versions,
+  ratings and flags.
+
+### Changed
+- "Originals over Wi-Fi only" now says it applies to the originals Reveal still uploads itself.
+- "Delete from server" tells you when a file stays on the server because it is in this phone's backup by Hoard.
+- A folder photo whose file disappears no longer leaves the library at once while Reveal is paired: it waits, hidden,
+  until the server says whether Hoard freed it (at most a week).
+
+### Fixed
+- An edited photo whose file was deleted from the server's NAS (or emptied from Hoard's trash) shows as unavailable,
+  with "Remove from Reveal", instead of a cell that fails to open. If you removed it and its file comes back, it shows
+  again.
+
 ## [0.9.0] - 2026-11-15
 
 ### Added

@@ -35,7 +35,7 @@ you do not report to the session that wrote this plan. The owner is Henrique; wr
   report aggregates only. Committed fixtures and PR screenshots use public-domain/CC0 images
   (e.g. raw.pixls.us) or synthetic ones.
 - **This Mac's memory is precious** (it is the owner's desktop): run at most two emulators at once,
-  shut them down when done. Heavy long-running services belong on `cachyos-fps` (`remote-ssh` skill),
+  shut them down when done. Heavy long-running services belong on the home Linux machine (`remote-ssh` skill),
   but Android builds and phone installs happen here.
 - Never cut scope or quality for time; this plan is the bar.
 - Public repo, AGPL-3.0-or-later. Third-party code and models: licences checked and listed in the

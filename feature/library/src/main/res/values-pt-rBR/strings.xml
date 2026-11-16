@@ -257,6 +257,18 @@
     </plurals>
     <string name="library_delete_server_body">As edições, estrelas e originais com backup são excluídos do servidor e dos seus outros aparelhos. Os arquivos nas pastas dos seus aparelhos e nas pastas do NAS do servidor não são tocados.</string>
     <string name="library_delete_server_confirm">Excluir</string>
+    <plurals name="library_kept_by_phone_backup">
+        <item quantity="one">%1$d arquivo continua no servidor: está no backup deste celular feito pelo Hoard</item>
+        <item quantity="many">%1$d arquivos continuam no servidor: estão no backup deste celular feito pelo Hoard</item>
+        <item quantity="other">%1$d arquivos continuam no servidor: estão no backup deste celular feito pelo Hoard</item>
+    </plurals>
+    <string name="library_filter_in_trash">Na lixeira do Hoard</string>
+    <string name="library_in_trash_label">Na lixeira</string>
+    <string name="library_in_trash_cell">Na lixeira do Hoard: restaure no Hoard para abrir ou editar</string>
+    <string name="viewer_in_trash_title">Na lixeira do Hoard</string>
+    <string name="viewer_in_trash_body">Esta foto foi para a lixeira do Hoard, então o Reveal não consegue abri-la em tamanho original nem editá-la. As edições ficam guardadas: restaure no Hoard e ela volta aqui.</string>
+    <string name="library_unavailable_reason_server">O arquivo não está mais no servidor: foi excluído do NAS ou a lixeira do Hoard foi esvaziada.</string>
+    <string name="library_backed_up_by_hoard">Backup feito pelo Hoard</string>
     <plurals name="library_deleted_server">
         <item quantity="one">%1$d foto excluída do servidor</item>
         <item quantity="many">%1$d fotos excluídas do servidor</item>

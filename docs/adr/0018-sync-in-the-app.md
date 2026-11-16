@@ -562,7 +562,7 @@ left open while the editor shows the photo or after the export.
 
 ### Measurements (W3/C)
 
-Galaxy S24 Ultra, debug builds, local hoard-server 0.9.0 (loopback on cachyos-fps, `ssh -R` + `adb reverse`), 21,000
+Galaxy S24 Ultra, debug builds, local hoard-server 0.9.0 (loopback on the home Linux machine, `ssh -R` + `adb reverse`), 21,000
 synthetic NAS JPEGs + 6 CC0 ZV-E10 RAW copies, 300 of the JPEGs also handed over through the debug provider.
 
 | | 0.8.0 | 0.9.0 (W3/C) |
@@ -826,3 +826,139 @@ paging by photo id), `KeptServerPhotosTest` (another server never hears of kept 
 again, removal, rebase onto an own record vs another device's conflict), `RealServerRecoveryTest`
 (pinned hoard-server: one orphan per device, edited previews uploaded, revoke and claim through the admin API and
 `/v1/device/claim`; `REVEAL_RECOVERY_DIR`).
+
+## Amendment R1 (0.10.0): Hoard's trash and one backup per phone
+
+Hoard 2.3+ moves rejects into a trash the server sees (Hoard ADR 0023, hoard-server 0.11.0, feature `trash`) and backs
+up the phone itself into a per-phone mirror (Hoard ADR 0024, hoard-server 0.12.0, feature `backup`). Reveal follows
+both. Every addition is used only when `GET /v1/server` lists its feature; against older servers Reveal behaves as
+0.9.0, except for the purge fix below. Database v16 (auto-migration): `photo_files.trashed_at` / `vanished_at`,
+`photos.forgotten_at`, `photo_cloud.lost_at` / `candidate_at`, `sync_uploads.retry_at`,
+`photo_files.vanish_asked_at` / `vanish_retries`.
+
+### The in-trash state (`trash`)
+
+- The NAS feed's `removed: true, trashed: true` keeps the Server source's file row with `trashed_at` (Reveal chose to
+  keep **every** trashed photo, edited or not: it costs one row and gives the trash a filter). A Server photo with a
+  trashed file and no live file the server serves (`on_server` and not trashed) is **in Hoard's trash**
+  (`PhotoQuerySql.IN_TRASH_SQL`): out of the home, the Server scope, every count (`LISTED_SQL`,
+  `observeServerPhotoCount`), and listed only with the Sync filter's **In Hoard's trash** (`SyncFilter.IN_TRASH`,
+  token `s:IN_TRASH`, its count `FilterCounts.inTrash`; the choice shows only while something is in the trash). Its
+  cell is a placeholder ("In trash"); the viewer shows a note ("restore it in Hoard") and no Edit button; it is never
+  opened full size or edited, although the server still serves the bytes until a purge. Trashed files are never
+  "servable" (`ServerTree.servable`).
+- **Restore** (the same path and fingerprint live again) clears `trashed_at`: the photo is back with its uuid,
+  versions, edits and culling. A file that comes back as a new row (a server without `trash`, a file put back) still
+  links by folder + stem, as before.
+- **Purge** (the row again with `removed` and no `trashed`, and any removal on a server without `trash`) deletes the
+  row; when the photo is left with nothing the server serves, `original_on_server` is cleared, and a photo Reveal
+  keeps (an edit, a hand-off, a record: `deleteEmptyServerPhotos` leaves it) gets `lost_at`. A lost Server photo is
+  **unavailable** (`UNAVAILABLE_SQL` has a Server branch; `UnavailableReason.SERVER`): the placeholder, the sheet and
+  "Remove from Reveal", never a cell that fails to open (0.9.0's broken cell). A file of it that comes back clears it.
+- **Forgot, then restored**: "Remove from Reveal" now stamps `photos.forgotten_at` on the photos it hides. When a file
+  of such a Server photo is live on the server again, the photo is shown again and its record goes up (`hidden` false
+  on every device). Photos hidden any other way (Remove from library, another device's record) stay hidden.
+- Edited previews are unchanged: a trashed item is `missing` in the lookup and a `PUT` answers `404`, so nothing is
+  sent or lost; after a restore the server's edit is the current one again and nothing is uploaded twice
+  (`HoardTrashTest`).
+- Hoard ADR 0023 amendment S1 (hoard-server 0.11.0): a JPEG trashed alone is a trashed item of its own while its RAW
+  stays live; Reveal sees only that file's row trashed, so the photo keeps its live RAW, is not "in Hoard's trash" and
+  opens from the RAW. `POST /v1/items/lookup` leaves trashed items out (`missing`) without `include=trash`, while
+  `POST /v1/fingerprints/lookup` and `GET /v1/originals` still find a trashed file until it is purged: `on_server`,
+  `original_on_server` and the 24-hour re-lookup may keep counting a trashed file as on the server, which is true
+  until the purge. With `trash`, a purge of a NAS file therefore makes this device's own copies of that content that
+  it believed on the server ask again (`SyncDao.askAgain`: `on_server` and the photo's lookup reset), so a phone copy
+  whose only server copy was emptied from the trash is backed up instead of being believed on the server for good.
+  Without `trash` the feed's removals leave local copies as 0.9.0 did (no mass re-lookup on a first pull). Reveal never sends
+  `include=trash`. Real server: `RealServerTrashTest` (a NAS file moved into `.hoard-trash/<day>/` and back, then
+  purged).
+
+### Covered folders and the 24-hour grace (`backup`)
+
+- Each sync run reads `GET /v1/device` `physicalDevice.backup.roots` (`volume`, `path`, `types`, `active`, `since`) and
+  keeps them in `meta` `sync.backup.roots` (`BackupCoverage.META_ROOTS`; removed when the server does not list
+  `backup`, on unpairing and on a new device). `BackupCoverage` (`:core:data`, pure) maps a folder source of
+  `com.android.externalstorage.documents` (`primary:DCIM/Camera` = volume `primary`, path `DCIM/Camera`) to a location;
+  any other provider is never covered. A folder is covered by an **active** root whose volume equals it (any case) and
+  whose path is equal or a prefix at `/`; a file is covered when its kind is in the root's `types` (`image` = JPEG,
+  HEIF, PNG, WebP and the RAWs MediaStore lists; `raw` = every RAW, CR3 included; `sidecar`; `video`; anything else is
+  never covered).
+- `BlobUploader.originals`: a candidate (`backupCandidates`: backup-on folders and edited photos, the shot's main
+  file, which is the RAW of a pair) whose file is covered starts a **24-hour grace** (`photo_cloud.candidate_at`, set the
+  first time it is seen as a candidate, never reused from `edited_at`); `backupCandidates(limit, waitedSince)` leaves
+  it out until then, so waiting candidates never starve the others. After the grace it is looked up again
+  (`POST /v1/fingerprints/lookup`): found = on the server (Hoard backed it up), missing = queued. Uncovered files go at
+  once, as before.
+- `POST /v1/uploads` carries `"wait": true` for originals when the server lists `backup` (`claim` stays absent: Reveal's
+  uploads keep claiming). `status: "in_progress"` leaves the upload pending with `retry_at` = now + `retryAfter`
+  (300 s when absent): never a failure, never a second upload in parallel (`SyncDao.dueOriginals`).
+- Settings › Sync: a covered folder shows "Backed up by Hoard on this phone" (read only) instead of its switch, and
+  "Originals over Wi-Fi only" says it applies to what Reveal still uploads. Manage folders: the folder's menu shows
+  "Backed up by Hoard" instead of the backup choice (`SourceItem.coveredByHoard`).
+
+### `409 mirror`
+
+`DELETE /v1/originals/{fp}` answering `409` with `details.reason = "mirror"` (`DropResult.MIRROR`) ends the queued
+delete at once, keeps `on_server` true (the file is in the phone's backup) and counts it in `meta` `sync.mirrorKept`;
+the library shows "N files stay on the server: they are in this phone's backup by Hoard" once, where "Delete from
+server" reports its result (`SyncRepository.mirrorKept`).
+
+### Freed-adopt and the offline rule
+
+Hoard's "Free up space" deletes phone files it verified on the server. A folder photo whose files vanished from a walk
+must never lose its edits because of that.
+
+- `LibraryIndexer.save`: a photo whose **every** file is gone is not deleted; its files get `vanished_at` and the photo
+  waits, **unlisted** (`VANISHED_SQL` in `LISTED_SQL`, the grid query and the folder counts). Paired (`meta`
+  `sync.tracking`), every such photo waits; unpaired, only one with an edit (the server cannot be asked, and an
+  unedited deletion needs no answer). A file listed again clears the mark. After **7 days** (`VANISHED_WAIT_MS`) a walk
+  applies today's rule (deleted). A photo that loses only some files (the JPEG of a pair) is handled as before.
+- `engine/FreedPhotos` (every sync run, after the lookups): without `backup` the server cannot have freed anything and
+  waiting photos are deleted at once. With it, each waiting photo's item is found by fingerprint (any file) when Reveal
+  has one, else by its mirror location: `GET /v1/items?folder=<rootId>&path=<dir>` (one paged query per directory
+  under any root of this phone, stopped and paused ones too), the `mirror` location whose `volume` (any case) and
+  `path` are the file's, confirmed by the member's size and the location's `modifiedAt` to the second (MediaStore keeps
+  seconds). Folders under no root fall back to `POST /v1/items/lookup` + `GET /v1/items/{id}`. Then:
+  - `gone: "freed"` → **adopted**; `gone: "deleted"`, an unknown value or no mirror location → adopted only when the
+    photo carries an edit (a non-default recipe, a named or copied version, snapshots), else deleted;
+  - `onDevice: true` (Hoard still sees it: the walk missed it) → it keeps waiting (the walk's bound applies) and is
+    not asked about again for 6 hours (`FreedPhotos.BACKOFF_MS`): no page walk per sync;
+  - no item → deleted, as before, but **only when the server fully answered**: the item lookup named nothing for its
+    files or its item was read, or (a photo known only by its path) its directory's folder query was read to the end,
+    or it is under no root of this phone and has no fingerprint. A refused lookup or folder query, a listing cut at
+    `MAX_PAGES`, the per-pass item-read cap (`MAX_ITEM_READS`, 500), a failed adoption or a backoff keep it for a
+    later pass. Every kept photo backs off (`photo_files.vanish_asked_at` / `vanish_retries`: 1 hour doubling to 6),
+    and the pass reads the oldest asked first, so photos without an answer never starve the read cap.
+  - Before this phone's physical device id is known (its first device report), nothing unmatched is deleted: whose
+    mirror location is whose cannot be judged yet.
+  - Only **this phone's** mirror locations count (its root ids, or its physical device id from `meta`
+    `sync.device.physical`): another phone's location at the same volume and path is never this file.
+  - The pass acts on what it read: deleting or adopting re-checks, in its transaction, that the photo still has
+    exactly the vanished files it started from (`SyncStore.stillVanished`); a photo a walk listed again meanwhile is
+    left alone.
+- Adoption (`SyncStore.adoptFreed`) is W3/C's in place: the same row keeps its uuid, versions, edits, history and
+  culling; each file the item names takes the item's fingerprint, `freed/<fingerprint>/<name>` in the Server source
+  and the server's document id, `on_server` set; the photo's other files go; the photo moves to the Server source under
+  its phone folder (`DCIM/Camera`, made unique on a clash), sidecar link dropped, pending uploads cancelled, original
+  marked (`nas` or `backup` by the item's locations). Quiet: nothing changes for other devices. The NAS feed never
+  replaces an adopted file (`keepAdopted` knows both prefixes).
+- `PATCH /v1/device` `features` adds `"freed-adopt"` (next to `culling`) only when the server lists `backup` and this
+  installation knows its physical device (learned from the first report): from then on Hoard may free shots that
+  Reveal's records name. Declaring it before the first pass is safe: nothing is deleted without a complete answer.
+- Vanished files are no backup or preview candidates (`vanished_at IS NULL`), and a file listed again loses its
+  `unreadable_at` with its `vanished_at`. The 24-hour grace applies only while the file is covered: each run ends the
+  wait of candidates no longer covered (`SyncDao.inGrace` / `endGrace`), e.g. when Hoard's root goes inactive.
+
+### Item 7 and 8
+
+`ItemLocationRecord` keeps `source: "mirror"` locations whole (`rootId`, `volume`, `path`, `modifiedAt`, `onDevice`,
+`gone`); `SyncServerItems` still chooses `nas`/`backup` from the other locations (`SyncServerItemsTest`).
+`FakeSyncServer` gains `trash()` (NAS feed `trashed`, `trashNasFile` / `restoreNasFile` / `purgeNasFile`) and
+`backup()` (roots in `GET /v1/device`, `inProgress` for `wait`, `mirrorFingerprints` for `409 mirror`,
+`addMirrorItem` with `onDevice`/`gone`, `GET /v1/items?folder=<root>&path=`). Tests: `HoardTrashTest`,
+`PhoneBackupTest`, `FreedAdoptTest`, `VanishedPhotosTest`, `BackupCoverageTest`; instrumented `HoardTrashFlowTest`.
+
+**Without `backup`:** Reveal applies today's rule as soon as the paired server answered `GET /v1/server` **in this run**
+without `backup` (never a stored features list): such a server cannot have freed anything, and keeping deletions for a
+week on every current server would be a visible regression (accepted by the orchestrator). Offline, or before the next
+sync, photos still wait (bounded by the walk's 7 days). `RealServerBackupTest` waits for hoard-server 0.12.0.

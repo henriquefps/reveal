@@ -141,7 +141,7 @@ class PhotoImages(
             ?.takeIf { it.state == SourceState.AVAILABLE } ?: return null
         val files = photos.files(photoId).let { all ->
             // A Server photo opens from the files the server holds (FIX/V).
-            if (source.kind == SourceKind.SERVER) ServerTree.reachable(all) { it.onServer } else all
+            if (source.kind == SourceKind.SERVER) ServerTree.reachable(all, ServerTree::servable) else all
         }
         return Opened(
             trees.open(source),

@@ -13,6 +13,9 @@ import dev.hfps.reveal.data.db.SyncUploadEntity
 import dev.hfps.reveal.data.handoff.LocalPreviews
 import dev.hfps.reveal.data.library.DocumentTreeFactory
 import dev.hfps.reveal.data.storage.isAccessError
+import dev.hfps.reveal.data.sync.BackupCoverage
+import dev.hfps.reveal.data.sync.BackupRoot
+import dev.hfps.reveal.data.sync.StorageLocation
 import dev.hfps.reveal.pipeline.preview.MadePreview
 import dev.hfps.reveal.pipeline.preview.SmartPreviewCodec
 import dev.hfps.reveal.pipeline.preview.SmartPreviewMaker
@@ -178,7 +181,7 @@ class BlobUploader(
                 continue
             }
             when (api.dropPreview(drop.sha256)) {
-                DropResult.DROPPED, DropResult.GONE, DropResult.REFUSED -> {
+                DropResult.DROPPED, DropResult.GONE, DropResult.REFUSED, DropResult.MIRROR -> {
                     sync.deleteUpload(drop.id)
                     settled++
                 }
@@ -207,9 +210,19 @@ class BlobUploader(
      */
     suspend fun deleteOriginals(api: SyncApi, limit: Int = DROP_BATCH): Int {
         var done = 0
+        var mirrored = 0
         for (queued in sync.pendingDeletes(limit)) {
             currentCoroutineContext().ensureActive()
             when (api.deleteOriginal(queued.fingerprint)) {
+                DropResult.MIRROR -> {
+                    // Hoard's phone backup holds it (ADR 0018 "R1"): done at once; the server keeps the file, so
+                    // whatever here names it is still backed up, and the owner is told where it stays.
+                    sync.deleteQueued(queued.fingerprint)
+                    sync.setOnServer(queued.fingerprint, true)
+                    mirrored++
+                    done++
+                }
+
                 DropResult.DROPPED, DropResult.GONE, DropResult.REFUSED -> {
                     sync.deleteQueued(queued.fingerprint)
                     // Nothing here should think the server still has it.
@@ -233,7 +246,15 @@ class BlobUploader(
                 }
             }
         }
+        if (mirrored > 0) noteMirrorKept(mirrored)
         return done
+    }
+
+    /** Adds [count] files to the "stays in the phone's backup" notice the library shows once ([KEY_MIRROR_KEPT]). */
+    private suspend fun noteMirrorKept(count: Int) {
+        val meta = db.metaDao()
+        val before = meta.get(KEY_MIRROR_KEPT)?.toIntOrNull() ?: 0
+        meta.put(dev.hfps.reveal.data.db.MetaEntity(KEY_MIRROR_KEPT, (before + count).toString()))
     }
 
     private suspend fun queueDrop(photoId: Long, sha: String) {
@@ -314,24 +335,37 @@ class BlobUploader(
 
     // ------------------------------------------------------------------ originals
 
-    /** Queues the device-only originals of folders with the backup on and uploads them, newest first. */
+    /**
+     * Queues the device-only originals of folders with the backup on (and edited photos) and uploads them, newest
+     * first.
+     * With Hoard's phone backup (ADR 0018 "R1", Hoard ADR 0024: the server lists `backup` and this phone has roots), a
+     * candidate whose file a root covers waits [GRACE_MS] from when it became one, is then looked up again and queued
+     * only if the server still misses it; uncovered files go at once, as before.
+     */
     suspend fun originals(api: SyncApi, limit: Int, progress: Progress = Progress { _, _ -> }): Int {
-        for (candidate in sync.backupCandidates(limit)) {
-            sync.insertUpload(
-                SyncUploadEntity(
-                    photoId = candidate.photoId,
-                    kind = SyncUploadEntity.KIND_ORIGINAL,
-                    sha256 = "",
-                    size = candidate.size,
-                    fingerprint = candidate.fingerprint,
-                    updatedAt = clock(),
-                ),
-            )
+        val rootsJson = db.metaDao().get(BackupCoverage.META_ROOTS)
+        val roots = BackupCoverage.decode(rootsJson)
+        val now = clock()
+        val due = ArrayList<CloudCandidate>()
+        val folders = HashMap<Long, StorageLocation?>()
+        // The wait applies only while Hoard covers the file: a root gone inactive (or out of the types) ends it.
+        val uncovered = sync.inGrace(now - GRACE_MS).filter { roots.isEmpty() || !covered(it, roots, folders) }
+        if (uncovered.isNotEmpty()) sync.endGrace(uncovered.map { it.photoId }.distinct())
+        for (candidate in sync.backupCandidates(limit, now - GRACE_MS)) {
+            val waited = roots.isNotEmpty() && covered(candidate, roots, folders)
+            if (!waited) {
+                queueOriginal(candidate)
+                continue
+            }
+            val since = sync.cloud(candidate.photoId)?.candidateAt
+            if (since == null) sync.startGrace(candidate.photoId, now) else due += candidate
         }
+        if (due.isNotEmpty()) askAgain(api, due)
         var sent = 0
-        for (upload in sync.pendingUploads(SyncUploadEntity.KIND_ORIGINAL, limit)) {
+        val wait = rootsJson != null
+        for (upload in sync.dueOriginals(clock(), limit)) {
             currentCoroutineContext().ensureActive()
-            val ok = runCatching { sendOriginal(api, upload, progress) }
+            val ok = runCatching { sendOriginal(api, upload, progress, wait) }
                 .onFailure { if (it is CancellationException || it is SyncHttpException) throw it }
                 .onFailure { Log.w(TAG, "Original of photo ${upload.photoId} not uploaded: ${describe(it)}") }
                 .getOrDefault(false)
@@ -340,7 +374,58 @@ class BlobUploader(
         return sent
     }
 
-    private suspend fun sendOriginal(api: SyncApi, queued: SyncUploadEntity, progress: Progress): Boolean {
+    private suspend fun queueOriginal(candidate: CloudCandidate) {
+        sync.insertUpload(
+            SyncUploadEntity(
+                photoId = candidate.photoId,
+                kind = SyncUploadEntity.KIND_ORIGINAL,
+                sha256 = "",
+                size = candidate.size,
+                fingerprint = candidate.fingerprint,
+                updatedAt = clock(),
+            ),
+        )
+    }
+
+    /**
+     * True when Hoard's phone backup covers [candidate]'s file (ADR 0018 "R1"): an `ExternalStorageProvider` folder
+     * inside an active root of this phone, and a kind in that root's types. [folders] memoises the sources' locations.
+     */
+    private suspend fun covered(
+        candidate: CloudCandidate,
+        roots: List<BackupRoot>,
+        folders: MutableMap<Long, StorageLocation?>,
+    ): Boolean {
+        val base = folders.getOrPut(candidate.sourceId) {
+            db.sourceDao().get(candidate.sourceId)?.let { BackupCoverage.location(it.treeUri, it.rootDocumentId) }
+        } ?: return false
+        val photo = db.photoDao().get(candidate.photoId) ?: return false
+        return BackupCoverage.coveringRoot(roots, base.child(photo.folder), candidate.name) != null
+    }
+
+    /**
+     * Covered candidates whose grace is over: asked about again (`POST /v1/fingerprints/lookup`); those Hoard backed
+     * up meanwhile are on the server now, the others are queued (and uploaded with `wait`).
+     */
+    private suspend fun askAgain(api: SyncApi, due: List<CloudCandidate>) {
+        val found = HashMap<String, String>()
+        val asked = due.map { it.fingerprint }.distinct()
+        for (part in asked.chunked(LOOKUP_BATCH)) {
+            for (hit in api.lookup(part).found) found[hit.fingerprint] = hit.source
+        }
+        store.filesLookedUp(asked, found.keys)
+        for (candidate in due) {
+            val source = found[candidate.fingerprint]
+            if (source != null) store.lookedUp(candidate.photoId, source) else queueOriginal(candidate)
+        }
+    }
+
+    private suspend fun sendOriginal(
+        api: SyncApi,
+        queued: SyncUploadEntity,
+        progress: Progress,
+        wait: Boolean = false,
+    ): Boolean {
         val photo = db.photoDao().get(queued.photoId) ?: return false.also { sync.deleteUpload(queued.id) }
         val main = SyncStore.mainFile(db.photoDao().files(photo.id))
         val source = db.sourceDao().get(photo.sourceId)
@@ -370,7 +455,7 @@ class BlobUploader(
                 val cloud = sync.cloud(photo.id) ?: PhotoCloudEntity(photo.id)
                 sync.putCloud(cloud.copy(originalSha = sha))
             }
-            val done = send(api, upload, blob, progress)
+            val done = send(api, upload, blob, progress, wait)
             if (done) store.originalLanded(photo.id, main.fingerprint ?: queued.fingerprint.orEmpty())
             return done
         }
@@ -386,7 +471,13 @@ class BlobUploader(
         "NestedBlockDepth",
         "ThrowsCount",
     )
-    private suspend fun send(api: SyncApi, queued: SyncUploadEntity, blob: BlobSource, progress: Progress): Boolean {
+    private suspend fun send(
+        api: SyncApi,
+        queued: SyncUploadEntity,
+        blob: BlobSource,
+        progress: Progress,
+        wait: Boolean = false,
+    ): Boolean {
         var upload = queued
         var offset: Long
         var chunk = DEFAULT_CHUNK
@@ -399,10 +490,21 @@ class BlobUploader(
         } else {
             // Only an original names its fingerprint (the server checks it); a preview must not (ADR 0017).
             val fingerprint = upload.fingerprint.takeIf { upload.kind == SyncUploadEntity.KIND_ORIGINAL }
-            val created = api.createUpload(UploadCreateRequest(upload.sha256, upload.size, upload.kind, fingerprint))
+            // `wait` only to a server that lists `backup` (Hoard ADR 0024); `claim` stays absent: Reveal's uploads
+            // claim.
+            val waitFlag = true.takeIf { wait && upload.kind == SyncUploadEntity.KIND_ORIGINAL }
+            val created = api.createUpload(
+                UploadCreateRequest(upload.sha256, upload.size, upload.kind, fingerprint, wait = waitFlag),
+            )
             if (created.status == STATUS_EXISTS) {
                 finish(upload)
                 return true
+            }
+            if (created.status == STATUS_IN_PROGRESS) {
+                // Another device is sending the same bytes: stays queued, asked again later, never a failure.
+                val seconds = created.retryAfter?.takeIf { it > 0 } ?: DEFAULT_RETRY_AFTER_S
+                sync.updateUpload(upload.copy(retryAt = clock() + seconds * MILLIS, updatedAt = clock()))
+                return false
             }
             upload = upload.copy(uploadId = created.uploadId, offset = created.offset, updatedAt = clock())
             sync.updateUpload(upload)
@@ -491,6 +593,12 @@ class BlobUploader(
         private const val TAG = "RevealSync"
 
         /**
+         * `meta`: files "Delete from server" could not delete because Hoard's phone backup holds them (`409 mirror`),
+         * not yet told to the owner; the library shows it once and clears it.
+         */
+        const val KEY_MIRROR_KEPT = "sync.mirrorKept"
+
+        /**
          * A failure for the log: its class, and where it was thrown in Reveal's code (class, method, line), so a
          * report from a release build points at the cause. The message only for programming errors (no URIs).
          */
@@ -504,6 +612,15 @@ class BlobUploader(
 
         private const val MAX_MESSAGE = 120
         private const val STATUS_EXISTS = "exists"
+        private const val STATUS_IN_PROGRESS = "in_progress"
+
+        /** Seconds before asking again after `in_progress` when the server does not say (Hoard ADR 0024). */
+        const val DEFAULT_RETRY_AFTER_S = 300L
+        private const val MILLIS = 1000L
+
+        /** How long a candidate Hoard's phone backup covers waits before Reveal asks again (Hoard ADR 0024). */
+        const val GRACE_MS = 24L * 60 * 60 * 1000
+        private const val LOOKUP_BATCH = 1000
         const val DEFAULT_CHUNK = 8L * 1024 * 1024
         private const val PENDING_BATCH = 50
         private const val DROP_BATCH = 50

@@ -1214,5 +1214,31 @@ suites on the phone.
 
 The `nasSeed`/`nasSize` file is the fingerprint-vector generator's bytes (`((i * 2654435761 + seed * 97) >> 13) & 0xff`).
 Both instrumented classes skip without their arguments, so the full suite stays green without a server. For the
-phone (on the Mac), keep the server on cachyos-fps loopback and forward it: `ssh -R 3471:127.0.0.1:3471` to the Mac,
+phone (on the Mac), keep the server on the home Linux machine loopback and forward it: `ssh -R 3471:127.0.0.1:3471` to the Mac,
 then `adb -s RXCX109VTTM reverse tcp:3471 tcp:3471` there.
+
+Hoard's trash and one backup per phone (R1, 0.10.0, ADR 0018 "Amendment R1", DB v16; only with `/v1/server`
+features `trash` / `backup`): the NAS feed's `trashed` keeps the file row with `photo_files.trashed_at`; a Server
+photo with no live servable file is in Hoard's trash (`PhotoQuerySql.IN_TRASH_SQL`, hidden everywhere except
+`SyncFilter.IN_TRASH`, `FilterCounts.inTrash`, cell `LibraryTags.trashed(id)`, viewer note `ViewerTags.IN_TRASH`, no
+Edit); restore clears it; a purge (or any removal without `trash`) clears `original_on_server` and sets
+`photo_cloud.lost_at` on a photo Reveal keeps (unavailable, `UnavailableReason.SERVER`); "Remove from Reveal" stamps
+`photos.forgotten_at`, and such a photo comes back with its file (`SyncStore.cameBack`). Backup roots: `GET /v1/device`
+`physicalDevice.backup.roots` -> `meta` `sync.backup.roots` (`data/sync/BackupCoverage`: ExternalStorageProvider trees
+only, active roots, `types`); covered candidates wait 24 h (`photo_cloud.candidate_at`, `BlobUploader.GRACE_MS`), are
+looked up again, then uploaded with `wait` (`in_progress` -> `sync_uploads.retry_at`, no failure); `409 mirror` ->
+`DropResult.MIRROR` (`meta` `sync.mirrorKept`, the library's notice). Freed-adopt: a walk keeps a photo whose files all
+vanished (`photo_files.vanished_at`, unlisted, 7 days; unpaired only edited ones), `engine/FreedPhotos` decides each
+sync (fingerprint, else `GET /v1/items?folder=<rootId>&path=` mirror location + size + second; `freed` or edited ->
+`SyncStore.adoptFreed` into `freed/<fp>/<name>`, `onDevice` -> wait, else delete; no `backup` -> delete); `PATCH
+/v1/device` declares `freed-adopt` with `backup`. Fake server: `FakeSyncServer.trash()` / `backup()`.
+
+```sh
+./gradlew :core:sync:testDebugUnitTest --tests '*HoardTrashTest*' --tests '*PhoneBackupTest*' --tests '*FreedAdoptTest*' --tests '*SyncServerItemsTest*'
+./gradlew :core:data:testDebugUnitTest --tests '*VanishedPhotosTest*' --tests '*BackupCoverageTest*' --tests '*RevealDatabaseMigrationTest*'
+adb -s emulator-<port> shell am instrument -w -e class dev.hfps.reveal.library.HoardTrashFlowTest dev.hfps.reveal.debug.test/androidx.test.runner.AndroidJUnitRunner
+# against the pinned hoard-server (0.11.0+, trash): trash, restore, purge on the NAS dir
+D=$(mktemp -d) && scripts/sync/local-server.sh start $D 3476 app/src/androidTest/assets/faces/studio-trio.jpg
+REVEAL_REPO=$PWD REVEAL_TRASH_DIR=$D REVEAL_TRASH_LINK=$(scripts/sync/local-server.sh pair $D) \
+  ./gradlew --no-configuration-cache :core:sync:testDebugUnitTest --tests '*RealServerTrashTest*'; scripts/sync/local-server.sh stop $D
+```

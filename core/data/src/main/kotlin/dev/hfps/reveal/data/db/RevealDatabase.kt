@@ -34,6 +34,9 @@ import androidx.sqlite.db.SupportSQLiteDatabase
  * | 15 | Dates and cameras (ADR 0006 "W3/D"): `photos.camera_make` / `camera_model` / `lens` / `metadata_version` |
  * |    | and their indexes ([Migration14To15]: Server photos without a capture time sort by their file's time or |
  * |    | go to "No date") |
+ * | 16 | Hoard's trash and phone backup (ADR 0018 "R1"): `photo_files.trashed_at` / `vanished_at` / |
+ * |    | `vanish_asked_at` / `vanish_retries`, |
+ * |    | `photos.forgotten_at`, `photo_cloud.lost_at` / `candidate_at`, `sync_uploads.retry_at` |
  *
  * Open it with [configure] (migrations and the sync triggers of [SyncTriggers]).
  */
@@ -77,6 +80,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         AutoMigration(from = 12, to = 13, spec = RevealDatabase.Migration12To13::class),
         AutoMigration(from = 13, to = 14),
         AutoMigration(from = 14, to = 15, spec = RevealDatabase.Migration14To15::class),
+        AutoMigration(from = 15, to = 16),
     ],
 )
 abstract class RevealDatabase : RoomDatabase() {
@@ -136,7 +140,7 @@ abstract class RevealDatabase : RoomDatabase() {
 
     companion object {
         const val NAME = "reveal.db"
-        const val VERSION = 15
+        const val VERSION = 16
 
         /** Every manual migration, for `Room.databaseBuilder(...).addMigrations(*MIGRATIONS)`. */
         val MIGRATIONS: Array<Migration> get() = arrayOf(MIGRATION_4_5, MIGRATION_10_11)

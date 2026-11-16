@@ -111,6 +111,12 @@ enum class SyncFilter {
 
     /** Everything else, uploads still waiting included. */
     NOT_SYNCED,
+
+    /**
+     * Server photos in Hoard's trash (Hoard ADR 0023, ADR 0018 "R1"): hidden everywhere else; shown only with this
+     * choice. They keep their edits and come back when restored in Hoard.
+     */
+    IN_TRASH,
 }
 
 /**

@@ -49,21 +49,48 @@ object PhotoQuerySql {
         "AND +su.state = 'pending' AND su.kind IN ('original', 'preview'))"
 
     /**
-     * "Unavailable", defined once (`PhotoAvailability` is its Kotlin mirror): a file of one of this device's photos is
-     * unreadable AND the sync server has no original AND no smart preview (Server photos are listed only when they
-     * open, FIX/V, so never unavailable). The local preview is a file, not a row: the repository removes
-     * the photos that have one after the query.
+     * A Server photo whose files the server no longer holds and that Reveal keeps for its edits or records (purged
+     * from Hoard's trash, deleted on the NAS, ADR 0018 "R1"): listed, as unavailable.
      */
-    const val UNAVAILABLE_SQL =
-        "EXISTS (SELECT 1 FROM photo_files uf WHERE uf.photo_id = p.id AND uf.unreadable_at IS NOT NULL) " +
-            "AND COALESCE(c.original_on_server, 0) = 0 AND c.preview_sha IS NULL " +
-            "AND NOT $SERVER_SOURCE_SQL"
+    const val SERVER_LOST_SQL = "c.lost_at IS NOT NULL"
+
+    /** A Server photo the library lists: it opens (FIX/V), or it lost its files and is shown as unavailable (R1). */
+    const val SERVER_LISTED_SQL = "($SERVER_OPENABLE_SQL OR $SERVER_LOST_SQL)"
 
     /**
-     * Every listed photo of the home: not hidden, and a Server photo only when it opens (FIX/V). The filter counts and
-     * the camera and lens lists count over it.
+     * "In Hoard's trash" (Hoard ADR 0023, ADR 0018 "R1"): a Server photo with a file the NAS feed reported trashed and
+     * no live file the server serves. Hidden from the library unless the Sync filter's "In Hoard's trash" is on.
      */
-    const val LISTED_SQL = "p.hidden = 0 AND (NOT $SERVER_SOURCE_SQL OR $SERVER_OPENABLE_SQL)"
+    const val IN_TRASH_SQL = "($SERVER_SOURCE_SQL AND EXISTS (SELECT 1 FROM photo_files tf WHERE " +
+        "tf.photo_id = p.id AND tf.trashed_at IS NOT NULL) AND NOT EXISTS (SELECT 1 FROM photo_files lf WHERE " +
+        "lf.photo_id = p.id AND lf.trashed_at IS NULL AND lf.on_server = 1))"
+
+    /**
+     * A folder photo whose files the last walk no longer listed, waiting for the server to say whether Hoard freed it
+     * (ADR 0018 "R1", freed-adopt): never listed. Only a photo that lost all its files keeps such rows.
+     */
+    const val VANISHED_SQL =
+        "EXISTS (SELECT 1 FROM photo_files vf WHERE vf.photo_id = p.id AND vf.vanished_at IS NOT NULL)"
+
+    /**
+     * "Unavailable", defined once (`PhotoAvailability` is its Kotlin mirror): a file of one of this device's photos is
+     * unreadable AND the sync server has no original AND no smart preview, or a Server photo lost its files (R1:
+     * [SERVER_LOST_SQL], with no preview either; other Server photos are listed only when they open, FIX/V). The local
+     * preview is a file, not a row: the repository removes the photos that have one after the query.
+     */
+    const val UNAVAILABLE_SQL =
+        "((EXISTS (SELECT 1 FROM photo_files uf WHERE uf.photo_id = p.id AND uf.unreadable_at IS NOT NULL) " +
+            "AND COALESCE(c.original_on_server, 0) = 0 AND c.preview_sha IS NULL " +
+            "AND NOT $SERVER_SOURCE_SQL) OR ($SERVER_LOST_SQL AND COALESCE(c.original_on_server, 0) = 0 " +
+            "AND c.preview_sha IS NULL AND $SERVER_SOURCE_SQL))"
+
+    /**
+     * Every listed photo of the home: not hidden, a Server photo only when it opens (FIX/V) or lost its files (R1), not
+     * in Hoard's trash and not vanished from its folder (R1). The filter counts and the camera and lens lists count
+     * over it.
+     */
+    const val LISTED_SQL = "p.hidden = 0 AND (NOT $SERVER_SOURCE_SQL OR $SERVER_LISTED_SQL) AND NOT $VANISHED_SQL " +
+        "AND NOT $IN_TRASH_SQL"
 
     /**
      * The grid's date (W3/D): `sort_time`, the capture time on the camera's clock stored as UTC millis, else the file's
@@ -95,8 +122,8 @@ object PhotoQuerySql {
             "$SERVER_SOURCE_SQL AS remote, ($UPLOADING_SQL) AS uploading, " +
             "EXISTS (SELECT 1 FROM photo_files uf WHERE uf.photo_id = p.id AND uf.unreadable_at IS NOT NULL) " +
             "AS unreadable, ($UNAVAILABLE_SQL) AS unavailable, (SELECT uf.fingerprint FROM photo_files uf WHERE " +
-            "uf.photo_id = p.id AND uf.unreadable_at IS NOT NULL LIMIT 1) AS unreadable_fingerprint " +
-            CELLS_FROM
+            "uf.photo_id = p.id AND uf.unreadable_at IS NOT NULL LIMIT 1) AS unreadable_fingerprint, " +
+            "$IN_TRASH_SQL AS in_trash " + CELLS_FROM
 
     /**
      * The statement text and its arguments, in order (exposed for tests). [today] is the device's date: the Date
@@ -105,7 +132,10 @@ object PhotoQuerySql {
     fun build(query: PhotoQuery, today: LocalDate = LocalDate.now()): Pair<String, List<Any>> {
         val clauses = buildList {
             add(Clause("p.hidden = 0"))
-            if (!query.withUnopenable) add(Clause("(NOT $SERVER_SOURCE_SQL OR $SERVER_OPENABLE_SQL)"))
+            if (!query.withUnopenable) add(Clause("(NOT $SERVER_SOURCE_SQL OR $SERVER_LISTED_SQL)"))
+            add(Clause("NOT $VANISHED_SQL"))
+            // Hoard's trash shows only when its filter is on (alone, or OR'ed with the other Sync choices).
+            if (SyncFilter.IN_TRASH !in query.filters.sync) add(Clause("NOT $IN_TRASH_SQL"))
             scopeClause(query.scope)?.let(::add)
             addAll(filterClauses(query.filters, today))
             if (query.unavailableOnly) add(Clause("($UNAVAILABLE_SQL)"))
@@ -168,6 +198,7 @@ object PhotoQuerySql {
                 when (it) {
                     SyncFilter.SYNCED -> Clause(SYNCED_SQL)
                     SyncFilter.NOT_SYNCED -> Clause("NOT $SYNCED_SQL")
+                    SyncFilter.IN_TRASH -> Clause(IN_TRASH_SQL)
                 }
             },
         ),

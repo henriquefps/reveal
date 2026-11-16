@@ -240,6 +240,10 @@ internal fun filterGroups(
             listOf(
                 option(SyncFilter.SYNCED, R.string.library_filter_synced, counts?.synced),
                 option(SyncFilter.NOT_SYNCED, R.string.library_filter_not_synced, counts?.notSynced),
+            ) + listOfNotNull(
+                // Only when something is in Hoard's trash, or the choice is on (R1).
+                option(SyncFilter.IN_TRASH, R.string.library_filter_in_trash, counts?.inTrash)
+                    .takeIf { (counts?.inTrash ?: 0) > 0 || SyncFilter.IN_TRASH in filters.sync },
             ),
         ).takeIf { paired },
     )

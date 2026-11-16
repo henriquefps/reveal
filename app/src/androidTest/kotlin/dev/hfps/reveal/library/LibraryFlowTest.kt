@@ -93,13 +93,17 @@ class LibraryFlowTest {
             compose.onNodeWithTag(LibraryTags.cell(pair.id)).performClick()
             compose.waitUntilAtLeastOneExists(hasTestTag(ViewerTags.PAGER), TIMEOUT_MS)
             compose.waitUntilAtLeastOneExists(hasTestTag(ViewerTags.star(2)), TIMEOUT_MS)
+            val sidecar = File(folder.dir, "DSC00001.xmp")
+            val before = sidecar.readBytes()
             compose.onNodeWithTag(ViewerTags.star(2)).performClick()
             shot("viewer")
-            val sidecar = File(folder.dir, "DSC00001.xmp")
+            // The rating lands in the library; the sidecar is never written by itself (W4, docs/adr/0026 "Amendment
+            // W4": only Export XMP writes one).
             compose.waitUntil(TIMEOUT_MS) {
-                runCatching { XmpReader.read(sidecar.readBytes()).rating == 2 }.getOrDefault(false)
+                runBlocking { folder.library.observePhoto(pair.id).first() }?.rating == 2
             }
-            assertThat(XmpReader.read(sidecar.readBytes()).flag).isEqualTo(PickFlag.PICK)
+            assertThat(sidecar.readBytes()).isEqualTo(before)
+            assertThat(XmpReader.read(sidecar.readBytes()).rating).isEqualTo(4)
             assertThat(sidecar.readText()).contains("xmp:CreatorTool=\"Hoard 1.7.2\"")
 
             compose.onNodeWithTag(ViewerTags.INFO).performClick()

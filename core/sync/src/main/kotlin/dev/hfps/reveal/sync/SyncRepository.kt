@@ -38,6 +38,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -630,7 +632,10 @@ class SyncRepository(
         val dao = db.syncDao()
         return dao.pendingUploads(dev.hfps.reveal.data.db.SyncUploadEntity.KIND_PREVIEW, 1).isNotEmpty() ||
             (options.previews && dao.previewCandidates(!options.originals, 1).isNotEmpty()) ||
-            (options.originals && originalsAllowed && dao.backupCandidates(1).isNotEmpty())
+            (
+                options.originals && originalsAllowed &&
+                    dao.backupCandidates(1, System.currentTimeMillis() - BlobUploader.GRACE_MS).isNotEmpty()
+                )
     }
 
     /**
@@ -689,6 +694,15 @@ class SyncRepository(
         if (accounts.account.value == null) return@withContext null
         mutex.withLock { library.removeFolder(sourceId, deleteFromServer) }
     }
+
+    /**
+     * How many files "Delete from server" left on the server because Hoard's phone backup holds them (`409 mirror`,
+     * ADR 0018 "R1"), not told to the owner yet; 0 when none. [mirrorKeptTold] clears it.
+     */
+    val mirrorKept: Flow<Int> =
+        db.metaDao().observe(BlobUploader.KEY_MIRROR_KEPT).map { it?.toIntOrNull() ?: 0 }.distinctUntilChanged()
+
+    suspend fun mirrorKeptTold() = withContext(Dispatchers.IO) { db.metaDao().delete(BlobUploader.KEY_MIRROR_KEPT) }
 
     /** "Delete from server" for Server-scope photos: records, edits and uploaded originals, on every device. */
     suspend fun deleteFromServer(photoIds: List<Long>): Int = withContext(Dispatchers.IO) {

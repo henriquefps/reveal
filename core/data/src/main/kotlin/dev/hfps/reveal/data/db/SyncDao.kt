@@ -9,6 +9,9 @@ import androidx.room.Update
 import dev.hfps.reveal.data.model.PickFlag
 import kotlinx.coroutines.flow.Flow
 
+/** `meta`: the id of the server this device syncs with (set by the first sync, gone after unpairing). */
+const val SYNC_TRACKING_KEY = "sync.tracking"
+
 /** `meta` key prefix (+ photo id, value = time) of a Server photo the item lookup missed: asked again later. */
 const val HEADER_MISS_PREFIX = "sync.headerMiss."
 
@@ -37,7 +40,7 @@ data class DroppablePreview(@ColumnInfo(name = "photo_id") val photoId: Long, va
  * A version `v` a user edited: a recipe that is not the default, a name, a virtual copy, a conflict copy or snapshots
  * (the W5 repair, and what unpairing keeps of the Server source).
  */
-private const val EDITED_VERSION =
+internal const val EDITED_VERSION =
     "EXISTS (SELECT 1 FROM recipes r WHERE r.version_id = v.id AND r.is_default = 0) " +
         "OR v.name IS NOT NULL OR v.position > 0 OR v.copy_of IS NOT NULL " +
         "OR EXISTS (SELECT 1 FROM snapshots n WHERE n.version_id = v.id)"
@@ -326,10 +329,14 @@ interface SyncDao {
     @Query("SELECT * FROM sources WHERE kind = 'SERVER' LIMIT 1")
     suspend fun serverSource(): SourceEntity?
 
-    /** The photos the "Server" entry lists: only those that open (`PhotoQuerySql.SERVER_OPENABLE_SQL`). */
+    /**
+     * The photos the "Server" entry lists: those that open (`PhotoQuerySql.SERVER_OPENABLE_SQL`) or lost their files
+     * (shown unavailable), not those in Hoard's trash (ADR 0018 "R1").
+     */
     @Query(
         "SELECT COUNT(*) FROM photos p LEFT JOIN photo_cloud c ON c.photo_id = p.id WHERE p.hidden = 0 AND " +
-            "p.source_id IN (SELECT id FROM sources WHERE kind = 'SERVER') AND " + PhotoQuerySql.SERVER_OPENABLE_SQL,
+            "p.source_id IN (SELECT id FROM sources WHERE kind = 'SERVER') AND " + PhotoQuerySql.SERVER_LISTED_SQL +
+            " AND NOT " + PhotoQuerySql.IN_TRASH_SQL,
     )
     fun observeServerPhotoCount(): Flow<Int>
 
@@ -353,6 +360,37 @@ interface SyncDao {
 
     @Query("SELECT * FROM photo_files WHERE source_id = :sourceId AND relative_path = :path")
     suspend fun serverFileByPath(sourceId: Long, path: String): PhotoFileEntity?
+
+    /**
+     * A NAS file of [fingerprint] was purged (ADR 0018 "R1"): this device's own files of it (folders, hand-offs) no
+     * longer count as on the server, and their photos are looked up again by the next sync.
+     */
+    @Query(
+        "UPDATE photo_files SET on_server = 0 WHERE fingerprint = :fingerprint AND source_id NOT IN " +
+            "(SELECT id FROM sources WHERE kind = 'SERVER')",
+    )
+    suspend fun localNotOnServer(fingerprint: String)
+
+    @Query(
+        "UPDATE photo_cloud SET original_on_server = 0, original_source = NULL, checked_at = 0 WHERE photo_id IN " +
+            "(SELECT f.photo_id FROM photo_files f JOIN sources s ON s.id = f.source_id WHERE s.kind != 'SERVER' " +
+            "AND f.fingerprint = :fingerprint)",
+    )
+    suspend fun lookUpAgain(fingerprint: String)
+
+    @androidx.room.Transaction
+    suspend fun askAgain(fingerprint: String) {
+        localNotOnServer(fingerprint)
+        lookUpAgain(fingerprint)
+    }
+
+    /** A NAS file moved into Hoard's trash ([at]) or out of it (null), ADR 0018 "R1". */
+    @Query("UPDATE photo_files SET trashed_at = :at WHERE id = :fileId")
+    suspend fun setTrashed(fileId: Long, at: Long?)
+
+    /** A photo "Remove from Reveal" hid is shown again: its file is back on the server (ADR 0018 "R1"). */
+    @Query("UPDATE photos SET hidden = 0, forgotten_at = NULL WHERE id = :photoId")
+    suspend fun unforget(photoId: Long)
 
     /**
      * Server-source photos still `PENDING` whose original the server serves: the next header reads, newest first.
@@ -401,6 +439,30 @@ interface SyncDao {
             "unreadable_at = NULL, checked_at = NULL WHERE id = :fileId",
     )
     suspend fun adoptFile(fileId: Long, sourceId: Long, path: String, documentId: String)
+
+    // ---- folder photos Hoard may have freed (ADR 0018 "R1")
+
+    /** Files of folder photos a walk no longer lists, waiting for the server's word (`photo_files.vanished_at`). */
+    @Query(
+        "SELECT f.* FROM photo_files f JOIN sources s ON s.id = f.source_id WHERE s.kind = 'FOLDER' AND " +
+            "f.vanished_at IS NOT NULL ORDER BY f.photo_id, f.id",
+    )
+    suspend fun vanishedFiles(): List<PhotoFileEntity>
+
+    /** A freed file becomes the server's: its fingerprint (the item's), document id and path in the Server source. */
+    @Query(
+        "UPDATE photo_files SET source_id = :sourceId, relative_path = :path, document_id = :documentId, " +
+            "fingerprint = :fingerprint, on_server = 1, vanished_at = NULL, unreadable_at = NULL, checked_at = NULL " +
+            "WHERE id = :fileId",
+    )
+    suspend fun adoptFreedFile(fileId: Long, sourceId: Long, path: String, documentId: String, fingerprint: String)
+
+    /** A freed folder photo moves to the Server source under [folder] (its sidecar link goes, as for hand-offs). */
+    @Query(
+        "UPDATE photos SET source_id = :sourceId, folder = :folder, folder_document_id = '', xmp_document_id = NULL, " +
+            "xmp_modified = NULL WHERE id = :photoId",
+    )
+    suspend fun adoptFreedPhoto(photoId: Long, sourceId: Long, folder: String)
 
     // ---- cloud state
 
@@ -480,9 +542,24 @@ interface SyncDao {
             "AND f.fingerprint IS NOT NULL AND f.unreadable_at IS NULL AND (f.role = 'RAW' OR NOT EXISTS " +
             "(SELECT 1 FROM photo_files o WHERE o.photo_id = p.id AND o.role = 'RAW')) AND NOT EXISTS " +
             "(SELECT 1 FROM sync_uploads u WHERE u.photo_id = p.id AND u.kind = 'original' AND u.state != 'done') " +
+            "AND (c.candidate_at IS NULL OR c.candidate_at <= :waitedSince) " +
             "ORDER BY p.sort_time DESC LIMIT :limit",
     )
-    suspend fun backupCandidates(limit: Int): List<CloudCandidate>
+    suspend fun backupCandidates(limit: Int, waitedSince: Long = Long.MAX_VALUE): List<CloudCandidate>
+
+    /**
+     * A candidate Hoard's phone backup covers starts its grace now (ADR 0018 "R1"): [backupCandidates] leaves it out
+     * until [at] is before its `waitedSince`. Only the first time counts.
+     */
+    @Query("UPDATE photo_cloud SET candidate_at = :at WHERE photo_id = :photoId AND candidate_at IS NULL")
+    suspend fun startGrace(photoId: Long, at: Long)
+
+    /** Pending original uploads that are due (not waiting for another device's upload of the same bytes). */
+    @Query(
+        "SELECT * FROM sync_uploads WHERE state = 'pending' AND kind = 'original' AND " +
+            "(retry_at IS NULL OR retry_at <= :now) ORDER BY id LIMIT :limit",
+    )
+    suspend fun dueOriginals(now: Long, limit: Int): List<SyncUploadEntity>
 
     /**
      * The other files of the Server-source photos among [photoIds] (their main file is in the lookup already): a shot

@@ -69,6 +69,9 @@ class ServerTree(private val resolver: ContentResolver, private val authority: S
         fun <T> reachable(files: List<T>, onServer: (T) -> Boolean): List<T> =
             if (files.any(onServer)) files.filter(onServer) else files
 
+        /** A file the server serves now: held (FIX/V) and not in Hoard's trash (ADR 0018 "R1"). */
+        fun servable(file: dev.hfps.reveal.data.db.PhotoFileEntity): Boolean = file.onServer && file.trashedAt == null
+
         /** The smart preview URI of any photo's main file (the editor opens it when the original is out of reach). */
         fun smartUri(authority: String, fingerprint: String, name: String): Uri =
             uri(authority, SMART, documentId(fingerprint, name))

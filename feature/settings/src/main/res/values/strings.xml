@@ -69,6 +69,8 @@
     <string name="sync_originals_subtitle">Photos only this device has are uploaded once: the photos you edit, and every photo of a folder set to “Everything”. Photos the server already has, such as its NAS folders, never are.</string>
     <string name="sync_folders_hint">Each folder backs up the originals of the photos you edit; switch one on to back up all its photos. Switching to “Only photos you edit” never deletes originals already on the server.</string>
     <string name="sync_wifi_only">Originals over Wi-Fi only</string>
+    <string name="sync_wifi_only_subtitle">Applies to the originals Reveal still uploads itself: folders Hoard backs up on this phone are left to Hoard.</string>
+    <string name="sync_folder_hoard">Backed up by Hoard on this phone</string>
     <string name="sync_handoff_backup">Photos opened from other apps</string>
     <string name="sync_section_folders">What each folder backs up</string>
     <string name="sync_folder_everything">Everything: every photo the server does not have yet</string>

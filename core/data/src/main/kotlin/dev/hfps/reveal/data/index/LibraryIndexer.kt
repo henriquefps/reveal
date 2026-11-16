@@ -17,6 +17,7 @@ import dev.hfps.reveal.data.db.MetaEntity
 import dev.hfps.reveal.data.db.PhotoEntity
 import dev.hfps.reveal.data.db.PhotoFileEntity
 import dev.hfps.reveal.data.db.RevealDatabase
+import dev.hfps.reveal.data.db.SYNC_TRACKING_KEY
 import dev.hfps.reveal.data.db.SyncTriggers
 import dev.hfps.reveal.data.db.VersionEntity
 import dev.hfps.reveal.data.library.SidecarEditResult
@@ -375,6 +376,7 @@ class LibraryIndexer(
             }
         }
         val seenPaths = HashSet<String>(knownFiles.size + plans.size * 2)
+        val listedPhotos = HashSet<Long>()
         val queue = ArrayList<SidecarJob>()
         var added = 0
         var changed = 0
@@ -414,11 +416,14 @@ class LibraryIndexer(
                         plan.sidecar?.let { queue += SidecarJob(id, it) }
                         added++
                     } else {
+                        listedPhotos += known.id
                         var dirty = false
                         val fresh = ArrayList<PhotoFileEntity>()
                         for ((entry, role) in members) {
                             val path = join(folder.path, entry.name)
                             val old = knownFiles[path]
+                            // Listed again: a photo that waited for the server's word is back (R1).
+                            if (old?.vanishedAt != null) photos.clearVanished(listOf(old.id))
                             if (old == null) {
                                 fresh += fileEntity(known.id, sourceId, folder.path, entry, role)
                                 dirty = true
@@ -450,15 +455,28 @@ class LibraryIndexer(
             }
             onProgress(IndexProgress(IndexPhase.SAVING, minOf((batchIndex + 1) * BATCH, plans.size), plans.size))
         }
-        // Files no longer listed: forget them, then every photo left without files.
-        val gone = knownFiles.values.filter { it.relativePath !in seenPaths }.map { it.id }
+        // Files no longer listed: forget them, then every photo left without files. A photo that lost every file
+        // waits instead (ADR 0018 "R1", freed-adopt): Hoard may have freed it after backing it up, and only the server
+        // can tell; while paired every such photo waits for it, unpaired only one with an edit, at most a week.
+        val gone = knownFiles.values.filter { it.relativePath !in seenPaths }
+        val waiting = gone.groupBy { it.photoId }.filterKeys { it !in listedPhotos }
+            .filter { (photoId, files) -> files.size == knownByPhoto[photoId].orEmpty().size }
+            .filterKeys { photoId -> paired() || photos.isEdited(photoId) }
+        val waitingFiles = waiting.values.flatten().map { it.id }.toSet()
         var removed = 0
         db.withTransaction {
-            gone.chunked(SQL_ARGS).forEach { photos.deleteFiles(it) }
+            gone.filter { it.id !in waitingFiles }.map { it.id }.chunked(SQL_ARGS).forEach { photos.deleteFiles(it) }
+            waitingFiles.chunked(SQL_ARGS).forEach { photos.markVanished(it, now) }
+            photos.expiredVanished(sourceId, now - VANISHED_WAIT_MS).chunked(SQL_ARGS)
+                .forEach { photos.deleteFiles(it) }
+            waiting.keys.chunked(SQL_ARGS).forEach { photos.touchPhotos(it) }
             removed = photos.deleteEmptyPhotos(sourceId)
         }
         return SaveResult(added, changed, removed, queue)
     }
+
+    /** Paired with a sync server (the engine records the server it tracks): every vanished photo asks it first. */
+    private suspend fun paired(): Boolean = db.metaDao().get(SYNC_TRACKING_KEY) != null
 
     private fun members(shot: Shot, byName: Map<String, DocumentEntry>): List<Pair<DocumentEntry, FileRole>> =
         buildList {
@@ -643,6 +661,12 @@ class LibraryIndexer(
             val lens = cameraText(text)
             return if (lens.none { it.isLetter() } || lens.startsWith("0.0 mm")) "" else lens
         }
+
+        /**
+         * How long a photo that vanished from its folder waits for the server's word (ADR 0018 "R1"): then today's rule
+         * (deleted) applies at the next walk, so an offline week cannot keep a deleted photo for ever.
+         */
+        const val VANISHED_WAIT_MS = 7L * 24 * 60 * 60 * 1000
 
         /** A photo the item lookup missed is asked about again after this long. */
         const val MISS_BACKOFF_MS = 30 * 60 * 1000L

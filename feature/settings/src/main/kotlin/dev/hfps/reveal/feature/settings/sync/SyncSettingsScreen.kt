@@ -76,7 +76,13 @@ import kotlinx.coroutines.launch
 
 /** A folder and its originals-backup switch. */
 @Immutable
-data class BackupFolder(val id: Long, val name: String, val backup: Boolean)
+data class BackupFolder(
+    val id: Long,
+    val name: String,
+    val backup: Boolean,
+    /** Hoard's phone backup covers it (ADR 0018 "R1"): shown read only, "Backed up by Hoard". */
+    val coveredByHoard: Boolean = false,
+)
 
 /** Pairing in progress or its failure. */
 sealed interface PairingState {
@@ -198,7 +204,7 @@ class SyncSettingsViewModel @Inject constructor(
             account = account,
             options = options,
             status = status,
-            folders = sources.map { BackupFolder(it.id, it.name, it.backup) },
+            folders = sources.map { BackupFolder(it.id, it.name, it.backup, it.coveredByHoard) },
             pairing = pairingState,
             handoffBackup = handoffBackup,
             samePhone = samePhone,
@@ -652,7 +658,7 @@ private fun Paired(
         )
         SwitchRow(
             title = stringResource(R.string.sync_wifi_only),
-            subtitle = null,
+            subtitle = stringResource(R.string.sync_wifi_only_subtitle),
             checked = options.originalsWifiOnly,
             enabled = options.originals,
             onChange = { actions.onOptions(options.copy(originalsWifiOnly = it)) },
@@ -669,18 +675,7 @@ private fun Paired(
                 color = RevealTheme.colors.mutedForeground,
                 modifier = Modifier.padding(horizontal = 16.dp),
             )
-            for (folder in state.folders) {
-                // On = "Everything", off = "Only photos you edit" (the default for new folders, FIX/V).
-                SwitchRow(
-                    title = folder.name,
-                    subtitle = stringResource(
-                        if (folder.backup) R.string.sync_folder_everything else R.string.sync_folder_edited,
-                    ),
-                    checked = folder.backup,
-                    onChange = { actions.onFolderBackup(folder.id, it) },
-                    tag = SyncTags.folder(folder.id),
-                )
-            }
+            for (folder in state.folders) FolderBackupRow(folder, actions)
             // Hand-offs: the same two modes, "Only photos you edit" by default (FIX/W).
             SwitchRow(
                 title = stringResource(R.string.sync_handoff_backup),
@@ -750,6 +745,29 @@ private fun Paired(
             )
         }
     }
+}
+
+/** One folder's backup mode: a switch, or "Backed up by Hoard" (read only) when Hoard's phone backup covers it. */
+@Composable
+private fun FolderBackupRow(folder: BackupFolder, actions: SyncActions) {
+    if (folder.coveredByHoard) {
+        // Hoard's phone backup covers it (R1): its originals are left to Hoard, no choice to make here.
+        RevealListRow(
+            title = folder.name,
+            subtitle = stringResource(R.string.sync_folder_hoard),
+            icon = PhosphorRegular.CloudCheck,
+            modifier = Modifier.testTag(SyncTags.folder(folder.id)),
+        )
+        return
+    }
+    // On = "Everything", off = "Only photos you edit" (the default for new folders, FIX/V).
+    SwitchRow(
+        title = folder.name,
+        subtitle = stringResource(if (folder.backup) R.string.sync_folder_everything else R.string.sync_folder_edited),
+        checked = folder.backup,
+        onChange = { actions.onFolderBackup(folder.id, it) },
+        tag = SyncTags.folder(folder.id),
+    )
 }
 
 @Composable

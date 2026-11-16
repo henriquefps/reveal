@@ -44,6 +44,7 @@ import dev.hfps.reveal.data.storage.SafDocumentTree
 import dev.hfps.reveal.data.storage.StorageVolumes
 import dev.hfps.reveal.data.storage.isAccessError
 import dev.hfps.reveal.data.storage.isProviderBusy
+import dev.hfps.reveal.data.sync.BackupCoverage
 import dev.hfps.reveal.data.sync.RemoteEdits
 import dev.hfps.reveal.data.sync.ServerTree
 import dev.hfps.reveal.pipeline.recipe.Recipe
@@ -84,6 +85,12 @@ data class SourceItem(
     val indexing: IndexProgress?,
     /** Sync backs up the originals of this folder's device-only photos (ADR 0018). */
     val backup: Boolean = true,
+    /**
+     * Hoard's phone backup covers this whole folder (an active root of this phone holds it, ADR 0018 "R1"): Reveal
+     * leaves its originals to Hoard (each candidate after a day's grace) and shows "Backed up by Hoard" instead of
+     * its backup choice.
+     */
+    val coveredByHoard: Boolean = false,
 )
 
 /** A photo's files with their content URIs, the source state, and the EXIF read from the header on demand. */
@@ -247,8 +254,13 @@ class LibraryRepository(
     val indexReports: StateFlow<Map<Long, IndexReport>> = reports.asStateFlow()
 
     /** Sources (with counts, state and indexing progress), by name. */
-    fun sources(): Flow<List<SourceItem>> = combine(sourceDao.observeWithCounts(), progress) { rows, running ->
+    fun sources(): Flow<List<SourceItem>> = combine(
+        sourceDao.observeWithCounts(),
+        progress,
+        db.metaDao().observe(BackupCoverage.META_ROOTS),
+    ) { rows, running, rootsJson ->
         val known = runCatching { volumes?.volumes() }.getOrNull().orEmpty()
+        val roots = BackupCoverage.decode(rootsJson)
         rows.map { (source, count) ->
             SourceItem(
                 id = source.id,
@@ -261,6 +273,8 @@ class LibraryRepository(
                 photoCount = count,
                 indexing = running[source.id],
                 backup = source.backup,
+                coveredByHoard = BackupCoverage.location(source.treeUri, source.rootDocumentId)
+                    ?.let { BackupCoverage.rootFor(roots, it) } != null,
             )
         }
     }
@@ -493,9 +507,14 @@ class LibraryRepository(
             // By fingerprint, whatever the rows pointed at, unless another row still files under the copy (W4).
             originals?.let { deleteCopies(photoDao, it, files.mapNotNull { file -> file.fingerprint }) }
         }
-        hide.map { it.id }.chunked(SQL_ARGS).forEach { photoDao.setHidden(it, true) }
+        // Marked as forgotten: a Server photo whose file comes back on the server is shown again (ADR 0018 "R1").
+        val now = clock()
+        hide.map { it.id }.chunked(SQL_ARGS).forEach { photoDao.forgetHidden(it, now) }
         photoIds.size
     }
+
+    /** Whether [photoId] is in Hoard's trash (ADR 0018 "R1"): the viewer shows a note, never the editor. */
+    suspend fun isInTrash(photoId: Long): Boolean = withContext(Dispatchers.IO) { photoDao.inTrash(photoId) }
 
     // ------------------------------------------------------------------ sources
 
@@ -771,7 +790,7 @@ class LibraryRepository(
     /** A photo's files; for a Server photo only those that open when any does (`ServerTree.reachable`, FIX/V). */
     private suspend fun filesOf(photoId: Long, source: SourceEntity): List<PhotoFileEntity> {
         val files = photoDao.files(photoId)
-        return if (source.kind == SourceKind.SERVER) ServerTree.reachable(files) { it.onServer } else files
+        return if (source.kind == SourceKind.SERVER) ServerTree.reachable(files, ServerTree::servable) else files
     }
 
     /** EXIF of a photo (RAW header first, gaps from its rendering), read now from the files. */

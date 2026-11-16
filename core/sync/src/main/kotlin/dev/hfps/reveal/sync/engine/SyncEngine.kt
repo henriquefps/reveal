@@ -5,6 +5,7 @@ package dev.hfps.reveal.sync.engine
 import android.util.Log
 import dev.hfps.reveal.data.db.MetaEntity
 import dev.hfps.reveal.data.db.RevealDatabase
+import dev.hfps.reveal.data.sync.BackupCoverage
 import dev.hfps.reveal.sync.account.ClientDevice
 import dev.hfps.reveal.sync.api.DeviceReport
 import dev.hfps.reveal.sync.api.ItemsLookupResponse
@@ -28,6 +29,8 @@ data class SyncReport(
     val cleanup: CleanupReport? = null,
     /** Culling through the server's culling records (ADR 0027), null when the server does not list `culling`. */
     val culling: CullingReport? = null,
+    /** Vanished folder photos decided this run (ADR 0018 "R1"). */
+    val freed: FreedReport = FreedReport(),
 )
 
 /** The server behind the paired URL is another one (a reset, or the URL now points elsewhere). */
@@ -53,6 +56,7 @@ class SyncEngine(
     var parkedRecovery = true
     private val meta = db.metaDao()
     val culling = CullingSync(db, clock)
+    private val freed = FreedPhotos(db, store)
 
     /**
      * Runs a sync against [api]. [serverId] is the paired server's id (another one throws [ServerChangedException]).
@@ -66,7 +70,8 @@ class SyncEngine(
         // so the server stops bridging this device's records (Hoard ADR 0016 "Client rules" 5).
         val serverCulling = info.has(FEATURE_CULLING)
         store.cullingInRecords = !serverCulling
-        if (info.has(FEATURE_DEVICE_IDENTITY)) report(api, serverId, serverCulling)
+        if (info.has(FEATURE_DEVICE_IDENTITY)) report(api, serverId, serverCulling, info.has(FEATURE_BACKUP))
+        backupRoots(api, info)
         val devices = runCatching { api.devices().devices }.getOrDefault(emptyList())
         val names = devices.associate { it.id to it.name }
         val deviceName = { id: String -> names[id] }
@@ -109,6 +114,7 @@ class SyncEngine(
         val cullingReport = if (serverCulling) culling.run(api, info) else null
         val nas = pullNas(api, info)
         val lookups = lookup(api, info)
+        val freedReport = freed.resolve(api, info)
         var cleaned: CleanupReport? = null
         if (cleanup) {
             cleaned = library.cleanUp()
@@ -118,7 +124,7 @@ class SyncEngine(
             meta.delete(KEY_CLEANUP_PULLED)
         }
         meta.put(MetaEntity(KEY_LAST_SYNC, clock().toString()))
-        return SyncReport(pushed, conflicts, pulled, copies, parked, nas, lookups, cleaned, cullingReport)
+        return SyncReport(pushed, conflicts, pulled, copies, parked, nas, lookups, cleaned, cullingReport, freedReport)
     }
 
     /** The one-off steps of updates that run after a pull ([sync]); returns how many changes they pushed. */
@@ -280,16 +286,39 @@ class SyncEngine(
     }
 
     /**
-     * `PATCH /v1/device` with the app id, model and (with [culling]) `features: ["culling"]` (Hoard ADR 0017 "Client
-     * calls" 2), once per server and whenever what is reported changes (an update, a renamed build).
+     * This phone's backup roots (Hoard ADR 0024 "`GET /v1/device` gains `physicalDevice.backup`"), kept in `meta`
+     * ([BackupCoverage.META_ROOTS]) for the uploader's coverage, the folders' "Backed up by Hoard" and the freed-adopt
+     * pass; gone when the server does not list `backup`. A failed read keeps the last answer.
      */
-    private suspend fun report(api: SyncApi, serverId: String, culling: Boolean) {
+    private suspend fun backupRoots(api: SyncApi, info: ServerInfo) {
+        if (!info.has(FEATURE_BACKUP)) {
+            meta.delete(BackupCoverage.META_ROOTS)
+            return
+        }
+        val view = try {
+            api.device()
+        } catch (e: SyncHttpException) {
+            if (e.transient || e.unauthorized) throw e
+            Log.w(TAG, "The server refused the device view: ${e.code}")
+            return
+        }
+        val roots = view.physicalDevice?.backup?.roots.orEmpty()
+        meta.put(MetaEntity(BackupCoverage.META_ROOTS, BackupCoverage.encode(roots)))
+    }
+
+    /**
+     * `PATCH /v1/device` with the app id, model and `features` (Hoard ADR 0017 "Client calls" 2): `culling` with
+     * [culling]; `freed-adopt` with [backup] (Hoard ADR 0024 item 6: this version adopts the folder photos Hoard
+     * frees, so Hoard may free shots Reveal's records name). Once per server and whenever what is reported changes.
+     */
+    private suspend fun report(api: SyncApi, serverId: String, culling: Boolean, backup: Boolean) {
         val device = device ?: return
+        val features = listOfNotNull(FEATURE_CULLING.takeIf { culling }, FEATURE_FREED_ADOPT.takeIf { backup })
         val report = DeviceReport(
             app = device.app,
             manufacturer = device.manufacturer,
             model = device.model,
-            features = if (culling) listOf(FEATURE_CULLING) else null,
+            features = features.ifEmpty { null },
         )
         val signature = serverId + " " + SyncApi.json.encodeToString(DeviceReport.serializer(), report)
         if (meta.get(KEY_DEVICE_REPORTED) == signature) return
@@ -396,7 +425,7 @@ class SyncEngine(
                 cursor = ""
                 continue
             }
-            store.applyNas(page.files)
+            store.applyNas(page.files, trash = info.has(FEATURE_TRASH))
             count += page.files.size
             cursor = page.cursor
             meta.put(MetaEntity(KEY_NAS_CURSOR, cursor))
@@ -453,6 +482,7 @@ class SyncEngine(
         meta.get(KEY_PHYSICAL_DEVICE)?.let { store.noteOwnDevice(it) }
         meta.delete(KEY_DEVICE_REPORTED)
         meta.delete(KEY_PHYSICAL_DEVICE)
+        meta.delete(BackupCoverage.META_ROOTS)
     }
 
     /** Forgets the cursors (unpair, another server). */
@@ -468,6 +498,7 @@ class SyncEngine(
             KEY_VERSION_PHOTOS,
             KEY_DEVICE_REPORTED,
             KEY_PHYSICAL_DEVICE,
+            BackupCoverage.META_ROOTS,
         )
         for (key in keys) {
             meta.delete(key)
@@ -479,7 +510,7 @@ class SyncEngine(
         private const val TAG = "RevealSync"
         const val KEY_CURSOR = "sync.cursor"
         const val KEY_NAS_CURSOR = "sync.nasCursor"
-        const val KEY_TRACKING = "sync.tracking"
+        const val KEY_TRACKING = dev.hfps.reveal.data.db.SYNC_TRACKING_KEY
         const val KEY_LAST_SYNC = "sync.lastSync"
 
         /** What was last reported with `PATCH /v1/device` (server id + body), and the physical device id read. */
@@ -488,6 +519,15 @@ class SyncEngine(
         const val FEATURE_CULLING = "culling"
         const val FEATURE_DEVICE_IDENTITY = "device-identity"
         const val FEATURE_ITEMS = "items"
+
+        /** hoard-server 0.11.0: Hoard's trash in the NAS feed (`trashed`, Hoard ADR 0023). */
+        const val FEATURE_TRASH = "trash"
+
+        /** hoard-server 0.12.0: phone backup (Hoard ADR 0024): roots, `wait`, `409 mirror`, mirror locations. */
+        const val FEATURE_BACKUP = "backup"
+
+        /** What Reveal declares once it adopts the folder photos Hoard frees (Hoard ADR 0024 item 6). */
+        const val FEATURE_FREED_ADOPT = "freed-adopt"
 
         /** The one-off clean-up of 0.5.3 is done (its version), and its re-pull is done (a run cut short resumes). */
         const val KEY_CLEANUP = "sync.cleanup"

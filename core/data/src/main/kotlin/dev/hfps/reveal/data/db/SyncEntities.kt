@@ -74,6 +74,18 @@ data class PhotoCloudEntity(
     @ColumnInfo(name = "original_sha") val originalSha: String? = null,
     /** When the server was last asked about the fingerprint (0 = never). */
     @ColumnInfo(name = "checked_at") val checkedAt: Long = 0,
+    /**
+     * A Server photo whose files the server no longer holds (purged from Hoard's trash, deleted on the NAS) and that
+     * Reveal keeps for its edits or records (ADR 0018 "R1"): listed as unavailable (the placeholder and Forget),
+     * never a cell that fails to open. Null otherwise; cleared when a file of it comes back.
+     */
+    @ColumnInfo(name = "lost_at") val lostAt: Long? = null,
+    /**
+     * When the photo first became an originals-backup candidate while its main file was covered by Hoard's phone
+     * backup (ADR 0018 "R1", Hoard ADR 0024): it waits 24 hours from then, is looked up again and uploaded only if the
+     * server still misses it. Null = not waiting (not covered, or never a candidate).
+     */
+    @ColumnInfo(name = "candidate_at") val candidateAt: Long? = null,
 )
 
 /**
@@ -113,6 +125,11 @@ data class SyncUploadEntity(
     val state: String = STATE_PENDING,
     val attempts: Int = 0,
     @ColumnInfo(name = "updated_at") val updatedAt: Long,
+    /**
+     * An original another device is uploading right now (`in_progress`, Hoard ADR 0024): not sent before this time
+     * (never in parallel, never counted as a failure). Null = due.
+     */
+    @ColumnInfo(name = "retry_at") val retryAt: Long? = null,
 ) {
     companion object {
         const val STATE_PENDING = "pending"

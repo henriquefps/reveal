@@ -123,6 +123,7 @@ object LibraryTags {
     const val FOLDER_REMOVE = "library-folder-remove"
     const val FOLDER_BACKUP_EVERYTHING = "library-folder-backup-everything"
     const val FOLDER_BACKUP_EDITED = "library-folder-backup-edited"
+    const val FOLDER_BACKED_UP_BY_HOARD = "library-folder-backed-up-by-hoard"
     const val ADD_FOLDER = "library-add-folder"
     const val EXPORT = "library-export"
     const val APPLY_PRESET = "library-apply-preset"
@@ -150,6 +151,9 @@ object LibraryTags {
     const val DELETE_CONFLICTS = "library-delete-conflicts"
 
     fun cell(id: Long) = "library-cell-$id"
+
+    /** The placeholder of a photo in Hoard's trash (ADR 0018 "R1"). */
+    fun trashed(id: Long) = "library-trashed-$id"
 
     /** The cloud badge of cell [id], by `CloudState` name. */
     fun cloudBadge(id: Long, state: String) = "library-cloud-$id-$state"
@@ -472,8 +476,9 @@ private fun PhotoCell(
 ) {
     val colors = RevealTheme.colors
     var image by remember(row.versionId, row.editTime, cellPx) { mutableStateOf(thumbnails.cached(row, cellPx)) }
-    LaunchedEffect(row.versionId, row.editTime, row.unavailable, cellPx) {
-        if (image == null && !row.unavailable) image = thumbnails.load(row, cellPx)
+    val placeholder = row.inTrash || row.unavailable
+    LaunchedEffect(row.versionId, row.editTime, placeholder, cellPx) {
+        if (image == null && !placeholder) image = thumbnails.load(row, cellPx)
         if (image != null && row.editTime != null) thumbnails.upgrade(row)?.let { image = it }
     }
     // The description is built only when the semantics are read (TalkBack, tests), not for every cell composed.
@@ -495,13 +500,8 @@ private fun PhotoCell(
             },
     ) {
         val bitmap = image
-        if (row.unavailable) {
-            // Never an empty square: nothing can show this photo, so the cell says so (FIX/U).
-            UnavailablePlaceholder(
-                name = row.name,
-                label = stringResource(R.string.library_unavailable_label),
-                modifier = Modifier.testTag(UnavailableTags.cell(row.id)),
-            )
+        if (placeholder) {
+            CellPlaceholder(row)
         } else if (bitmap != null) {
             // Drawn by the cell itself, not an Image node: a tablet row composes and measures 13 cells at once while
             // the grid flings (W2/P).
@@ -539,6 +539,27 @@ private fun Modifier.cropImage(bitmap: ImageBitmap, alpha: Float): Modifier = dr
     val offset = IntOffset(((size.width - width) / 2f).roundToInt(), ((size.height - height) / 2f).roundToInt())
     val dstSize = IntSize(width, height)
     onDrawBehind { clipRect { drawImage(bitmap, dstOffset = offset, dstSize = dstSize, alpha = alpha) } }
+}
+
+/**
+ * A cell nothing can show: a photo in Hoard's trash (R1: it opens to a note, never to the editor), or an unavailable
+ * one (FIX/U: never an empty square, the cell says so).
+ */
+@Composable
+private fun CellPlaceholder(row: PhotoRow) {
+    if (row.inTrash) {
+        UnavailablePlaceholder(
+            name = row.name,
+            label = stringResource(R.string.library_in_trash_label),
+            modifier = Modifier.testTag(LibraryTags.trashed(row.id)),
+        )
+    } else {
+        UnavailablePlaceholder(
+            name = row.name,
+            label = stringResource(R.string.library_unavailable_label),
+            modifier = Modifier.testTag(UnavailableTags.cell(row.id)),
+        )
+    }
 }
 
 /** Whether [Badges] would draw anything for [row] (most cells have none: they skip the badge layer entirely). */
@@ -706,7 +727,7 @@ internal enum class CloudState {
 
 internal fun cloudState(row: PhotoRow): CloudState = when {
     // Nothing shows it: the placeholder says so, a cloud badge would only repeat it badly.
-    row.unavailable -> CloudState.LOCAL
+    row.unavailable || row.inTrash -> CloudState.LOCAL
 
     // A hand-off Reveal can no longer read whose original the server has opens from there (ADR 0011 "Fallbacks").
     row.unreadable && row.cloudOriginal -> CloudState.CLOUD
@@ -766,6 +787,7 @@ internal fun formatBadge(format: PhotoFormat): Int? = when (format) {
 internal fun cellDescription(resources: Resources, row: PhotoRow): String {
     val parts = mutableListOf(row.name, resources.getString(formatName(row.format)))
     if (row.unavailable) parts += resources.getString(R.string.library_unavailable_cell)
+    if (row.inTrash) parts += resources.getString(R.string.library_in_trash_cell)
     if (row.rating > 0) parts += resources.getQuantityString(R.plurals.library_stars, row.rating, row.rating)
     when (row.flag) {
         PickFlag.PICK -> parts += resources.getString(R.string.library_flag_picked)

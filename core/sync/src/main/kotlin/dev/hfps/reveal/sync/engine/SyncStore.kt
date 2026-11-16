@@ -1443,26 +1443,39 @@ class SyncStore(
 
     // ------------------------------------------------------------------ NAS files and lookups
 
-    /** Files the server indexes on its NAS (ADR 0017 "NAS folders"): the Server source's photos. */
-    suspend fun applyNas(files: List<NasFile>) {
+    /**
+     * Files the server indexes on its NAS (ADR 0017 "NAS folders"): the Server source's photos. With [trash] (the
+     * server lists `trash`, Hoard ADR 0023; ADR 0018 "R1") a removal marked `trashed` keeps its file row as trashed
+     * (the photo is "in Hoard's trash"), the same row live again restores it, and the row removed again without
+     * `trashed` purges it; without it every removal is a purge.
+     */
+    suspend fun applyNas(files: List<NasFile>, trash: Boolean = false) {
         val source = quietly { serverSource() }
         for (chunk in files.chunked(APPLY_CHUNK)) {
-            quietly { for (file in chunk) applyNasFile(source, file) }
+            quietly { for (file in chunk) applyNasFile(source, file, trash) }
             yield()
         }
         quietly { sync.deleteEmptyServerPhotos(source.id) }
     }
 
-    @Suppress("CyclomaticComplexMethod", "ComplexCondition")
-    private suspend fun applyNasFile(source: SourceEntity, file: NasFile) {
+    @Suppress("CyclomaticComplexMethod", "ComplexCondition", "LongMethod")
+    private suspend fun applyNasFile(source: SourceEntity, file: NasFile, trash: Boolean) {
         val path = "nas/${file.folderId}/${file.path}"
         val known = sync.serverFileByPath(source.id, path)
         if (file.removed || file.fingerprint == null) {
-            if (known != null) photos.deleteFiles(listOf(known.id))
+            removed(known, file, trash)
             return
         }
         val fingerprint = file.fingerprint
-        if (known != null && known.fingerprint == fingerprint) return
+        if (known != null && known.fingerprint == fingerprint) {
+            // Restored from Hoard's trash (the same path and fingerprint): live again.
+            if (known.trashedAt != null) {
+                sync.setTrashed(known.id, null)
+                trashChanged(known.photoId)
+                cameBack(known.photoId)
+            }
+            return
+        }
         if (known != null) photos.deleteFiles(listOf(known.id))
         val name = file.path.substringAfterLast('/')
         val type = ImageFormats.classify(name)
@@ -1509,6 +1522,68 @@ class SyncStore(
             sync.setServerFolder(photoId, folder)
         }
         markOriginal(photoId, SOURCE_NAS)
+        cameBack(photoId)
+    }
+
+    /**
+     * A NAS feed removal (ADR 0018 "R1"): into Hoard's trash (kept, marked) when [trash] and the row says so, else a
+     * purge. A file only this device's own copy had makes it ask the server again (a trashed file is still served).
+     */
+    private suspend fun removed(known: PhotoFileEntity?, file: NasFile, trash: Boolean) {
+        val trashed = trash && file.removed && file.trashed
+        when {
+            known == null -> if (!trashed) file.fingerprint?.let { sync.askAgain(it) }
+
+            // Into Hoard's trash: kept, so a restore gives the photo back with its uuid, edits and culling.
+            trashed -> if (known.trashedAt == null) {
+                sync.setTrashed(known.id, clock())
+                trashChanged(known.photoId)
+            }
+
+            else -> purge(known)
+        }
+    }
+
+    /**
+     * A NAS file the server no longer holds (deleted on the NAS, emptied from Hoard's trash): its row goes, and a photo
+     * left with nothing the server can serve stops looking openable (ADR 0018 "R1"). One Reveal keeps (an edit, a
+     * hand-off, a record: `deleteEmptyServerPhotos` leaves it) becomes unavailable: the placeholder and Forget, never a
+     * cell that fails to open.
+     */
+    private suspend fun purge(known: PhotoFileEntity) {
+        photos.deleteFiles(listOf(known.id))
+        // The fingerprint lookup found the content while it was in the trash (hoard-server keeps serving a trashed
+        // file until it is purged): this device's own copies of it are asked about again, so one the server no longer
+        // has is backed up instead of being believed on the server for good.
+        known.fingerprint?.let { sync.askAgain(it) }
+        val left = photos.files(known.photoId)
+        if (left.any { it.onServer && it.trashedAt == null }) return
+        val cloud = sync.cloud(known.photoId) ?: PhotoCloudEntity(known.photoId)
+        val lost = if (left.isEmpty()) cloud.lostAt ?: clock() else cloud.lostAt
+        sync.putCloud(cloud.copy(originalOnServer = false, originalSource = null, lostAt = lost))
+    }
+
+    /** The trashed state of a file of [photoId] changed: the grid reads it from the files, so tell its observers. */
+    private suspend fun trashChanged(photoId: Long) {
+        photos.touchPhotos(listOf(photoId))
+    }
+
+    /**
+     * A file of [photoId] is live on the server again (a restore, a file put back): it is no longer lost, and a photo
+     * "Remove from Reveal" hid only because it was unavailable shows again, on every device (its record goes up).
+     */
+    private suspend fun cameBack(photoId: Long) {
+        val cloud = sync.cloud(photoId)
+        if (cloud?.lostAt != null) sync.putCloud(cloud.copy(lostAt = null))
+        val photo = photos.get(photoId) ?: return
+        if (!photo.hidden || photo.forgottenAt == null) return
+        sync.unforget(photoId)
+        val record = sync.record(Kinds.PHOTO, photo.uuid) ?: return
+        if (!record.deleted) {
+            sync.putRecord(
+                record.copy(dirty = true, modifiedAt = maxOf(clock(), record.modifiedAt + 1)),
+            )
+        }
     }
 
     /**
@@ -1517,7 +1592,8 @@ class SyncStore(
      */
     private suspend fun keepAdopted(source: SourceEntity, fingerprint: String, local: List<FingerprintMatch>): Boolean {
         val adopted = local.firstOrNull {
-            it.file.sourceId == source.id && it.file.relativePath.startsWith(ADOPTED_PREFIX)
+            it.file.sourceId == source.id &&
+                (it.file.relativePath.startsWith(ADOPTED_PREFIX) || it.file.relativePath.startsWith(FREED_PREFIX))
         } ?: return false
         sync.setOnServer(fingerprint, true)
         if (isMainFile(adopted.file)) markOriginal(adopted.file.photoId, SOURCE_NAS)
@@ -1645,6 +1721,45 @@ class SyncStore(
     /** One batch of [adoptHandoffs] over what is adoptable now; returns how many moved (0 = none left). */
     suspend fun adoptHandoffs(limit: Int = ADOPT_BATCH): Int = adoptNext(limit).moved
 
+    // ------------------------------------------------------------------ folder photos Hoard freed (R1)
+
+    /**
+     * A folder photo whose files vanished from the phone while the server holds them (Hoard freed them, or they were
+     * deleted from an edited photo) moves to the Server source **in place** (ADR 0018 "R1", Hoard ADR 0024 item 6):
+     * the same row keeps its uuid, versions, edits, history and culling; each file in [files] (file id -> the item's
+     * fingerprint for it) takes the server's document id under [FREED_PREFIX]; the photo's other files go (the server
+     * does not hold them). Quiet, like the hand-off adoption: nothing changes for other devices. [folder] is where the
+     * photo was on the phone (made unique when a Server photo there has its stem). False when nothing was adopted.
+     */
+    suspend fun adoptFreed(photoId: Long, files: Map<Long, String>, folder: String, originalSource: String): Boolean =
+        quietly {
+            val source = serverSource()
+            val photo = photos.get(photoId) ?: return@quietly false
+            val all = photos.files(photoId)
+            val keep = all.filter { it.id in files }
+            if (keep.isEmpty()) return@quietly false
+            photos.deleteFiles(all.filter { it.id !in files }.map { it.id })
+            for (file in keep) {
+                val print = files.getValue(file.id)
+                var path = "$FREED_PREFIX$print/${file.name}"
+                if (sync.serverFileByPath(source.id, path) != null) path = "$FREED_PREFIX$print/${file.id}/${file.name}"
+                sync.adoptFreedFile(file.id, source.id, path, ServerTree.documentId(print, file.name), print)
+            }
+            val taken = photos.byStem(source.id, folder, photo.stemKey)?.takeIf { it.id != photoId } != null
+            sync.adoptFreedPhoto(photoId, source.id, if (taken) "$folder/${photo.uuid}" else folder)
+            sync.cancelUploads(photoId)
+            val cloud = sync.cloud(photoId) ?: PhotoCloudEntity(photoId)
+            sync.putCloud(
+                cloud.copy(
+                    originalOnServer = true,
+                    originalSource = originalSource,
+                    checkedAt = clock(),
+                    lostAt = null,
+                ),
+            )
+            true
+        }
+
     // ------------------------------------------------------------------ the Server source
 
     /** The single Server source (created on first use). */
@@ -1704,6 +1819,9 @@ class SyncStore(
 
         /** Relative path prefix of adopted hand-off files (unique next to the NAS feed's `nas/<folder>/<path>`). */
         const val ADOPTED_PREFIX = "handoff/"
+
+        /** Relative path prefix of folder files Hoard freed and the Server source adopted (ADR 0018 "R1"). */
+        const val FREED_PREFIX = "freed/"
 
         /** `sources.tree_uri` of the Server source (unique, never a real URI). */
         const val SERVER_TREE = dev.hfps.reveal.data.sync.ServerTree.SOURCE_TREE

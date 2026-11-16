@@ -2,7 +2,9 @@ package dev.hfps.reveal.ui.sync
 
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.test.junit4.v2.createComposeRule
+import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onRoot
+import androidx.compose.ui.test.performScrollTo
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.github.takahirom.roborazzi.captureRoboImage
 import dev.hfps.reveal.data.db.PhotoRow
@@ -16,6 +18,7 @@ import dev.hfps.reveal.feature.settings.sync.BackupFolder
 import dev.hfps.reveal.feature.settings.sync.PairingState
 import dev.hfps.reveal.feature.settings.sync.SyncActions
 import dev.hfps.reveal.feature.settings.sync.SyncSettingsContent
+import dev.hfps.reveal.feature.settings.sync.SyncTags
 import dev.hfps.reveal.feature.settings.sync.SyncUiState
 import dev.hfps.reveal.sync.PairProblem
 import dev.hfps.reveal.sync.SyncProblem
@@ -72,6 +75,22 @@ class SyncScreenshotTest {
 
     @Test fun pairedLight() = shoot("phone_paired_light") {
         RevealTheme(darkTheme = false) { SyncSettingsContent(paired, SyncActions(), now = now) }
+    }
+
+    /** A folder Hoard's phone backup covers (R1): read only, "Backed up by Hoard on this phone". */
+    @Test fun pairedHoardDark() = shoot("phone_paired_hoard_dark", scrollTo = SyncTags.folder(1)) {
+        RevealTheme(darkTheme = true) {
+            SyncSettingsContent(
+                paired.copy(
+                    folders = listOf(
+                        BackupFolder(1, "Camera", true, coveredByHoard = true),
+                        BackupFolder(2, "Beach day", false),
+                    ),
+                ),
+                SyncActions(),
+                now = now,
+            )
+        }
     }
 
     @Test fun pairedProblemDark() = shoot("phone_paired_problem_dark") {
@@ -143,8 +162,9 @@ class SyncScreenshotTest {
         RevealTheme(darkTheme = true) { LibraryContent(state, LibraryActions(), LibrarySamples.thumbnails) }
     }
 
-    private fun shoot(name: String, content: @Composable () -> Unit) {
+    private fun shoot(name: String, scrollTo: String? = null, content: @Composable () -> Unit) {
         composeRule.setContent(content)
+        scrollTo?.let { composeRule.onNodeWithTag(it).performScrollTo() }
         composeRule.onRoot().captureRoboImage("src/test/screenshots/sync/$name.png")
     }
 }

@@ -374,6 +374,12 @@ private fun LibraryMessages(events: Flow<LibraryMessage>, snackbar: SnackbarHost
                     message.count,
                 )
 
+                is LibraryMessage.KeptByPhoneBackup -> resources.getQuantityString(
+                    R.plurals.library_kept_by_phone_backup,
+                    message.count,
+                    message.count,
+                )
+
                 is LibraryMessage.Pasted -> resources.getQuantityString(
                     R.plurals.library_edits_pasted,
                     message.count,

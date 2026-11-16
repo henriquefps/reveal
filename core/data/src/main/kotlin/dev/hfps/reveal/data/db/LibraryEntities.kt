@@ -129,6 +129,12 @@ data class PhotoEntity(
      * The files are never touched.
      */
     val hidden: Boolean = false,
+    /**
+     * When "Remove from Reveal" hid this photo because nothing could show it (ADR 0018 "R1"): a Server photo whose
+     * file comes back on the server (restored from Hoard's trash, put back on the NAS) is shown again. Null for photos
+     * hidden for any other reason (Remove from library, another device's record), which stay hidden.
+     */
+    @ColumnInfo(name = "forgotten_at") val forgottenAt: Long? = null,
 )
 
 /** One file on disk of a photo. Unique by (source, relative path); size + mtime detect changes. */
@@ -181,6 +187,18 @@ data class PhotoFileEntity(
      * a hand-off is checked again only after a while, never in a burst at start.
      */
     @ColumnInfo(name = "checked_at") val checkedAt: Long? = null,
+    /**
+     * Server source: when the NAS feed said this file moved into Hoard's trash (`trashed: true`, Hoard ADR 0023,
+     * ADR 0018 "R1"); null = live. A photo whose every file is trashed is "in Hoard's trash": hidden from the library
+     * unless that filter is on, never opened or edited. A restore clears it; a purge deletes the row.
+     */
+    @ColumnInfo(name = "trashed_at") val trashedAt: Long? = null,
+    /**
+     * Folders: when a walk last missed this file while its photo kept no other file (ADR 0018 "R1", freed-adopt):
+     * the photo waits, unlisted, for the server to say whether Hoard freed it (then it moves to the Server source) or
+     * it was deleted (then it goes, as before). Null = listed by the last walk. A walk that lists it again clears it.
+     */
+    @ColumnInfo(name = "vanished_at") val vanishedAt: Long? = null,
 )
 
 /**

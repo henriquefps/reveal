@@ -97,6 +97,9 @@ sealed interface LibraryMessage {
     /** [count] photos deleted from the sync server ("Delete from server"). */
     data class DeletedFromServer(val count: Int) : LibraryMessage
 
+    /** [count] files "Delete from server" left there: Hoard's phone backup holds them (`409 mirror`, ADR 0018 "R1"). */
+    data class KeptByPhoneBackup(val count: Int) : LibraryMessage
+
     /** [count] virtual copies made (docs/adr/0025). */
     data class CopiesCreated(val count: Int) : LibraryMessage
 
@@ -259,6 +262,19 @@ class LibraryViewModel @Inject constructor(
 
     init {
         LibraryMetrics.selected(SystemClock.elapsedRealtime())
+    }
+
+    init {
+        // "Delete from server" answers later (the deletes go after the push): files Hoard's phone backup keeps are
+        // told once, where the deletion reported its result (ADR 0018 "R1").
+        viewModelScope.launch {
+            sync.mirrorKept.collect { count ->
+                if (count > 0) {
+                    messages.send(LibraryMessage.KeptByPhoneBackup(count))
+                    sync.mirrorKeptTold()
+                }
+            }
+        }
     }
 
     init {

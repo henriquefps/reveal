@@ -39,8 +39,10 @@ class HandoffServerRefsTest {
         ServerItems {
         val items = HashMap<String, ServerItemResult>()
         val lookups = HashMap<String, String>()
-        val itemCalls = ArrayList<String>()
-        val lookupCalls = ArrayList<List<String>>()
+
+        // The resolver reads items in parallel: the call logs must take concurrent adds.
+        val itemCalls: MutableList<String> = java.util.Collections.synchronizedList(ArrayList())
+        val lookupCalls: MutableList<List<String>> = java.util.Collections.synchronizedList(ArrayList())
         var pulls = 0
         var up = true
 

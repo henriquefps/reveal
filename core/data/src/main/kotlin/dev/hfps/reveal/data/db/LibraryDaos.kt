@@ -63,6 +63,11 @@ data class PhotoRow(
     val unavailable: Boolean = false,
     /** The fingerprint of an unreadable file of the photo (to look for its local preview), null when readable. */
     @ColumnInfo(name = "unreadable_fingerprint") val unreadableFingerprint: String? = null,
+    /**
+     * A Server photo in Hoard's trash (ADR 0018 "R1"): listed only under that filter, shown as a placeholder, never
+     * opened full size or edited.
+     */
+    @ColumnInfo(name = "in_trash") val inTrash: Boolean = false,
 ) {
     /** This cell's version has an edit (per version: a virtual copy is edited or not on its own, docs/adr/0025). */
     val edited: Boolean get() = editTime != null
@@ -78,6 +83,8 @@ data class IndexedFile(
     @ColumnInfo(name = "relative_path") val relativePath: String,
     val size: Long,
     val modified: Long,
+    /** A walk missed it and its photo waits for the server's word (ADR 0018 "R1"); null = listed last time. */
+    @ColumnInfo(name = "vanished_at") val vanishedAt: Long? = null,
 )
 
 /** A file whose content fingerprint is still to be computed (filled in the background after a walk). */
@@ -130,7 +137,8 @@ interface SourceDao {
     suspend fun handoff(): SourceEntity?
 
     @Query(
-        "SELECT s.*, (SELECT COUNT(*) FROM photos p WHERE p.source_id = s.id AND p.hidden = 0) AS photo_count " +
+        "SELECT s.*, (SELECT COUNT(*) FROM photos p WHERE p.source_id = s.id AND p.hidden = 0 AND NOT " +
+            PhotoQuerySql.VANISHED_SQL + ") AS photo_count " +
             "FROM sources s WHERE s.kind = 'FOLDER' ORDER BY s.display_name COLLATE NOCASE, s.id",
     )
     fun observeWithCounts(): Flow<List<SourceWithCount>>
@@ -162,6 +170,8 @@ data class FilterCounts(
     val synced: Int = 0,
     /** Every photo of the home (unfiltered). */
     val total: Int = 0,
+    /** Photos in Hoard's trash (not part of [total]: hidden unless their filter is on, ADR 0018 "R1"). */
+    @ColumnInfo(name = "in_trash") val inTrash: Int = 0,
 ) {
     val notSynced: Int get() = total - synced
 }
@@ -201,7 +211,8 @@ interface PhotoDao {
             "COALESCE(SUM(NOT " + PhotoQuerySql.EDITED_SQL + "), 0) AS not_edited, " +
             "COALESCE(SUM(p.has_raw = 1), 0) AS raw, " +
             "COALESCE(SUM(p.has_raw = 0), 0) AS jpeg, COALESCE(SUM(" + PhotoQuerySql.SYNCED_SQL + "), 0) AS synced, " +
-            "COUNT(*) AS total " + PhotoQuerySql.CELLS_FROM + " " +
+            "COUNT(*) AS total, (SELECT COUNT(*) " + PhotoQuerySql.CELLS_FROM + " WHERE p.hidden = 0 AND " +
+            PhotoQuerySql.IN_TRASH_SQL + ") AS in_trash " + PhotoQuerySql.CELLS_FROM + " " +
             "WHERE " + PhotoQuerySql.LISTED_SQL,
     )
     fun observeFilterCounts(): Flow<FilterCounts>
@@ -237,8 +248,38 @@ interface PhotoDao {
 
     // ---- indexing
 
-    @Query("SELECT id, photo_id, relative_path, size, modified FROM photo_files WHERE source_id = :sourceId")
+    @Query(
+        "SELECT id, photo_id, relative_path, size, modified, vanished_at FROM photo_files WHERE source_id = :sourceId",
+    )
     suspend fun indexedFiles(sourceId: Long): List<IndexedFile>
+
+    /**
+     * A walk no longer lists these files and their photo kept none (ADR 0018 "R1", freed-adopt): the photo waits,
+     * unlisted, for the server's word. The first time is kept (the 7-day bound counts from it).
+     */
+    @Query("UPDATE photo_files SET vanished_at = :at WHERE id IN (:ids) AND vanished_at IS NULL")
+    suspend fun markVanished(ids: List<Long>, at: Long)
+
+    /** A walk listed these files again: their photo is back. */
+    @Query("UPDATE photo_files SET vanished_at = NULL WHERE id IN (:ids)")
+    suspend fun clearVanished(ids: List<Long>)
+
+    /** Files of [sourceId] that vanished at or before [before]: the bound of the wait is over, today's rule applies. */
+    @Query(
+        "SELECT id FROM photo_files WHERE source_id = :sourceId AND vanished_at IS NOT NULL AND vanished_at <= :before",
+    )
+    suspend fun expiredVanished(sourceId: Long, before: Long): List<Long>
+
+    /**
+     * Rewrites nothing, but tells the grid's observers that these photos changed (a change to their files alone, which
+     * the grid's query reads but does not observe).
+     */
+    @Query("UPDATE photos SET added_at = added_at WHERE id IN (:ids)")
+    suspend fun touchPhotos(ids: List<Long>)
+
+    /** The photo has a version a user edited (an edit, a name, a virtual or conflict copy, snapshots). */
+    @Query("SELECT EXISTS (SELECT 1 FROM versions v WHERE v.photo_id = :photoId AND (" + EDITED_VERSION + "))")
+    suspend fun isEdited(photoId: Long): Boolean
 
     @Query("SELECT id, folder, stem_key, xmp_document_id, xmp_modified FROM photos WHERE source_id = :sourceId")
     suspend fun indexedPhotos(sourceId: Long): List<IndexedPhoto>
@@ -394,6 +435,10 @@ interface PhotoDao {
     @Query("UPDATE photos SET hidden = :hidden WHERE id IN (:ids)")
     suspend fun setHidden(ids: List<Long>, hidden: Boolean)
 
+    /** "Remove from Reveal" of photos it keeps: hidden, and marked as forgotten (ADR 0018 "R1"). */
+    @Query("UPDATE photos SET hidden = 1, forgotten_at = :at WHERE id IN (:ids)")
+    suspend fun forgetHidden(ids: List<Long>, at: Long)
+
     // ---- hand-offs (ADR 0011)
 
     @Query("SELECT * FROM photos WHERE source_id = :sourceId AND folder = :folder AND stem_key = :stemKey")
@@ -511,6 +556,10 @@ interface PhotoDao {
             PhotoQuerySql.UNAVAILABLE_SQL + "))",
     )
     suspend fun unavailableCandidate(id: Long): Boolean
+
+    /** [PhotoQuerySql.IN_TRASH_SQL] for one photo (the viewer). */
+    @Query("SELECT EXISTS(SELECT 1 FROM photos p WHERE p.id = :id AND " + PhotoQuerySql.IN_TRASH_SQL + ")")
+    suspend fun inTrash(id: Long): Boolean
 
     /** How many of [ids] have an edit (the "Remove from Reveal" confirmation says they go too). */
     @Query("SELECT COUNT(*) FROM photos WHERE id IN (:ids) AND has_edit = 1")

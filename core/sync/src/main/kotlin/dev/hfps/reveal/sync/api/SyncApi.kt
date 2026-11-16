@@ -1,5 +1,6 @@
 package dev.hfps.reveal.sync.api
 
+import dev.hfps.reveal.data.sync.BackupRoot
 import java.io.IOException
 import java.io.InputStream
 import java.util.concurrent.TimeUnit
@@ -64,6 +65,12 @@ enum class DropResult {
 
     /** The server predates the route: asked again after it is updated. */
     UNSUPPORTED,
+
+    /**
+     * `DELETE /v1/originals`: `409` with reason `mirror` (Hoard ADR 0024): Hoard's phone backup holds the file, so the
+     * server keeps it (it released this device's claim). Done: the photo stays backed up by the phone's mirror.
+     */
+    MIRROR,
 }
 
 /**
@@ -270,6 +277,18 @@ class SyncApi(baseUrl: String, private val apiKey: String?, private val client: 
         LookupResponse.serializer(),
     )
 
+    /**
+     * `GET /v1/items?folder=&path=` (Hoard ADR 0014, ADR 0024 "Mirror items"): one page of the live items under [path]
+     * of [folder] (a NAS folder id, or a phone backup root id; sub-directories included), with their locations.
+     */
+    fun items(folder: String, path: String?, cursor: String?, limit: Int): ItemsPage {
+        val builder = url("v1/items").newBuilder().addQueryParameter("folder", folder)
+            .addQueryParameter("limit", limit.toString())
+        if (!path.isNullOrEmpty()) builder.addQueryParameter("path", path)
+        if (cursor != null) builder.addQueryParameter("cursor", cursor)
+        return get(builder.build(), ItemsPage.serializer())
+    }
+
     fun nasFiles(cursor: String, limit: Int): NasFilesResponse = get(
         url("v1/nas/files").newBuilder().addQueryParameter("cursor", cursor)
             .addQueryParameter("limit", limit.toString()).build(),
@@ -373,7 +392,7 @@ class SyncApi(baseUrl: String, private val apiKey: String?, private val client: 
 
                 HTTP_FORBIDDEN -> DropResult.REFUSED
 
-                HTTP_CONFLICT -> DropResult.REFERENCED
+                HTTP_CONFLICT -> if (reason(response) == REASON_MIRROR) DropResult.MIRROR else DropResult.REFERENCED
 
                 HTTP_METHOD_NOT_ALLOWED -> DropResult.UNSUPPORTED
 
@@ -386,6 +405,13 @@ class SyncApi(baseUrl: String, private val apiKey: String?, private val client: 
     }
 
     // ------------------------------------------------------------------ plumbing
+
+    /** `error.details.reason` of an error answer, or null. */
+    private fun reason(response: Response): String? {
+        val text = runCatching { response.body.string() }.getOrDefault("")
+        val error = runCatching { json.parseToJsonElement(text).jsonObject["error"]?.jsonObject }.getOrNull()
+        return runCatching { (error?.get("details") as? JsonObject)?.get("reason")?.jsonPrimitive?.content }.getOrNull()
+    }
 
     private fun uploadUrl(id: String) = url("v1/uploads").newBuilder().addPathSegment(id).build()
 
@@ -468,6 +494,7 @@ class SyncApi(baseUrl: String, private val apiKey: String?, private val client: 
         private const val HTTP_FORBIDDEN = 403
         private const val HTTP_CONFLICT = 409
         private const val HTTP_METHOD_NOT_ALLOWED = 405
+        private const val REASON_MIRROR = "mirror"
         private val JSON_TYPE = "application/json; charset=utf-8".toMediaType()
         private val OFFSET_OCTETS = "application/offset+octet-stream".toMediaType()
         private val JPEG_TYPE = "image/jpeg".toMediaType()
@@ -583,7 +610,17 @@ data class DeviceCandidate(
 }
 
 @Serializable
-data class PhysicalDevice(val id: String, val name: String = "", val devices: List<DeviceEntry> = emptyList())
+data class PhysicalDevice(
+    val id: String,
+    val name: String = "",
+    val devices: List<DeviceEntry> = emptyList(),
+    /** hoard-server 0.12.0 (`backup`): the folders Hoard mirrors on this phone; absent on older servers. */
+    val backup: PhysicalBackup? = null,
+)
+
+/** `physicalDevice.backup` of `GET /v1/device` (Hoard ADR 0024): this phone's backup roots (`[]` when none). */
+@Serializable
+data class PhysicalBackup(val roots: List<BackupRoot> = emptyList())
 
 /** `GET /v1/device` (and the answer of `PATCH` / `claim`). */
 @Serializable
@@ -761,13 +798,28 @@ data class NasFile(
     val size: Long = 0,
     val modifiedAt: Long = 0,
     val removed: Boolean = false,
+    /**
+     * hoard-server 0.11.0 (`trash`, Hoard ADR 0023): a removal that is a move into Hoard's trash (`removed` too); a
+     * restore is the row again live, a purge the row again removed without it.
+     */
+    val trashed: Boolean = false,
 )
 
 @Serializable
 data class NasFilesResponse(val files: List<NasFile> = emptyList(), val cursor: String, val hasMore: Boolean = false)
 
 @Serializable
-data class UploadCreateRequest(val sha256: String, val size: Long, val kind: String, val fingerprint: String? = null)
+data class UploadCreateRequest(
+    val sha256: String,
+    val size: Long,
+    val kind: String,
+    val fingerprint: String? = null,
+    /**
+     * hoard-server 0.12.0 (`backup`, Hoard ADR 0024): answer `in_progress` instead of starting a second upload while
+     * another device uploads the same bytes. Sent only to servers that list `backup` (null = left out).
+     */
+    val wait: Boolean? = null,
+)
 
 @Serializable
 data class UploadCreateResponse(
@@ -776,6 +828,8 @@ data class UploadCreateResponse(
     val offset: Long = 0,
     val chunkSize: Long = 0,
     val expiresAt: Long = 0,
+    /** With `status: "in_progress"`: seconds before asking again (Hoard ADR 0024; 300 when absent). */
+    val retryAfter: Long? = null,
 )
 
 /** 8 MiB: an edited preview's upload limit when the server does not say (Hoard ADR 0020 "Limits"). */
@@ -867,9 +921,25 @@ data class ItemsLookupResponse(
     val missing: List<String> = emptyList(),
 )
 
-/** Where the server holds a file: `nas` (a folder path) or `backup` (an uploaded blob). */
+/**
+ * Where the server holds a file: `nas` (a folder path) or `backup` (an uploaded blob); `mirror` (hoard-server 0.12.0,
+ * Hoard ADR 0024) is where a phone has or had it, next to one of those: [volume] + [path] on the phone, [modifiedAt],
+ * [onDevice] and, when the phone no longer has it, why ([gone]: `freed`, `deleted`; unknown values mean `deleted`).
+ * Unknown sources are kept as their string and ignored.
+ */
 @Serializable
-data class ItemLocationRecord(val source: String = "", val folderName: String = "", val path: String = "")
+data class ItemLocationRecord(
+    val source: String = "",
+    val folderName: String = "",
+    val path: String = "",
+    val folderId: String? = null,
+    val modifiedAt: Long? = null,
+    val physicalDeviceId: String? = null,
+    val rootId: String? = null,
+    val volume: String? = null,
+    val onDevice: Boolean? = null,
+    val gone: String? = null,
+)
 
 /** One member file of an item (Hoard ADR 0014). */
 @Serializable
@@ -896,6 +966,14 @@ data class ItemRecord(
     val height: Int? = null,
     val orientation: Int = 1,
     val files: List<ItemFileRecord> = emptyList(),
+)
+
+/** A page of `GET /v1/items` (Hoard ADR 0014): [cursor] is null on the last page. */
+@Serializable
+data class ItemsPage(
+    val items: List<ItemRecord> = emptyList(),
+    val cursor: String? = null,
+    val hasMore: Boolean = false,
 )
 
 /** The headers of an edited preview's PUT. */

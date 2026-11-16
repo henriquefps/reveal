@@ -81,6 +81,76 @@ class SyncServerItemsTest {
         assertThat(info.sortTime).isEqualTo(99)
     }
 
+    /** A phone backup location (hoard-server 0.12.0, Hoard ADR 0024 "Mirror items"). */
+    private fun mirror(path: String, gone: String?) = buildJsonObject {
+        put("source", "mirror")
+        put("physicalDeviceId", "a0e4")
+        put("deviceName", "Phone")
+        put("rootId", "r1")
+        put("volume", "primary")
+        put("path", path)
+        put("modifiedAt", 1_730_455_000_000L)
+        put("onDevice", gone == null)
+        gone?.let { put("gone", it) }
+    }
+
+    @Test
+    fun `mirror locations parse and never change where the original is`() = runBlocking {
+        server.itemRecords["m1"] = buildJsonObject {
+            put("id", "m1")
+            put("mainFingerprint", "v1:m1")
+            put(
+                "files",
+                buildJsonArray {
+                    add(
+                        file(
+                            "v1:m1",
+                            "rendered",
+                            "PXL_1.jpg",
+                            buildJsonObject {
+                                put("source", "backup")
+                                put("sha256", "s")
+                            },
+                            mirror("DCIM/Camera/PXL_1.jpg", "freed"),
+                        ),
+                    )
+                },
+            )
+        }
+        server.itemRecords["m2"] = buildJsonObject {
+            put("id", "m2")
+            put("mainFingerprint", "v1:m2")
+            put(
+                "files",
+                buildJsonArray {
+                    add(
+                        file(
+                            "v1:m2",
+                            "rendered",
+                            "PXL_2.jpg",
+                            mirror("DCIM/Camera/PXL_2.jpg", null),
+                            nas("Phone", "Camera/PXL_2.jpg"),
+                        ),
+                    )
+                },
+            )
+        }
+        val backedUp = (items().item("m1") as ServerItemResult.Found).item
+        assertThat(backedUp.originalSource).isEqualTo("backup")
+        assertThat(backedUp.folder).isEmpty()
+        val onNas = (items().item("m2") as ServerItemResult.Found).item
+        assertThat(onNas.originalSource).isEqualTo("nas")
+        assertThat(onNas.folder).isEqualTo("Phone/Camera")
+        // The client keeps every field of a mirror location.
+        val location = SyncApi(url, key).item("m1")!!.files.single().locations.single { it.source == "mirror" }
+        assertThat(location.volume).isEqualTo("primary")
+        assertThat(location.path).isEqualTo("DCIM/Camera/PXL_1.jpg")
+        assertThat(location.onDevice).isFalse()
+        assertThat(location.gone).isEqualTo("freed")
+        assertThat(location.rootId).isEqualTo("r1")
+        assertThat(location.modifiedAt).isEqualTo(1_730_455_000_000L)
+    }
+
     @Test
     fun `an uploaded-only item is a backup original with no folder`() = runBlocking {
         server.itemRecords["i2"] = buildJsonObject {

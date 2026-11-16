@@ -217,7 +217,12 @@ private fun SourceMenu(
                     onExportXmp()
                 }
             }
-            if (paired) {
+            if (paired && source.coveredByHoard) {
+                // Hoard's phone backup covers the folder (ADR 0018 "R1"): its originals are Hoard's, read only.
+                Box(Modifier.testTag(LibraryTags.FOLDER_BACKED_UP_BY_HOARD)) {
+                    MenuItem(PhosphorRegular.CloudCheck, stringResource(R.string.library_backed_up_by_hoard), false) {}
+                }
+            } else if (paired) {
                 BackupItems(source.backup) { everything ->
                     open = false
                     onBackup(everything)

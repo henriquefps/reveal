@@ -253,6 +253,17 @@
         <item quantity="one">%1$d photo deleted from the server</item>
         <item quantity="other">%1$d photos deleted from the server</item>
     </plurals>
+    <plurals name="library_kept_by_phone_backup">
+        <item quantity="one">%1$d file stays on the server: it is in this phone\'s backup by Hoard</item>
+        <item quantity="other">%1$d files stay on the server: they are in this phone\'s backup by Hoard</item>
+    </plurals>
+    <string name="library_filter_in_trash">In Hoard\'s trash</string>
+    <string name="library_in_trash_label">In trash</string>
+    <string name="library_in_trash_cell">In Hoard\'s trash: restore it in Hoard to open or edit it</string>
+    <string name="viewer_in_trash_title">In Hoard\'s trash</string>
+    <string name="viewer_in_trash_body">This photo was moved to Hoard\'s trash, so Reveal cannot open it full size or edit it. Its edits are kept: restore it in Hoard and it comes back here.</string>
+    <string name="library_unavailable_reason_server">Its file is no longer on the server: it was deleted from the NAS or emptied from Hoard\'s trash.</string>
+    <string name="library_backed_up_by_hoard">Backed up by Hoard</string>
     <string name="conflict_title">Two versions of this photo</string>
     <string name="conflict_body">It was edited on two devices at the same time. Keep one: the other is deleted on every device.</string>
     <string name="conflict_main">Main version</string>

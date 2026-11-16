@@ -21,13 +21,17 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
+import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performScrollToIndex
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.github.takahirom.roborazzi.captureRoboImage
+import com.github.takahirom.roborazzi.captureScreenRoboImage
 import dev.hfps.image.format.ExifTime
 import dev.hfps.reveal.data.db.CameraCount
 import dev.hfps.reveal.data.db.DateCounts
@@ -207,6 +211,23 @@ internal object LibrarySamples {
             photoCount = shown.size,
             photosLoaded = true,
             selected = versionsOf(selected),
+        )
+    }
+
+    /** "In Hoard's trash" on (R1): every photo shown as the trash placeholder, never opened. */
+    fun inTrash(): LibraryUiState {
+        val shown = rows.take(5).map { it.copy(remote = true, cloudOriginal = true, inTrash = true) }
+        val query = PhotoQuery(filters = PhotoFilters(sync = setOf(SyncFilter.IN_TRASH)))
+        return LibraryUiState(
+            sources = sources,
+            sourcesLoaded = true,
+            counts = counts.copy(inTrash = shown.size),
+            query = query,
+            paired = true,
+            entries = buildGridEntries(shown, query),
+            dateIndex = buildGrid(shown, query).dateIndex,
+            photoCount = shown.size,
+            photosLoaded = true,
         )
     }
 
@@ -731,6 +752,73 @@ class PhoneLibraryScreenshotTest : LibraryScreenshotBase("phone") {
 
     /** Virtual copies as cells of their own, named; one copy selected (docs/adr/0025). */
     @Test fun copies() = shoot("home_copies_dark", dark = true, state = LibrarySamples.copies(selected = setOf(900L)))
+
+    /** A Server photo whose file the server lost (R1): the same sheet, the server's reason. */
+    @Test fun unavailableServerSheet() {
+        composeRule.setContent {
+            RevealTheme(darkTheme = false) {
+                Box(Modifier.fillMaxSize().background(RevealTheme.colors.background), Alignment.BottomCenter) {
+                    Surface(color = RevealTheme.colors.card, shape = RevealTheme.shapes.sheet) {
+                        UnavailableContent(
+                            LibrarySamples.unavailableInfo.copy(
+                                reason = UnavailableReason.SERVER,
+                                appLabel = null,
+                                appLaunch = null,
+                                gallery = false,
+                            ),
+                            onOpenApp = {},
+                            onGallery = {},
+                            onTryAgain = {},
+                            onRemove = {},
+                            modifier = Modifier.padding(top = 24.dp),
+                        )
+                    }
+                }
+            }
+        }
+        composeRule.onRoot().captureRoboImage("src/test/screenshots/library/phone_unavailable_server_sheet_light.png")
+    }
+
+    /** Hoard's trash (R1): the filter's choice with its count, and the grid it shows (placeholders). */
+    @Test fun hoardTrashFilters() {
+        composeRule.setContent {
+            RevealTheme(darkTheme = true) {
+                Surface(color = RevealTheme.colors.card, modifier = Modifier.fillMaxSize()) {
+                    val state = LibrarySamples.grid(LibrarySamples.combined, paired = true)
+                    FilterSheetContent(
+                        state.copy(counts = checkNotNull(state.counts).copy(inTrash = 3)),
+                        LibraryActions(),
+                    )
+                }
+            }
+        }
+        composeRule.onNodeWithText("In Hoard's trash", substring = true).performScrollTo()
+        composeRule.onRoot().captureRoboImage("src/test/screenshots/library/phone_hoard_trash_filters_dark.png")
+    }
+
+    @Test fun hoardTrashGrid() = shoot("hoard_trash_light", dark = false, state = LibrarySamples.inTrash())
+
+    /** "Manage folders" while Hoard backs up a folder: its menu says so instead of offering the backup choice. */
+    @OptIn(com.github.takahirom.roborazzi.ExperimentalRoborazziApi::class)
+    @Test
+    fun manageFoldersHoard() {
+        composeRule.setContent {
+            RevealTheme(darkTheme = true) {
+                Surface(color = RevealTheme.colors.card, modifier = Modifier.fillMaxSize()) {
+                    Box(Modifier.padding(top = 24.dp)) {
+                        ManageFoldersContent(
+                            LibrarySamples.sources.map { if (it.id == 2L) it.copy(coveredByHoard = true) else it },
+                            paired = true,
+                            actions = LibraryActions(),
+                        )
+                    }
+                }
+            }
+        }
+        composeRule.onNodeWithTag(LibraryTags.folderMenu(2)).performClick()
+        composeRule.onNodeWithTag(LibraryTags.FOLDER_BACKED_UP_BY_HOARD).assertExists()
+        captureScreenRoboImage("src/test/screenshots/library/phone_manage_folders_hoard_dark.png")
+    }
 
     @Test fun handoffServerNotPaired() =
         handoffServer("handoff_server_not_paired_dark", true, false, ServerIssue.NotPaired(12))

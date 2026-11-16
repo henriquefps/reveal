@@ -61,6 +61,9 @@ enum class UnavailableReason {
 
     /** Its folder is not mounted or its grant was lost. */
     FOLDER,
+
+    /** A Server photo whose file the server no longer holds (deleted on the NAS, emptied from Hoard's trash, R1). */
+    SERVER,
 }
 
 /** What the explanation sheet shows for one unavailable photo. */
@@ -88,6 +91,7 @@ class UnavailableHelper @Inject constructor(
         val sender = detail.uri?.let { HandoffApps.sender(context.packageManager, it, context.packageName) }
         val reason = when {
             detail.sourceKind == SourceKind.HANDOFF -> UnavailableReason.SENDER
+            detail.sourceKind == SourceKind.SERVER -> UnavailableReason.SERVER
             detail.sourceState != SourceState.AVAILABLE -> UnavailableReason.FOLDER
             else -> UnavailableReason.FILE
         }
@@ -206,6 +210,8 @@ private fun reasonText(info: UnavailableInfo): String = when (info.reason) {
     UnavailableReason.FILE -> stringResource(R.string.library_unavailable_reason_file)
 
     UnavailableReason.FOLDER -> stringResource(R.string.library_unavailable_reason_folder)
+
+    UnavailableReason.SERVER -> stringResource(R.string.library_unavailable_reason_server)
 }
 
 /** The photos "Remove from Reveal" is about to forget; [edited] of them have edits, which go too. */

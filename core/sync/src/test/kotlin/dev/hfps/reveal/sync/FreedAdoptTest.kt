@@ -15,6 +15,7 @@ import dev.hfps.reveal.data.model.PickFlag
 import dev.hfps.reveal.data.model.SourceKind
 import dev.hfps.reveal.data.model.SourceState
 import dev.hfps.reveal.data.sync.BackupCoverage
+import dev.hfps.reveal.sync.engine.FreedPhotos
 import dev.hfps.reveal.sync.engine.SyncStore
 import kotlin.random.Random
 import kotlinx.coroutines.runBlocking
@@ -69,11 +70,17 @@ class FreedAdoptTest {
 
     private fun bytes(seed: Int) = Random(seed).nextBytes(2500)
 
-    /** A JPEG of the camera folder; [printed] false = Reveal has not fingerprinted it yet. */
-    private fun photo(name: String, bytes: ByteArray, modified: Long, printed: Boolean = true): Long = runBlocking {
+    /** A JPEG of the camera folder (or [source]); [printed] false = Reveal has not fingerprinted it yet. */
+    private fun photo(
+        name: String,
+        bytes: ByteArray,
+        modified: Long,
+        printed: Boolean = true,
+        source: Long = camera,
+    ): Long = runBlocking {
         val id = phone.db.photoDao().insertPhoto(
             PhotoEntity(
-                sourceId = camera, folder = "", folderDocumentId = "primary:DCIM/Camera",
+                sourceId = source, folder = "", folderDocumentId = "primary:DCIM/Camera",
                 stemKey = name.substringBeforeLast('.').lowercase(), name = name, format = PhotoFormat.JPEG,
                 hasRaw = false, sortTime = modified, addedAt = 0,
             ),
@@ -81,7 +88,7 @@ class FreedAdoptTest {
         phone.db.photoDao().insertFiles(
             listOf(
                 PhotoFileEntity(
-                    photoId = id, sourceId = camera, relativePath = name, documentId = "primary:DCIM/Camera/$name",
+                    photoId = id, sourceId = source, relativePath = name, documentId = "primary:DCIM/Camera/$name",
                     name = name, size = bytes.size.toLong(), modified = modified, role = FileRole.RENDERED,
                     fingerprint = FileFingerprint.of(bytes).takeIf { printed },
                 ),
@@ -223,6 +230,152 @@ class FreedAdoptTest {
 
         assertThat(phone.sync().freed.deleted).isEqualTo(1)
         assertThat(get(id)).isNull()
+    }
+
+    /** A folder of Android's storage outside every root of this phone (Pictures). */
+    private fun pictures(): Long = runBlocking {
+        phone.db.sourceDao().insert(
+            SourceEntity(
+                treeUri = "content://${BackupCoverage.EXTERNAL_STORAGE_AUTHORITY}/tree/primary%3APictures" +
+                    System.nanoTime(),
+                rootDocumentId = "primary:Pictures",
+                displayName = "Pictures",
+                volumeId = "primary",
+                volumeName = null,
+                state = SourceState.AVAILABLE,
+                writable = false,
+                addedAt = 0,
+            ),
+        )
+    }
+
+    private fun clearVanished(id: Long) = runBlocking {
+        phone.db.photoDao().clearVanished(phone.db.photoDao().files(id).map { it.id })
+    }
+
+    @Test
+    fun `a refused item lookup or folder query keeps a photo instead of deleting it`() {
+        // Known by fingerprint only (outside every root): the item lookup is refused.
+        val printed = photo("IMG_20.jpg", bytes(20), 0, source = pictures())
+        edit(printed)
+        // Known by path only, under the root: the folder query is refused.
+        val byPath = photo("PXL_21.jpg", bytes(21), 0, printed = false)
+        vanish(printed, byPath)
+        server.refuseItemLookups = "invalid_request"
+        server.refuseFolderQueries = true
+
+        val report = phone.sync().freed
+
+        assertThat(report.deleted).isEqualTo(0)
+        assertThat(report.kept).isEqualTo(2)
+        assertThat(get(printed)).isNotNull()
+        assertThat(get(byPath)).isNotNull()
+
+        // Answered later: the server has nothing for either, so today's rule applies then.
+        server.refuseItemLookups = null
+        server.refuseFolderQueries = false
+        assertThat(phone.sync().freed.deleted).isEqualTo(2)
+    }
+
+    @Test
+    fun `photos past the per-pass read cap wait for the next pass instead of going`() {
+        val folder = pictures()
+        val ids = (0..FreedPhotos.MAX_ITEM_READS).map { i ->
+            val bytes = bytes(1000 + i)
+            server.addMirrorItem(root, "primary", "Pictures/IMG_$i.jpg", bytes, 0, onDevice = false, gone = "freed")
+            photo("IMG_$i.jpg", bytes, 0, source = folder)
+        }
+        vanish(*ids.toLongArray())
+
+        val first = phone.sync().freed
+        assertThat(first.adopted).isEqualTo(FreedPhotos.MAX_ITEM_READS)
+        assertThat(first.deleted).isEqualTo(0)
+        assertThat(first.kept).isEqualTo(1)
+        assertThat(phone.sync().freed.adopted).isEqualTo(1)
+        assertThat(ids.all { get(it)!!.sourceId == serverSource() }).isTrue()
+    }
+
+    @Test
+    fun `a photo a walk lists again while the server is asked is neither adopted nor deleted`() {
+        val folder = pictures()
+        val freed = bytes(30)
+        val adoptable = photo("IMG_30.jpg", freed, 0, source = folder)
+        server.addMirrorItem(root, "primary", "Pictures/IMG_30.jpg", freed, 0, onDevice = false, gone = "freed")
+        val plain = photo("IMG_31.jpg", bytes(31), 0, source = folder)
+        server.culling.addItem(listOf(FileFingerprint.of(bytes(31))))
+        vanish(adoptable, plain)
+        // The walk finds both files again while the server answers.
+        server.onItemRead = {
+            clearVanished(adoptable)
+            clearVanished(plain)
+        }
+
+        val report = phone.sync().freed
+
+        assertThat(report.adopted).isEqualTo(0)
+        assertThat(report.deleted).isEqualTo(0)
+        assertThat(get(adoptable)!!.sourceId).isEqualTo(folder)
+        assertThat(get(plain)!!.sourceId).isEqualTo(folder)
+        assertThat(files(adoptable).single().relativePath).isEqualTo("IMG_30.jpg")
+    }
+
+    @Test
+    fun `another phone's mirror location at the same path is never this photo's`() {
+        val other = server.addRoot("another-phone", "primary", "DCIM/Camera")
+        val freedThere = bytes(40)
+        val seenThere = bytes(41)
+        val a = photo("PXL_40.jpg", freedThere, 0)
+        val b = photo("PXL_41.jpg", seenThere, 0)
+        server.addMirrorItem(
+            other,
+            "primary",
+            "DCIM/Camera/PXL_40.jpg",
+            freedThere,
+            0,
+            onDevice = false,
+            gone = "freed",
+        )
+        server.addMirrorItem(other, "primary", "DCIM/Camera/PXL_41.jpg", seenThere, 0, onDevice = true, gone = null)
+        vanish(a, b)
+
+        val report = phone.sync().freed
+
+        // Neither the other phone's "freed" (adopting an unedited photo this phone deleted) nor its "on the device"
+        // (keeping it a week): no location of this phone, no edit, so it goes as before.
+        assertThat(report.adopted).isEqualTo(0)
+        assertThat(report.deleted).isEqualTo(2)
+    }
+
+    @Test
+    fun `a photo the mirror still sees on the phone is not asked about again for six hours`() {
+        val bytes = bytes(50)
+        val id = photo("PXL_50.jpg", bytes, 1_730_000_000_000L, printed = false)
+        mirror("PXL_50.jpg", bytes, 1_730_000_000_000L, gone = null, onDevice = true)
+        vanish(id)
+        phone.sync()
+        val queries = server.folderQueries
+
+        assertThat(phone.sync().freed.kept).isEqualTo(1)
+        assertThat(server.folderQueries).isEqualTo(queries)
+
+        phone.now += FreedPhotos.BACKOFF_MS + 1
+        phone.sync()
+        assertThat(server.folderQueries).isGreaterThan(queries)
+    }
+
+    @Test
+    fun `a paired server that does not answer this run decides nothing, even if it listed backup before`() {
+        val bytes = bytes(11)
+        val id = photo("PXL_11.jpg", bytes, 1_730_000_000_000L)
+        vanish(id)
+        // The last run stored the server's backup roots; now it is offline (the features list is never reused).
+        assertThat(runBlocking { phone.db.metaDao().get(BackupCoverage.META_ROOTS) }).isNotNull()
+        server.shutdown()
+
+        assertThat(runCatching { phone.sync() }.isFailure).isTrue()
+
+        assertThat(get(id)!!.sourceId).isEqualTo(camera)
+        assertThat(files(id).single().vanishedAt).isNotNull()
     }
 
     @Test

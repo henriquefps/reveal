@@ -562,7 +562,7 @@ left open while the editor shows the photo or after the export.
 
 ### Measurements (W3/C)
 
-Galaxy S24 Ultra, debug builds, local hoard-server 0.9.0 (loopback on cachyos-fps, `ssh -R` + `adb reverse`), 21,000
+Galaxy S24 Ultra, debug builds, local hoard-server 0.9.0 (loopback on the home Linux machine, `ssh -R` + `adb reverse`), 21,000
 synthetic NAS JPEGs + 6 CC0 ZV-E10 RAW copies, 300 of the JPEGs also handed over through the debug provider.
 
 | | 0.8.0 | 0.9.0 (W3/C) |
@@ -865,9 +865,10 @@ both. Every addition is used only when `GET /v1/server` lists its feature; again
   opens from the RAW. `POST /v1/items/lookup` leaves trashed items out (`missing`) without `include=trash`, while
   `POST /v1/fingerprints/lookup` and `GET /v1/originals` still find a trashed file until it is purged: `on_server`,
   `original_on_server` and the 24-hour re-lookup may keep counting a trashed file as on the server, which is true
-  until the purge. A purge (or a removal) of a NAS file therefore makes this device's own copies of that content ask
-  again (`SyncDao.askAgain`: `on_server` and the photo's lookup reset), so a phone copy whose only server copy was
-  emptied from the trash is backed up instead of being believed on the server for good. Reveal never sends
+  until the purge. With `trash`, a purge of a NAS file therefore makes this device's own copies of that content that
+  it believed on the server ask again (`SyncDao.askAgain`: `on_server` and the photo's lookup reset), so a phone copy
+  whose only server copy was emptied from the trash is backed up instead of being believed on the server for good.
+  Without `trash` the feed's removals leave local copies as 0.9.0 did (no mass re-lookup on a first pull). Reveal never sends
   `include=trash`. Real server: `RealServerTrashTest` (a NAS file moved into `.hoard-trash/<day>/` and back, then
   purged).
 
@@ -919,16 +920,29 @@ must never lose its edits because of that.
   seconds). Folders under no root fall back to `POST /v1/items/lookup` + `GET /v1/items/{id}`. Then:
   - `gone: "freed"` → **adopted**; `gone: "deleted"`, an unknown value or no mirror location → adopted only when the
     photo carries an edit (a non-default recipe, a named or copied version, snapshots), else deleted;
-  - `onDevice: true` (Hoard still sees it: the walk missed it) → it keeps waiting (the walk's bound applies);
-  - no item → deleted, as before.
+  - `onDevice: true` (Hoard still sees it: the walk missed it) → it keeps waiting (the walk's bound applies) and is
+    not asked about again for 6 hours (`FreedPhotos.BACKOFF_MS`, `meta` `sync.freed.backoff`): no page walk per sync;
+  - no item → deleted, as before, but **only when the server fully answered**: the item lookup named nothing for its
+    files or its item was read, or (a photo known only by its path) its directory's folder query was read to the end,
+    or it is under no root of this phone and has no fingerprint. A refused lookup or folder query, a listing cut at
+    `MAX_PAGES`, the per-pass item-read cap (`MAX_ITEM_READS`, 500) or a backoff keep it for a later pass.
+  - Only **this phone's** mirror locations count (its root ids, or its physical device id from `meta`
+    `sync.device.physical`): another phone's location at the same volume and path is never this file.
+  - The pass acts on what it read: deleting or adopting re-checks, in its transaction, that the photo still has
+    exactly the vanished files it started from (`SyncStore.stillVanished`); a photo a walk listed again meanwhile is
+    left alone.
 - Adoption (`SyncStore.adoptFreed`) is W3/C's in place: the same row keeps its uuid, versions, edits, history and
   culling; each file the item names takes the item's fingerprint, `freed/<fingerprint>/<name>` in the Server source
   and the server's document id, `on_server` set; the photo's other files go; the photo moves to the Server source under
   its phone folder (`DCIM/Camera`, made unique on a clash), sidecar link dropped, pending uploads cancelled, original
   marked (`nas` or `backup` by the item's locations). Quiet: nothing changes for other devices. The NAS feed never
   replaces an adopted file (`keepAdopted` knows both prefixes).
-- `PATCH /v1/device` `features` adds `"freed-adopt"` (next to `culling`) only when the server lists `backup`: from then
-  on Hoard may free shots that Reveal's records name.
+- `PATCH /v1/device` `features` adds `"freed-adopt"` (next to `culling`) only when the server lists `backup` and this
+  installation knows its physical device (learned from the first report): from then on Hoard may free shots that
+  Reveal's records name. Declaring it before the first pass is safe: nothing is deleted without a complete answer.
+- Vanished files are no backup or preview candidates (`vanished_at IS NULL`), and a file listed again loses its
+  `unreadable_at` with its `vanished_at`. The 24-hour grace applies only while the file is covered: each run ends the
+  wait of candidates no longer covered (`SyncDao.inGrace` / `endGrace`), e.g. when Hoard's root goes inactive.
 
 ### Item 7 and 8
 
@@ -939,7 +953,7 @@ must never lose its edits because of that.
 `addMirrorItem` with `onDevice`/`gone`, `GET /v1/items?folder=<root>&path=`). Tests: `HoardTrashTest`,
 `PhoneBackupTest`, `FreedAdoptTest`, `VanishedPhotosTest`, `BackupCoverageTest`; instrumented `HoardTrashFlowTest`.
 
-**Deviation, on purpose:** the task asked to keep vanished photos for a week also when the server "has no `backup`
-feature". Reveal applies today's rule as soon as a reachable server says it has no `backup`: such a server cannot have
-freed anything, and keeping deletions for a week on every current server would be a visible regression. Offline or
-before the next sync, photos still wait (bounded by the walk's 7 days).
+**Without `backup`:** Reveal applies today's rule as soon as the paired server answered `GET /v1/server` **in this run**
+without `backup` (never a stored features list): such a server cannot have freed anything, and keeping deletions for a
+week on every current server would be a visible regression (accepted by the orchestrator). Offline, or before the next
+sync, photos still wait (bounded by the walk's 7 days). `RealServerBackupTest` waits for hoard-server 0.12.0.

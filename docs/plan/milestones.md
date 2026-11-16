@@ -35,7 +35,7 @@ milestone run in parallel where they do not touch the same files.
 - Tablet/foldable layout with the filmstrip; S Pen basics.
 
 ## MS - Sync and cloud library (0.4.0, after M2)
-- Self-hosted Go sync server (`reveal-sync`, on `cachyos-fps` behind Cloudflare Tunnel), edits and
+- Self-hosted Go sync server (`reveal-sync`, on the home Linux machine behind Cloudflare Tunnel), edits and
   library metadata keyed by a content fingerprint, optional smart previews and originals backup,
   NAS folders served by the server, phone + tablet on the same library, a small web setup UI on the server (devices/keys, storage paths).
   Design: `sync.md`.

@@ -256,8 +256,11 @@ class FakeSyncServer(val serverId: String = "858e1b9d-0000-4000-8000-00000000000
             }
 
             method == "GET" && url.pathSegments.size == 3 && path.startsWith("/v1/items/") &&
-                path != "/v1/items/changes" && "items" in features ->
+                path != "/v1/items/changes" && "items" in features -> {
+                itemReads++
+                onItemRead?.invoke()
                 itemRecords[url.pathSegments[2]]?.let(::ok) ?: error(404, "not_found")
+            }
 
             path == "/v1/culling" && method == "POST" && "culling" in features ->
                 ok(culling.push(device, json.parseToJsonElement(request.body!!.utf8()).jsonObject))
@@ -891,6 +894,16 @@ class FakeSyncServer(val serverId: String = "858e1b9d-0000-4000-8000-00000000000
         return id
     }
 
+    /** Answer `GET /v1/items?folder=` with `400` (a server that refuses the query). */
+    var refuseFolderQueries = false
+
+    /** Called on every `GET /v1/items/{id}` (a test changes the device's database while the server answers). */
+    var onItemRead: (() -> Unit)? = null
+
+    /** How many `GET /v1/items/{id}` were answered. */
+    @Volatile
+    var itemReads = 0
+
     /** How many `GET /v1/items?folder=` pages were answered. */
     @Volatile
     var folderQueries = 0
@@ -900,6 +913,7 @@ class FakeSyncServer(val serverId: String = "858e1b9d-0000-4000-8000-00000000000
         val url = request.url
         val folder = url.queryParameter("folder") ?: return error(400, "invalid_request")
         val root = roots.firstOrNull { it.id == folder } ?: return error(400, "invalid_request")
+        if (refuseFolderQueries) return error(400, "invalid_request")
         folderQueries++
         val dir = listOf(root.path, url.queryParameter("path").orEmpty()).filter { it.isNotEmpty() }.joinToString("/")
         val limit = url.queryParameter("limit")?.toInt() ?: 200

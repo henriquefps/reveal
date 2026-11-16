@@ -135,6 +135,8 @@ class VanishedPhotosTest {
         assertThat(listed()).containsExactly("PXL_4.jpg")
         assertThat(db.photoDao().files(plain).single().vanishedAt).isNotNull()
 
+        // A read failed while it was gone (the backup, a thumbnail): the mark goes when the file is back.
+        db.photoDao().setUnreadable(db.photoDao().files(plain).single().documentId, now)
         // The file is back (a walk that had missed it, a restore): same photo, listed again.
         file.writeBytes(saved)
         file.setLastModified(modified)
@@ -142,6 +144,7 @@ class VanishedPhotosTest {
         assertThat(listed()).containsExactly("PXL_3.jpg", "PXL_4.jpg")
         assertThat(id("PXL_3.jpg")).isEqualTo(plain)
         assertThat(db.photoDao().files(plain).single().vanishedAt).isNull()
+        assertThat(db.photoDao().files(plain).single().unreadableAt).isNull()
     }
 
     @Test

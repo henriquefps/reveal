@@ -4,6 +4,7 @@ package dev.hfps.reveal.sync.engine
 
 import android.util.Log
 import androidx.room.withTransaction
+import dev.hfps.reveal.data.db.MetaEntity
 import dev.hfps.reveal.data.db.PhotoEntity
 import dev.hfps.reveal.data.db.PhotoFileEntity
 import dev.hfps.reveal.data.db.RevealDatabase
@@ -36,39 +37,62 @@ data class FreedReport(val adopted: Int = 0, val deleted: Int = 0, val kept: Int
  *
  * A server without `backup` cannot have freed anything: every waiting photo gets the old rule at once.
  */
-class FreedPhotos(private val db: RevealDatabase, private val store: SyncStore) {
+class FreedPhotos(
+    private val db: RevealDatabase,
+    private val store: SyncStore,
+    private val clock: () -> Long = System::currentTimeMillis,
+) {
     private val sync = db.syncDao()
     private val photos = db.photoDao()
+    private val meta = db.metaDao()
 
+    /**
+     * Decides with [info], the paired server's `GET /v1/server` answered in this very run (never a stored features
+     * list): a server that did not answer never gets here, so its photos keep waiting (the walk's 7-day bound). Only a
+     * complete answer deletes: a refused or truncated query, the per-pass read cap, a photo backing off, all keep the
+     * photo for a later pass.
+     */
     suspend fun resolve(api: SyncApi, info: ServerInfo): FreedReport {
         val waiting = sync.vanishedFiles().groupBy { it.photoId }
         if (waiting.isEmpty()) return FreedReport()
-        if (!info.has(SyncEngine.FEATURE_BACKUP)) return FreedReport(deleted = delete(waiting.keys))
-        val roots = BackupCoverage.decode(db.metaDao().get(BackupCoverage.META_ROOTS))
-        val candidates = waiting.mapNotNull { (photoId, files) -> candidate(photoId, files) }
-        val found = HashMap<Long, Match>()
-        byLocation(api, roots, candidates, found)
-        byFingerprint(api, candidates.filter { it.photo.id !in found }, found)
+        val expected = waiting.mapValues { (_, files) -> files.map { it.id }.toSet() }
+        if (!info.has(SyncEngine.FEATURE_BACKUP)) return FreedReport(deleted = delete(expected))
+        val roots = BackupCoverage.decode(meta.get(BackupCoverage.META_ROOTS))
+        val mine = Owner(roots.map { it.id }.toSet(), meta.get(SyncEngine.KEY_PHYSICAL_DEVICE))
+        val backoff = backoff().filterKeys { it in waiting.keys }
+        val now = clock()
+        val all = waiting.mapNotNull { (photoId, files) -> candidate(photoId, files) }
+        // Photos the mirror last saw on the phone are not asked about again for a while (each one cost a page walk).
+        val resting = all.filter { (backoff[it.photo.id] ?: 0L) > now - BACKOFF_MS }
+        val candidates = all - resting.toSet()
+        val answers = Answers()
+        byLocation(api, roots, mine, candidates, answers)
+        byFingerprint(api, mine, candidates.filter { it.photo.id !in answers.found }, answers)
         var adopted = 0
-        val deletes = ArrayList<Long>()
-        var kept = 0
+        var kept = resting.size
+        val deletes = HashMap<Long, Set<Long>>()
+        val nextBackoff = HashMap(backoff)
         for (candidate in candidates) {
             currentCoroutineContext().ensureActive()
-            when (decide(candidate, found[candidate.photo.id])) {
-                Decision.ADOPT -> if (adopt(candidate, checkNotNull(found[candidate.photo.id]))) {
-                    adopted++
-                } else {
-                    deletes += candidate.photo.id
+            val id = candidate.photo.id
+            when (decide(candidate, answers.found[id], id in answers.answered)) {
+                Decision.ADOPT -> if (adopt(candidate, checkNotNull(answers.found[id]))) adopted++ else kept++
+
+                Decision.RECHECK -> {
+                    kept++
+                    nextBackoff[id] = now
                 }
 
                 Decision.KEEP -> kept++
 
-                Decision.DELETE -> deletes += candidate.photo.id
+                Decision.DELETE -> deletes[id] = expected.getValue(id)
             }
         }
         // Photos whose source or row went meanwhile have nothing left to decide.
-        val gone = waiting.keys - candidates.map { it.photo.id }.toSet()
-        val report = FreedReport(adopted, delete(deletes + gone), kept)
+        val gone = waiting.keys - all.map { it.photo.id }.toSet()
+        for (id in gone) deletes[id] = expected.getValue(id)
+        saveBackoff(nextBackoff.filterKeys { it in waiting.keys && it !in deletes })
+        val report = FreedReport(adopted, delete(deletes), kept)
         if (report != FreedReport()) log("vanished folder photos: $report")
         return report
     }
@@ -81,12 +105,25 @@ class FreedPhotos(private val db: RevealDatabase, private val store: SyncStore) 
         val edited: Boolean,
     ) {
         val main: PhotoFileEntity get() = SyncStore.mainFile(files) ?: files.first()
+        val printed: Boolean get() = files.any { it.fingerprint != null }
     }
 
     /** The item of a candidate, and the mirror location of its main file when the item has one. */
     private class Match(val item: ItemRecord, val location: ItemLocationRecord?)
 
-    private enum class Decision { ADOPT, KEEP, DELETE }
+    /** What the server said this pass: the matches, and the photos it fully answered for (no item = really none). */
+    private class Answers {
+        val found = HashMap<Long, Match>()
+        val answered = HashSet<Long>()
+    }
+
+    /** This phone in mirror locations: its roots (any state) and its physical device (Hoard ADR 0024). */
+    private class Owner(val rootIds: Set<String>, val physical: String?) {
+        fun owns(location: ItemLocationRecord): Boolean =
+            location.rootId in rootIds || (physical != null && location.physicalDeviceId == physical)
+    }
+
+    private enum class Decision { ADOPT, KEEP, RECHECK, DELETE }
 
     private suspend fun candidate(photoId: Long, files: List<PhotoFileEntity>): Candidate? {
         val photo = photos.get(photoId) ?: return null
@@ -95,16 +132,17 @@ class FreedPhotos(private val db: RevealDatabase, private val store: SyncStore) 
         return Candidate(photo, files, base?.child(photo.folder), photos.isEdited(photoId))
     }
 
-    private fun decide(candidate: Candidate, match: Match?): Decision {
-        match ?: return Decision.DELETE
+    private fun decide(candidate: Candidate, match: Match?, answered: Boolean): Decision {
+        // No item: deleted only when the server fully answered that it has none; any gap keeps it for a later pass.
+        match ?: return if (answered) Decision.DELETE else Decision.KEEP
         val location = match.location
         return when {
-            // The phone still has it as far as Hoard's mirror knows: this walk missed it; ask again later.
-            location?.onDevice == true -> Decision.KEEP
+            // The phone still has it as far as Hoard's mirror knows: this walk missed it; asked again later.
+            location?.onDevice == true -> Decision.RECHECK
 
             location?.gone == GONE_FREED -> Decision.ADOPT
 
-            // Deleted (or an unknown reason, or no mirror location): kept only for its edit.
+            // Deleted (or an unknown reason, or no mirror location of this phone): kept only for its edit.
             candidate.edited -> Decision.ADOPT
 
             else -> Decision.DELETE
@@ -112,50 +150,70 @@ class FreedPhotos(private val db: RevealDatabase, private val store: SyncStore) 
     }
 
     /**
-     * The folder queries: one paged `GET /v1/items?folder=<root>&path=<dir>` per directory of waiting photos under any
-     * root of this phone (stopped and paused ones too: their entries stay), matched by fingerprint or mirror location.
+     * The folder queries: one paged `GET /v1/items?folder=<root>&path=<dir>` per directory that has waiting photos
+     * under a root of this phone (stopped and paused ones too: their entries stay), matched by fingerprint or mirror
+     * location. A complete listing answers for the photos Reveal knows only by path; a photo in no root of this phone
+     * and without a fingerprint is answered too (nothing on the server can name it).
      */
     private suspend fun byLocation(
         api: SyncApi,
         roots: List<BackupRoot>,
+        mine: Owner,
         candidates: List<Candidate>,
-        found: MutableMap<Long, Match>,
+        answers: Answers,
     ) {
-        val groups = candidates.mapNotNull { c ->
-            val folder = c.folder ?: return@mapNotNull null
-            val root = roots.firstOrNull { BackupCoverage.contains(it, folder) } ?: return@mapNotNull null
-            Triple(root, relative(root, folder), c)
-        }.groupBy({ it.first to it.second }, { it.third })
+        val placed = candidates.map { c ->
+            c to
+                c.folder?.let { f -> roots.firstOrNull { BackupCoverage.contains(it, f) } }
+        }
+        for ((candidate, root) in placed) {
+            if (root == null && !candidate.printed) answers.answered += candidate.photo.id
+        }
+        val groups = placed.filter { it.second != null }
+            .groupBy({ (c, root) ->
+                checkNotNull(root) to relative(checkNotNull(root), checkNotNull(c.folder))
+            }, { it.first })
         for ((key, group) in groups) {
             val (root, dir) = key
-            val items = folderItems(api, root.id, dir) ?: continue
-            for (candidate in group) match(candidate, items)?.let { found[candidate.photo.id] = it }
+            val listing = folderItems(api, root.id, dir) ?: continue
+            for (candidate in group) {
+                match(candidate, listing.items, mine)?.let { answers.found[candidate.photo.id] = it }
+                if (listing.complete && !candidate.printed) answers.answered += candidate.photo.id
+            }
         }
     }
 
-    /** Every page of a folder query; null when the server refused it (the fingerprint lookup still runs). */
-    private suspend fun folderItems(api: SyncApi, rootId: String, dir: String): List<ItemRecord>? {
+    private class Listing(val items: List<ItemRecord>, val complete: Boolean)
+
+    /** Every page of a folder query (complete = read to its end); null when the server refused it. */
+    private suspend fun folderItems(api: SyncApi, rootId: String, dir: String): Listing? {
         val items = ArrayList<ItemRecord>()
         var cursor: String? = null
         var pages = 0
+        var more: Boolean
         try {
             do {
                 currentCoroutineContext().ensureActive()
                 val page = api.items(rootId, dir, cursor, PAGE)
                 items += page.items
                 cursor = page.cursor
-            } while (page.hasMore && cursor != null && ++pages < MAX_PAGES)
+                more = page.hasMore && cursor != null
+            } while (more && ++pages < MAX_PAGES)
         } catch (e: SyncHttpException) {
             if (e.transient || e.unauthorized) throw e
             log("folder query refused (${e.code})")
             return null
         }
-        return items
+        return Listing(items, complete = !more)
     }
 
-    /** The photos with a fingerprint the folder queries did not find: `POST /v1/items/lookup`, then each item. */
-    private suspend fun byFingerprint(api: SyncApi, candidates: List<Candidate>, found: MutableMap<Long, Match>) {
-        val prints = candidates.flatMap { c -> c.files.mapNotNull { it.fingerprint } }.distinct()
+    /**
+     * The photos with a fingerprint the folder queries did not find: `POST /v1/items/lookup`, then each item. A photo
+     * is answered when the lookup named no item for its files, or its item was read (gone or not matching).
+     */
+    private suspend fun byFingerprint(api: SyncApi, mine: Owner, candidates: List<Candidate>, answers: Answers) {
+        val printed = candidates.filter { it.printed }
+        val prints = printed.flatMap { c -> c.files.mapNotNull { it.fingerprint } }.distinct()
         if (prints.isEmpty()) return
         val itemOf = HashMap<String, String>()
         try {
@@ -167,43 +225,48 @@ class FreedPhotos(private val db: RevealDatabase, private val store: SyncStore) 
             log("item lookup refused (${e.code})")
             return
         }
-        readItems(api, candidates, itemOf, found)
-    }
-
-    /** Reads each candidate's item (at most [MAX_ITEM_READS] per pass) and matches it. */
-    private suspend fun readItems(
-        api: SyncApi,
-        candidates: List<Candidate>,
-        itemOf: Map<String, String>,
-        found: MutableMap<Long, Match>,
-    ) {
         val items = HashMap<String, ItemRecord?>()
-        for (candidate in candidates) {
+        for (candidate in printed) {
             val id = candidate.files.firstNotNullOfOrNull { f -> f.fingerprint?.let(itemOf::get) }
-            val readable = id != null && (id in items || items.size < MAX_ITEM_READS)
-            val item = if (readable) items.getOrPut(id) { api.item(id)?.takeIf { !it.deleted } } else null
-            item?.let { match(candidate, listOf(it)) }?.let { found[candidate.photo.id] = it }
+            when {
+                id == null -> answers.answered += candidate.photo.id
+
+                // The read cap of a pass: the rest waits for the next one.
+                id !in items && items.size >= MAX_ITEM_READS -> Unit
+
+                else -> {
+                    val item = items.getOrPut(id) { api.item(id)?.takeIf { !it.deleted } }
+                    answers.answered += candidate.photo.id
+                    item?.let { match(candidate, listOf(it), mine) }?.let { answers.found[candidate.photo.id] = it }
+                }
+            }
         }
     }
 
     /** The item of [candidate] among [items]: one with a member of its fingerprint, else its mirror location. */
-    private fun match(candidate: Candidate, items: List<ItemRecord>): Match? {
+    private fun match(candidate: Candidate, items: List<ItemRecord>, mine: Owner): Match? {
         val main = candidate.main
         val path = candidate.folder?.child(main.name)
         val byPrint = (listOf(main) + (candidate.files - main)).mapNotNull { it.fingerprint }
             .firstNotNullOfOrNull { print -> items.firstOrNull { item -> item.files.any { it.fingerprint == print } } }
-        if (byPrint != null) return Match(byPrint, path?.let { mirrorOf(byPrint, it, null) })
+        if (byPrint != null) return Match(byPrint, path?.let { mirrorOf(byPrint, it, null, mine) })
         if (path == null) return null
-        return items.firstNotNullOfOrNull { item -> mirrorOf(item, path, main)?.let { Match(item, it) } }
+        return items.firstNotNullOfOrNull { item -> mirrorOf(item, path, main, mine)?.let { Match(item, it) } }
     }
 
     /**
-     * The mirror location of [path] in [item]; with [confirm] (a file Reveal knows only by its path), only when the
-     * member's size and the location's time are the file's (MediaStore keeps seconds: compared to the second).
+     * This phone's mirror location of [path] in [item] (another phone's at the same path is never this file); with
+     * [confirm] (a file Reveal knows only by its path), only when the member's size and the location's time are the
+     * file's (MediaStore keeps seconds: compared to the second).
      */
-    private fun mirrorOf(item: ItemRecord, path: StorageLocation, confirm: PhotoFileEntity?): ItemLocationRecord? {
+    private fun mirrorOf(
+        item: ItemRecord,
+        path: StorageLocation,
+        confirm: PhotoFileEntity?,
+        mine: Owner,
+    ): ItemLocationRecord? {
         for (file in item.files) {
-            val location = file.locations.firstOrNull { isAt(it, path) } ?: continue
+            val location = file.locations.firstOrNull { isAt(it, path) && mine.owns(it) } ?: continue
             if (confirm == null || confirms(file, location, confirm)) return location
         }
         return null
@@ -232,24 +295,45 @@ class FreedPhotos(private val db: RevealDatabase, private val store: SyncStore) 
         val stored = match.item.files.flatMap { it.locations }.map { it.source }
         val original = if (SyncStore.SOURCE_NAS in stored) SyncStore.SOURCE_NAS else SyncStore.SOURCE_BACKUP
         val folder = candidate.folder?.path ?: candidate.photo.folder
-        return store.adoptFreed(candidate.photo.id, files, folder, original)
+        val expected = candidate.files.map { it.id }.toSet()
+        return store.adoptFreed(candidate.photo.id, files, folder, original, expected)
     }
 
-    /** Today's rule for [photoIds]: their files go, then every folder photo left without one. */
-    private suspend fun delete(photoIds: Collection<Long>): Int {
-        if (photoIds.isEmpty()) return 0
+    /**
+     * Today's rule for [photos]' files (photo id -> the vanished file ids read at the start of the pass): each photo
+     * only if it still has exactly those files, all still vanished (a walk may have listed it again meanwhile), then
+     * every folder photo left without a file.
+     */
+    private suspend fun delete(expected: Map<Long, Set<Long>>): Int {
+        if (expected.isEmpty()) return 0
         var removed = 0
         db.withTransaction {
             val sources = HashSet<Long>()
-            for (ids in photoIds.chunked(SQL_ARGS)) {
+            for (ids in expected.keys.chunked(SQL_ARGS)) {
                 for (photo in photos.getAll(ids)) {
+                    val files = photos.files(photo.id)
+                    if (!SyncStore.stillVanished(files, expected.getValue(photo.id))) continue
                     sources += photo.sourceId
-                    photos.deleteFiles(photos.files(photo.id).map { it.id })
+                    photos.deleteFiles(files.map { it.id })
                 }
             }
             for (source in sources) removed += photos.deleteEmptyPhotos(source)
         }
         return removed
+    }
+
+    /** `meta` [KEY_BACKOFF]: photo id -> when the mirror last said the phone still has it. */
+    private suspend fun backoff(): Map<Long, Long> = meta.get(KEY_BACKOFF).orEmpty().split(',').mapNotNull { entry ->
+        val (id, at) = entry.split('=').takeIf { it.size == 2 } ?: return@mapNotNull null
+        (id.toLongOrNull() ?: return@mapNotNull null) to (at.toLongOrNull() ?: return@mapNotNull null)
+    }.toMap()
+
+    private suspend fun saveBackoff(entries: Map<Long, Long>) {
+        if (entries.isEmpty()) {
+            meta.delete(KEY_BACKOFF)
+        } else {
+            meta.put(MetaEntity(KEY_BACKOFF, entries.entries.joinToString(",") { "${it.key}=${it.value}" }))
+        }
     }
 
     private fun relative(root: BackupRoot, folder: StorageLocation): String {
@@ -262,15 +346,23 @@ class FreedPhotos(private val db: RevealDatabase, private val store: SyncStore) 
         runCatching { Log.i(TAG, message) }
     }
 
-    private companion object {
-        const val TAG = "RevealSync"
-        const val GONE_FREED = "freed"
-        const val SOURCE_MIRROR = "mirror"
-        const val PAGE = 500
-        const val MAX_PAGES = 200
-        const val LOOKUP = 1000
+    companion object {
+        private const val TAG = "RevealSync"
+        private const val GONE_FREED = "freed"
+        private const val SOURCE_MIRROR = "mirror"
+        private const val PAGE = 500
+        private const val MAX_PAGES = 200
+        private const val LOOKUP = 1000
+
+        /** Item reads per pass; photos past it are decided by a later pass, never deleted for want of an answer. */
         const val MAX_ITEM_READS = 500
-        const val SQL_ARGS = 900
-        const val SECOND = 1000L
+        private const val SQL_ARGS = 900
+        private const val SECOND = 1000L
+
+        /** A photo the mirror still sees on the phone is asked about again after this long. */
+        const val BACKOFF_MS = 6L * 60 * 60 * 1000
+
+        /** `meta`: [BACKOFF_MS] stamps, `photoId=time`, `,` joined. */
+        const val KEY_BACKOFF = "sync.freed.backoff"
     }
 }

@@ -1214,7 +1214,7 @@ suites on the phone.
 
 The `nasSeed`/`nasSize` file is the fingerprint-vector generator's bytes (`((i * 2654435761 + seed * 97) >> 13) & 0xff`).
 Both instrumented classes skip without their arguments, so the full suite stays green without a server. For the
-phone (on the Mac), keep the server on cachyos-fps loopback and forward it: `ssh -R 3471:127.0.0.1:3471` to the Mac,
+phone (on the Mac), keep the server on the home Linux machine loopback and forward it: `ssh -R 3471:127.0.0.1:3471` to the Mac,
 then `adb -s RXCX109VTTM reverse tcp:3471 tcp:3471` there.
 
 Hoard's trash and one backup per phone (R1, 0.10.0, ADR 0018 "Amendment R1", DB v16; only with `/v1/server`

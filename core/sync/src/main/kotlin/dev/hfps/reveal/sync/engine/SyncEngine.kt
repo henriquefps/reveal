@@ -56,7 +56,7 @@ class SyncEngine(
     var parkedRecovery = true
     private val meta = db.metaDao()
     val culling = CullingSync(db, clock)
-    private val freed = FreedPhotos(db, store)
+    private val freed = FreedPhotos(db, store, clock)
 
     /**
      * Runs a sync against [api]. [serverId] is the paired server's id (another one throws [ServerChangedException]).
@@ -313,7 +313,14 @@ class SyncEngine(
      */
     private suspend fun report(api: SyncApi, serverId: String, culling: Boolean, backup: Boolean) {
         val device = device ?: return
-        val features = listOfNotNull(FEATURE_CULLING.takeIf { culling }, FEATURE_FREED_ADOPT.takeIf { backup })
+        // `freed-adopt` needs the server's `backup` and this phone's physical device (the mirror locations Reveal
+        // matches are its own). Declaring it before the first freed-adopt pass is safe: a vanished photo is never
+        // deleted without a complete answer from the server, so whatever Hoard frees waits until a pass adopts it.
+        val physical = meta.get(KEY_PHYSICAL_DEVICE) != null
+        val features = listOfNotNull(
+            FEATURE_CULLING.takeIf { culling },
+            FEATURE_FREED_ADOPT.takeIf { backup && physical },
+        )
         val report = DeviceReport(
             app = device.app,
             manufacturer = device.manufacturer,

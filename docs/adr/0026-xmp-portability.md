@@ -146,7 +146,7 @@ English and pt-BR (`XmpPreferences`, SharedPreferences `xmp`). Culling always tr
 ## Measurements
 
 `XmpMeasurementsTest` (instrumented, the debug SAF provider in its own process, 1,000 RAW+JPEG pairs; `REVEAL_XMP`),
-x86_64 emulator (phone screen, SwiftShader; cachyos-fps), 2026-11-14:
+x86_64 emulator (phone screen, SwiftShader; the home Linux machine), 2026-11-14:
 
 | Step | Total | Per photo |
 | --- | --- | --- |

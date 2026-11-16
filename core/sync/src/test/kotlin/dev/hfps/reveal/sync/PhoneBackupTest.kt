@@ -200,6 +200,32 @@ class PhoneBackupTest {
     }
 
     @Test
+    fun `the wait ends when Hoard stops covering the folder`() {
+        val root = server.addRoot(deviceId(), "primary", "DCIM/Camera", types = listOf("image"))
+        val (photo, bytes) = readable("PXL_20", 20, camera, ext = "jpg")
+        phone.sync()
+        originals()
+        assertThat(runBlocking { phone.db.syncDao().cloud(photo) }!!.candidateAt).isNotNull()
+        assertThat(uploadedFingerprints()).doesNotContain(FileFingerprint.of(bytes))
+
+        // Hoard paused (inactive): the folder is Reveal's again, its originals go now, not a day later.
+        root.active = false
+        phone.sync()
+        phone.now += HOUR
+        originals()
+        assertThat(uploadedFingerprints()).contains(FileFingerprint.of(bytes))
+    }
+
+    @Test
+    fun `a vanished file is no backup candidate`() {
+        val (photo, _) = readable("DSC21", 21, phone.folder)
+        phone.sync()
+        assertThat(runBlocking { phone.db.syncDao().backupCandidates(10) }.map { it.photoId }).contains(photo)
+        runBlocking { phone.db.photoDao().markVanished(phone.db.photoDao().files(photo).map { it.id }, phone.now) }
+        assertThat(runBlocking { phone.db.syncDao().backupCandidates(10) }.map { it.photoId }).doesNotContain(photo)
+    }
+
+    @Test
     fun `a server without backup gets no wait and covers nothing`() {
         server.features -= "backup"
         val (_, bytes) = readable("PXL_6", 6, camera, ext = "jpg")
@@ -268,6 +294,10 @@ class PhoneBackupTest {
 
     @Test
     fun `freed-adopt is declared with culling only to a server with backup`() {
+        // The first report learns this phone's physical device; freed-adopt needs it, so it comes with the next one.
+        phone.sync()
+        assertThat(server.culling.reports.first().second["features"]!!.jsonArray.map { it.jsonPrimitive.content })
+            .containsExactly("culling")
         phone.sync()
         val declared = server.culling.reports.last().second["features"]!!.jsonArray.map { it.jsonPrimitive.content }
         assertThat(declared).containsExactly("culling", "freed-adopt")

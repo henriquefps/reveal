@@ -270,6 +270,25 @@ class HoardTrashTest {
     }
 
     @Test
+    fun `without trash a NAS removal leaves this device's own copy as 0_9_0 did`() {
+        server.features -= "trash"
+        val phone = device("Phone")
+        val jpeg = bytes(13)
+        server.addNasFile("f1", "NAS", "2026/IMG13.JPG", jpeg, fp(jpeg))
+        val local = phone.addFolderJpeg("IMG13", jpeg)
+        phone.sync()
+        val checked = runBlocking { phone.db.syncDao().cloud(local) }!!.checkedAt
+
+        server.removeNasFile("f1", "2026/IMG13.JPG")
+        phone.sync()
+
+        // No mass re-lookup on a first pull or a cursor reset: the copy's state is untouched.
+        val cloud = runBlocking { phone.db.syncDao().cloud(local) }!!
+        assertThat(cloud.originalOnServer).isTrue()
+        assertThat(cloud.checkedAt).isEqualTo(checked)
+    }
+
+    @Test
     fun `an edited preview survives a trash and a restore without a new upload`() {
         server.hoard(edits = true)
         server.trash()

@@ -1450,6 +1450,7 @@ class SyncStore(
      * `trashed` purges it; without it every removal is a purge.
      */
     suspend fun applyNas(files: List<NasFile>, trash: Boolean = false) {
+        trashAware = trash
         val source = quietly { serverSource() }
         for (chunk in files.chunked(APPLY_CHUNK)) {
             quietly { for (file in chunk) applyNasFile(source, file, trash) }
@@ -1532,7 +1533,7 @@ class SyncStore(
     private suspend fun removed(known: PhotoFileEntity?, file: NasFile, trash: Boolean) {
         val trashed = trash && file.removed && file.trashed
         when {
-            known == null -> if (!trashed) file.fingerprint?.let { sync.askAgain(it) }
+            known == null -> if (trash && !trashed) recheckOwnCopies(file.fingerprint)
 
             // Into Hoard's trash: kept, so a restore gives the photo back with its uuid, edits and culling.
             trashed -> if (known.trashedAt == null) {
@@ -1552,16 +1553,26 @@ class SyncStore(
      */
     private suspend fun purge(known: PhotoFileEntity) {
         photos.deleteFiles(listOf(known.id))
-        // The fingerprint lookup found the content while it was in the trash (hoard-server keeps serving a trashed
-        // file until it is purged): this device's own copies of it are asked about again, so one the server no longer
-        // has is backed up instead of being believed on the server for good.
-        known.fingerprint?.let { sync.askAgain(it) }
+        recheckOwnCopies(known.fingerprint)
         val left = photos.files(known.photoId)
         if (left.any { it.onServer && it.trashedAt == null }) return
         val cloud = sync.cloud(known.photoId) ?: PhotoCloudEntity(known.photoId)
         val lost = if (left.isEmpty()) cloud.lostAt ?: clock() else cloud.lostAt
         sync.putCloud(cloud.copy(originalOnServer = false, originalSource = null, lostAt = lost))
     }
+
+    /**
+     * A purge on a server with `trash` (ADR 0018 "R1"): the fingerprint lookup found the content while it was in the
+     * trash (hoard-server serves a trashed file until it is purged), so this device's own copies it believed on the
+     * server are asked about again, and backed up if the server no longer has them. Only copies known to be on the
+     * server; without `trash` the feed's removals change nothing here, as in 0.9.0.
+     */
+    private suspend fun recheckOwnCopies(fingerprint: String?) {
+        if (fingerprint != null && sync.knownOnServer(fingerprint) && trashAware) sync.askAgain(fingerprint)
+    }
+
+    /** The server of the NAS feed being applied lists `trash` ([applyNas]). */
+    private var trashAware = false
 
     /** The trashed state of a file of [photoId] changed: the grid reads it from the files, so tell its observers. */
     private suspend fun trashChanged(photoId: Long) {
@@ -1731,34 +1742,41 @@ class SyncStore(
      * does not hold them). Quiet, like the hand-off adoption: nothing changes for other devices. [folder] is where the
      * photo was on the phone (made unique when a Server photo there has its stem). False when nothing was adopted.
      */
-    suspend fun adoptFreed(photoId: Long, files: Map<Long, String>, folder: String, originalSource: String): Boolean =
-        quietly {
-            val source = serverSource()
-            val photo = photos.get(photoId) ?: return@quietly false
-            val all = photos.files(photoId)
-            val keep = all.filter { it.id in files }
-            if (keep.isEmpty()) return@quietly false
-            photos.deleteFiles(all.filter { it.id !in files }.map { it.id })
-            for (file in keep) {
-                val print = files.getValue(file.id)
-                var path = "$FREED_PREFIX$print/${file.name}"
-                if (sync.serverFileByPath(source.id, path) != null) path = "$FREED_PREFIX$print/${file.id}/${file.name}"
-                sync.adoptFreedFile(file.id, source.id, path, ServerTree.documentId(print, file.name), print)
-            }
-            val taken = photos.byStem(source.id, folder, photo.stemKey)?.takeIf { it.id != photoId } != null
-            sync.adoptFreedPhoto(photoId, source.id, if (taken) "$folder/${photo.uuid}" else folder)
-            sync.cancelUploads(photoId)
-            val cloud = sync.cloud(photoId) ?: PhotoCloudEntity(photoId)
-            sync.putCloud(
-                cloud.copy(
-                    originalOnServer = true,
-                    originalSource = originalSource,
-                    checkedAt = clock(),
-                    lostAt = null,
-                ),
-            )
-            true
+    suspend fun adoptFreed(
+        photoId: Long,
+        files: Map<Long, String>,
+        folder: String,
+        originalSource: String,
+        expected: Set<Long>,
+    ): Boolean = quietly {
+        val source = serverSource()
+        val photo = photos.get(photoId) ?: return@quietly false
+        val all = photos.files(photoId)
+        // A walk listed the photo again while the server was asked: it is back on the phone, nothing to adopt.
+        if (!stillVanished(all, expected)) return@quietly false
+        val keep = all.filter { it.id in files }
+        if (keep.isEmpty()) return@quietly false
+        photos.deleteFiles(all.filter { it.id !in files }.map { it.id })
+        for (file in keep) {
+            val print = files.getValue(file.id)
+            var path = "$FREED_PREFIX$print/${file.name}"
+            if (sync.serverFileByPath(source.id, path) != null) path = "$FREED_PREFIX$print/${file.id}/${file.name}"
+            sync.adoptFreedFile(file.id, source.id, path, ServerTree.documentId(print, file.name), print)
         }
+        val taken = photos.byStem(source.id, folder, photo.stemKey)?.takeIf { it.id != photoId } != null
+        sync.adoptFreedPhoto(photoId, source.id, if (taken) "$folder/${photo.uuid}" else folder)
+        sync.cancelUploads(photoId)
+        val cloud = sync.cloud(photoId) ?: PhotoCloudEntity(photoId)
+        sync.putCloud(
+            cloud.copy(
+                originalOnServer = true,
+                originalSource = originalSource,
+                checkedAt = clock(),
+                lostAt = null,
+            ),
+        )
+        true
+    }
 
     // ------------------------------------------------------------------ the Server source
 
@@ -1876,6 +1894,13 @@ class SyncStore(
         /** `meta`: versions the W5 repair left to check on the next run ([checkRepairs]): `uuid@rev`, `,` joined. */
         const val KEY_REPAIR_CHECKS = "sync.versionPhotos.checks"
         private const val CHECK_REV = "@"
+
+        /**
+         * True when [files] are exactly [expected] and all still vanished (ADR 0018 "R1"): the freed-adopt pass decided
+         * on that state and must not act on a photo a walk listed again meanwhile.
+         */
+        fun stillVanished(files: List<PhotoFileEntity>, expected: Set<Long>): Boolean =
+            files.isNotEmpty() && files.map { it.id }.toSet() == expected && files.all { it.vanishedAt != null }
 
         fun mainFile(files: List<PhotoFileEntity>): PhotoFileEntity? =
             files.firstOrNull { it.role == FileRole.RAW } ?: files.firstOrNull { it.role == FileRole.RENDERED }

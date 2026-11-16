@@ -260,8 +260,8 @@ interface PhotoDao {
     @Query("UPDATE photo_files SET vanished_at = :at WHERE id IN (:ids) AND vanished_at IS NULL")
     suspend fun markVanished(ids: List<Long>, at: Long)
 
-    /** A walk listed these files again: their photo is back. */
-    @Query("UPDATE photo_files SET vanished_at = NULL WHERE id IN (:ids)")
+    /** A walk listed these files again: their photo is back (a read that failed while it was gone no longer counts). */
+    @Query("UPDATE photo_files SET vanished_at = NULL, unreadable_at = NULL WHERE id IN (:ids)")
     suspend fun clearVanished(ids: List<Long>)
 
     /** Files of [sourceId] that vanished at or before [before]: the bound of the wait is over, today's rule applies. */

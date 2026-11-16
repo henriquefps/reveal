@@ -348,6 +348,9 @@ class BlobUploader(
         val now = clock()
         val due = ArrayList<CloudCandidate>()
         val folders = HashMap<Long, StorageLocation?>()
+        // The wait applies only while Hoard covers the file: a root gone inactive (or out of the types) ends it.
+        val uncovered = sync.inGrace(now - GRACE_MS).filter { roots.isEmpty() || !covered(it, roots, folders) }
+        if (uncovered.isNotEmpty()) sync.endGrace(uncovered.map { it.photoId }.distinct())
         for (candidate in sync.backupCandidates(limit, now - GRACE_MS)) {
             val waited = roots.isNotEmpty() && covered(candidate, roots, folders)
             if (!waited) {

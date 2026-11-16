@@ -55,6 +55,7 @@ private const val PREVIEW_PHOTOS =
         "s.backup FROM photos p JOIN sources s ON s.id = p.source_id JOIN photo_files f ON f.photo_id = p.id " +
         "JOIN photo_cloud c ON c.photo_id = p.id WHERE s.kind != 'SERVER' AND s.state = 'AVAILABLE' " +
         "AND p.hidden = 0 AND c.original_on_server = 0 AND c.checked_at > 0 AND f.fingerprint IS NOT NULL " +
+        "AND f.vanished_at IS NULL " +
         "AND (f.role = 'RAW' OR NOT EXISTS (SELECT 1 FROM photo_files o WHERE o.photo_id = p.id AND " +
         "o.role = 'RAW')) AND (f.unreadable_at IS NOT NULL OR (p.has_edit = 1 AND :originalsOff)) " +
         "AND NOT EXISTS (SELECT 1 FROM sync_uploads u WHERE u.photo_id = p.id AND u.kind = 'preview' AND " +
@@ -539,7 +540,8 @@ interface SyncDao {
             "s.backup FROM photos p JOIN sources s ON s.id = p.source_id JOIN photo_files f ON f.photo_id = p.id " +
             "JOIN photo_cloud c ON c.photo_id = p.id WHERE s.kind != 'SERVER' AND s.state = 'AVAILABLE' " +
             "AND (s.backup = 1 OR p.has_edit = 1) AND p.hidden = 0 AND c.original_on_server = 0 AND c.checked_at > 0 " +
-            "AND f.fingerprint IS NOT NULL AND f.unreadable_at IS NULL AND (f.role = 'RAW' OR NOT EXISTS " +
+            "AND f.fingerprint IS NOT NULL AND f.unreadable_at IS NULL AND f.vanished_at IS NULL " +
+            "AND (f.role = 'RAW' OR NOT EXISTS " +
             "(SELECT 1 FROM photo_files o WHERE o.photo_id = p.id AND o.role = 'RAW')) AND NOT EXISTS " +
             "(SELECT 1 FROM sync_uploads u WHERE u.photo_id = p.id AND u.kind = 'original' AND u.state != 'done') " +
             "AND (c.candidate_at IS NULL OR c.candidate_at <= :waitedSince) " +
@@ -553,6 +555,23 @@ interface SyncDao {
      */
     @Query("UPDATE photo_cloud SET candidate_at = :at WHERE photo_id = :photoId AND candidate_at IS NULL")
     suspend fun startGrace(photoId: Long, at: Long)
+
+    /**
+     * Candidates whose grace started and is not over (ADR 0018 "R1"): the uploader checks they are still covered and
+     * ends the wait of those that are not ([endGrace]).
+     */
+    @Query(
+        "SELECT p.id AS photo_id, p.source_id, f.id AS file_id, f.document_id, f.name, f.size, f.fingerprint, " +
+            "s.backup FROM photos p JOIN sources s ON s.id = p.source_id JOIN photo_files f ON f.photo_id = p.id " +
+            "JOIN photo_cloud c ON c.photo_id = p.id WHERE c.candidate_at > :waitedSince " +
+            "AND f.fingerprint IS NOT NULL " +
+            "AND (f.role = 'RAW' OR NOT EXISTS (SELECT 1 FROM photo_files o WHERE o.photo_id = p.id AND " +
+            "o.role = 'RAW'))",
+    )
+    suspend fun inGrace(waitedSince: Long): List<CloudCandidate>
+
+    @Query("UPDATE photo_cloud SET candidate_at = NULL WHERE photo_id IN (:photoIds)")
+    suspend fun endGrace(photoIds: List<Long>)
 
     /** Pending original uploads that are due (not waiting for another device's upload of the same bytes). */
     @Query(

@@ -37,7 +37,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 
 /**
- * Hand-off server references against the real hoard-server (pinned 0.9.0, `scripts/sync/local-server.sh`, loopback;
+ * Hand-off server references against the real hoard-server (the pinned image, `scripts/sync/local-server.sh`, loopback;
  * ADR 0011 "Amendment W3/H"): a NAS item and a backed-up (uploaded original) item resolve to Server photos, a JPEG
  * item that a later RAW replaced is followed once through `replacedBy`, and the culling another app set on the server
  * before the hand-off is on the photo when the batch is shown. `REVEAL_HANDOFF_DIR` = the server's work dir (the test

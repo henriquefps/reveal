@@ -44,18 +44,10 @@ enum class SettingsLink {
 
     /** "Pair" in the hand-off sheet for server photos (ADR 0011 "Amendment W3/H"). */
     PAIR,
-
-    /** Anything about the cache or storage use. */
-    STORAGE,
-
-    /** Anything about the gallery permission (ADR 0011 "Gallery access"). */
-    GALLERY_ACCESS,
     ;
 
     val route: Any
         get() = when (this) {
             SYNC_STATUS, PAIR -> PhotoServerRoute
-            STORAGE -> StorageRoute
-            GALLERY_ACCESS -> FoldersAccessRoute
         }
 }

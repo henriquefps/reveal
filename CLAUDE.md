@@ -1037,8 +1037,11 @@ Unpair; `SyncTags`), `sync/BackupSyncScreen` (the `SyncOptions` switches, hand-o
 a row to Photo server), `folders/FoldersAccessScreen` (each folder's mode through `LibraryRepository.setBackup`, the
 same state as the library's Manage folders; gallery access), `storage/StorageScreen`, `appearance/` (`ThemeModeStore`:
 SharedPreferences read when made, so the first frame has it, and `UiModeManager.setApplicationNightMode` on 12+;
-`AppLanguage`: `LocaleManager` per-app language on 13+, own preference + `AppLanguage.wrap` in `MainActivity
-.attachBaseContext` + `recreate()` below; `res/xml/locales_config.xml` in the app; `AppearanceSection` is the list of
+`ThemeModeStore.applyNightMode` at every app start; below 12 `MainActivity.attachBaseContext` overrides its night mode
+from `ThemeModeStore.stored` (no flash) and a new choice recreates it; `AppLanguage`: `LocaleManager` per-app
+language on 13+ (covers the application context), below it own preference + `AppLanguage.wrap` in `MainActivity
+.attachBaseContext` + `recreate()`, and `AppLanguage.applyToApp` on the application's resources (`RevealApplication
+.onCreate`/`onConfigurationChanged` and every choice: mask/preset names and notifications use the app context); `res/xml/locales_config.xml` in the app; `AppearanceSection` is the list of
 dropdowns: a palette is one more entry), `editing/EditingScreen` (XMP, author, copyright). Shared pieces in
 `SettingsRows.kt` (`SettingsBody` = one column, max 720 dp; `SectionTitle`, `Hint`, `NavigationRow`, `SwitchRow`).
 A new setting goes into the screen of the entry it belongs to (never back onto the hub); a new door from elsewhere is

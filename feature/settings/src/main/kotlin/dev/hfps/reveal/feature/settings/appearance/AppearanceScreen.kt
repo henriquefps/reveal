@@ -1,6 +1,7 @@
 package dev.hfps.reveal.feature.settings.appearance
 
 import android.app.Activity
+import android.os.Build
 import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
@@ -100,7 +101,12 @@ fun AppearanceScreen(
         state = state,
         actions = AppearanceActions(
             onBack = onBack,
-            onTheme = viewModel::setTheme,
+            onTheme = { mode ->
+                viewModel.setTheme(mode)
+                // Android 10-11: the activity's night mode is overridden from the stored choice before its first
+                // frame (MainActivity); a new choice takes a new activity. 12+ recreates it through the system.
+                if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) (context as? Activity)?.recreate()
+            },
             onLanguage = { choice ->
                 // Android 13+ recreates the activities itself; older versions read the choice in attachBaseContext.
                 if (viewModel.setLanguage(choice)) (context as? Activity)?.recreate()

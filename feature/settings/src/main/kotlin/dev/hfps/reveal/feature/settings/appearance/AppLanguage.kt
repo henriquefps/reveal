@@ -4,6 +4,7 @@ import android.annotation.SuppressLint
 import android.app.LocaleManager
 import android.content.Context
 import android.content.res.Configuration
+import android.content.res.Resources
 import android.os.Build
 import android.os.LocaleList
 import androidx.core.content.edit
@@ -42,8 +43,11 @@ enum class LanguageChoice(val tag: String?) {
 
 /**
  * The app's language (Settings -> Appearance and language). Android 13+ keeps it as the per-app language
- * ([LocaleManager], also in the system's App languages, which recreates the activities); on Android 10-12 Reveal keeps
- * it itself and [wrap]s each activity's context, and the caller recreates the activity.
+ * ([LocaleManager], also in the system's App languages, which recreates the activities and covers the application
+ * context). On Android 10-12 Reveal keeps it itself: [wrap]s each activity's context, [applyToApp] sets it on the
+ * application's resources (at start, after every system configuration change and on every choice, so strings resolved
+ * through the application context, such as mask and preset names and notifications, follow it too), and the caller
+ * recreates the activity.
  */
 @Singleton
 class AppLanguage @Inject constructor(@ApplicationContext private val context: Context) {
@@ -64,6 +68,7 @@ class AppLanguage @Inject constructor(@ApplicationContext private val context: C
             false
         } else {
             prefs(context).edit(commit = true) { putString(KEY_LANGUAGE, tags) }
+            applyToApp(context.applicationContext)
             true
         }
     }
@@ -87,15 +92,36 @@ class AppLanguage @Inject constructor(@ApplicationContext private val context: C
          */
         @SuppressLint("AppBundleLocaleChanges")
         fun wrap(base: Context): Context {
-            val tag = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                null
-            } else {
-                LanguageChoice.of(prefs(base).getString(KEY_LANGUAGE, null)).tag
-            }
-            if (tag == null) return base
+            val tag = chosenTag(base) ?: return base
             val config = Configuration(base.resources.configuration)
             config.setLocales(LocaleList.forLanguageTags(tag))
             return base.createConfigurationContext(config)
+        }
+
+        /**
+         * Android 12 and older: sets the chosen language (the system's for "System language") on [app]'s resources
+         * and as the default locale (formatters). The application calls it in `onCreate` and in
+         * `onConfigurationChanged` (a system change resets its resources); Android 13+ does nothing.
+         */
+        @SuppressLint("AppBundleLocaleChanges")
+        @Suppress("DEPRECATION") // updateConfiguration is the only way to change the application's own resources.
+        fun applyToApp(app: Context) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) return
+            val locales = chosenTag(app)?.let(LocaleList::forLanguageTags)
+                ?: Resources.getSystem().configuration.locales
+            val resources = app.resources
+            if (resources.configuration.locales == locales) return
+            val config = Configuration(resources.configuration)
+            config.setLocales(locales)
+            resources.updateConfiguration(config, resources.displayMetrics)
+            Locale.setDefault(locales[0])
+        }
+
+        /** The chosen language's tag below Android 13; null on 13+ or for "System language". */
+        private fun chosenTag(context: Context): String? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            null
+        } else {
+            LanguageChoice.of(prefs(context).getString(KEY_LANGUAGE, null)).tag
         }
     }
 }

@@ -61,7 +61,11 @@ class SettingsHubFlowTest {
     @Before
     fun setUp() {
         runBlocking { access.sync().unpair() }
-        access.themeModes().set(ThemeMode.System)
+        // An aborted earlier run may have left another theme or language: start from the system's.
+        instrumentation.runOnMainSync {
+            access.themeModes().set(ThemeMode.System)
+            access.appLanguage().set(LanguageChoice.SYSTEM)
+        }
     }
 
     @After
@@ -125,10 +129,9 @@ class SettingsHubFlowTest {
 
             scenario.recreate()
             compose.waitUntilAtLeastOneExists(hasTestTag(AppearanceTags.SCREEN), TIMEOUT_MS)
-            compose.waitUntilAtLeastOneExists(
-                hasTestTag(AppearanceTags.THEME) and hasState(text(R.string.appearance_theme_dark)),
-                TIMEOUT_MS,
-            )
+            var dark = ""
+            scenario.onActivity { dark = it.getString(R.string.appearance_theme_dark) }
+            compose.waitUntilAtLeastOneExists(hasTestTag(AppearanceTags.THEME) and hasState(dark), TIMEOUT_MS)
             assertThat(backgroundIsDark()).isTrue()
 
             choose(AppearanceTags.THEME, AppearanceTags.theme(ThemeMode.Light))
@@ -142,9 +145,12 @@ class SettingsHubFlowTest {
         ActivityScenario.launch(MainActivity::class.java).use { scenario ->
             compose.openSettings(SettingsEntry.APPEARANCE, TIMEOUT_MS)
             var shown = ""
-            scenario.onActivity { shown = it.resources.configuration.locales[0].language }
+            var before = ""
+            scenario.onActivity {
+                shown = it.resources.configuration.locales[0].language
+                before = it.getString(R.string.appearance_title)
+            }
             val other = if (shown == "pt") LanguageChoice.ENGLISH else LanguageChoice.PORTUGUESE_BRAZIL
-            val before = text(R.string.appearance_title)
             val after = localized(checkNotNull(other.tag)).getString(R.string.appearance_title)
             assertThat(after).isNotEqualTo(before)
 
@@ -153,10 +159,13 @@ class SettingsHubFlowTest {
             compose.waitUntilAtLeastOneExists(hasText(after), TIMEOUT_MS)
             compose.waitUntilAtLeastOneExists(hasTestTag(AppearanceTags.SCREEN), TIMEOUT_MS)
             assertThat(access.appLanguage().choice.value).isEqualTo(other)
+            // The application context follows too (mask and preset names, notifications), on every API level.
+            assertThat(appString(R.string.appearance_title)).isEqualTo(after)
 
             choose(AppearanceTags.LANGUAGE, AppearanceTags.language(LanguageChoice.SYSTEM))
             compose.waitUntilAtLeastOneExists(hasText(before), TIMEOUT_MS)
             assertThat(access.appLanguage().choice.value).isEqualTo(LanguageChoice.SYSTEM)
+            assertThat(appString(R.string.appearance_title)).isEqualTo(before)
         }
     }
 
@@ -170,10 +179,10 @@ class SettingsHubFlowTest {
 
     private fun hasState(value: String) = SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, value)
 
-    /** A string in the language the app shows now (the target context follows the per-app language). */
-    private fun text(id: Int): String {
+    /** A string resolved through the application context, as the app's singletons and workers do. */
+    private fun appString(id: Int): String {
         var value = ""
-        instrumentation.runOnMainSync { value = context.getString(id) }
+        instrumentation.runOnMainSync { value = context.applicationContext.getString(id) }
         return value
     }
 

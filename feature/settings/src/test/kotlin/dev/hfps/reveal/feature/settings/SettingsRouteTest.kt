@@ -20,8 +20,6 @@ class SettingsRouteTest {
     fun `doors from outside Settings land on their screens`() {
         assertThat(SettingsLink.SYNC_STATUS.route).isEqualTo(PhotoServerRoute)
         assertThat(SettingsLink.PAIR.route).isEqualTo(PhotoServerRoute)
-        assertThat(SettingsLink.STORAGE.route).isEqualTo(StorageRoute)
-        assertThat(SettingsLink.GALLERY_ACCESS.route).isEqualTo(FoldersAccessRoute)
     }
 
     @Test

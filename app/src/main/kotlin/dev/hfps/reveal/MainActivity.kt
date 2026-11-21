@@ -3,7 +3,9 @@ package dev.hfps.reveal
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.content.res.Configuration
 import android.graphics.Color
+import android.os.Build
 import android.os.Bundle
 import android.view.MotionEvent
 import android.widget.Toast
@@ -44,6 +46,7 @@ import dev.hfps.reveal.data.preset.PresetIntents
 import dev.hfps.reveal.data.preset.PresetRepository
 import dev.hfps.reveal.data.storage.AppStart
 import dev.hfps.reveal.designsystem.theme.RevealTheme
+import dev.hfps.reveal.designsystem.theme.ThemeMode
 import dev.hfps.reveal.designsystem.theme.isDark
 import dev.hfps.reveal.feature.editor.EditorRoute
 import dev.hfps.reveal.feature.editor.navigateToEditor
@@ -130,9 +133,25 @@ class MainActivity : ComponentActivity() {
     /** True while the editor shows a photo another app sent: leaving it returns to that app. */
     private var openedFromIntent = false
 
-    /** Android 12 and older: the app language chosen in Settings (Android 13+ applies it itself, `LocaleManager`). */
+    /**
+     * Android 12 and older: the app language chosen in Settings (Android 13+ applies it itself, `LocaleManager`).
+     * Android 10-11: a Light or Dark choice overrides the activity's night mode, so the window background (the
+     * day/night platform theme) already matches before Compose's first frame; 12+ gets it from the system
+     * (`ThemeModeStore.applyNightMode`).
+     */
     override fun attachBaseContext(newBase: Context) {
         super.attachBaseContext(AppLanguage.wrap(newBase))
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
+            val night = when (ThemeModeStore.stored(newBase)) {
+                ThemeMode.System -> null
+                ThemeMode.Light -> Configuration.UI_MODE_NIGHT_NO
+                ThemeMode.Dark -> Configuration.UI_MODE_NIGHT_YES
+            }
+            if (night != null) {
+                val base = newBase.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK.inv()
+                applyOverrideConfiguration(Configuration().apply { uiMode = base or night })
+            }
+        }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {

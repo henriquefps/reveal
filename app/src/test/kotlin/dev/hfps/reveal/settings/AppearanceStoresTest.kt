@@ -5,6 +5,7 @@ import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.google.common.truth.Truth.assertThat
 import dev.hfps.reveal.designsystem.theme.ThemeMode
+import dev.hfps.reveal.feature.settings.R as SettingsR
 import dev.hfps.reveal.feature.settings.appearance.AppLanguage
 import dev.hfps.reveal.feature.settings.appearance.LanguageChoice
 import dev.hfps.reveal.feature.settings.appearance.ThemeModeStore
@@ -57,6 +58,30 @@ class AppearanceStoresTest {
         assertThat(AppLanguage.wrap(context).resources.configuration.locales[0].toLanguageTag()).isEqualTo("pt-BR")
         language.set(LanguageChoice.SYSTEM)
         assertThat(AppLanguage.wrap(context)).isSameInstanceAs(context)
+    }
+
+    /**
+     * Android 10-12: strings resolved through the application context (mask and preset names, notifications) follow
+     * the choice too, not only the activity's.
+     */
+    @Config(sdk = [32])
+    @Test
+    fun applicationContextStringsFollowTheChoiceOnAndroid12() {
+        val english = context.getString(SettingsR.string.appearance_title)
+        AppLanguage(context).set(LanguageChoice.PORTUGUESE_BRAZIL)
+        assertThat(context.getString(SettingsR.string.appearance_title)).isEqualTo("Aparência e idioma")
+        assertThat(context.applicationContext.getString(SettingsR.string.settings_title)).isEqualTo("Configurações")
+        AppLanguage(context).set(LanguageChoice.SYSTEM)
+        assertThat(context.getString(SettingsR.string.appearance_title)).isEqualTo(english)
+    }
+
+    /** A process started with Portuguese chosen: the application applies it before anything resolves a string. */
+    @Config(sdk = [32])
+    @Test
+    fun applyToAppSetsTheStoredChoiceOnTheApplication() {
+        context.getSharedPreferences("appearance", Context.MODE_PRIVATE).edit().putString("language", "pt-BR").commit()
+        AppLanguage.applyToApp(context)
+        assertThat(context.getString(SettingsR.string.settings_title)).isEqualTo("Configurações")
     }
 
     @Test

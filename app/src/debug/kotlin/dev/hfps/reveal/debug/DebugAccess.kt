@@ -19,6 +19,8 @@ import dev.hfps.reveal.data.preset.PresetRepository
 import dev.hfps.reveal.data.thumb.PhotoImages
 import dev.hfps.reveal.data.thumb.ThumbnailRepository
 import dev.hfps.reveal.data.xmp.XmpPreferences
+import dev.hfps.reveal.feature.settings.appearance.AppLanguage
+import dev.hfps.reveal.feature.settings.appearance.ThemeModeStore
 import dev.hfps.reveal.sync.SyncRepository
 import dev.hfps.reveal.sync.thumbs.LibraryThumbs
 
@@ -64,4 +66,8 @@ interface DebugAccess {
     fun xmpPreferences(): XmpPreferences
 
     fun libraryThumbs(): LibraryThumbs
+
+    fun themeModes(): ThemeModeStore
+
+    fun appLanguage(): AppLanguage
 }

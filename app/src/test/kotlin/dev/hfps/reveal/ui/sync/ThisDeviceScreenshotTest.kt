@@ -6,8 +6,8 @@ import androidx.compose.ui.test.onRoot
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.github.takahirom.roborazzi.captureRoboImage
 import dev.hfps.reveal.designsystem.theme.RevealTheme
+import dev.hfps.reveal.feature.settings.sync.PhotoServerContent
 import dev.hfps.reveal.feature.settings.sync.SyncActions
-import dev.hfps.reveal.feature.settings.sync.SyncSettingsContent
 import dev.hfps.reveal.feature.settings.sync.SyncUiState
 import dev.hfps.reveal.feature.settings.sync.ThisDeviceActions
 import dev.hfps.reveal.feature.settings.sync.ThisDeviceContent
@@ -85,7 +85,7 @@ class PhoneThisDeviceScreenshotTest : ThisDeviceScreenshotBase("phone") {
     @Test fun samePhoneQuestion() = shoot("same_phone_dark") {
         val now = 1_762_851_600_000L
         RevealTheme(darkTheme = true) {
-            SyncSettingsContent(
+            PhotoServerContent(
                 SyncUiState(
                     account = SyncAccount("https://photos.example.org", "858e1b9d", "Home server", "d1", now),
                     status = SyncStatus(lastSyncAt = null),

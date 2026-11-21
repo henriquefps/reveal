@@ -23,6 +23,8 @@ import dev.hfps.reveal.designsystem.components.GhostButton
 import dev.hfps.reveal.designsystem.components.PrimaryButton
 import dev.hfps.reveal.designsystem.components.RevealBottomSheet
 import dev.hfps.reveal.designsystem.components.RevealChip
+import dev.hfps.reveal.designsystem.components.RevealDropdown
+import dev.hfps.reveal.designsystem.components.RevealDropdownOption
 import dev.hfps.reveal.designsystem.components.RevealIconButton
 import dev.hfps.reveal.designsystem.components.RevealListRow
 import dev.hfps.reveal.designsystem.components.RevealRowDivider
@@ -69,6 +71,16 @@ internal fun ControlsPage() {
                 RevealChip(label, selected = index == chip, onClick = { chip = index })
             }
         }
+    }
+    Section("Dropdown") {
+        var theme by remember { mutableIntStateOf(0) }
+        RevealDropdown(
+            label = "Theme",
+            options = listOf("System", "Light", "Dark").mapIndexed { i, label -> RevealDropdownOption(i, label) },
+            selected = theme,
+            onSelect = { theme = it },
+            help = "Applies at once. The editor stays dark.",
+        )
     }
     Section("Bottom sheet") {
         SecondaryButton("Open the sheet", onClick = { sheetOpen = true })

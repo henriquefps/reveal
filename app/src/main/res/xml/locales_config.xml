@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The app languages Reveal offers (Settings -> Appearance and language, and the system's App languages).
+     Keep in step with LanguageChoice in :feature:settings. -->
+<locale-config xmlns:android="http://schemas.android.com/apk/res/android">
+    <locale android:name="en" />
+    <locale android:name="pt-BR" />
+</locale-config>

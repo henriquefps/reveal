@@ -13,7 +13,6 @@ import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performScrollToKey
 import androidx.compose.ui.test.performTextInput
 import androidx.test.core.app.ActivityScenario
-import androidx.test.espresso.Espresso
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.work.WorkManager
@@ -33,9 +32,11 @@ import dev.hfps.reveal.feature.export.work.ItemStatus
 import dev.hfps.reveal.feature.library.LibraryTags
 import dev.hfps.reveal.feature.library.R as LibraryR
 import dev.hfps.reveal.feature.library.viewer.ViewerTags
-import dev.hfps.reveal.feature.settings.SettingsTags
+import dev.hfps.reveal.feature.settings.SettingsEntry
 import dev.hfps.reveal.feature.settings.sync.SyncTags
 import dev.hfps.reveal.library.LibraryFilterSteps.showOnly
+import dev.hfps.reveal.settings.SettingsSteps.backTo
+import dev.hfps.reveal.settings.SettingsSteps.openSettings
 import java.io.File
 import kotlinx.coroutines.runBlocking
 import org.junit.After
@@ -107,8 +108,7 @@ class SyncFlowTest {
             compose.waitUntilAtLeastOneExists(hasTestTag(SyncTags.STATUS), TIMEOUT_MS)
             shot("sync-paired")
 
-            Espresso.pressBack()
-            Espresso.pressBack()
+            compose.backTo()
             val library = EntryPointAccessors.fromApplication(context, DebugAccess::class.java).library()
             val photo = runBlocking { library.photoList(PhotoQuery.SERVER_ONLY) }.single {
                 it.name ==
@@ -132,14 +132,10 @@ class SyncFlowTest {
             compose.onNodeWithTag(ViewerTags.EDIT).performClick()
             compose.waitUntilAtLeastOneExists(hasTestTag(EditorTags.DEVELOPED), EDITOR_TIMEOUT_MS)
             shot("editor-server-photo")
-            Espresso.pressBack()
-            Espresso.pressBack()
+            compose.backTo()
         }
         ActivityScenario.launch(MainActivity::class.java).use {
-            compose.waitUntilAtLeastOneExists(hasTestTag(LibraryTags.SETTINGS), TIMEOUT_MS)
-            compose.onNodeWithTag(LibraryTags.SETTINGS).performClick()
-            compose.waitUntilAtLeastOneExists(hasTestTag(SettingsTags.SYNC), TIMEOUT_MS)
-            compose.onNodeWithTag(SettingsTags.SYNC).performClick()
+            compose.openSettings(SettingsEntry.SERVER, TIMEOUT_MS)
             compose.waitUntilAtLeastOneExists(hasTestTag(SyncTags.UNPAIR), TIMEOUT_MS)
             compose.onNodeWithTag(SyncTags.UNPAIR).performScrollTo().performClick()
             compose.waitUntilAtLeastOneExists(hasTestTag(SyncTags.UNPAIR_CONFIRM), TIMEOUT_MS)

@@ -16,6 +16,9 @@ android {
         ndk { abiFilters += setOf("arm64-v8a", "x86_64") }
     }
 
+    // The language is chosen in the app (Settings -> Appearance and language): a bundle keeps every translation.
+    bundle { language { enableSplit = false } }
+
     // Release signing reads the keystore from the environment, never from the repo. The values live in the skv
     // vault (group "reveal"): `skv run reveal -- ./gradlew :app:assembleRelease` exports REVEAL_KEYSTORE (path of a
     // temporary copy of the .jks), REVEAL_KEYSTORE_PASSWORD, REVEAL_KEY_ALIAS and REVEAL_KEY_PASSWORD. Without them

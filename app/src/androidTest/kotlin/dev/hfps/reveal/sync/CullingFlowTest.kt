@@ -9,10 +9,10 @@ import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.junit4.v2.createEmptyComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performScrollToKey
 import androidx.compose.ui.test.performTextInput
 import androidx.test.core.app.ActivityScenario
-import androidx.test.espresso.Espresso
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.google.common.truth.Truth.assertThat
@@ -26,6 +26,7 @@ import dev.hfps.reveal.feature.library.R as LibraryR
 import dev.hfps.reveal.feature.settings.sync.SyncTags
 import dev.hfps.reveal.feature.settings.sync.ThisDeviceTags
 import dev.hfps.reveal.library.SyntheticFolder
+import dev.hfps.reveal.settings.SettingsSteps.backTo
 import dev.hfps.reveal.sync.account.PairingLink
 import dev.hfps.reveal.sync.api.CullingChange
 import dev.hfps.reveal.sync.api.PairRequest
@@ -115,12 +116,11 @@ class CullingFlowTest {
             shot("culling-same-phone")
             compose.onNodeWithTag(SyncTags.SAME_PHONE_YES).performClick()
             compose.waitUntilDoesNotExist(hasTestTag(SyncTags.SAME_PHONE), TIMEOUT_MS)
-            compose.onNodeWithTag(SyncTags.THIS_DEVICE).performClick()
+            compose.onNodeWithTag(SyncTags.THIS_DEVICE).performScrollTo().performClick()
             compose.waitUntilAtLeastOneExists(hasTestTag(ThisDeviceTags.app(paired.deviceId)), TIMEOUT_MS)
             compose.waitUntilAtLeastOneExists(hasTestTag(ThisDeviceTags.CULLING), TIMEOUT_MS)
             shot("culling-this-device")
-            Espresso.pressBack()
-            Espresso.pressBack()
+            compose.backTo()
 
             // Wait for the first sync (it declares culling); then Hoard rates and picks the shot on the server.
             waitUntil(TIMEOUT_MS) { runBlocking { hoard.device() }.physicalDevice?.devices.orEmpty().size == 2 }

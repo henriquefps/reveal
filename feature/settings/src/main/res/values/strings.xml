@@ -6,10 +6,6 @@
     <string name="settings_author">Author</string>
     <string name="settings_copyright">Copyright</string>
     <string name="settings_authorship_note">Written into exported photos (EXIF and XMP) unless the export\'s metadata is set to None.</string>
-    <string name="settings_section_sync">Sync</string>
-    <string name="settings_sync">Sync with your server</string>
-    <string name="settings_sync_off">Not paired</string>
-    <string name="settings_section_photos">Photos</string>
     <string name="settings_section_xmp">XMP sidecars</string>
     <string name="settings_xmp_read">Apply edits from XMP sidecars</string>
     <string name="settings_xmp_note">Reveal never writes .xmp files on its own. To write sidecars for your photos, use Export XMP in the library: from the selection menu, a folder’s menu or the filter’s menu.</string>
@@ -18,8 +14,6 @@
     <string name="settings_gallery_full">Allowed: photos shared from the gallery stay readable</string>
     <string name="settings_gallery_partial">Selected photos only</string>
     <string name="settings_gallery_off">Off: photos shared from the gallery are readable while Reveal is open</string>
-    <string name="settings_sync_on">Paired with %1$s</string>
-    <string name="sync_title">Sync</string>
     <string name="sync_section_pair">Pair this device</string>
     <string name="sync_intro">Keep your edits, versions, ratings and flags on every device, with your own Reveal sync server. Nothing goes to anyone else\'s cloud.</string>
     <string name="sync_intro_server">On the server\'s setup page, open Devices, then Pair a device, and scan the code or paste its link here.</string>
@@ -93,8 +87,7 @@
         <item quantity="other">%d photos only on the server</item>
     </plurals>
     <string name="sync_cleartext">This server is reached over plain HTTP: use that address only on your home network or Tailscale, and HTTPS (a tunnel or a reverse proxy) anywhere else.</string>
-    <string name="settings_storage_subtitle">Thumbnails, previews, edits; clear the cache</string>
-    <string name="storage_title">Storage</string>
+    <string name="storage_title">Cache and storage</string>
     <string name="storage_measuring">Measuring…</string>
     <string name="storage_total">Reveal uses %1$s on this device</string>
     <string name="storage_photos_note">Reveal never copies or moves your photos: originals stay where they are (camera card, gallery, folders, network shares). Reveal stores only thumbnails, previews and your edits (recipes), plus parts of server originals while you view them. Edited photos are backed up to your server when you are paired.</string>
@@ -170,4 +163,35 @@
     <string name="device_same_phone_none">None</string>
     <string name="sync_edited_previews">Edited photos for the gallery</string>
     <string name="sync_edited_previews_subtitle">Your edits, rendered at 2560 px, so the server\'s web gallery and Hoard show them as you finished them. Sent under the originals\' Wi-Fi rule; only servers that support it.</string>
+    <!-- Settings hub -->
+    <string name="server_title">Photo server</string>
+    <string name="hub_server_on">Paired with %1$s · %2$s</string>
+    <string name="hub_server_off">Pair with a photo server</string>
+    <string name="backup_title">Backup and sync</string>
+    <string name="hub_backup_subtitle">What goes to the server, and when</string>
+    <string name="backup_not_paired">Once this device is paired with your photo server, edits, ratings and flags sync, and the originals you choose are backed up.</string>
+    <string name="backup_folders_subtitle">Only the photos you edit, or everything, per folder</string>
+    <string name="folders_title">Folders and photo access</string>
+    <string name="hub_folders_subtitle">Library folders and gallery access</string>
+    <string name="folders_not_paired">Folders back up to your photo server once this device is paired with it.</string>
+    <string name="folders_originals_off">Back up originals is off, so no folder uploads its originals. Turn it on in Backup and sync.</string>
+    <string name="folders_none">No folders yet. Add one from the library\'s Folders.</string>
+    <string name="folders_gallery_hint">With this access, photos other apps share from the gallery stay readable after Reveal closes. Reveal only reads your photos, never changes them.</string>
+    <string name="hub_storage_subtitle">Thumbnails, previews, kept originals, masks</string>
+    <string name="appearance_title">Appearance and language</string>
+    <string name="hub_appearance_subtitle">Theme, language</string>
+    <string name="appearance_theme">Theme</string>
+    <string name="appearance_theme_system">System</string>
+    <string name="appearance_theme_light">Light</string>
+    <string name="appearance_theme_dark">Dark</string>
+    <string name="appearance_theme_help">The editor and the photo viewer are always dark.</string>
+    <string name="appearance_language">Language</string>
+    <string name="appearance_language_system">System language</string>
+    <string name="appearance_language_help">The screen opens again in the new language; open edits and exports carry on.</string>
+    <string name="editing_title">Editing and XMP</string>
+    <string name="hub_editing_subtitle">XMP sidecars, author and copyright in exports</string>
+    <string name="hub_about">About</string>
+    <string name="hub_about_subtitle">Version, licences and privacy</string>
+    <string name="appearance_language_en" translatable="false">English</string>
+    <string name="appearance_language_pt_br" translatable="false">Português (Brasil)</string>
 </resources>

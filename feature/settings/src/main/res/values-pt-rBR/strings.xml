@@ -6,10 +6,6 @@
     <string name="settings_author">Autor</string>
     <string name="settings_copyright">Direitos autorais</string>
     <string name="settings_authorship_note">Gravados nas fotos exportadas (EXIF e XMP), a não ser que os metadados da exportação sejam Nenhum.</string>
-    <string name="settings_section_sync">Sincronização</string>
-    <string name="settings_sync">Sincronizar com o seu servidor</string>
-    <string name="settings_sync_off">Não pareado</string>
-    <string name="settings_section_photos">Fotos</string>
     <string name="settings_section_xmp">Arquivos XMP</string>
     <string name="settings_xmp_read">Aplicar edições dos arquivos XMP</string>
     <string name="settings_xmp_note">O Reveal nunca grava arquivos .xmp sozinho. Para gravar os arquivos XMP das suas fotos, use Exportar XMP na biblioteca: no menu da seleção, no menu de uma pasta ou no menu dos filtros.</string>
@@ -18,8 +14,6 @@
     <string name="settings_gallery_full">Permitido: fotos compartilhadas pela galeria continuam legíveis</string>
     <string name="settings_gallery_partial">Só as fotos selecionadas</string>
     <string name="settings_gallery_off">Desligado: fotos compartilhadas pela galeria são legíveis enquanto o Reveal está aberto</string>
-    <string name="settings_sync_on">Pareado com %1$s</string>
-    <string name="sync_title">Sincronização</string>
     <string name="sync_section_pair">Parear este aparelho</string>
     <string name="sync_intro">Tenha suas edições, versões, classificações e marcações em todos os aparelhos, com o seu próprio servidor de sincronização do Reveal. Nada vai para a nuvem de terceiros.</string>
     <string name="sync_intro_server">Na página de configuração do servidor, abra Aparelhos e depois Parear um aparelho, e leia o código ou cole o link aqui.</string>
@@ -96,8 +90,7 @@
         <item quantity="other">%d fotos só no servidor</item>
     </plurals>
     <string name="sync_cleartext">Este servidor é acessado por HTTP sem criptografia: use esse endereço só na rede de casa ou no Tailscale, e HTTPS (um túnel ou proxy reverso) em qualquer outro lugar.</string>
-    <string name="settings_storage_subtitle">Miniaturas, prévias, edições; limpar o cache</string>
-    <string name="storage_title">Armazenamento</string>
+    <string name="storage_title">Cache e armazenamento</string>
     <string name="storage_measuring">Medindo…</string>
     <string name="storage_total">O Reveal usa %1$s neste aparelho</string>
     <string name="storage_photos_note">O Reveal nunca copia nem move suas fotos: os originais ficam onde estão (cartão da câmera, galeria, pastas, compartilhamentos de rede). O Reveal guarda só miniaturas, prévias e suas edições (receitas), além de partes de originais do servidor enquanto você os vê. As fotos editadas têm backup no seu servidor quando o aparelho está pareado.</string>
@@ -172,4 +165,33 @@
     <string name="device_same_phone_none">Nenhum</string>
     <string name="sync_edited_previews">Fotos editadas para a galeria</string>
     <string name="sync_edited_previews_subtitle">Suas edições, renderizadas em 2560 px, para a galeria web do servidor e o Hoard mostrarem como você as finalizou. Enviadas pela regra de Wi-Fi dos originais; só em servidores compatíveis.</string>
+    <!-- Settings hub -->
+    <string name="server_title">Servidor de fotos</string>
+    <string name="hub_server_on">Pareado com %1$s · %2$s</string>
+    <string name="hub_server_off">Parear com um servidor de fotos</string>
+    <string name="backup_title">Backup e sincronização</string>
+    <string name="hub_backup_subtitle">O que vai para o servidor e quando</string>
+    <string name="backup_not_paired">Depois que este aparelho for pareado com o seu servidor de fotos, edições, classificações e marcações sincronizam, e os originais que você escolher vão para o backup.</string>
+    <string name="backup_folders_subtitle">Só as fotos que você editar, ou tudo, por pasta</string>
+    <string name="folders_title">Pastas e acesso às fotos</string>
+    <string name="hub_folders_subtitle">Pastas da biblioteca e acesso à galeria</string>
+    <string name="folders_not_paired">As pastas fazem backup no seu servidor de fotos depois que este aparelho for pareado com ele.</string>
+    <string name="folders_originals_off">Fazer backup dos originais está desligado, então nenhuma pasta envia os originais. Ligue em Backup e sincronização.</string>
+    <string name="folders_none">Nenhuma pasta ainda. Adicione uma em Pastas, na biblioteca.</string>
+    <string name="folders_gallery_hint">Com este acesso, as fotos que outros apps compartilham pela galeria continuam legíveis depois que o Reveal fecha. O Reveal só lê as suas fotos, nunca as altera.</string>
+    <string name="hub_storage_subtitle">Miniaturas, prévias, originais guardados, máscaras</string>
+    <string name="appearance_title">Aparência e idioma</string>
+    <string name="hub_appearance_subtitle">Tema, idioma</string>
+    <string name="appearance_theme">Tema</string>
+    <string name="appearance_theme_system">Sistema</string>
+    <string name="appearance_theme_light">Claro</string>
+    <string name="appearance_theme_dark">Escuro</string>
+    <string name="appearance_theme_help">O editor e o visualizador de fotos são sempre escuros.</string>
+    <string name="appearance_language">Idioma</string>
+    <string name="appearance_language_system">Idioma do sistema</string>
+    <string name="appearance_language_help">A tela abre de novo no novo idioma; edições e exportações abertas continuam.</string>
+    <string name="editing_title">Edição e XMP</string>
+    <string name="hub_editing_subtitle">Arquivos XMP, autor e direitos na exportação</string>
+    <string name="hub_about">Sobre</string>
+    <string name="hub_about_subtitle">Versão, licenças e privacidade</string>
 </resources>

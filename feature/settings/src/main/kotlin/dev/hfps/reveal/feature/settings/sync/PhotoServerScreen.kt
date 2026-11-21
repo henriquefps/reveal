@@ -7,14 +7,9 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
-import androidx.compose.material3.Switch
-import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
@@ -24,15 +19,12 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.ViewModel
@@ -40,7 +32,6 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
-import dev.hfps.reveal.data.library.LibraryRepository
 import dev.hfps.reveal.designsystem.components.Eyebrow
 import dev.hfps.reveal.designsystem.components.GhostButton
 import dev.hfps.reveal.designsystem.components.PrimaryButton
@@ -52,6 +43,7 @@ import dev.hfps.reveal.designsystem.components.SecondaryButton
 import dev.hfps.reveal.designsystem.icons.PhosphorRegular
 import dev.hfps.reveal.designsystem.theme.RevealTheme
 import dev.hfps.reveal.feature.settings.R
+import dev.hfps.reveal.feature.settings.SettingsBody
 import dev.hfps.reveal.sync.ClaimException
 import dev.hfps.reveal.sync.PairException
 import dev.hfps.reveal.sync.PairProblem
@@ -61,7 +53,6 @@ import dev.hfps.reveal.sync.SyncRepository
 import dev.hfps.reveal.sync.SyncStatus
 import dev.hfps.reveal.sync.account.PairingLink
 import dev.hfps.reveal.sync.account.SyncAccount
-import dev.hfps.reveal.sync.account.SyncOptions
 import dev.hfps.reveal.sync.api.DeviceCandidate
 import dev.hfps.reveal.sync.work.SyncScheduler
 import java.net.URI
@@ -73,16 +64,6 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-
-/** A folder and its originals-backup switch. */
-@Immutable
-data class BackupFolder(
-    val id: Long,
-    val name: String,
-    val backup: Boolean,
-    /** Hoard's phone backup covers it (ADR 0018 "R1"): shown read only, "Backed up by Hoard". */
-    val coveredByHoard: Boolean = false,
-)
 
 /** Pairing in progress or its failure. */
 sealed interface PairingState {
@@ -107,21 +88,17 @@ sealed interface PairingState {
     data class ConfirmSwitch(val serverName: String, val deviceName: String) : PairingState
 }
 
-/** Everything the Sync screen shows. */
+/** Everything the Photo server screen shows. */
 @Immutable
 data class SyncUiState(
     val account: SyncAccount? = null,
-    val options: SyncOptions = SyncOptions(),
     val status: SyncStatus = SyncStatus(),
-    val folders: List<BackupFolder> = emptyList(),
     val pairing: PairingState = PairingState.Idle,
-    /** "Photos opened from other apps": everything (true) or only edited photos (the default, FIX/W). */
-    val handoffBackup: Boolean = false,
     /** Right after pairing: phones of the same model another app paired from (Hoard ADR 0017's one question). */
     val samePhone: List<DeviceCandidate> = emptyList(),
 )
 
-/** What the Sync screen can ask for. */
+/** What the Photo server screen can ask for. */
 @Immutable
 data class SyncActions(
     val onBack: () -> Unit = {},
@@ -129,9 +106,6 @@ data class SyncActions(
     val onScanned: (String) -> Unit = {},
     val onCancelScan: () -> Unit = {},
     val onPaste: (String) -> Unit = {},
-    val onOptions: (SyncOptions) -> Unit = {},
-    val onFolderBackup: (Long, Boolean) -> Unit = { _, _ -> },
-    val onHandoffBackup: (Boolean) -> Unit = {},
     val onSyncNow: () -> Unit = {},
     val onUnpair: () -> Unit = {},
     val onThisDevice: () -> Unit = {},
@@ -149,7 +123,7 @@ data class SyncActions(
     val onConfirmSwitch: (Boolean) -> Unit = {},
 )
 
-/** Test tags of the Sync screen. */
+/** Test tags of the Photo server screen (the Sync screen before the settings hub; the backup switches' tags too). */
 object SyncTags {
     const val SCREEN = "sync_screen"
     const val SCAN = "sync_scan"
@@ -188,27 +162,16 @@ object SyncTags {
 class SyncSettingsViewModel @Inject constructor(
     @ApplicationContext private val context: Context,
     private val sync: SyncRepository,
-    library: LibraryRepository,
 ) : ViewModel() {
     private val pairing = MutableStateFlow<PairingState>(PairingState.Idle)
-    private val lib = library
 
     val state: StateFlow<SyncUiState> = combine(
         sync.account,
-        sync.options,
         sync.status,
-        combine(library.sources(), library.handoffBackup(), ::Pair),
-        combine(pairing, sync.pairCandidates, ::Pair),
-    ) { account, options, status, (sources, handoffBackup), (pairingState, samePhone) ->
-        SyncUiState(
-            account = account,
-            options = options,
-            status = status,
-            folders = sources.map { BackupFolder(it.id, it.name, it.backup, it.coveredByHoard) },
-            pairing = pairingState,
-            handoffBackup = handoffBackup,
-            samePhone = samePhone,
-        )
+        pairing,
+        sync.pairCandidates,
+    ) { account, status, pairingState, samePhone ->
+        SyncUiState(account = account, status = status, pairing = pairingState, samePhone = samePhone)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_MS), SyncUiState())
 
     fun scan() = pairing.update { PairingState.Scanning }
@@ -313,25 +276,6 @@ class SyncSettingsViewModel @Inject constructor(
         }
     }
 
-    fun setOptions(options: SyncOptions) {
-        sync.setOptions(options)
-        SyncScheduler.blobs(context)
-    }
-
-    fun setFolderBackup(id: Long, backup: Boolean) {
-        viewModelScope.launch {
-            lib.setBackup(id, backup)
-            SyncScheduler.blobs(context)
-        }
-    }
-
-    fun setHandoffBackup(everything: Boolean) {
-        viewModelScope.launch {
-            lib.setHandoffBackup(everything)
-            SyncScheduler.blobs(context)
-        }
-    }
-
     fun syncNow() {
         SyncScheduler.now(context)
         SyncScheduler.blobs(context)
@@ -360,14 +304,14 @@ class SyncSettingsViewModel @Inject constructor(
 }
 
 @Composable
-fun SyncSettingsScreen(
+fun PhotoServerScreen(
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
     onThisDevice: () -> Unit = {},
     viewModel: SyncSettingsViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
-    SyncSettingsContent(
+    PhotoServerContent(
         state = state,
         actions = SyncActions(
             onBack = onBack,
@@ -375,9 +319,6 @@ fun SyncSettingsScreen(
             onScanned = viewModel::pair,
             onCancelScan = viewModel::cancelScan,
             onPaste = viewModel::pair,
-            onOptions = viewModel::setOptions,
-            onFolderBackup = viewModel::setFolderBackup,
-            onHandoffBackup = viewModel::setHandoffBackup,
             onSyncNow = viewModel::syncNow,
             onUnpair = viewModel::unpair,
             onThisDevice = onThisDevice,
@@ -392,9 +333,9 @@ fun SyncSettingsScreen(
     )
 }
 
-/** Stateless Sync screen (screenshots, tests). [now] formats "last sync" (fixed in screenshots). */
+/** Stateless Photo server screen (screenshots, tests). [now] formats "last sync" (fixed in screenshots). */
 @Composable
-fun SyncSettingsContent(
+fun PhotoServerContent(
     state: SyncUiState,
     actions: SyncActions,
     modifier: Modifier = Modifier,
@@ -404,16 +345,13 @@ fun SyncSettingsContent(
         modifier = modifier.testTag(SyncTags.SCREEN),
         topBar = {
             RevealTopBar(
-                title = stringResource(R.string.sync_title),
+                title = stringResource(R.string.server_title),
                 onBack = actions.onBack,
                 backContentDescription = stringResource(R.string.settings_back),
             )
         },
     ) {
-        Column(
-            modifier = Modifier.verticalScroll(rememberScrollState()).padding(vertical = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
+        SettingsBody {
             val account = state.account
             if (account == null) {
                 Unpaired(state.pairing, actions)
@@ -562,7 +500,6 @@ private fun Paired(
     now: Long,
     modifier: Modifier = Modifier,
 ) {
-    val context = LocalContext.current
     val status = state.status
     var confirmUnpair by rememberSaveable { mutableStateOf(false) }
     // The Unpair confirmation opened by "Switch server": confirming it also pairs with the other server's code.
@@ -585,27 +522,6 @@ private fun Paired(
                 modifier = Modifier.padding(horizontal = 16.dp),
             )
         }
-        PairAgain(
-            open = pairAgain,
-            onOpen = { pairAgain = true },
-            pairing = state.pairing,
-            actions = actions,
-            onSwitchServer = {
-                switchServer = true
-                confirmUnpair = true
-            },
-        )
-        RevealListRow(
-            title = stringResource(R.string.device_title),
-            subtitle = stringResource(R.string.device_row_subtitle),
-            icon = PhosphorRegular.DeviceMobile,
-            onClick = actions.onThisDevice,
-            trailing = {
-                Icon(PhosphorRegular.CaretRight, null, tint = RevealTheme.colors.mutedForeground)
-            },
-            modifier = Modifier.testTag(SyncTags.THIS_DEVICE),
-        )
-        RevealRowDivider()
         RevealListRow(
             title = statusTitle(status, now),
             subtitle = statusSubtitle(status),
@@ -627,85 +543,27 @@ private fun Paired(
             )
         }
 
-        Eyebrow(stringResource(R.string.sync_section_what), Modifier.padding(start = 16.dp, end = 16.dp, top = 12.dp))
-        Text(
-            stringResource(R.string.sync_edits_always),
-            style = RevealTheme.typography.ui,
-            color = RevealTheme.colors.mutedForeground,
-            modifier = Modifier.padding(horizontal = 16.dp),
+        RevealRowDivider()
+        RevealListRow(
+            title = stringResource(R.string.device_title),
+            subtitle = stringResource(R.string.device_row_subtitle),
+            icon = PhosphorRegular.DeviceMobile,
+            onClick = actions.onThisDevice,
+            trailing = {
+                Icon(PhosphorRegular.CaretRight, null, tint = RevealTheme.colors.mutedForeground)
+            },
+            modifier = Modifier.testTag(SyncTags.THIS_DEVICE),
         )
-        val options = state.options
-        SwitchRow(
-            title = stringResource(R.string.sync_previews),
-            subtitle = stringResource(R.string.sync_previews_subtitle),
-            checked = options.previews,
-            onChange = { actions.onOptions(options.copy(previews = it)) },
-            tag = SyncTags.PREVIEWS,
+        PairAgain(
+            open = pairAgain,
+            onOpen = { pairAgain = true },
+            pairing = state.pairing,
+            actions = actions,
+            onSwitchServer = {
+                switchServer = true
+                confirmUnpair = true
+            },
         )
-        SwitchRow(
-            title = stringResource(R.string.sync_edited_previews),
-            subtitle = stringResource(R.string.sync_edited_previews_subtitle),
-            checked = options.editedPreviews,
-            onChange = { actions.onOptions(options.copy(editedPreviews = it)) },
-            tag = SyncTags.EDITED_PREVIEWS,
-        )
-        SwitchRow(
-            title = stringResource(R.string.sync_originals),
-            subtitle = stringResource(R.string.sync_originals_subtitle),
-            checked = options.originals,
-            onChange = { actions.onOptions(options.copy(originals = it)) },
-            tag = SyncTags.ORIGINALS,
-        )
-        SwitchRow(
-            title = stringResource(R.string.sync_wifi_only),
-            subtitle = stringResource(R.string.sync_wifi_only_subtitle),
-            checked = options.originalsWifiOnly,
-            enabled = options.originals,
-            onChange = { actions.onOptions(options.copy(originalsWifiOnly = it)) },
-            tag = SyncTags.WIFI_ONLY,
-        )
-        if (options.originals) {
-            Eyebrow(
-                stringResource(R.string.sync_section_folders),
-                Modifier.padding(start = 16.dp, end = 16.dp, top = 12.dp),
-            )
-            Text(
-                stringResource(R.string.sync_folders_hint),
-                style = RevealTheme.typography.ui,
-                color = RevealTheme.colors.mutedForeground,
-                modifier = Modifier.padding(horizontal = 16.dp),
-            )
-            for (folder in state.folders) FolderBackupRow(folder, actions)
-            // Hand-offs: the same two modes, "Only photos you edit" by default (FIX/W).
-            SwitchRow(
-                title = stringResource(R.string.sync_handoff_backup),
-                subtitle = stringResource(
-                    if (state.handoffBackup) R.string.sync_folder_everything else R.string.sync_folder_edited,
-                ),
-                checked = state.handoffBackup,
-                onChange = actions.onHandoffBackup,
-                tag = SyncTags.HANDOFF_BACKUP,
-            )
-        }
-
-        Eyebrow(
-            stringResource(R.string.sync_section_storage),
-            Modifier.padding(start = 16.dp, end = 16.dp, top = 12.dp),
-        )
-        Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            StorageLine(stringResource(R.string.sync_uploaded, size(context, status.uploadedBytes)))
-            if (status.uploadsPending > 0) {
-                StorageLine(
-                    pluralStringResource(
-                        R.plurals.sync_waiting,
-                        status.uploadsPending,
-                        size(context, status.uploadBytesPending),
-                        status.uploadsPending,
-                    ),
-                )
-            }
-            StorageLine(pluralStringResource(R.plurals.sync_server_photos, status.serverPhotos, status.serverPhotos))
-        }
 
         Column(Modifier.padding(16.dp)) {
             GhostButton(
@@ -747,94 +605,38 @@ private fun Paired(
     }
 }
 
-/** One folder's backup mode: a switch, or "Backed up by Hoard" (read only) when Hoard's phone backup covers it. */
 @Composable
-private fun FolderBackupRow(folder: BackupFolder, actions: SyncActions) {
-    if (folder.coveredByHoard) {
-        // Hoard's phone backup covers it (R1): its originals are left to Hoard, no choice to make here.
-        RevealListRow(
-            title = folder.name,
-            subtitle = stringResource(R.string.sync_folder_hoard),
-            icon = PhosphorRegular.CloudCheck,
-            modifier = Modifier.testTag(SyncTags.folder(folder.id)),
-        )
-        return
-    }
-    // On = "Everything", off = "Only photos you edit" (the default for new folders, FIX/V).
-    SwitchRow(
-        title = folder.name,
-        subtitle = stringResource(if (folder.backup) R.string.sync_folder_everything else R.string.sync_folder_edited),
-        checked = folder.backup,
-        onChange = { actions.onFolderBackup(folder.id, it) },
-        tag = SyncTags.folder(folder.id),
-    )
-}
-
-@Composable
-private fun StorageLine(text: String) {
-    Text(text, style = RevealTheme.typography.body, color = RevealTheme.colors.foreground)
-}
-
-/** A titled switch row (Sync, Settings' XMP section). */
-@Composable
-internal fun SwitchRow(
-    title: String,
-    subtitle: String?,
-    checked: Boolean,
-    onChange: (Boolean) -> Unit,
-    tag: String,
-    enabled: Boolean = true,
-) {
-    val c = RevealTheme.colors
-    Row(
-        modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(horizontal = 16.dp, vertical = 4.dp)
-            .semantics { contentDescription = title },
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Column(Modifier.weight(1f).padding(end = 12.dp)) {
-            Text(title, style = RevealTheme.typography.body, color = if (enabled) c.foreground else c.mutedForeground)
-            if (subtitle != null) Text(subtitle, style = RevealTheme.typography.ui, color = c.mutedForeground)
-        }
-        Switch(
-            checked = checked,
-            onCheckedChange = onChange,
-            enabled = enabled,
-            colors = SwitchDefaults.colors(
-                checkedTrackColor = c.primary,
-                checkedThumbColor = c.primaryForeground,
-                uncheckedTrackColor = c.muted,
-                uncheckedThumbColor = c.mutedForeground,
-                uncheckedBorderColor = c.input,
-            ),
-            modifier = Modifier.testTag(tag),
-        )
-    }
-}
-
-@Composable
-private fun statusTitle(status: SyncStatus, now: Long): String {
+internal fun statusTitle(status: SyncStatus, now: Long): String {
     val last = status.lastSyncAt
+    val locale = LocalConfiguration.current.locales[0]
     return when {
         status.running -> stringResource(R.string.sync_running)
 
         last == null -> stringResource(R.string.sync_never)
 
-        else -> stringResource(
-            R.string.sync_last,
-            DateUtils.getRelativeTimeSpanString(last, now, DateUtils.MINUTE_IN_MILLIS).toString(),
-        )
+        else -> {
+            val relative = DateUtils.getRelativeTimeSpanString(last, now, DateUtils.MINUTE_IN_MILLIS).toString()
+            // Mid-sentence: "Última sincronização há 2 minutos" (Android capitalises "Há"). Within a week the span is a
+            // phrase ("2 minutes ago", "Ontem"), never a date whose month name keeps its capital.
+            val phrase = if (now - last < DateUtils.WEEK_IN_MILLIS) {
+                relative.replaceFirstChar { it.lowercase(locale) }
+            } else {
+                relative
+            }
+            stringResource(R.string.sync_last, phrase)
+        }
     }
 }
 
 @Composable
-private fun statusSubtitle(status: SyncStatus): String = status.problem?.let { stringResource(it.text()) }
+internal fun statusSubtitle(status: SyncStatus): String = status.problem?.let { stringResource(it.text()) }
     ?: if (status.pending > 0) {
         pluralStringResource(R.plurals.sync_pending, status.pending, status.pending)
     } else {
         stringResource(R.string.sync_up_to_date)
     }
 
-private fun SyncProblem.text(): Int = when (this) {
+internal fun SyncProblem.text(): Int = when (this) {
     SyncProblem.OFFLINE -> R.string.sync_problem_offline
     SyncProblem.UNAUTHORIZED -> R.string.sync_problem_unauthorized
     SyncProblem.SERVER_CHANGED -> R.string.sync_problem_server_changed
@@ -859,7 +661,7 @@ private fun host(url: String): String = runCatching {
 }
     .getOrDefault(url)
 
-private fun size(context: Context, bytes: Long): String = Formatter.formatShortFileSize(context, bytes)
+internal fun size(context: Context, bytes: Long): String = Formatter.formatShortFileSize(context, bytes)
 
 private const val MAX_LINK = 2000
 

@@ -7,8 +7,6 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -48,7 +46,8 @@ import dev.hfps.reveal.designsystem.components.SecondaryButton
 import dev.hfps.reveal.designsystem.icons.PhosphorRegular
 import dev.hfps.reveal.designsystem.theme.RevealTheme
 import dev.hfps.reveal.feature.settings.R
-import dev.hfps.reveal.feature.settings.sync.SwitchRow
+import dev.hfps.reveal.feature.settings.SettingsBody
+import dev.hfps.reveal.feature.settings.SwitchRow
 import dev.hfps.reveal.sync.files.ServerFiles
 import dev.hfps.reveal.sync.thumbs.LibraryThumbs
 import dev.hfps.reveal.sync.work.SyncScheduler
@@ -185,10 +184,7 @@ fun StorageContent(
             )
         },
     ) {
-        Column(
-            modifier = Modifier.verticalScroll(rememberScrollState()).padding(vertical = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
+        SettingsBody {
             val usage = state.usage
             Text(
                 if (usage == null) {

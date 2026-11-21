@@ -1,211 +1,143 @@
 package dev.hfps.reveal.feature.settings
 
-import android.app.Activity
-import android.content.Context
-import android.content.Intent
-import android.net.Uri
-import android.provider.Settings
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Icon
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextField
-import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
-import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.ViewModel
-import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
+import androidx.navigation.NavController
 import androidx.navigation.NavGraphBuilder
 import androidx.navigation.compose.composable
 import dagger.hilt.android.lifecycle.HiltViewModel
-import dev.hfps.reveal.data.export.Authorship
-import dev.hfps.reveal.data.export.ExportPreferences
-import dev.hfps.reveal.data.handoff.GalleryAccess
-import dev.hfps.reveal.data.handoff.GalleryAccessState
-import dev.hfps.reveal.data.library.LibraryRepository
-import dev.hfps.reveal.data.xmp.XmpPreferences
-import dev.hfps.reveal.designsystem.components.Eyebrow
-import dev.hfps.reveal.designsystem.components.RevealListRow
 import dev.hfps.reveal.designsystem.components.RevealScaffold
 import dev.hfps.reveal.designsystem.components.RevealTopBar
 import dev.hfps.reveal.designsystem.icons.PhosphorRegular
 import dev.hfps.reveal.designsystem.theme.RevealTheme
+import dev.hfps.reveal.feature.settings.appearance.AppearanceScreen
+import dev.hfps.reveal.feature.settings.editing.EditingScreen
+import dev.hfps.reveal.feature.settings.folders.FoldersAccessScreen
 import dev.hfps.reveal.feature.settings.storage.StorageScreen
-import dev.hfps.reveal.feature.settings.sync.SwitchRow
-import dev.hfps.reveal.feature.settings.sync.SyncSettingsScreen
+import dev.hfps.reveal.feature.settings.sync.BackupSyncScreen
+import dev.hfps.reveal.feature.settings.sync.PhotoServerScreen
 import dev.hfps.reveal.feature.settings.sync.ThisDeviceScreen
+import dev.hfps.reveal.feature.settings.sync.statusTitle
 import dev.hfps.reveal.sync.SyncRepository
+import dev.hfps.reveal.sync.SyncStatus
 import javax.inject.Inject
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
-import kotlinx.coroutines.launch
 
 /**
- * Settings: sync (ADR 0018), the XMP sidecar switches (ADR 0026) and the author and copyright that exports write
- * (docs/adr/0009, "Metadata").
+ * The entries of the Settings hub, top to bottom: each opens its own screen. A new setting goes into the screen of
+ * the entry it belongs to; a new entry is one constant here plus its route, strings and destination.
  */
+enum class SettingsEntry(val tag: String) {
+    SERVER("settings_server"),
+    BACKUP("settings_backup"),
+    FOLDERS("settings_folders"),
+    STORAGE("settings_storage"),
+    APPEARANCE("settings_appearance"),
+    EDITING("settings_editing"),
+    ABOUT("settings_about"),
+}
+
+/** What the hub's rows say about the server (the only entry whose subtitle changes). */
+@Immutable
+data class SettingsHubState(val server: String? = null, val status: SyncStatus = SyncStatus())
+
 @HiltViewModel
-class SettingsViewModel @Inject constructor(
-    private val preferences: ExportPreferences,
-    sync: SyncRepository,
-    private val gallery: GalleryAccess,
-    private val library: LibraryRepository,
-    private val xmp: XmpPreferences,
-) : ViewModel() {
-    /** Settings → XMP sidecars (ADR 0026). */
-    val readEdits: StateFlow<Boolean> = xmp.readEdits
+class SettingsViewModel @Inject constructor(sync: SyncRepository) : ViewModel() {
+    val state: StateFlow<SettingsHubState> = combine(sync.account, sync.status) { account, status ->
+        SettingsHubState(account?.let { it.serverName.ifBlank { it.url } }, status)
+    }.stateIn(
+        viewModelScope,
+        SharingStarted.WhileSubscribed(STOP_MS),
+        SettingsHubState(sync.account.value?.let { it.serverName.ifBlank { it.url } }),
+    )
 
-    fun setReadEdits(on: Boolean) = xmp.setReadEdits(on)
-
-    val authorship: Authorship get() = preferences.authorship.value
-
-    /** The optional gallery permission (ADR 0011 "Gallery access"). */
-    val galleryAccess: StateFlow<GalleryAccessState> = gallery.state
-
-    /** After the permission dialog: the offer is answered; which hand-offs read again. */
-    fun onGalleryResult() {
-        gallery.setAsked()
-        gallery.refresh()
-        library.scheduleAccessCheck(again = true)
+    private companion object {
+        const val STOP_MS = 5_000L
     }
+}
 
-    /** Back from the app settings page (or anywhere): the permission may have changed. */
-    fun onResumed() {
-        if (gallery.refresh()) library.scheduleAccessCheck(again = true)
+/**
+ * Adds Settings: the hub ([SettingsRoute]) and one destination per entry, plus This device under Photo server.
+ * About lives in the app ([onAbout]). Back from any screen returns to the one below it.
+ */
+fun NavGraphBuilder.settingsScreens(navController: NavController, onAbout: () -> Unit) {
+    val back: () -> Unit = { navController.popBackStack() }
+    composable<SettingsRoute> {
+        SettingsScreen(
+            onBack = back,
+            onEntry = { entry ->
+                when (entry) {
+                    SettingsEntry.SERVER -> navController.navigate(PhotoServerRoute)
+                    SettingsEntry.BACKUP -> navController.navigate(BackupSyncRoute)
+                    SettingsEntry.FOLDERS -> navController.navigate(FoldersAccessRoute)
+                    SettingsEntry.STORAGE -> navController.navigate(StorageRoute)
+                    SettingsEntry.APPEARANCE -> navController.navigate(AppearanceRoute)
+                    SettingsEntry.EDITING -> navController.navigate(EditingRoute)
+                    SettingsEntry.ABOUT -> onAbout()
+                }
+            },
+        )
     }
-
-    /** The paired server's name (or address), null when not paired. */
-    val server: StateFlow<String?> = sync.account
-        .map { account -> account?.let { it.serverName.ifBlank { it.url } } }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, sync.account.value?.let { it.serverName.ifBlank { it.url } })
-
-    fun setAuthorship(value: Authorship) = preferences.setAuthorship(value)
+    composable<PhotoServerRoute> {
+        PhotoServerScreen(onBack = back, onThisDevice = { navController.navigate(ThisDeviceRoute) })
+    }
+    composable<ThisDeviceRoute> { ThisDeviceScreen(onBack = back) }
+    composable<BackupSyncRoute> {
+        BackupSyncScreen(
+            onBack = back,
+            onServer = { navController.navigate(PhotoServerRoute) },
+            onFolders = { navController.navigate(FoldersAccessRoute) },
+        )
+    }
+    composable<FoldersAccessRoute> {
+        FoldersAccessScreen(
+            onBack = back,
+            onServer = { navController.navigate(PhotoServerRoute) },
+            onBackup = { navController.navigate(BackupSyncRoute) },
+        )
+    }
+    composable<StorageRoute> { StorageScreen(onBack = back) }
+    composable<AppearanceRoute> { AppearanceScreen(onBack = back) }
+    composable<EditingRoute> { EditingScreen(onBack = back) }
 }
 
-/** Adds the settings destinations (Settings, its Sync, This device and Storage screens). */
-fun NavGraphBuilder.settingsScreen(
-    onBack: () -> Unit,
-    onSync: () -> Unit,
-    onStorage: () -> Unit = {},
-    onThisDevice: () -> Unit = {},
-) {
-    composable<SettingsRoute> { SettingsScreen(onBack = onBack, onSync = onSync, onStorage = onStorage) }
-    composable<SyncSettingsRoute> { SyncSettingsScreen(onBack = onBack, onThisDevice = onThisDevice) }
-    composable<ThisDeviceRoute> { ThisDeviceScreen(onBack = onBack) }
-    composable<StorageRoute> { StorageScreen(onBack = onBack) }
-}
-
-/** Test tags of the settings screen. */
-object SettingsTags {
-    const val AUTHOR = "settings_author"
-    const val COPYRIGHT = "settings_copyright"
-    const val SYNC = "settings_sync"
-    const val GALLERY = "settings_gallery"
-    const val STORAGE = "settings_storage"
-    const val XMP_NOTE = "settings_xmp_note"
-    const val XMP_READ = "settings_xmp_read"
-}
+/** Opens the Settings screen a door outside Settings names (the library's sync badge, a sheet's Pair...). */
+fun NavController.navigateToSettings(link: SettingsLink) = navigate(link.route)
 
 @Composable
 fun SettingsScreen(
     onBack: () -> Unit,
-    onSync: () -> Unit,
+    onEntry: (SettingsEntry) -> Unit,
     modifier: Modifier = Modifier,
-    onStorage: () -> Unit = {},
     viewModel: SettingsViewModel = hiltViewModel(),
 ) {
-    val server by viewModel.server.collectAsStateWithLifecycle()
-    val gallery by viewModel.galleryAccess.collectAsStateWithLifecycle()
-    val readEdits by viewModel.readEdits.collectAsStateWithLifecycle()
-    val context = LocalContext.current
-    val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
-        viewModel.onGalleryResult()
-        val activity = context as? Activity
-        val blocked = result.values.none { it } && activity != null &&
-            GalleryAccess.permissions().none { activity.shouldShowRequestPermissionRationale(it) }
-        // The system no longer shows the dialog (denied twice): the app's own settings page is where it changes.
-        if (blocked) context.startActivity(appSettings(context))
-    }
-    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { viewModel.onResumed() }
-    var author by rememberSaveable { mutableStateOf(viewModel.authorship.author) }
-    var copyright by rememberSaveable { mutableStateOf(viewModel.authorship.copyright) }
-    fun save() = viewModel.setAuthorship(Authorship(author, copyright))
-    SettingsContent(
-        author = author,
-        copyright = copyright,
-        onAuthor = {
-            author = it
-            save()
-        },
-        onCopyright = {
-            copyright = it
-            save()
-        },
-        onBack = onBack,
-        modifier = modifier,
-        server = server,
-        onSync = onSync,
-        onStorage = onStorage,
-        gallery = gallery,
-        onGallery = {
-            // Turning it off (or widening "selected photos") happens in the system's page for the app.
-            if (gallery == GalleryAccessState.FULL) {
-                context.startActivity(appSettings(context))
-            } else {
-                permission.launch(GalleryAccess.permissions())
-            }
-        },
-        xmp = XmpSettings(readEdits, viewModel::setReadEdits),
-    )
+    val state by viewModel.state.collectAsStateWithLifecycle()
+    SettingsContent(state = state, onBack = onBack, onEntry = onEntry, modifier = modifier)
 }
 
-/** The XMP switches as the content shows them (ADR 0026). */
-data class XmpSettings(val readEdits: Boolean = true, val onReadEdits: (Boolean) -> Unit = {})
-
-private fun appSettings(context: Context) = Intent(
-    Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
-    Uri.fromParts("package", context.packageName, null),
-).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-
-/** Stateless settings content (screenshots). */
+/** Stateless Settings hub (screenshots, tests). [now] formats the last sync (fixed in screenshots). */
 @Composable
 fun SettingsContent(
-    author: String,
-    copyright: String,
-    onAuthor: (String) -> Unit,
-    onCopyright: (String) -> Unit,
+    state: SettingsHubState,
     onBack: () -> Unit,
+    onEntry: (SettingsEntry) -> Unit,
     modifier: Modifier = Modifier,
-    server: String? = null,
-    onSync: () -> Unit = {},
-    gallery: GalleryAccessState = GalleryAccessState.NONE,
-    onGallery: () -> Unit = {},
-    onStorage: () -> Unit = {},
-    xmp: XmpSettings = XmpSettings(),
+    now: Long = System.currentTimeMillis(),
 ) {
     RevealScaffold(
-        modifier = modifier,
+        modifier = modifier.testTag(SettingsTags.SCREEN),
         topBar = {
             RevealTopBar(
                 title = stringResource(R.string.settings_title),
@@ -214,116 +146,63 @@ fun SettingsContent(
             )
         },
     ) {
-        Column(
-            modifier = Modifier.verticalScroll(rememberScrollState()).padding(vertical = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            Eyebrow(stringResource(R.string.settings_section_sync), Modifier.padding(horizontal = 16.dp))
-            RevealListRow(
-                title = stringResource(R.string.settings_sync),
-                subtitle = server?.let { stringResource(R.string.settings_sync_on, it) }
-                    ?: stringResource(R.string.settings_sync_off),
-                icon = if (server == null) PhosphorRegular.Cloud else PhosphorRegular.CloudCheck,
-                onClick = onSync,
-                modifier = Modifier.testTag(SettingsTags.SYNC),
-                trailing = {
-                    Icon(PhosphorRegular.CaretRight, null, tint = RevealTheme.colors.mutedForeground)
-                },
-            )
-            Eyebrow(stringResource(R.string.settings_section_photos), Modifier.padding(horizontal = 16.dp))
-            RevealListRow(
-                title = stringResource(R.string.settings_gallery),
-                subtitle = stringResource(
-                    when (gallery) {
-                        GalleryAccessState.FULL -> R.string.settings_gallery_full
-                        GalleryAccessState.PARTIAL -> R.string.settings_gallery_partial
-                        GalleryAccessState.NONE -> R.string.settings_gallery_off
-                    },
-                ),
-                icon = PhosphorRegular.Image,
-                onClick = onGallery,
-                modifier = Modifier.testTag(SettingsTags.GALLERY),
-                trailing = {
-                    Icon(PhosphorRegular.CaretRight, null, tint = RevealTheme.colors.mutedForeground)
-                },
-            )
-            RevealListRow(
-                title = stringResource(R.string.storage_title),
-                subtitle = stringResource(R.string.settings_storage_subtitle),
-                icon = PhosphorRegular.Database,
-                onClick = onStorage,
-                modifier = Modifier.testTag(SettingsTags.STORAGE),
-                trailing = {
-                    Icon(PhosphorRegular.CaretRight, null, tint = RevealTheme.colors.mutedForeground)
-                },
-            )
-            XmpSection(xmp)
-            ExportSection(author, copyright, onAuthor, onCopyright)
+        SettingsBody {
+            for (entry in SettingsEntry.entries) {
+                val problem = entry == SettingsEntry.SERVER && state.server != null && state.status.problem != null
+                NavigationRow(
+                    title = stringResource(entry.title()),
+                    subtitle = subtitle(entry, state, now),
+                    icon = entry.icon(),
+                    iconTint = if (problem) RevealTheme.colors.warning else RevealTheme.colors.mutedForeground,
+                    onClick = { onEntry(entry) },
+                    tag = entry.tag,
+                )
+            }
         }
     }
 }
 
-/** The XMP sidecar switches (ADR 0026). */
+/** Test tags of the Settings hub (each entry's row is tagged [SettingsEntry.tag]). */
+object SettingsTags {
+    const val SCREEN = "settings_screen"
+}
+
+private fun SettingsEntry.title(): Int = when (this) {
+    SettingsEntry.SERVER -> R.string.server_title
+    SettingsEntry.BACKUP -> R.string.backup_title
+    SettingsEntry.FOLDERS -> R.string.folders_title
+    SettingsEntry.STORAGE -> R.string.storage_title
+    SettingsEntry.APPEARANCE -> R.string.appearance_title
+    SettingsEntry.EDITING -> R.string.editing_title
+    SettingsEntry.ABOUT -> R.string.hub_about
+}
+
+private fun SettingsEntry.icon(): ImageVector = when (this) {
+    SettingsEntry.SERVER -> PhosphorRegular.Lock
+    SettingsEntry.BACKUP -> PhosphorRegular.Upload
+    SettingsEntry.FOLDERS -> PhosphorRegular.Folder
+    SettingsEntry.STORAGE -> PhosphorRegular.Database
+    SettingsEntry.APPEARANCE -> PhosphorRegular.Palette
+    SettingsEntry.EDITING -> PhosphorRegular.SlidersHorizontal
+    SettingsEntry.ABOUT -> PhosphorRegular.ShieldCheck
+}
+
 @Composable
-private fun XmpSection(xmp: XmpSettings) {
-    Column {
-        Eyebrow(stringResource(R.string.settings_section_xmp), Modifier.padding(horizontal = 16.dp))
-        SwitchRow(
-            title = stringResource(R.string.settings_xmp_read),
-            subtitle = stringResource(R.string.settings_xmp_read_note),
-            checked = xmp.readEdits,
-            onChange = xmp.onReadEdits,
-            tag = SettingsTags.XMP_READ,
-        )
-        Text(
-            stringResource(R.string.settings_xmp_note),
-            style = RevealTheme.typography.ui,
-            color = RevealTheme.colors.mutedForeground,
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp).testTag(SettingsTags.XMP_NOTE),
-        )
+private fun subtitle(entry: SettingsEntry, state: SettingsHubState, now: Long): String = when (entry) {
+    SettingsEntry.SERVER -> state.server?.let {
+        stringResource(R.string.hub_server_on, it, statusTitle(state.status, now))
     }
-}
+        ?: stringResource(R.string.hub_server_off)
 
-@Composable
-private fun ExportSection(
-    author: String,
-    copyright: String,
-    onAuthor: (String) -> Unit,
-    onCopyright: (String) -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    Column(modifier.padding(horizontal = 16.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Eyebrow(stringResource(R.string.settings_export))
-        Field(stringResource(R.string.settings_author), author, onAuthor, SettingsTags.AUTHOR)
-        Field(stringResource(R.string.settings_copyright), copyright, onCopyright, SettingsTags.COPYRIGHT)
-        Text(
-            stringResource(R.string.settings_authorship_note),
-            style = RevealTheme.typography.ui,
-            color = RevealTheme.colors.mutedForeground,
-        )
-    }
-}
+    SettingsEntry.BACKUP -> stringResource(R.string.hub_backup_subtitle)
 
-@Composable
-private fun Field(label: String, value: String, onChange: (String) -> Unit, tag: String) {
-    val c = RevealTheme.colors
-    TextField(
-        value = value,
-        onValueChange = { onChange(it.take(MAX_LENGTH)) },
-        singleLine = true,
-        label = { Text(label, style = RevealTheme.typography.ui) },
-        textStyle = RevealTheme.typography.body.copy(color = c.foreground),
-        colors = TextFieldDefaults.colors(
-            focusedContainerColor = Color.Transparent,
-            unfocusedContainerColor = Color.Transparent,
-            focusedIndicatorColor = c.primary,
-            unfocusedIndicatorColor = c.input,
-            cursorColor = c.primary,
-            focusedLabelColor = c.mutedForeground,
-            unfocusedLabelColor = c.mutedForeground,
-        ),
-        modifier = Modifier.fillMaxWidth().testTag(tag),
-    )
-}
+    SettingsEntry.FOLDERS -> stringResource(R.string.hub_folders_subtitle)
 
-private const val MAX_LENGTH = 120
+    SettingsEntry.STORAGE -> stringResource(R.string.hub_storage_subtitle)
+
+    SettingsEntry.APPEARANCE -> stringResource(R.string.hub_appearance_subtitle)
+
+    SettingsEntry.EDITING -> stringResource(R.string.hub_editing_subtitle)
+
+    SettingsEntry.ABOUT -> stringResource(R.string.hub_about_subtitle)
+}

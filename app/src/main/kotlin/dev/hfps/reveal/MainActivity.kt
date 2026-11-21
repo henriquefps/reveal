@@ -1,5 +1,6 @@
 package dev.hfps.reveal
 
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Color
@@ -54,13 +55,15 @@ import dev.hfps.reveal.feature.library.GalleryOffer
 import dev.hfps.reveal.feature.library.HandoffServerSheet
 import dev.hfps.reveal.feature.library.LibraryRoute
 import dev.hfps.reveal.feature.library.ViewerRoute
-import dev.hfps.reveal.feature.settings.SyncSettingsRoute
+import dev.hfps.reveal.feature.settings.SettingsLink
+import dev.hfps.reveal.feature.settings.appearance.AppLanguage
+import dev.hfps.reveal.feature.settings.appearance.ThemeModeStore
+import dev.hfps.reveal.feature.settings.navigateToSettings
 import dev.hfps.reveal.handoff.HandoffGrantService
 import dev.hfps.reveal.handoff.HandoffNotices
 import dev.hfps.reveal.input.PalmRejection
 import dev.hfps.reveal.navigation.RevealNavHost
 import dev.hfps.reveal.sync.SyncRepository
-import dev.hfps.reveal.theme.ThemeModeStore
 import java.util.UUID
 import javax.inject.Inject
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -126,6 +129,11 @@ class MainActivity : ComponentActivity() {
 
     /** True while the editor shows a photo another app sent: leaving it returns to that app. */
     private var openedFromIntent = false
+
+    /** Android 12 and older: the app language chosen in Settings (Android 13+ applies it itself, `LocaleManager`). */
+    override fun attachBaseContext(newBase: Context) {
+        super.attachBaseContext(AppLanguage.wrap(newBase))
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -226,7 +234,7 @@ class MainActivity : ComponentActivity() {
                 onPair = {
                     // The batch stays kept: pairing with that server opens it (watchServer).
                     serverNotice.value = null
-                    navController.navigate(SyncSettingsRoute)
+                    navController.navigateToSettings(SettingsLink.PAIR)
                 },
                 onDismiss = {
                     serverNotice.value = null

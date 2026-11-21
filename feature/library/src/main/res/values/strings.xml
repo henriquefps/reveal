@@ -235,7 +235,7 @@
     <string name="viewer_unavailable_details">What can I do?</string>
     <!-- The server's view (ADR 0018, FIX/V) -->
     <string name="library_backup_title">Back up this folder to your sync server?</string>
-    <string name="library_backup_body">Edits, ratings and flags always sync. Originals are uploaded once, over Wi-Fi by default. You can change this later in Settings → Sync.</string>
+    <string name="library_backup_body">Edits, ratings and flags always sync. Originals are uploaded once, over Wi-Fi by default. You can change this later in Settings → Backup and sync.</string>
     <string name="library_backup_edited">Only photos you edit</string>
     <string name="library_backup_edited_detail">A photo’s original goes up the first time you edit it.</string>
     <string name="library_backup_everything">Everything</string>

@@ -9,14 +9,13 @@ import dev.hfps.reveal.feature.editor.editorScreen
 import dev.hfps.reveal.feature.editor.navigateToEditor
 import dev.hfps.reveal.feature.library.LibraryRoute
 import dev.hfps.reveal.feature.library.libraryScreens
+import dev.hfps.reveal.feature.settings.SettingsLink
 import dev.hfps.reveal.feature.settings.SettingsRoute
-import dev.hfps.reveal.feature.settings.StorageRoute
-import dev.hfps.reveal.feature.settings.SyncSettingsRoute
-import dev.hfps.reveal.feature.settings.ThisDeviceRoute
-import dev.hfps.reveal.feature.settings.settingsScreen
+import dev.hfps.reveal.feature.settings.navigateToSettings
+import dev.hfps.reveal.feature.settings.settingsScreens
 import dev.hfps.reveal.ui.about.AboutScreen
 
-/** The app's navigation: the library is the start (M1); the editor, Settings and About hang off it. */
+/** The app's navigation: the library is the start (M1); the editor, Settings (a hub) and About hang off it. */
 @Composable
 fun RevealNavHost(navController: NavHostController, onEditorBack: () -> Unit, modifier: Modifier = Modifier) {
     NavHost(navController = navController, startDestination = LibraryRoute(), modifier = modifier) {
@@ -26,15 +25,10 @@ fun RevealNavHost(navController: NavHostController, onEditorBack: () -> Unit, mo
             onOpenFile = { uri -> navController.navigateToEditor(uri.toString()) },
             onAbout = { navController.navigate(AboutRoute) },
             onSettings = { navController.navigate(SettingsRoute) },
-            onSync = { navController.navigate(SyncSettingsRoute) },
+            onSync = { navController.navigateToSettings(SettingsLink.SYNC_STATUS) },
         )
         composable<AboutRoute> { AboutScreen(onBack = { navController.popBackStack() }) }
-        settingsScreen(
-            onBack = { navController.popBackStack() },
-            onSync = { navController.navigate(SyncSettingsRoute) },
-            onStorage = { navController.navigate(StorageRoute) },
-            onThisDevice = { navController.navigate(ThisDeviceRoute) },
-        )
+        settingsScreens(navController, onAbout = { navController.navigate(AboutRoute) })
         editorScreen(navController = navController, onBack = onEditorBack)
     }
 }

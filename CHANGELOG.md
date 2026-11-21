@@ -6,6 +6,8 @@ All notable changes to Reveal are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-11-20
+
 ### Added
 - Settings › Appearance and language: choose the theme (System, Light or Dark; it applies at once, and the editor
   stays dark) and Reveal's language (the system's, English or Português (Brasil)), independently of the phone's.

@@ -965,7 +965,7 @@ sync, photos still wait (bounded by the walk's 7 days).
 
 ### Against the real server (R1b)
 
-`RealServerBackupTest` (`:core:sync`, JVM, `REVEAL_BACKUP_DIR`) runs every rule above against hoard-server 0.12.0 with
+`RealServerBackupTest` (`:core:sync`, JVM, `REVEAL_BACKUP_DIR`) runs every rule above against hoard-server 0.13.2 with
 two device keys on one phone: Reveal's (`TestDevice`) and a raw HTTP "Hoard" that claims Reveal's physical device and
 drives `POST /v1/backup/roots`, `PATCH .../roots/{id}`, `POST /v1/backup/report` and uploads with `claim: false`. What
 the real server showed, against R1's reading of Hoard ADR 0024 and `FakeSyncServer`:

@@ -30,7 +30,6 @@ import dev.hfps.reveal.feature.export.ui.ExportRun
 import dev.hfps.reveal.feature.export.ui.ExportSheetActions
 import dev.hfps.reveal.feature.export.ui.ExportSheetContent
 import dev.hfps.reveal.feature.export.ui.ExportUiState
-import dev.hfps.reveal.feature.settings.SettingsContent
 import dev.hfps.reveal.pipeline.export.ExportSize
 import dev.hfps.reveal.pipeline.export.OutputSharpening
 import dev.hfps.reveal.pipeline.export.PixelSize
@@ -187,12 +186,6 @@ class ExportScreenshotTest {
     /** A device without an AV1 encoder: no AVIF chip. */
     @Test fun noAvif() = shoot("editor_no_avif") {
         EditorTheme { Sheet(single.copy(support = support)) }
-    }
-
-    @Test fun settings() = shoot("settings_light") {
-        RevealTheme(darkTheme = false) {
-            SettingsContent("Ana Example", "© 2026 Ana Example", {}, {}, {})
-        }
     }
 
     private fun shoot(name: String, content: @Composable () -> Unit) {

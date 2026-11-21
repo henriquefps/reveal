@@ -116,3 +116,6 @@ stack
 camera
 calendar-blank
 push-pin
+lock
+upload
+shield-check

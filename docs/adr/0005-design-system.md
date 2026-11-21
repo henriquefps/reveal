@@ -80,7 +80,9 @@ in two weights. Decision: `scripts/icons/generate_icons.py` (Python 3, no depend
 edge-to-edge insets via `safeDrawing`), `RevealTopBar` (56 dp, no bottom border), `RevealIconButton` (48 dp target,
 content description + long-press tooltip), `PrimaryButton`/`SecondaryButton`/`GhostButton` (44 dp min, 10 dp radius),
 `RevealChip`, `RevealListRow` (56 dp min), `Eyebrow`, `RevealBottomSheet` (Material modal sheet with drag handle and
-hfps radius). Motion: `RevealMotion` (150 / 200 / 250 ms, ease-out `tween`s, so every change is interruptible).
+hfps radius), `RevealDropdown` (a single choice as an outlined field that opens a Material `DropdownMenu` in `card`
+colours: label above, help line below, the chosen option ticked; TalkBack reads one node, "label, value, drop-down
+list"; used by Settings › Appearance and language). Motion: `RevealMotion` (150 / 200 / 250 ms, ease-out `tween`s, so every change is interruptible).
 
 ## RevealSlider (M1)
 

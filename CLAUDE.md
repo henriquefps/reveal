@@ -181,7 +181,7 @@ One home with combinable filters (FIX/L, ADR 0006 "Filters"): the start destinat
 `PhotoListCodec` (format 2; format 1 and the old `library.lastSelection` still decode), its option in
 `feature/library/LibraryFilters.kt` (`filterGroups`), its count in `PhotoDao.observeFilterCounts`, strings in both
 languages. The last filters live in `meta` `library.filters` (`LibraryRepository.lastFilters`); a multi-photo hand-off
-opens on `PhotoFilters.FROM_APPS`. UI: `LibraryContent` (top bar: `SyncBadge` status -> Sync screen, Recent, Folders,
+opens on `PhotoFilters.FROM_APPS`. UI: `LibraryContent` (top bar: `SyncBadge` status -> Settings' Photo server, Recent, Folders,
 Settings, ⋯), `FilterBar` + `FilterSheet` (`LibraryFilters.kt`), `ManageFoldersSheet` (`ManageFolders.kt`: show a
 folder = `LibraryViewModel.showFolder`, backup mode, remove). The viewer and the filmstrip get the grid's query
 (`PhotoListCodec.encode(state.gridQuery)`). Pending uploads: `CloudState.UPLOADING`. Instrumented steps that work in
@@ -316,7 +316,7 @@ fingerprint in any source (the item's mirrored members in `culling_files` win ov
 a Server photo from the item (one `replacedBy` followed, unknown id -> lookup by fingerprint, 404/tombstone = counted
 in `notFound`), `handoff_at` + title so it lists in "Opened from other apps" (`FromApps` now includes Server photos),
 culling pulled on receipt. Not paired: batch kept in `meta` `handoff.pendingServerRefs`, `ServerIssue.NotPaired`, the
-sheet's Pair opens Sync settings, `MainActivity.watchServer` calls `HandoffRepository.resumePending(serverId)` once
+sheet's Pair opens Settings' Photo server (`SettingsLink.PAIR`), `MainActivity.watchServer` calls `HandoffRepository.resumePending(serverId)` once
 paired; another server: `ServerIssue.OtherServer(name)`, nothing kept; unreachable: placeholders from the intent's
 name + fingerprint, kept in `handoff.retryServerRefs`, refilled by `retryUnreachable` after a sync. Outcomes carry
 `notFound` and `issue` (`OpenEditor`/`OpenLibrary`/`ServerRefs`); the sheet is `feature/library/HandoffServerSheet.kt`.
@@ -381,7 +381,7 @@ previews wait while an editor is open (`editorOpened/Closed`, heap), the editor 
 `IllegalArgumentException` into `FileNotFoundException`) and by `LibraryRepository.checkHandoffs` (refresh);
 thumbnails, `PhotoImages`, `editTarget` (file URI of the `.rvsp`) and `exportTarget` (`OriginalReach.PREVIEW`) fall
 back to them; grid `CloudState.LOCAL_PREVIEW`. Gallery access (optional): `handoff/GalleryAccess` (state, asked once),
-`GalleryAccessSheet` in the library route, Settings → Gallery access; permissions in `core/data` manifest. The debug
+`GalleryAccessSheet` in the library route, Settings → Folders and photo access → Gallery access; permissions in `core/data` manifest. The debug
 provider refuses ids listed by `SyntheticDocumentsProvider.refuse` (an ended grant), `forget` (a provider's
 `IllegalArgumentException`) and `refuseAfterOpen` (a grant good for one read).
 
@@ -1026,6 +1026,37 @@ screenshot): JVM `REVEAL_ARW_DIR=<dir of copies> ./gradlew :core:image:testDebug
 device: push the copies to `files/private` with `run-as`, run with `-e dir /data/user/0/dev.hfps.image.test/files/private
 -e anonymize true` (logs `file#N`), then `run-as dev.hfps.image.test rm -rf files/private`.
 
+## Settings (`:feature:settings`)
+
+A hub of short entries (the structure of Hoard's Configurações): `SettingsScreen` lists `SettingsEntry` (Photo server,
+Backup and sync, Folders and photo access, Cache and storage, Appearance and language, Editing and XMP, About), each a
+`NavigationRow` opening its own route (`SettingsRoute.kt`: `PhotoServerRoute` (+ `ThisDeviceRoute`), `BackupSyncRoute`,
+`FoldersAccessRoute`, `StorageRoute`, `AppearanceRoute`, `EditingRoute`; About is the app's `AboutRoute`), all added by
+`settingsScreens(navController, onAbout)`. Screens: `sync/PhotoServerScreen` (pairing, status, Sync now, This device,
+Unpair; `SyncTags`), `sync/BackupSyncScreen` (the `SyncOptions` switches, hand-offs, the upload summary; not paired ->
+a row to Photo server), `folders/FoldersAccessScreen` (each folder's mode through `LibraryRepository.setBackup`, the
+same state as the library's Manage folders; gallery access), `storage/StorageScreen`, `appearance/` (`ThemeModeStore`:
+SharedPreferences read when made, so the first frame has it, and `UiModeManager.setApplicationNightMode` on 12+;
+`ThemeModeStore.applyNightMode` at every app start; below 12 `MainActivity.attachBaseContext` overrides its night mode
+from `ThemeModeStore.stored` (no flash) and a new choice recreates it; `AppLanguage`: `LocaleManager` per-app
+language on 13+ (covers the application context), below it own preference + `AppLanguage.wrap` in `MainActivity
+.attachBaseContext` + `recreate()`, and `AppLanguage.applyToApp` on the application's resources (`RevealApplication
+.onCreate`/`onConfigurationChanged` and every choice: mask/preset names and notifications use the app context); `res/xml/locales_config.xml` in the app; `AppearanceSection` is the list of
+dropdowns: a palette is one more entry), `editing/EditingScreen` (XMP, author, copyright). Shared pieces in
+`SettingsRows.kt` (`SettingsBody` = one column, max 720 dp; `SectionTitle`, `Hint`, `NavigationRow`, `SwitchRow`).
+A new setting goes into the screen of the entry it belongs to (never back onto the hub); a new door from elsewhere is
+a `SettingsLink` (its `route`) opened with `navController.navigateToSettings(link)`. Tests: `SettingsRouteTest`,
+`LanguageChoiceTest`, `AppearanceStoresTest` (app, Robolectric), goldens `app/src/test/screenshots/settings/`
+(`SettingsScreenshotTest`: every screen light + dark in pt-BR, the hub in English) and `sync/` (Photo server states);
+instrumented `SettingsHubFlowTest` with `settings/SettingsSteps` (`openSettings`, `openEntry`, `backTo`: never press
+Back a fixed number of times).
+
+```sh
+./gradlew :feature:settings:testDebugUnitTest && ./gradlew :app:testDebugUnitTest --tests '*AppearanceStoresTest*'
+./gradlew :app:recordRoborazziDebug --tests 'dev.hfps.reveal.ui.settings.*' --tests 'dev.hfps.reveal.ui.sync.*'
+adb -s emulator-<port> shell am instrument -w -e class dev.hfps.reveal.settings.SettingsHubFlowTest dev.hfps.reveal.debug.test/androidx.test.runner.AndroidJUnitRunner
+```
+
 ## Sync server (lives in Hoard, ADR 0017)
 
 Hoard<->Reveal contracts (owners, versions, compatibility): github.com/henriquefps/hoard `docs/integration/README.md` (maintained by the coordinator; don't edit it).
@@ -1064,7 +1095,7 @@ originals backup off); previews no longer needed are dropped (`BlobUploader.mark
 `DELETE /v1/blobs/{sha}` in the blob run, `sync_uploads.kind = drop_preview`); format 1 ones are remade 3 per run on
 unmetered networks (`photo_cloud.preview_format`, DB v9). Grid: `CloudState.ELSEWHERE` = only another device has it
 and no preview. Live editor reload:
-`data/sync/RemoteEdits`. UI: `feature/settings/sync/` (Sync screen, `PairingScanner` CameraX + ZXing), library
+`data/sync/RemoteEdits`. UI: `feature/settings/sync/` (`PhotoServerScreen`, `BackupSyncScreen`, `PairingScanner` CameraX + ZXing; folder modes in `folders/`), library
 `SpecialSource.SERVER`, `CloudState` badges, conflict cells (`LibraryTags.copy`). A new synced field: add it to the
 payload, `photoData`/`versionChange` and the apply path, and (if it lives in a new column) to the triggers.
 
@@ -1082,7 +1113,7 @@ edited photos unless "Everything" is chosen (`addSource(uri, backup)`, `AddFolde
 FIX/W (0.5.4, ADR 0018 amendment, DB v11): `photo.data.orientation` (Server photos without it read their header;
 `DisplayImage.of`/`UprightSize` in the viewer); the lens profile default is never an edit for sync (`SyncStore
 .isAutomatic`, `HistoryOp.Commit(onlyIfEmpty)`); conflict chooser `feature/library/ConflictSheet.kt` +
-`SyncStore.conflict/keep` (`versions.edit_device/edited_at`); `HandoffBackup` (Settings -> Sync); Settings -> Storage
+`SyncStore.conflict/keep` (`versions.edit_device/edited_at`); `HandoffBackup` (Settings -> Backup and sync); Settings -> Cache and storage
 (`:core:data/storage` `AppStorage`, `CacheBudget` + `CacheArea`: thumbnails and `ServerFiles.areas`;
 `feature/settings/storage/StorageScreen.kt`). A new disk cache: make it a `CacheArea`, register it with the budget,
 cap it at `budget::cap`, and add its directory to `AppStorage.AREA_DIRS`.
@@ -1127,7 +1158,7 @@ dated by a file/sidecar/hand-off time, pushed with `baseRev` 0; `invalid` = refu
 rating/flag/label are ignored then (`SyncStore.cullingInRecords`). Device identity (Hoard ADR 0017):
 `account/ClientDevice` (app id with variant from the package), `PATCH /v1/device` with `features: ["culling"]` before
 any photo record push (`SyncEngine.report`), pairing candidates -> `SyncRepository.pairCandidates` (the "same phone?"
-question), `thisDevice()` / `claim()`, Settings -> Sync -> This device (`feature/settings/sync/ThisDeviceScreen.kt`,
+question), `thisDevice()` / `claim()`, Settings -> Photo server -> This device (`feature/settings/sync/ThisDeviceScreen.kt`,
 goldens `phone_this_device*`, `phone_same_phone_dark`). Hand-off values equal to the server's cached value are not
 pushed; `EXTRA_CULLING` may carry `ratingModifiedAt`/`flagModifiedAt`/`labelModifiedAt`.
 Edited previews (Hoard ADR 0020, `features` `edits`, hoard-server 0.9.0): `engine/EditPreviews` in the blob job
@@ -1185,7 +1216,7 @@ Server headers come from the item lookup (`engine/ServerHeaders`), not range rea
 and hand-offs on the server: `ThumbnailRepository` asks `ServerThumbs` (optional binding) = `thumbs/LibraryThumbs`
 (`server_thumbs`, `no_backup/library-thumbs`, 384 px WebP q70, `CacheTier.LIBRARY` evicted last; batched lookup +
 `POST /v1/items/previews` + immutable `?v=` GETs; `prefetch` by `LibraryThumbsWorker`, unmetered + charging/idle;
-Settings -> Storage switch `LibraryThumbsPreferences`); never a provider round trip per cell. Originals the editor or
+Settings -> Cache and storage switch `LibraryThumbsPreferences`); never a provider round trip per cell. Originals the editor or
 the export opens are kept whole (`ServerFiles.keep`, `cache/sync-kept`, served as a plain descriptor); the files of the
 50 photos opened in the last 7 days are `CacheTier.PINNED`. Never gate the provider's proxies on `FileOpens` slots
 (the viewer and the editor hold them for minutes).

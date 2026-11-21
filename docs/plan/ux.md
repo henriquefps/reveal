@@ -118,7 +118,7 @@ slightly lighter than the surround, with the hfps hairline border and radius.
   photo; photos not on this device keep a small cloud badge, uploads still waiting a pending one. Everything else is a
   filter, not a place.
 - **Top bar:** the title "Library", then a compact sync status (an icon on phones, with the count while uploading;
-  icon and text on tablets: "Synced", "Uploading 12…", "Offline", "Not paired"; tap → the Sync screen), Recent,
+  icon and text on tablets: "Synced", "Uploading 12…", "Offline", "Not paired"; tap → Settings › Photo server), Recent,
   Folders ("Manage folders": add, remove with the delete-from-server question, backup mode per folder, a folder → the
   home filtered to it), Settings and ⋯ (search and sort on phones; add folder, open a photo, design system, About).
   Tablets show search and sort in the bar. Recent is its own view (back returns to the home).
@@ -128,7 +128,14 @@ slightly lighter than the surround, with the hfps hairline border and radius.
   and, while paired, Sync (Synced, Not synced), each choice with its count. OR within a group, AND across groups. The
   last combination is remembered. Unreadable photos keep their in-place "Unavailable" placeholder (no filter).
 - Empty states with a single clear action ("Add a folder", "Open from Hoard").
-- Settings: grouped list inside the card, same as Hoard's settings screen.
+- Settings: a hub of short entries inside the card, the structure of Hoard's Configurações. Each row (Phosphor icon,
+  title, one-line subtitle, caret) opens its own screen; Back returns to the hub. Entries, top to bottom: Photo server
+  (pairing, status, Sync now, This device, Unpair; subtitle "Paired with <server> · last sync"), Backup and sync (what
+  goes to the server, and when), Folders and photo access (each folder's backup mode, gallery access), Cache and
+  storage, Appearance and language (dropdowns: theme System / Light / Dark, applied at once, the editor stays dark;
+  language System / English / Português (Brasil), the app's own language), Editing and XMP (XMP sidecars, author and
+  copyright), About (version, privacy, licences). Screens are one column, at most 720 dp wide, centred on tablets.
+  Doors from elsewhere land on the screen directly: the sync badge and the hand-off sheet's Pair on Photo server.
 - Export: a bottom sheet on phones (format, size, quality, metadata, destination, export preset) with
   a live estimated file size; progress in the sheet and a notification for batches.
 

@@ -1,8 +1,11 @@
 package dev.hfps.reveal
 
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.content.res.Configuration
 import android.graphics.Color
+import android.os.Build
 import android.os.Bundle
 import android.view.MotionEvent
 import android.widget.Toast
@@ -43,6 +46,7 @@ import dev.hfps.reveal.data.preset.PresetIntents
 import dev.hfps.reveal.data.preset.PresetRepository
 import dev.hfps.reveal.data.storage.AppStart
 import dev.hfps.reveal.designsystem.theme.RevealTheme
+import dev.hfps.reveal.designsystem.theme.ThemeMode
 import dev.hfps.reveal.designsystem.theme.isDark
 import dev.hfps.reveal.feature.editor.EditorRoute
 import dev.hfps.reveal.feature.editor.navigateToEditor
@@ -54,13 +58,15 @@ import dev.hfps.reveal.feature.library.GalleryOffer
 import dev.hfps.reveal.feature.library.HandoffServerSheet
 import dev.hfps.reveal.feature.library.LibraryRoute
 import dev.hfps.reveal.feature.library.ViewerRoute
-import dev.hfps.reveal.feature.settings.SyncSettingsRoute
+import dev.hfps.reveal.feature.settings.SettingsLink
+import dev.hfps.reveal.feature.settings.appearance.AppLanguage
+import dev.hfps.reveal.feature.settings.appearance.ThemeModeStore
+import dev.hfps.reveal.feature.settings.navigateToSettings
 import dev.hfps.reveal.handoff.HandoffGrantService
 import dev.hfps.reveal.handoff.HandoffNotices
 import dev.hfps.reveal.input.PalmRejection
 import dev.hfps.reveal.navigation.RevealNavHost
 import dev.hfps.reveal.sync.SyncRepository
-import dev.hfps.reveal.theme.ThemeModeStore
 import java.util.UUID
 import javax.inject.Inject
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -126,6 +132,27 @@ class MainActivity : ComponentActivity() {
 
     /** True while the editor shows a photo another app sent: leaving it returns to that app. */
     private var openedFromIntent = false
+
+    /**
+     * Android 12 and older: the app language chosen in Settings (Android 13+ applies it itself, `LocaleManager`).
+     * Android 10-11: a Light or Dark choice overrides the activity's night mode, so the window background (the
+     * day/night platform theme) already matches before Compose's first frame; 12+ gets it from the system
+     * (`ThemeModeStore.applyNightMode`).
+     */
+    override fun attachBaseContext(newBase: Context) {
+        super.attachBaseContext(AppLanguage.wrap(newBase))
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
+            val night = when (ThemeModeStore.stored(newBase)) {
+                ThemeMode.System -> null
+                ThemeMode.Light -> Configuration.UI_MODE_NIGHT_NO
+                ThemeMode.Dark -> Configuration.UI_MODE_NIGHT_YES
+            }
+            if (night != null) {
+                val base = newBase.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK.inv()
+                applyOverrideConfiguration(Configuration().apply { uiMode = base or night })
+            }
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -226,7 +253,7 @@ class MainActivity : ComponentActivity() {
                 onPair = {
                     // The batch stays kept: pairing with that server opens it (watchServer).
                     serverNotice.value = null
-                    navController.navigate(SyncSettingsRoute)
+                    navController.navigateToSettings(SettingsLink.PAIR)
                 },
                 onDismiss = {
                     serverNotice.value = null

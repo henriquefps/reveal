@@ -2,9 +2,7 @@ package dev.hfps.reveal.ui.sync
 
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.test.junit4.v2.createComposeRule
-import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onRoot
-import androidx.compose.ui.test.performScrollTo
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.github.takahirom.roborazzi.captureRoboImage
 import dev.hfps.reveal.data.db.PhotoRow
@@ -14,17 +12,14 @@ import dev.hfps.reveal.designsystem.theme.RevealTheme
 import dev.hfps.reveal.feature.library.LibraryActions
 import dev.hfps.reveal.feature.library.LibraryContent
 import dev.hfps.reveal.feature.library.buildGridEntries
-import dev.hfps.reveal.feature.settings.sync.BackupFolder
 import dev.hfps.reveal.feature.settings.sync.PairingState
+import dev.hfps.reveal.feature.settings.sync.PhotoServerContent
 import dev.hfps.reveal.feature.settings.sync.SyncActions
-import dev.hfps.reveal.feature.settings.sync.SyncSettingsContent
-import dev.hfps.reveal.feature.settings.sync.SyncTags
 import dev.hfps.reveal.feature.settings.sync.SyncUiState
 import dev.hfps.reveal.sync.PairProblem
 import dev.hfps.reveal.sync.SyncProblem
 import dev.hfps.reveal.sync.SyncStatus
 import dev.hfps.reveal.sync.account.SyncAccount
-import dev.hfps.reveal.sync.account.SyncOptions
 import dev.hfps.reveal.ui.library.LibrarySamples
 import org.junit.Rule
 import org.junit.Test
@@ -33,8 +28,9 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 
 /**
- * Sync goldens (ADR 0018) under `screenshots/sync/`: the Sync screen unpaired, paired and with a problem, and the
- * library's Server entry with cloud badges and a conflict copy. Fictional server and folder names.
+ * Sync goldens (ADR 0018) under `screenshots/sync/`: Settings -> Photo server unpaired, paired and with a problem, its
+ * dialogs, and the library's Server entry with cloud badges and a conflict copy. Fictional server and folder names.
+ * The other settings screens: `SettingsScreenshotTest`.
  */
 @RunWith(AndroidJUnit4::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -47,7 +43,6 @@ class SyncScreenshotTest {
     private val account = SyncAccount("https://photos.example.org", "858e1b9d", "Home server", "d1", now - 86_400_000)
     private val paired = SyncUiState(
         account = account,
-        options = SyncOptions(),
         status = SyncStatus(
             lastSyncAt = now - 120_000,
             pending = 3,
@@ -56,16 +51,15 @@ class SyncScreenshotTest {
             uploadedBytes = 1_850_000_000,
             serverPhotos = 2481,
         ),
-        folders = listOf(BackupFolder(1, "Camera", true), BackupFolder(2, "Beach day", false)),
     )
 
     @Test fun unpaired() = shoot("phone_unpaired_light") {
-        RevealTheme(darkTheme = false) { SyncSettingsContent(SyncUiState(), SyncActions(), now = now) }
+        RevealTheme(darkTheme = false) { PhotoServerContent(SyncUiState(), SyncActions(), now = now) }
     }
 
     @Test fun pairFailed() = shoot("phone_pair_failed_dark") {
         RevealTheme(darkTheme = true) {
-            SyncSettingsContent(
+            PhotoServerContent(
                 SyncUiState(pairing = PairingState.Failed(PairProblem.INVALID_TOKEN)),
                 SyncActions(),
                 now = now,
@@ -74,28 +68,12 @@ class SyncScreenshotTest {
     }
 
     @Test fun pairedLight() = shoot("phone_paired_light") {
-        RevealTheme(darkTheme = false) { SyncSettingsContent(paired, SyncActions(), now = now) }
-    }
-
-    /** A folder Hoard's phone backup covers (R1): read only, "Backed up by Hoard on this phone". */
-    @Test fun pairedHoardDark() = shoot("phone_paired_hoard_dark", scrollTo = SyncTags.folder(1)) {
-        RevealTheme(darkTheme = true) {
-            SyncSettingsContent(
-                paired.copy(
-                    folders = listOf(
-                        BackupFolder(1, "Camera", true, coveredByHoard = true),
-                        BackupFolder(2, "Beach day", false),
-                    ),
-                ),
-                SyncActions(),
-                now = now,
-            )
-        }
+        RevealTheme(darkTheme = false) { PhotoServerContent(paired, SyncActions(), now = now) }
     }
 
     @Test fun pairedProblemDark() = shoot("phone_paired_problem_dark") {
         RevealTheme(darkTheme = true) {
-            SyncSettingsContent(
+            PhotoServerContent(
                 paired.copy(status = paired.status.copy(problem = SyncProblem.OFFLINE)),
                 SyncActions(),
                 now = now,
@@ -105,7 +83,7 @@ class SyncScreenshotTest {
 
     @Test fun keyReuseDark() = shoot("phone_key_reuse_dark") {
         RevealTheme(darkTheme = true) {
-            SyncSettingsContent(
+            PhotoServerContent(
                 paired.copy(pairing = PairingState.ConfirmKeyReuse("203.0.113.7", protected = false)),
                 SyncActions(),
                 now = now,
@@ -115,7 +93,7 @@ class SyncScreenshotTest {
 
     @Test fun switchServerDark() = shoot("phone_switch_server_dark") {
         RevealTheme(darkTheme = true) {
-            SyncSettingsContent(
+            PhotoServerContent(
                 paired.copy(pairing = PairingState.ConfirmSwitch("Studio NAS", "Pixel 8")),
                 SyncActions(),
                 now = now,
@@ -125,7 +103,7 @@ class SyncScreenshotTest {
 
     @Test fun pairedElsewhereLight() = shoot("phone_paired_elsewhere_light") {
         RevealTheme(darkTheme = false) {
-            SyncSettingsContent(
+            PhotoServerContent(
                 paired.copy(pairing = PairingState.Failed(PairProblem.PAIRED_ELSEWHERE)),
                 SyncActions(),
                 now = now,
@@ -162,9 +140,8 @@ class SyncScreenshotTest {
         RevealTheme(darkTheme = true) { LibraryContent(state, LibraryActions(), LibrarySamples.thumbnails) }
     }
 
-    private fun shoot(name: String, scrollTo: String? = null, content: @Composable () -> Unit) {
+    private fun shoot(name: String, content: @Composable () -> Unit) {
         composeRule.setContent(content)
-        scrollTo?.let { composeRule.onNodeWithTag(it).performScrollTo() }
         composeRule.onRoot().captureRoboImage("src/test/screenshots/sync/$name.png")
     }
 }

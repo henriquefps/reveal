@@ -242,7 +242,7 @@
     <string name="viewer_unavailable_details">O que posso fazer?</string>
     <!-- A visão do servidor (ADR 0018, FIX/V) -->
     <string name="library_backup_title">Fazer backup desta pasta no seu servidor de sincronização?</string>
-    <string name="library_backup_body">Edições, estrelas e marcações sempre sincronizam. Os originais são enviados uma vez, por Wi-Fi por padrão. Dá para mudar depois em Configurações → Sincronização.</string>
+    <string name="library_backup_body">Edições, estrelas e marcações sempre sincronizam. Os originais são enviados uma vez, por Wi-Fi por padrão. Dá para mudar depois em Configurações → Backup e sincronização.</string>
     <string name="library_backup_edited">Só as fotos que você editar</string>
     <string name="library_backup_edited_detail">O original de uma foto sobe na primeira vez que você a editar.</string>
     <string name="library_backup_everything">Tudo</string>

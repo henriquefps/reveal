@@ -6,6 +6,18 @@ All notable changes to Reveal are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- Settings › Appearance and language: choose the theme (System, Light or Dark; it applies at once, and the editor
+  stays dark) and Reveal's language (the system's, English or Português (Brasil)), independently of the phone's.
+- Settings › About now shows the build number and a short privacy summary next to the licences.
+
+### Changed
+- Settings is now a short list of entries, each opening its own screen: Photo server, Backup and sync, Folders and
+  photo access, Cache and storage, Appearance and language, Editing and XMP, and About. The former Sync screen is split
+  between Photo server (pairing, status, Sync now, This device, Unpair), Backup and sync (what goes to the server, and
+  when) and Folders and photo access (what each folder backs up, gallery access). The library's sync status and the
+  "Pair" button of a hand-off open Photo server directly.
+
 ## [0.10.0] - 2026-11-16
 
 ### Added

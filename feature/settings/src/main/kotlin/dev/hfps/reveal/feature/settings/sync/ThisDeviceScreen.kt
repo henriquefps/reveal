@@ -3,8 +3,6 @@ package dev.hfps.reveal.feature.settings.sync
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -30,6 +28,7 @@ import dev.hfps.reveal.designsystem.components.SecondaryButton
 import dev.hfps.reveal.designsystem.icons.PhosphorRegular
 import dev.hfps.reveal.designsystem.theme.RevealTheme
 import dev.hfps.reveal.feature.settings.R
+import dev.hfps.reveal.feature.settings.SettingsBody
 import dev.hfps.reveal.sync.ClaimException
 import dev.hfps.reveal.sync.ClaimProblem
 import dev.hfps.reveal.sync.SyncRepository
@@ -149,10 +148,7 @@ fun ThisDeviceContent(state: ThisDeviceState, actions: ThisDeviceActions, modifi
             )
         },
     ) {
-        Column(
-            modifier = Modifier.verticalScroll(rememberScrollState()).padding(vertical = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
+        SettingsBody {
             when (state) {
                 ThisDeviceState.Loading -> Hint(stringResource(R.string.device_loading))
 

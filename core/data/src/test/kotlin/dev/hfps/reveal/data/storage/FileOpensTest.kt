@@ -8,10 +8,12 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import org.junit.Assert.assertThrows
 import org.junit.Test
@@ -350,5 +352,86 @@ class FileOpensTest {
         assertThat(got.await(5, TimeUnit.SECONDS)).isTrue()
         waiter.join(5_000)
         waitUntil { lines.any { it.contains("ended after") } }
+    }
+
+    @Test
+    fun `an input opened in withContext is closed when the switch back is cancelled`() = runBlocking<Unit> {
+        // Plain withContext: the block returns the input, the cancelled coroutine throws at its exit and drops it.
+        var dropped: Held? = null
+        val naive = launch {
+            val held = withContext(FileOpens.io("test")) {
+                FileOpens.gated { Held(it) }.also {
+                    dropped = it
+                    this@launch.cancel()
+                }
+            }
+            held.close()
+        }
+        naive.join()
+        assertThat(FileOpens.open).isEqualTo(1)
+        dropped?.close()
+        assertThat(FileOpens.open).isEqualTo(0)
+        // openedIn closes it instead: no slot lost.
+        val job = launch {
+            val held = openedIn(FileOpens.io("test")) {
+                FileOpens.gated { Held(it) }.also { this@launch.cancel() }
+            }
+            held.close()
+        }
+        job.join()
+        assertThat(job.isCancelled).isTrue()
+        assertThat(FileOpens.open).isEqualTo(0)
+        // Not cancelled: the input is the caller's, open.
+        val kept = openedIn(FileOpens.io("test")) { FileOpens.gated { Held(it) } }
+        assertThat(FileOpens.open).isEqualTo(1)
+        kept.close()
+        fill().forEach { it() }
+    }
+
+    @Test
+    fun `a report that throws never costs a slot`() {
+        FileOpens.report = { error("broken log") }
+        FileOpens.stuckMs = 20
+        val holders = fill()
+        val got = CountDownLatch(1)
+        var release: () -> Unit = {}
+        val waiter = Thread {
+            FileOpens.gated { r ->
+                release = r
+                got.countDown()
+            }
+        }
+        waiter.start()
+        Thread.sleep(150)
+        holders.first()()
+        assertThat(got.await(5, TimeUnit.SECONDS)).isTrue()
+        waiter.join(5_000)
+        assertThat(FileOpens.open).isEqualTo(FileOpens.BACKGROUND_SLOTS)
+        release()
+        holders.drop(1).forEach { it() }
+        assertThat(FileOpens.open).isEqualTo(0)
+    }
+
+    @Test
+    fun `readCatching keeps read failures but throws a cancelled wait on`() = runBlocking<Unit> {
+        assertThat(readCatching { throw java.io.IOException("gone") }.isFailure).isTrue()
+        assertThat(readCatching { throw OutOfMemoryError("big") }.isFailure).isTrue()
+        assertThrows(kotlinx.coroutines.CancellationException::class.java) {
+            readCatching { throw kotlinx.coroutines.CancellationException("stop") }
+        }
+        assertThrows(InterruptedException::class.java) { readCatching { throw InterruptedException() } }
+        // A cancelled batch stops at its next gated read instead of reading on.
+        val holders = fill()
+        val reads = java.util.concurrent.atomic.AtomicInteger()
+        val batch = launch(FileOpens.io("batch")) {
+            repeat(5) {
+                readCatching { FileOpens.gated { release -> release() } }
+                reads.incrementAndGet()
+            }
+        }
+        waitUntil { FileOpens.waiting == 1 }
+        batch.cancelAndJoin()
+        assertThat(reads.get()).isEqualTo(0)
+        holders.forEach { it() }
     }
 }

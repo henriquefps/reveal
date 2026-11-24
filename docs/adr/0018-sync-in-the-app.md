@@ -461,7 +461,9 @@ over through the debug provider, on the phone (0.8.0 debug build, 60 s on the fi
   slot inside a database transaction. The queue is first come, first served; a waiter keeps its place while it polls
   (50 ms) for its coroutine's cancellation (`FileOpens.io(tag)` / `waits(tag)`: a `ThreadContextElement` carrying the
   job) or ends on an interrupt, taking and freeing nothing. A wait over 2 minutes logs `REVEAL_IO` with each holder's
-  tag, document and age (again every 2 minutes) and keeps waiting: never a bypass.
+  tag, document and age (again every 2 minutes) and keeps waiting: never a bypass. An input returned across a context switch goes
+  through `openedIn` (a `withContext` cancelled while its block ran throws at its exit and would drop the input and its
+  slot), and reads are wrapped in `readCatching`, which never swallows a cancelled wait.
 - **A busy sender is waited out, never marked unreadable** (Hoard ADR 0010): a `FileNotFoundException` whose message
   starts exactly with `busy:` (`PROVIDER_BUSY_PREFIX`) is retried with 250 ms doubling to 4 s, giving up after about
   30 s as a transient failure (`ProviderBusyException`); `isAccessError` is false for it, so `unreadable_at` is never

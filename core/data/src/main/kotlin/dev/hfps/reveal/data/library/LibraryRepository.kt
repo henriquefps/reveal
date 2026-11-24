@@ -45,6 +45,7 @@ import dev.hfps.reveal.data.storage.SafDocumentTree
 import dev.hfps.reveal.data.storage.StorageVolumes
 import dev.hfps.reveal.data.storage.isAccessError
 import dev.hfps.reveal.data.storage.isProviderBusy
+import dev.hfps.reveal.data.storage.readCatching
 import dev.hfps.reveal.data.sync.BackupCoverage
 import dev.hfps.reveal.data.sync.RemoteEdits
 import dev.hfps.reveal.data.sync.ServerTree
@@ -803,7 +804,7 @@ class LibraryRepository(
         val tree = trees.open(source)
         val files = listOfNotNull(detail.raw, detail.rendered)
         files.mapNotNull { file ->
-            runCatching { tree.openInput(file.documentId, file.name).use { it.inspection.metadata } }.getOrNull()
+            readCatching { tree.openInput(file.documentId, file.name).use { it.inspection.metadata } }.getOrNull()
         }.reduceOrNull { acc, next -> acc.orElse(next) } ?: serverMetadata(detail)
     }
 
@@ -886,6 +887,8 @@ class LibraryRepository(
         val ok = try {
             trees.open(source).openInput(file.documentId, file.name).close()
             true
+        } catch (e: CancellationException) {
+            throw e
         } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
             !isAccessError(e)
         }

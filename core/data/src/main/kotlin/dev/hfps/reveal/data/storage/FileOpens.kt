@@ -13,9 +13,11 @@ import kotlin.concurrent.withLock
 import kotlin.coroutines.AbstractCoroutineContextElement
 import kotlin.coroutines.CoroutineContext
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.ThreadContextElement
+import kotlinx.coroutines.withContext
 
 /**
  * The message prefix of a hand-off provider that is busy, not refusing (Hoard ADR 0010, Hoard 2.0.1): Hoard's
@@ -45,6 +47,37 @@ class ProviderBusyException(cause: Throwable) : IOException("the provider stayed
 private const val MAX_CAUSES = 8
 
 /**
+ * [runCatching] for reads through [FileOpens]: a failed read becomes a failure, but a cancelled wait for a slot
+ * ([CancellationException], [InterruptedException]) is thrown on, so a cancelled batch stops instead of opening its
+ * next document.
+ */
+@Suppress("TooGenericExceptionCaught")
+inline fun <T> readCatching(block: () -> T): Result<T> = try {
+    Result.success(block())
+} catch (e: CancellationException) {
+    throw e
+} catch (e: InterruptedException) {
+    throw e
+} catch (e: Throwable) {
+    Result.failure(e)
+}
+
+/**
+ * [block] in [context] (`withContext`), returning what it opened. `withContext` throws when its coroutine was cancelled
+ * while [block] ran, even after [block] returned: the input it opened would be dropped with its [FileOpens] slot, lost
+ * until the process dies. This closes it instead. Use it whenever an input that holds a slot crosses a context switch.
+ */
+suspend fun <T : AutoCloseable?> openedIn(context: CoroutineContext, block: suspend CoroutineScope.() -> T): T {
+    val opened = java.util.concurrent.atomic.AtomicReference<T>()
+    try {
+        return withContext(context) { block().also(opened::set) }
+    } catch (@Suppress("TooGenericExceptionCaught") e: Throwable) {
+        opened.get()?.close()
+        throw e
+    }
+}
+
+/**
  * Reveal's own limit on files opened through other apps' providers (ADR 0018 "W3/C", ADR 0011): at most
  * [BACKGROUND_SLOTS] open at once app-wide (hand-off documents read by the thumbnail loader, the viewer, the access
  * checks, the hand-off previewer, sync's uploads, the editor and the export), so a large library never bursts a
@@ -65,6 +98,9 @@ private const val MAX_CAUSES = 8
  * - **Waits end with their caller.** A waiter keeps its place in the FIFO queue and leaves it when its thread is
  *   interrupted (`runInterruptible`) or, for coroutine callers that switch with [IO] / [io] (or add [waits]), within
  *   [POLL_MS] of its coroutine being cancelled ([CancellationException]); it never takes or frees a slot then.
+ * - **An open input never crosses a context switch bare**: return it from [openedIn], not `withContext` (a cancelled
+ *   switch back drops the result, slot included); wrap reads in [readCatching], not `runCatching`, so a cancelled wait
+ *   ends the batch.
  * - A wait longer than [stuckMs] logs `REVEAL_IO` with every holder's tag, document and age (then again every
  *   [stuckMs]), so a pinned slot can be found; the waiter keeps waiting.
  *
@@ -304,10 +340,9 @@ object FileOpens {
                             stuck = true
                             reportAt = now + stuckMs * NANOS_PER_MS
                             val waited = (now - started) / NANOS_PER_MS / MILLIS
-                            report(
-                                "slot wait of $tag ($name) for $waited s, ${queue.size} waiting; " +
-                                    "holders: ${describe(now).joinToString()}",
-                            )
+                            val line = "slot wait of $tag ($name) for $waited s, ${queue.size} waiting; " +
+                                "holders: ${describe(now).joinToString()}"
+                            runCatching { report(line) }
                         }
                     }
                 } catch (@Suppress("TooGenericExceptionCaught") e: Throwable) {
@@ -321,12 +356,10 @@ object FileOpens {
                 val id = next++
                 holders[id] = Holder(tag, name, System.nanoTime())
                 if (free > 0 && queue.isNotEmpty()) changed.signalAll()
-                if (stuck) {
-                    report(
-                        "slot wait of $tag ($name) ended after ${(System.nanoTime() - started) / NANOS_PER_MS} ms",
-                    )
-                }
-                return Slot(this, id)
+                val slot = Slot(this, id)
+                // The slot is the caller's from here: a report that throws must not lose it.
+                if (stuck) runCatching { report("slot wait of $tag ($name) ended after ${elapsedMs(started)} ms") }
+                return slot
             } finally {
                 lock.unlock()
             }
@@ -338,6 +371,8 @@ object FileOpens {
                 changed.signalAll()
             }
         }
+
+        private fun elapsedMs(started: Long) = (System.nanoTime() - started) / NANOS_PER_MS
 
         private fun describe(now: Long): List<String> = holders.values.map {
             "${it.tag} (${it.name}, ${(now - it.since) / NANOS_PER_MS / MILLIS} s)"

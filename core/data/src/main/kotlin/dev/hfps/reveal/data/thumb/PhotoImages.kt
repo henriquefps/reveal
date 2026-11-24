@@ -27,6 +27,8 @@ import dev.hfps.reveal.data.storage.DocumentTree
 import dev.hfps.reveal.data.storage.FileOpens
 import dev.hfps.reveal.data.storage.LocalCopies
 import dev.hfps.reveal.data.storage.isAccessError
+import dev.hfps.reveal.data.storage.openedIn
+import dev.hfps.reveal.data.storage.readCatching
 import dev.hfps.reveal.data.sync.ServerTree
 import dev.hfps.reveal.pipeline.preview.SmartPreviewCodec
 import dev.hfps.reveal.pipeline.recipe.Recipe
@@ -271,11 +273,11 @@ class PhotoImages(
     }
 
     /** Full-resolution regions of the camera rendering, or null (RAW only, unreadable, unsupported). */
-    suspend fun region(photoId: Long): RegionSource? = withContext(VIEWER_IO) {
-        val opened = open(photoId) ?: return@withContext null
-        val file = opened.rendered ?: return@withContext null
+    suspend fun region(photoId: Long): RegionSource? = openedIn(VIEWER_IO) {
+        val opened = open(photoId) ?: return@openedIn null
+        val file = opened.rendered ?: return@openedIn null
         val source = photos.get(photoId)?.let { db.sourceDao().get(it.sourceId) }
-        runCatching {
+        readCatching {
             val input = opened.tree.openInput(file.documentId, file.name)
             val dir = copiesDir
             // A hand-off's document is copied and closed at once (open, copy, close), never held by the decoder.
@@ -314,7 +316,7 @@ class PhotoImages(
     /** Upright full size: the camera rendering's own bounds when there is one, else the header's size. */
     private fun fullSize(width: Int?, height: Int?, orientation: Int, opened: Opened): Pair<Int, Int> {
         val bounds = opened.rendered?.let { rendered ->
-            runCatching {
+            readCatching {
                 opened.tree.openInput(rendered.documentId, rendered.name).use { input ->
                     val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
                     BitmapFactory.decodeFileDescriptor(input.descriptor.fileDescriptor, null, options)

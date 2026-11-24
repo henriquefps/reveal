@@ -29,6 +29,7 @@ import dev.hfps.reveal.data.storage.DocumentTree
 import dev.hfps.reveal.data.storage.FileOpens
 import dev.hfps.reveal.data.storage.fingerprint
 import dev.hfps.reveal.data.storage.isAccessError
+import dev.hfps.reveal.data.storage.readCatching
 import dev.hfps.reveal.data.xmp.SidecarCulling
 import dev.hfps.reveal.data.xmp.SidecarNames
 import dev.hfps.reveal.data.xmp.XmpFields
@@ -342,7 +343,7 @@ class HandoffRepository(
     @Suppress("ReturnCount")
     private fun sniffed(item: Item): Item {
         if (item.name.substringAfterLast('.', "").isNotEmpty()) return item
-        val head = runCatching {
+        val head = readCatching {
             tree.openInput(item.uri.toString(), item.name).use { input ->
                 java.io.FileInputStream(input.descriptor.fileDescriptor).use { stream ->
                     val bytes = ByteArray(LocalOriginals.HEAD_BYTES)
@@ -859,7 +860,7 @@ class HandoffRepository(
         return values
     }
 
-    private fun readSidecar(item: Item): SidecarCulling? = runCatching {
+    private fun readSidecar(item: Item): SidecarCulling? = readCatching {
         XmpReader.readCulling(tree.readBytes(item.uri.toString(), LibraryIndexer.MAX_SIDECAR_BYTES))
     }.getOrNull()
 

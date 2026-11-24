@@ -1212,7 +1212,8 @@ opens/s); a `FileNotFoundException` starting with `busy:` (`PROVIDER_BUSY_PREFIX
 slot while holding one** (read a pair one file after the other: `FirstImageLoader.loadEach`, `PreviewMaking.display` openers),
 **hold it for the read only** (`EditedThumbnails.decode` then `render`: no file open during GPU work, locks, masks or
 fills; sync's original upload is the one long holder), never inside a DB transaction; coroutine callers switch with
-`FileOpens.io(tag)` so a cancelled wait leaves the FIFO queue; a wait over 2 min logs `REVEAL_IO` with the holders) and is never `isAccessError`. The access check is one paced
+`FileOpens.io(tag)` so a cancelled wait leaves the FIFO queue; an input returned across a switch goes through `openedIn`,
+reads are wrapped in `readCatching` (never `runCatching`: it swallows the cancellation); a wait over 2 min logs `REVEAL_IO` with the holders) and is never `isAccessError`. The access check is one paced
 background pass (skips files the server holds, `photo_files.checked_at` < 6 h, documents with a read grant:
 `readGrants`); never per grid query. Hand-offs whose main file the server holds become Server photos in place
 (`SyncStore.adoptNext` after every sync, one photo per transaction, failures marked and skipped: uuid, versions, culling, `handoff_at` kept; only files the server holds move; sidecar link dropped; never deletable by server records or the NAS feed).

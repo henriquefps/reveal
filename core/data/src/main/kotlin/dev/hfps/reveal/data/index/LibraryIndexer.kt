@@ -31,6 +31,7 @@ import dev.hfps.reveal.data.model.PickFlag
 import dev.hfps.reveal.data.storage.DocumentEntry
 import dev.hfps.reveal.data.storage.DocumentTree
 import dev.hfps.reveal.data.storage.fingerprint
+import dev.hfps.reveal.data.storage.readCatching
 import dev.hfps.reveal.data.xmp.SidecarDevelop
 import dev.hfps.reveal.data.xmp.SidecarNames
 import dev.hfps.reveal.data.xmp.XmpDevelop
@@ -509,7 +510,7 @@ class LibraryIndexer(
         jobs.chunked(BATCH).forEach { batch ->
             currentCoroutineContext().ensureActive()
             val results = batch.map { job ->
-                val document = runCatching {
+                val document = readCatching {
                     XmpDom.parse(tree.readBytes(job.sidecar.documentId, MAX_SIDECAR_BYTES))
                 }.getOrNull()
                 val fields = document?.let { runCatching { XmpReader.readCulling(it) }.getOrNull() }
@@ -612,7 +613,7 @@ class LibraryIndexer(
     }
 
     /** One file's header: its EXIF essentials and, for a JPEG, the fields of its embedded XMP packet. */
-    private fun readFile(file: PhotoFileEntity, tree: DocumentTree): Pair<PhotoMetadata, XmpFields?>? = runCatching {
+    private fun readFile(file: PhotoFileEntity, tree: DocumentTree): Pair<PhotoMetadata, XmpFields?>? = readCatching {
         tree.openInput(file.documentId, file.name).use { input ->
             val inspection = input.inspection
             val xmp = if (inspection.type.kind == ImageKind.JPEG) runCatching { jpegXmp(input) }.getOrNull() else null

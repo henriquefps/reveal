@@ -26,8 +26,10 @@ import dev.hfps.reveal.data.model.SourceKind
 import dev.hfps.reveal.data.model.SourceState
 import dev.hfps.reveal.data.storage.DocumentEntry
 import dev.hfps.reveal.data.storage.DocumentTree
+import dev.hfps.reveal.data.storage.FileOpens
 import dev.hfps.reveal.data.storage.fingerprint
 import dev.hfps.reveal.data.storage.isAccessError
+import dev.hfps.reveal.data.storage.readCatching
 import dev.hfps.reveal.data.xmp.SidecarCulling
 import dev.hfps.reveal.data.xmp.SidecarNames
 import dev.hfps.reveal.data.xmp.XmpFields
@@ -37,7 +39,6 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Deferred
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -74,6 +75,9 @@ sealed interface HandoffOutcome {
     /** Nothing usable in the intent (no readable image). */
     data object Nothing : HandoffOutcome
 }
+
+/** Hand-offs' IO: a cancelled receive stops waiting for a FileOpens slot (ADR 0018 "W3/C"). */
+private val HANDOFF_IO = FileOpens.io("handoff")
 
 /**
  * Receives the photos other apps hand to Reveal (ADR 0011) and files them in the "Opened from other apps" source: a
@@ -150,7 +154,7 @@ class HandoffRepository(
      * (smart previews of documents only that grant covers are made only while it does).
      */
     suspend fun receiveStaged(request: HandoffRequest, holderAlive: () -> Boolean = { true }): Received =
-        withContext(Dispatchers.IO) {
+        withContext(HANDOFF_IO) {
             // Server references first: they never touch the sender, so they resolve whatever the URIs do.
             val batch = request.server?.let { refs.resolve(it, request.title, at = request.batchAt) }
             if (request.uris.isEmpty()) {
@@ -166,7 +170,7 @@ class HandoffRepository(
      * The photos kept for [HandoffOutcome.ServerRefs] when Reveal was not paired: after pairing with the sender's
      * server ([serverId]) the batch resolves as if it had just arrived, and opens. Null when nothing waits for it.
      */
-    suspend fun resumePending(serverId: String): HandoffOutcome? = withContext(Dispatchers.IO) {
+    suspend fun resumePending(serverId: String): HandoffOutcome? = withContext(HANDOFF_IO) {
         // An atomic take: with two live activities (Reveal's own task and the sender's) only one resolves it.
         val groups = refs.takePending(serverId).takeIf { it.isNotEmpty() } ?: return@withContext null
         val at = clock()
@@ -188,7 +192,7 @@ class HandoffRepository(
      * Fills the photos that opened from what Reveal had while the server was unreachable; true when none is left
      * unreachable. Each batch keeps the time it was handed over, so its photos stay under their header.
      */
-    suspend fun retryUnreachable(): Boolean = withContext(Dispatchers.IO) {
+    suspend fun retryUnreachable(): Boolean = withContext(HANDOFF_IO) {
         val paired = server.pairing()?.serverId
         val groups = refs.retryGroups().filter { it.serverId == paired }
         if (groups.isEmpty()) return@withContext false
@@ -339,7 +343,7 @@ class HandoffRepository(
     @Suppress("ReturnCount")
     private fun sniffed(item: Item): Item {
         if (item.name.substringAfterLast('.', "").isNotEmpty()) return item
-        val head = runCatching {
+        val head = readCatching {
             tree.openInput(item.uri.toString(), item.name).use { input ->
                 java.io.FileInputStream(input.descriptor.fileDescriptor).use { stream ->
                     val bytes = ByteArray(LocalOriginals.HEAD_BYTES)
@@ -856,7 +860,7 @@ class HandoffRepository(
         return values
     }
 
-    private fun readSidecar(item: Item): SidecarCulling? = runCatching {
+    private fun readSidecar(item: Item): SidecarCulling? = readCatching {
         XmpReader.readCulling(tree.readBytes(item.uri.toString(), LibraryIndexer.MAX_SIDECAR_BYTES))
     }.getOrNull()
 

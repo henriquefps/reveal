@@ -285,6 +285,9 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
     /** Set once [close] starts: the heal worker's pixel reads fail instead of waiting for this thread. */
     @Volatile
     private var closing = false
+
+    /** Set on the GL thread once [close] released GL: later posts must not touch the zoom or GL. */
+    private var glReleased = false
     private var healStatus = HealStatus()
     private var histogramDirty = false
     private var histogramPosted = false
@@ -322,6 +325,12 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
      * Returns false (and does not take [source]) when the renderer is already closed.
      */
     fun setFullResolution(source: TileSource?, k: Float): Boolean = handler.post {
+        // Posted after close() released GL but before the looper quit: the renderer took it, so it closes it (the
+        // zoom's executor is gone and would never run its close).
+        if (glReleased) {
+            source?.close()
+            return@post
+        }
         zoom.setSource(source, k)
         // Remove's crops are read from the original (docs/adr/0023): the fills are asked for again.
         fullSource = source
@@ -854,6 +863,7 @@ class GpuDevelopRenderer private constructor() : AutoCloseable {
         val latch = CountDownLatch(1)
         handler.post {
             releaseGl()
+            glReleased = true
             egl.release()
             latch.countDown()
         }

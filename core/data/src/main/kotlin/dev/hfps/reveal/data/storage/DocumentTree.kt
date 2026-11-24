@@ -29,7 +29,7 @@ data class DocumentEntry(
  * The content fingerprint of a document (`FileFingerprint`: size, first and last MiB; ADR 0006 "Identity"), or null
  * when it cannot be read. Blocks: run it on an IO dispatcher.
  */
-fun DocumentTree.fingerprint(documentId: String, name: String): String? = runCatching {
+fun DocumentTree.fingerprint(documentId: String, name: String): String? = readCatching {
     openInput(documentId, name).use { input -> input.withSource(FileFingerprint::of) }
 }.onFailure { Log.i("RevealIdentity", "No fingerprint for a document: ${it.javaClass.simpleName}") }.getOrNull()
 

@@ -3,6 +3,7 @@ package dev.hfps.reveal.data.handoff
 import android.util.Log
 import dev.hfps.image.ImageInput
 import dev.hfps.reveal.data.storage.DocumentTree
+import dev.hfps.reveal.data.storage.FileOpens
 import dev.hfps.reveal.pipeline.preview.SmartPreviewMaker
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
@@ -18,10 +19,14 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
-/** Makes the two local previews from open documents (the real one decodes; tests write marker bytes). */
+/** Makes the two local previews from documents (the real one decodes; tests write marker bytes). */
 interface PreviewMaking {
-    /** Writes the display JPEG of a shot (its RAW and/or rendering) to [out]. */
-    fun display(raw: ImageInput?, rendered: ImageInput?, out: File)
+    /**
+     * Writes the display JPEG of a shot (its RAW and/or rendering) to [out]. [raw] and [rendered] open the documents:
+     * open one, read it and close it before opening the other (each open holds a `FileOpens` slot; holding one while
+     * waiting for a second locked the gate, ADR 0018 "W3/C").
+     */
+    fun display(raw: (() -> ImageInput)?, rendered: (() -> ImageInput)?, out: File)
 
     /** Writes the smart preview of the shot's main file to [out]. */
     fun smart(main: ImageInput, out: File)
@@ -29,7 +34,7 @@ interface PreviewMaking {
     companion object {
         /** The app's: `SmartPreviewMaker`'s display JPEG and smart preview (the ones sync makes). */
         val DEFAULT: PreviewMaking = object : PreviewMaking {
-            override fun display(raw: ImageInput?, rendered: ImageInput?, out: File) {
+            override fun display(raw: (() -> ImageInput)?, rendered: (() -> ImageInput)?, out: File) {
                 out.writeBytes(SmartPreviewMaker.displayJpeg(raw, rendered, LocalPreviews.DISPLAY_EDGE))
             }
 
@@ -122,8 +127,8 @@ class HandoffPreviewer(
         if (shots.isEmpty()) return Job().apply { complete() }
         // A main file again (the same photo handed over anew, alone): its previews are wanted.
         retired.removeAll(shots.map { it.fingerprint }.toSet())
-        val displays = scope.launch { displayLock.withLock { shots.forEach { display(it) } } }
-        val smarts = scope.launch {
+        val displays = scope.launch(WAITS) { displayLock.withLock { shots.forEach { display(it) } } }
+        val smarts = scope.launch(WAITS) {
             displays.join()
             smartLock.withLock {
                 for (shot in shots.filter { it.smart }) {
@@ -149,9 +154,7 @@ class HandoffPreviewer(
         if (shot.fingerprint in retired) return@guarded
         if (previews.display(shot.fingerprint) == null) {
             write({ previews.putDisplay(shot.fingerprint, it) }) { out ->
-                open(shot.raw).use { raw ->
-                    open(shot.rendered).use { rendered -> making.display(raw, rendered, out) }
-                }
+                making.display(opener(shot.raw), opener(shot.rendered), out)
             }
         }
         // The replaced main file's previews go only once this one exists (a failed RAW keeps the JPEG's).
@@ -193,7 +196,7 @@ class HandoffPreviewer(
         }
     }
 
-    private fun open(document: Document?): ImageInput? = document?.let { tree.openInput(it.id, it.name) }
+    private fun opener(document: Document?): (() -> ImageInput)? = document?.let { { tree.openInput(it.id, it.name) } }
 
     private inline fun write(store: (File) -> Unit, block: (File) -> Unit) {
         val temp = previews.temp()
@@ -206,6 +209,8 @@ class HandoffPreviewer(
     }
 
     private companion object {
+        /** A cancelled preview job stops waiting for a FileOpens slot (ADR 0018 "W3/C"). */
+        val WAITS = FileOpens.waits("previewer")
         const val TAG = "RevealHandoff"
         const val EXPECT_MS = 30_000L
         const val POLL_MS = 250L

@@ -13,7 +13,10 @@ import dev.hfps.reveal.debug.SyntheticDocumentsProvider
 import dev.hfps.reveal.editor.TestPhotos
 import dev.hfps.reveal.library.SyntheticFolder
 import java.io.File
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import org.junit.After
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -41,6 +44,21 @@ class HandoffBusyTest {
         inbox.deleteRecursively()
     }
 
+    /**
+     * [block] with a bound: a slot that never frees (the gate locked up, ADR 0018 "W3/C") fails the test with the
+     * holders instead of hanging the run (it once hung 1h45 here).
+     */
+    private fun <T> bounded(block: suspend CoroutineScope.() -> T): T = runBlocking {
+        try {
+            withTimeout(TIMEOUT_MS, block)
+        } catch (e: TimeoutCancellationException) {
+            throw AssertionError(
+                "timed out; FileOpens holders: ${FileOpens.holders()}, waiting ${FileOpens.waiting}",
+                e,
+            )
+        }
+    }
+
     private fun share(name: String): Pair<String, Uri> {
         val bytes = SyntheticFolder("unused-$stem").let { f ->
             f.gradientJpeg(name.hashCode(), 320, 213).also { f.dir.deleteRecursively() }
@@ -50,11 +68,11 @@ class HandoffBusyTest {
         val id = "inbox-$stem/$name"
         ids += id
         val uri = DocumentsContract.buildDocumentUri(SyntheticDocumentsProvider.AUTHORITY, id)
-        runBlocking { access.handoffs().receive(HandoffRequest(listOf(uri))) }
+        bounded { access.handoffs().receive(HandoffRequest(listOf(uri))) }
         return id to uri
     }
 
-    private fun unreadable(name: String) = runBlocking {
+    private fun unreadable(name: String) = bounded {
         access.library().photoList(PhotoQuery.FROM_APPS).single { it.name == name }.unreadable
     }
 
@@ -63,7 +81,7 @@ class HandoffBusyTest {
         val name = "${stem}_1.jpg"
         val (id, _) = share(name)
         SyntheticDocumentsProvider.busy(context.filesDir, id, 3)
-        runBlocking { access.library().checkHandoffs() }
+        bounded { access.library().checkHandoffs() }
         assertThat(SyntheticDocumentsProvider.busyLeft(context.filesDir, id)).isEqualTo(0)
         assertThat(unreadable(name)).isFalse()
     }
@@ -77,8 +95,13 @@ class HandoffBusyTest {
         FileOpens.busyBackoffMs = longArrayOf(10, 20, 40)
         SyntheticDocumentsProvider.busy(context.filesDir, busy, 1_000)
         SyntheticDocumentsProvider.refuse(context.filesDir, refused)
-        runBlocking { access.library().checkHandoffs() }
+        bounded { access.library().checkHandoffs() }
         assertThat(unreadable(busyName)).isFalse()
         assertThat(unreadable(refusedName)).isTrue()
+    }
+
+    private companion object {
+        /** Far above a run's need (the full backoff is about 30 s), far below the 1h45 hang it replaces. */
+        const val TIMEOUT_MS = 120_000L
     }
 }

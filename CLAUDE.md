@@ -1208,7 +1208,12 @@ Large library (W3/C, 0.9.0, ADR 0018 "W3/C", DB v14): **nothing reads files befo
 `MainActivity` reports it; the walk, `LibraryRepository.scheduleAccessCheck`, `SyncController` and the prefetch wait
 for it). Other apps' documents open through `FileOpens` (≤ 4 at once for background work, counted, `REVEAL_IO`
 opens/s); a `FileNotFoundException` starting with `busy:` (`PROVIDER_BUSY_PREFIX`, Hoard ADR 0010) is retried
-(`FileOpens.gated`: 250 ms doubling to 4 s, ~30 s, the slot is released while waiting; the editor and the export count too via `FileOpens.openDocument`; waiting for a slot never gives up) and is never `isAccessError`. The access check is one paced
+(`FileOpens.gated`: 250 ms doubling to 4 s, ~30 s, the slot is released while waiting; the editor and the export count too via `FileOpens.openDocument`; waiting for a slot never gives up, but **never wait for a
+slot while holding one** (read a pair one file after the other: `FirstImageLoader.loadEach`, `PreviewMaking.display` openers),
+**hold it for the read only** (`EditedThumbnails.decode` then `render`: no file open during GPU work, locks, masks or
+fills; sync's original upload is the one long holder), never inside a DB transaction; coroutine callers switch with
+`FileOpens.io(tag)` so a cancelled wait leaves the FIFO queue; an input returned across a switch goes through `openedIn`,
+reads are wrapped in `readCatching` (never `runCatching`: it swallows the cancellation); a wait over 2 min logs `REVEAL_IO` with the holders) and is never `isAccessError`. The access check is one paced
 background pass (skips files the server holds, `photo_files.checked_at` < 6 h, documents with a read grant:
 `readGrants`); never per grid query. Hand-offs whose main file the server holds become Server photos in place
 (`SyncStore.adoptNext` after every sync, one photo per transaction, failures marked and skipped: uuid, versions, culling, `handoff_at` kept; only files the server holds move; sidecar link dropped; never deletable by server records or the NAS feed).
@@ -1222,7 +1227,7 @@ the export opens are kept whole (`ServerFiles.keep`, `cache/sync-kept`, served a
 (the viewer and the editor hold them for minutes).
 
 ```sh
-./gradlew :core:data:testDebugUnitTest --tests '*AccessChecksTest*' --tests '*FileOpensTest*' --tests '*ServerThumbnailsTest*'
+./gradlew :core:data:testDebugUnitTest --tests '*AccessChecksTest*' --tests '*FileOpensTest*' --tests '*FileOpensCallersTest*' --tests '*ServerThumbnailsTest*'
 ./gradlew :core:sync:testDebugUnitTest --tests '*LibraryThumbsTest*' --tests '*HandoffAdoptionTest*' --tests '*RangeCacheTest*'
 REVEAL_THUMBS_LINK=$(scripts/sync/local-server.sh pair <work dir>) ./gradlew --no-configuration-cache \
   :core:sync:testDebugUnitTest --tests '*RealServerThumbsTest*'

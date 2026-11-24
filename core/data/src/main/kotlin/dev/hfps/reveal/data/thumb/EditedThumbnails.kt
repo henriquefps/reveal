@@ -22,16 +22,51 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
-/** Renders a small image of a recipe (the grid's "edited" thumbnail). */
-fun interface EditedThumbnails {
-    /** The edit, its Remove spots filled (docs/adr/0023 "FIX/H": from the fills' store, else made at this size). */
-    suspend fun render(input: ImageInput, recipe: Recipe, longEdge: Int): Bitmap
+/**
+ * Renders a small image of a recipe (the grid's "edited" thumbnail, the viewer's developed image) in two steps, so a
+ * document from another app is open (holds a `FileOpens` slot, ADR 0018 "W3/C") for the read only: [decode] opens,
+ * decodes and closes the file; [render] develops the decoded pixels (GPU, its queue, AI masks, Remove fills) with no
+ * file open.
+ */
+interface EditedThumbnails {
+    /**
+     * A photo decoded for [render]: the proxy mapped like the editor's input, the original's long edge (Detail's
+     * lengths), its upright size (Remove's crops) and, when the recipe has Remove spots, the file's fingerprint (the
+     * fills' store keys). The file itself is closed.
+     */
+    class Decoded(
+        val input: PipelineInput,
+        val fullLongEdge: Int,
+        val originalSize: Pair<Int, Int>?,
+        val fileKey: String?,
+    )
 
     /**
-     * [render] without waiting for Remove fills that are not ready (the grid's first thumbnail; the complete one
-     * follows, docs/adr/0023 "FIX/H").
+     * Opens the file with [open], decodes it at [longEdge] for [recipe] and closes it before returning, also when the
+     * decode fails. [alongside] reads the same open input first (the AI masks' small input and key), so the file is
+     * opened once. Blocking work: call it on an IO dispatcher.
      */
-    suspend fun renderQuick(input: ImageInput, recipe: Recipe, longEdge: Int): Bitmap = render(input, recipe, longEdge)
+    suspend fun decode(
+        open: () -> ImageInput,
+        recipe: Recipe,
+        longEdge: Int,
+        alongside: (ImageInput) -> Unit = {},
+    ): Decoded
+
+    /**
+     * The edit of [decoded], its Remove spots filled (docs/adr/0023 "FIX/H": from the fills' store, else made at this
+     * size) unless [waitForFills] is false (the grid's first thumbnail; the complete one follows), with the AI mask
+     * parts of [recipe] taken from [masks] (docs/adr/0022 "M4/F"; [photoKey] is the masks' cache key of the photo).
+     */
+    @Suppress("LongParameterList")
+    suspend fun render(
+        decoded: Decoded,
+        recipe: Recipe,
+        longEdge: Int,
+        masks: AiMaskSource = AiMaskSource.NONE,
+        photoKey: String = "",
+        waitForFills: Boolean = true,
+    ): Bitmap
 
     /**
      * The same from an input already decoded (a hand-off's local smart preview, ADR 0011); [fullLongEdge] is the
@@ -39,25 +74,21 @@ fun interface EditedThumbnails {
      */
     suspend fun renderPreview(input: PipelineInput, fullLongEdge: Int, recipe: Recipe, longEdge: Int): Bitmap? = null
 
-    /**
-     * [render] with the AI mask parts of [recipe] taken from [masks] (docs/adr/0022 "M4/F"; [photoKey] is the masks'
-     * cache key of the photo). Without a renderer that knows masks it is the plain render.
-     */
-    suspend fun renderWithMasks(
-        input: ImageInput,
+    /** [decode] then [render]: the file is closed before the render starts. */
+    suspend fun renderFile(
+        open: () -> ImageInput,
         recipe: Recipe,
         longEdge: Int,
-        masks: AiMaskSource,
-        photoKey: String,
-    ): Bitmap = render(input, recipe, longEdge)
+        waitForFills: Boolean = true,
+    ): Bitmap = render(decode(open, recipe, longEdge), recipe, longEdge, waitForFills = waitForFills)
 }
 
 /**
  * [EditedThumbnails] through the real develop pipeline: a proxy decode at thumbnail size (RAW: half-size LibRaw
  * decode, area-averaged), mapped like the editor's input, uploaded to one shared [GpuDevelopRenderer] and read back
  * through the output transform (`renderOutputImage`, sRGB RGBA8, at the geometry's output size). The same recipe, the
- * same shaders as the editor, so the thumbnail is the edit. One render at a time; the renderer is closed after
- * [IDLE_MS] without work.
+ * same shaders as the editor, so the thumbnail is the edit. One decode or render at a time; the file is open for the
+ * decode only (closed before the GPU work); the renderer is closed after [IDLE_MS] without work.
  *
  * Healing (docs/adr/0023 "FIX/H"): spots are computed at the thumbnail's size; Remove spots take the editor's fill
  * from [fillStore] (keyed by the file's fingerprint and the crop on the original), else a patch fill made on the
@@ -72,59 +103,93 @@ class GpuEditedThumbnails(private val scope: CoroutineScope, fillStore: RemoveFi
     /** Fills of the thumbnails: the store's (read only), else the patch fill on the thumbnail (never a model here). */
     private val fills = RemoveFills(storeWrites = false).also { it.store = fillStore }
 
-    override suspend fun render(input: ImageInput, recipe: Recipe, longEdge: Int): Bitmap =
-        renderWith(input, recipe, longEdge, AiMaskSource.NONE, "")
-
-    override suspend fun renderQuick(input: ImageInput, recipe: Recipe, longEdge: Int): Bitmap =
-        renderWith(input, recipe, longEdge, AiMaskSource.NONE, "", waitForFills = false)
-
-    override suspend fun renderWithMasks(
-        input: ImageInput,
+    /**
+     * Decodes under the renderer's [lock] (one proxy on the heap at a time, as before the split), opening the file
+     * only once the lock is held: the lock is always taken before a FileOpens slot, never the other way round, so a
+     * caller never holds a file while it queues.
+     */
+    override suspend fun decode(
+        open: () -> ImageInput,
         recipe: Recipe,
         longEdge: Int,
-        masks: AiMaskSource,
-        photoKey: String,
-    ): Bitmap = renderWith(input, recipe, longEdge, masks, photoKey)
+        alongside: (ImageInput) -> Unit,
+    ): EditedThumbnails.Decoded = lock.withLock { decodeLocked(open, recipe, longEdge, alongside) }
+
+    /** [decode] and [render] in one turn of the [lock]: the file is closed once decoded, before the GPU work. */
+    override suspend fun renderFile(
+        open: () -> ImageInput,
+        recipe: Recipe,
+        longEdge: Int,
+        waitForFills: Boolean,
+    ): Bitmap = lock.withLock {
+        renderLocked(decodeLocked(open, recipe, longEdge) {}, recipe, AiMaskSource.NONE, "", waitForFills)
+    }
+
+    private fun decodeLocked(
+        open: () -> ImageInput,
+        recipe: Recipe,
+        longEdge: Int,
+        alongside: (ImageInput) -> Unit,
+    ): EditedThumbnails.Decoded {
+        idle?.cancel()
+        return open().use { input ->
+            alongside(input)
+            val orientation = if (input.type.isRaw) {
+                null
+            } else {
+                runCatching {
+                    input.inspection.metadata.orientation
+                }.getOrNull()
+            }
+            val proxy = ProxyBuilder.decodeProxy(input, longEdge)
+            val metadata = runCatching { input.inspection.metadata }.getOrNull()
+            val pipelineInput = PipelineInputMapper.map(
+                proxy.image,
+                proxy.info,
+                orientation ?: proxy.info.orientation,
+                metadata,
+            )
+            // Remove's crops are defined on the original (upright), so the store finds the editor's fills by its keys.
+            val full = proxy.stats.fullWidth to proxy.stats.fullHeight
+            val upright = if ((pipelineInput.width >= pipelineInput.height) == (full.first >= full.second)) {
+                full
+            } else {
+                full.second to full.first
+            }
+            EditedThumbnails.Decoded(
+                input = pipelineInput,
+                fullLongEdge = maxOf(full.first, full.second),
+                originalSize = upright,
+                fileKey = if (removes(recipe)) MaskInputs.photoKey(input) else null,
+            )
+        }
+    }
 
     @Suppress("LongParameterList")
-    private suspend fun renderWith(
-        input: ImageInput,
+    override suspend fun render(
+        decoded: EditedThumbnails.Decoded,
         recipe: Recipe,
         longEdge: Int,
         masks: AiMaskSource,
         photoKey: String,
-        waitForFills: Boolean = true,
-    ): Bitmap = lock.withLock {
+        waitForFills: Boolean,
+    ): Bitmap = lock.withLock { renderLocked(decoded, recipe, masks, photoKey, waitForFills) }
+
+    private suspend fun renderLocked(
+        decoded: EditedThumbnails.Decoded,
+        recipe: Recipe,
+        masks: AiMaskSource,
+        photoKey: String,
+        waitForFills: Boolean,
+    ): Bitmap {
         idle?.cancel()
-        val orientation = if (input.type.isRaw) {
-            null
-        } else {
-            runCatching {
-                input.inspection.metadata.orientation
-            }.getOrNull()
-        }
-        val proxy = ProxyBuilder.decodeProxy(input, longEdge)
-        val metadata = runCatching { input.inspection.metadata }.getOrNull()
-        val pipelineInput = PipelineInputMapper.map(
-            proxy.image,
-            proxy.info,
-            orientation ?: proxy.info.orientation,
-            metadata,
-        )
-        // Remove's crops are defined on the original (upright), so the store finds the editor's fills by its keys.
-        val full = proxy.stats.fullWidth to proxy.stats.fullHeight
-        val upright = if ((pipelineInput.width >= pipelineInput.height) == (full.first >= full.second)) {
-            full
-        } else {
-            full.second to full.first
-        }
         val heals = HealSetup(
-            fileKey = if (removes(recipe)) photoKey.ifEmpty { null } ?: MaskInputs.photoKey(input) else null,
-            originalSize = upright,
+            fileKey = if (removes(recipe)) photoKey.ifEmpty { null } ?: decoded.fileKey else null,
+            originalSize = decoded.originalSize,
             wait = waitForFills,
         )
         // Detail's lengths are full-resolution pixels: a thumbnail is developed at its own scale (ADR 0012).
-        draw(pipelineInput, maxOf(full.first, full.second), recipe, masks, photoKey, heals)
+        return draw(decoded.input, decoded.fullLongEdge, recipe, masks, photoKey, heals)
     }
 
     /** How a render resolves its Remove spots: the file's fingerprint (store keys), the original's size, waiting. */

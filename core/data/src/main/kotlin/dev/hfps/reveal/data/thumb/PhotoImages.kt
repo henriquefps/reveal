@@ -24,15 +24,17 @@ import dev.hfps.reveal.data.model.FileRole
 import dev.hfps.reveal.data.model.SourceKind
 import dev.hfps.reveal.data.model.SourceState
 import dev.hfps.reveal.data.storage.DocumentTree
+import dev.hfps.reveal.data.storage.FileOpens
 import dev.hfps.reveal.data.storage.LocalCopies
 import dev.hfps.reveal.data.storage.isAccessError
+import dev.hfps.reveal.data.storage.openedIn
+import dev.hfps.reveal.data.storage.readCatching
 import dev.hfps.reveal.data.sync.ServerTree
 import dev.hfps.reveal.pipeline.preview.SmartPreviewCodec
 import dev.hfps.reveal.pipeline.recipe.Recipe
 import java.io.Closeable
 import java.io.File
 import java.io.IOException
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 /** A display image for the viewer and the upright pixel size of the photo it shows (for 100 % zoom). */
@@ -102,6 +104,9 @@ class RegionSource internal constructor(
     }
 }
 
+/** The viewer's reads: a page that left the screen stops waiting for a FileOpens slot (ADR 0018 "W3/C"). */
+private val VIEWER_IO = FileOpens.io("viewer")
+
 /**
  * Images for the full-screen viewer (ADR 0006, "Viewer"). Fast path: the RAW's embedded preview or the camera JPEG
  * at screen size ([FirstImageLoader]). An edited photo shows its edit (a develop render). Zooming in uses the
@@ -156,7 +161,7 @@ class PhotoImages(
      * own edit, docs/adr/0025; null = the photo's first version); null when its folder is not available.
      */
     suspend fun display(photoId: Long, longEdge: Int, versionId: Long? = null): DisplayImage? = withContext(
-        Dispatchers.IO,
+        VIEWER_IO,
     ) {
         val photo = photos.get(photoId) ?: return@withContext null
         val opened = open(photoId) ?: return@withContext null
@@ -172,20 +177,14 @@ class PhotoImages(
             }
         }
         try {
-            val raw = opened.raw?.let { opened.tree.openInput(it.documentId, it.name) }
-            val rendered = try {
-                opened.rendered?.let { opened.tree.openInput(it.documentId, it.name) }
-            } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
-                raw?.close()
-                throw e
-            }
-            try {
-                val first = FirstImageLoader.load(raw, rendered, longEdge)
-                DisplayImage.of(first.bitmap, fullWidth, fullHeight, false)
-            } finally {
-                raw?.close()
-                rendered?.close()
-            }
+            // One file at a time, each closed before the next opens: never a FileOpens slot held while waiting for
+            // another (a pair's RAW and JPEG, ADR 0018 "W3/C").
+            val first = FirstImageLoader.loadEach(
+                opened.raw?.let { raw -> { opened.tree.openInput(raw.documentId, raw.name) } },
+                opened.rendered?.let { rendered -> { opened.tree.openInput(rendered.documentId, rendered.name) } },
+                longEdge,
+            )
+            DisplayImage.of(first.bitmap, fullWidth, fullHeight, false)
         } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
             if (!isAccessError(e)) throw e
             localDisplay(opened, longEdge, fullWidth, fullHeight)
@@ -199,7 +198,7 @@ class PhotoImages(
      * [longEdge]; null without a GPU path.
      */
     suspend fun developed(photoId: Long, longEdge: Int, versionId: Long? = null): Bitmap? = withContext(
-        Dispatchers.IO,
+        VIEWER_IO,
     ) {
         val renderer = edited ?: return@withContext null
         val opened = open(photoId) ?: return@withContext null
@@ -207,7 +206,8 @@ class PhotoImages(
         val version = versionId ?: photos.firstVersion(photoId) ?: return@withContext null
         val recipe = edits.recipe(version)
         runCatching {
-            opened.tree.openInput(main.documentId, main.name).use { renderer.render(it, recipe, longEdge) }
+            // The file is closed once decoded: the GPU render holds no FileOpens slot (ADR 0018 "W3/C").
+            renderer.renderFile({ opened.tree.openInput(main.documentId, main.name) }, recipe, longEdge)
         }.recoverCatching { e ->
             if (!isAccessError(e)) throw e
             // A hand-off whose grant ended (ADR 0011 "Fallbacks"): the server's original, else a smart preview.
@@ -234,7 +234,7 @@ class PhotoImages(
         }
         val resolver = resolver ?: return null
         val original = fallbacks.original(main) ?: return null
-        return ImageInput.fromUri(resolver, original, main.name).use { renderer.render(it, recipe, longEdge) }
+        return renderer.renderFile({ ImageInput.fromUri(resolver, original, main.name) }, recipe, longEdge)
     }
 
     /**
@@ -273,11 +273,11 @@ class PhotoImages(
     }
 
     /** Full-resolution regions of the camera rendering, or null (RAW only, unreadable, unsupported). */
-    suspend fun region(photoId: Long): RegionSource? = withContext(Dispatchers.IO) {
-        val opened = open(photoId) ?: return@withContext null
-        val file = opened.rendered ?: return@withContext null
+    suspend fun region(photoId: Long): RegionSource? = openedIn(VIEWER_IO) {
+        val opened = open(photoId) ?: return@openedIn null
+        val file = opened.rendered ?: return@openedIn null
         val source = photos.get(photoId)?.let { db.sourceDao().get(it.sourceId) }
-        runCatching {
+        readCatching {
             val input = opened.tree.openInput(file.documentId, file.name)
             val dir = copiesDir
             // A hand-off's document is copied and closed at once (open, copy, close), never held by the decoder.
@@ -316,7 +316,7 @@ class PhotoImages(
     /** Upright full size: the camera rendering's own bounds when there is one, else the header's size. */
     private fun fullSize(width: Int?, height: Int?, orientation: Int, opened: Opened): Pair<Int, Int> {
         val bounds = opened.rendered?.let { rendered ->
-            runCatching {
+            readCatching {
                 opened.tree.openInput(rendered.documentId, rendered.name).use { input ->
                     val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
                     BitmapFactory.decodeFileDescriptor(input.descriptor.fileDescriptor, null, options)

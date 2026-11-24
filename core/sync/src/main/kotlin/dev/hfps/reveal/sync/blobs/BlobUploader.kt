@@ -12,7 +12,9 @@ import dev.hfps.reveal.data.db.SyncRecordEntity
 import dev.hfps.reveal.data.db.SyncUploadEntity
 import dev.hfps.reveal.data.handoff.LocalPreviews
 import dev.hfps.reveal.data.library.DocumentTreeFactory
+import dev.hfps.reveal.data.storage.FileOpens
 import dev.hfps.reveal.data.storage.isAccessError
+import dev.hfps.reveal.data.storage.openedIn
 import dev.hfps.reveal.data.sync.BackupCoverage
 import dev.hfps.reveal.data.sync.BackupRoot
 import dev.hfps.reveal.data.sync.StorageLocation
@@ -34,8 +36,16 @@ import java.security.MessageDigest
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
+
+/**
+ * Sync's opens of other apps' documents: a cancelled run stops waiting for a FileOpens slot (ADR 0018 "W3/C"). An
+ * original's slot is held for its whole chunked upload (the file is read as it is sent, one upload at a time); nothing
+ * inside the upload waits for another slot.
+ */
+private val SYNC_IO = FileOpens.io("sync")
 
 /** A readable blob: its size and a stream from an offset. */
 private interface BlobSource : AutoCloseable {
@@ -284,7 +294,9 @@ class BlobUploader(
         local?.smart(candidate.fingerprint)?.let { return maker.adopt(it) }
         val source = db.sourceDao().get(candidate.sourceId) ?: throw IOException("no source")
         return try {
-            trees.open(source).openInput(candidate.documentId, candidate.name).use { maker.make(it) }
+            withContext(SYNC_IO) {
+                trees.open(source).openInput(candidate.documentId, candidate.name).use { maker.make(it) }
+            }
         } catch (e: CancellationException) {
             throw e
         } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
@@ -435,7 +447,8 @@ class BlobUploader(
             return false
         }
         val input = try {
-            trees.open(source).openInput(main.documentId, main.name)
+            // Returned across the switch: closed (its slot freed) if the job is cancelled meanwhile.
+            openedIn(SYNC_IO) { trees.open(source).openInput(main.documentId, main.name) }
         } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
             if (!isAccessError(e)) throw e
             // Reveal cannot read it now (a hand-off whose grant ended, ADR 0011): parked, not retried every run. It

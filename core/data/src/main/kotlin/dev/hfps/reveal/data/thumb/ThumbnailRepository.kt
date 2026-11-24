@@ -32,6 +32,7 @@ import dev.hfps.reveal.data.model.SourceState
 import dev.hfps.reveal.data.storage.CacheArea
 import dev.hfps.reveal.data.storage.CacheItem
 import dev.hfps.reveal.data.storage.DocumentTree
+import dev.hfps.reveal.data.storage.FileOpens
 import dev.hfps.reveal.data.storage.StorageKind
 import dev.hfps.reveal.data.storage.isAccessError
 import dev.hfps.reveal.data.sync.ServerTree
@@ -42,6 +43,7 @@ import dev.hfps.reveal.pipeline.preset.ApplyContext
 import dev.hfps.reveal.pipeline.preview.SmartPreviewCodec
 import dev.hfps.reveal.pipeline.recipe.HealKind
 import dev.hfps.reveal.pipeline.recipe.MaskComponent
+import dev.hfps.reveal.pipeline.recipe.Recipe
 import java.io.File
 import java.io.IOException
 import java.util.Collections
@@ -89,7 +91,9 @@ class ThumbnailRepository(
     private val fallbacks = HandoffFallbacks(db, previews, serverAuthority)
     private val cache = db.cacheDao()
     private val photos = db.photoDao()
-    private val io = Dispatchers.IO.limitedParallelism(PARALLELISM)
+
+    /** A cancelled cell's wait for a FileOpens slot ends with it (ADR 0018 "W3/C"). */
+    private val io = Dispatchers.IO.limitedParallelism(PARALLELISM) + FileOpens.waits("thumbnails")
 
     /**
      * One smart preview decoded at a time (a full-size preview's planes are tens of MB): the home lists unreadable
@@ -320,18 +324,17 @@ class ThumbnailRepository(
             val tree = availableTree(target.sourceId) ?: return@withContext null
             aiLock.withLock {
                 try {
-                    tree.openInput(target.main.documentId, target.main.name).use { image ->
-                        if (masks == null || components.isEmpty()) {
-                            // Remove fills only: the render waits for them.
-                            renderer.render(image, edits.recipe(versionId), EDGE).also { bitmap ->
-                                save(key, target.photoId, KIND_EDITED, bitmap)
-                                memory.put(memoryKey, bitmap)
-                                forgetReduced(photoId, editTime)
-                                aiDone += memoryKey
-                            }
-                        } else {
-                            renderWithAiMasks(image, target, renderer, masks, components, versionId, key, editTime)
+                    val recipe = edits.recipe(versionId)
+                    if (masks == null || components.isEmpty()) {
+                        // Remove fills only: the render waits for them (the file is closed by then).
+                        renderer.renderFile(open(tree, target), recipe, EDGE).also { bitmap ->
+                            save(key, target.photoId, KIND_EDITED, bitmap)
+                            memory.put(memoryKey, bitmap)
+                            forgetReduced(photoId, editTime)
+                            aiDone += memoryKey
                         }
+                    } else {
+                        renderWithAiMasks(tree, target, renderer, masks, components, recipe, key, editTime)
                     }
                 } catch (e: CancellationException) {
                     throw e
@@ -361,18 +364,19 @@ class ThumbnailRepository(
                 it.enabled
             }.flatMap { it.components.filterIsInstance<MaskComponent.Ai>() }
             aiLock.withLock {
-                tree.openInput(target.main.documentId, target.main.name).use { image ->
-                    val masks = aiMasks
-                    if (masks == null || components.isEmpty()) return@use renderer.render(image, recipe, longEdge)
-                    val photoKey = MaskInputs.photoKey(image) ?: return@use null
-                    val small = MaskInputs.smallInput(image, MaskInputs.THUMBNAIL_PROXY_EDGE) ?: return@use null
-                    val session = masks.session(photoKey, small.width to small.height) { MaskInputs.render(small) }
-                    try {
-                        if (!session.ready(components)) return@use null
-                        renderer.renderWithMasks(image, recipe, longEdge, session, photoKey)
-                    } finally {
-                        session.close()
-                    }
+                val masks = aiMasks
+                if (masks == null || components.isEmpty()) {
+                    return@withLock renderer.renderFile(open(tree, target), recipe, longEdge)
+                }
+                val (decoded, inputs) = decodeWithMaskInputs(renderer, tree, target, recipe, longEdge)
+                val (photoKey, small) = inputs ?: return@withLock null
+                // The file is closed: the wait for the masks and the render hold no FileOpens slot.
+                val session = masks.session(photoKey, small.width to small.height) { MaskInputs.render(small) }
+                try {
+                    if (!session.ready(components)) return@withLock null
+                    renderer.render(decoded, recipe, longEdge, session, photoKey)
+                } finally {
+                    session.close()
                 }
             }
         }
@@ -380,24 +384,25 @@ class ThumbnailRepository(
 
     @Suppress("LongParameterList", "ReturnCount")
     private suspend fun renderWithAiMasks(
-        image: ImageInput,
+        tree: DocumentTree,
         target: Target,
         renderer: EditedThumbnails,
         masks: AiMasks,
         components: List<MaskComponent.Ai>,
-        versionId: Long,
+        recipe: Recipe,
         key: String,
         editTime: Long,
     ): Bitmap? {
-        val photoKey = MaskInputs.photoKey(image) ?: return null
-        val small = MaskInputs.smallInput(image, MaskInputs.THUMBNAIL_PROXY_EDGE) ?: return null
+        val (decoded, inputs) = decodeWithMaskInputs(renderer, tree, target, recipe, EDGE)
+        val (photoKey, small) = inputs ?: return null
+        // The file is closed: the wait for the masks and the render hold no FileOpens slot.
         val session = masks.session(photoKey, small.width to small.height) { MaskInputs.render(small) }
         try {
             if (!session.ready(components)) {
                 aiFailed += key
                 return null
             }
-            val bitmap = renderer.renderWithMasks(image, edits.recipe(versionId), EDGE, session, photoKey)
+            val bitmap = renderer.render(decoded, recipe, EDGE, session, photoKey)
             save(key, target.photoId, KIND_EDITED, bitmap)
             memory.put(memoryKey(target.photoId, editTime), bitmap)
             forgetReduced(target.photoId, editTime)
@@ -407,6 +412,30 @@ class ThumbnailRepository(
             session.close()
         }
     }
+
+    /**
+     * [target]'s file opened once for the develop decode and the AI masks' key and small input (closed before this
+     * returns); the mask inputs are null when the file has no key or no small input.
+     */
+    private suspend fun decodeWithMaskInputs(
+        renderer: EditedThumbnails,
+        tree: DocumentTree,
+        target: Target,
+        recipe: Recipe,
+        longEdge: Int,
+    ): Pair<EditedThumbnails.Decoded, Pair<String, PipelineInput>?> {
+        var inputs: Pair<String, PipelineInput>? = null
+        val decoded = renderer.decode(open(tree, target), recipe, longEdge) { image ->
+            val photoKey = MaskInputs.photoKey(image)
+            val small = photoKey?.let { MaskInputs.smallInput(image, MaskInputs.THUMBNAIL_PROXY_EDGE) }
+            if (photoKey != null && small != null) inputs = photoKey to small
+        }
+        return decoded to inputs
+    }
+
+    /** Opens [target]'s main file (in a FileOpens slot for another app's document; close it once read). */
+    private fun open(tree: DocumentTree, target: Target): () -> ImageInput =
+        { tree.openInput(target.main.documentId, target.main.name) }
 
     @Suppress("ReturnCount")
     private suspend fun loadPreview(target: Target, sample: Int = 1): Bitmap? {
@@ -455,12 +484,14 @@ class ThumbnailRepository(
         val tree = availableTree(target.sourceId) ?: return null
         val main = target.main
         return try {
-            tree.openInput(main.documentId, main.name).use { input ->
-                val rendered = target.rendered?.takeIf { it !== main }
-                embeddedPreview(input)
-                    ?: rendered?.let { tree.openInput(it.documentId, it.name).use(::decodeStandard) }
-                    ?: decodeStandard(input)
-            }.also { if (main.unreadableAt != null) photos.setReadable(main.documentId) }
+            // One file at a time: the main file is closed before its pair's JPEG is opened (never a FileOpens slot held
+            // while waiting for another, ADR 0018 "W3/C").
+            val rendered = target.rendered?.takeIf { it !== main }
+            val image = tree.openInput(main.documentId, main.name).use { input ->
+                embeddedPreview(input) ?: if (rendered == null) decodeStandard(input) else null
+            } ?: tree.openInput(checkNotNull(rendered).documentId, rendered.name).use(::decodeStandard)
+            if (main.unreadableAt != null) photos.setReadable(main.documentId)
+            image
         } catch (e: CancellationException) {
             throw e
         } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
@@ -488,7 +519,7 @@ class ThumbnailRepository(
         if (renderer == null || tree == null) return null
         return try {
             val recipe = edits.recipe(versionId)
-            tree.openInput(target.main.documentId, target.main.name).use { renderer.renderQuick(it, recipe, EDGE) }
+            renderer.renderFile(open(tree, target), recipe, EDGE, waitForFills = false)
         } catch (e: CancellationException) {
             throw e
         } catch (@Suppress("TooGenericExceptionCaught") e: Throwable) {
@@ -603,7 +634,7 @@ class ThumbnailRepository(
             }
             val resolver = resolver ?: return null
             val original = fallbacks.original(target.main) ?: return null
-            ImageInput.fromUri(resolver, original, target.main.name).use { renderer.render(it, recipe, EDGE) }
+            renderer.renderFile({ ImageInput.fromUri(resolver, original, target.main.name) }, recipe, EDGE)
         } catch (e: CancellationException) {
             throw e
         } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {

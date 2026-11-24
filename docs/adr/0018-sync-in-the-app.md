@@ -450,6 +450,20 @@ over through the debug provider, on the phone (0.8.0 debug build, 60 s on the fi
   (interruptible: a cancelled caller frees nothing it never held; there is no bypass after a timeout). A busy
   answer's backoff **releases the slot** while it waits. Every open counted, `REVEAL_IO` logs opens per second while
   any happen.
+- **No hold-and-wait, slots for reads only, waits that end with their caller** (fix in 0.11.0; the wait-forever cap
+  shipped in 0.9.0 and 0.10.0 could lock up: four callers each holding one slot and waiting for a second, the RAW and
+  JPEG of a pair, waited forever, and every later open with them). The rules, in `FileOpens`' KDoc: never wait for a
+  slot while holding one (a pair is read one file after the other, each closed before the next opens:
+  `FirstImageLoader.loadEach`, the thumbnail loader, `PreviewMaking.display` takes openers, the export reads the
+  pair's EXIF before the main file); hold a slot for the read only (`EditedThumbnails.decode` opens, decodes and
+  closes, then `render` does the GPU work, the lock queue, AI masks and fills with no file open; sync's chunked upload
+  of an original is the one long holder, one at a time, nothing inside it waits for another slot); never wait for a
+  slot inside a database transaction. The queue is first come, first served; a waiter keeps its place while it polls
+  (50 ms) for its coroutine's cancellation (`FileOpens.io(tag)` / `waits(tag)`: a `ThreadContextElement` carrying the
+  job) or ends on an interrupt, taking and freeing nothing. A wait over 2 minutes logs `REVEAL_IO` with each holder's
+  tag, document and age (again every 2 minutes) and keeps waiting: never a bypass. An input returned across a context switch goes
+  through `openedIn` (a `withContext` cancelled while its block ran throws at its exit and would drop the input and its
+  slot), and reads are wrapped in `readCatching`, which never swallows a cancelled wait.
 - **A busy sender is waited out, never marked unreadable** (Hoard ADR 0010): a `FileNotFoundException` whose message
   starts exactly with `busy:` (`PROVIDER_BUSY_PREFIX`) is retried with 250 ms doubling to 4 s, giving up after about
   30 s as a transient failure (`ProviderBusyException`); `isAccessError` is false for it, so `unreadable_at` is never

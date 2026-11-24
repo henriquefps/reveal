@@ -6,6 +6,13 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import org.junit.Assert.assertThrows
 import org.junit.Test
 
@@ -178,5 +185,170 @@ class FileOpensTest {
         pool.shutdown()
         assertThat(peak.get()).isAtMost(FileOpens.BACKGROUND_SLOTS)
         assertThat(FileOpens.open).isEqualTo(0)
+    }
+
+    /** Takes every slot; returns their releases. */
+    private fun fill(): List<() -> Unit> = List(FileOpens.BACKGROUND_SLOTS) {
+        var r: () -> Unit = {}
+        FileOpens.gated(tag = "holder$it") { release -> r = release }
+        r
+    }
+
+    /** An input-like holder of one slot, released when closed (as `ImageInput(..., onClose = release)`). */
+    private class Held(private val release: () -> Unit) : AutoCloseable {
+        override fun close() = release()
+    }
+
+    private fun waitUntil(condition: () -> Boolean) {
+        val deadline = System.currentTimeMillis() + 5_000
+        while (!condition() && System.currentTimeMillis() < deadline) Thread.sleep(5)
+        assertThat(condition()).isTrue()
+    }
+
+    @Test
+    fun `a cancelled coroutine leaves the queue at once, takes and frees nothing`() = runBlocking<Unit> {
+        val holders = fill()
+        val waiter = launch(FileOpens.io("test")) { FileOpens.gated { release -> release() } }
+        waitUntil { FileOpens.waiting == 1 }
+        val started = System.nanoTime()
+        withTimeout(2_000) { waiter.cancelAndJoin() }
+        assertThat((System.nanoTime() - started) / 1_000_000).isLessThan(1_000L)
+        assertThat(FileOpens.waiting).isEqualTo(0)
+        assertThat(FileOpens.open).isEqualTo(FileOpens.BACKGROUND_SLOTS)
+        holders.forEach { it() }
+        assertThat(FileOpens.open).isEqualTo(0)
+        // All four slots usable again.
+        fill().forEach { it() }
+    }
+
+    @Test
+    fun `a waiter keeps its place in the queue while it polls for cancellation`() = runBlocking<Unit> {
+        val holders = fill()
+        val order = java.util.Collections.synchronizedList(ArrayList<String>())
+        val first = async(Dispatchers.IO + FileOpens.waits("first")) {
+            FileOpens.gated { release ->
+                order += "first"
+                release()
+            }
+        }
+        waitUntil { FileOpens.waiting == 1 }
+        // Longer than a poll: the first waiter has woken up several times meanwhile.
+        delay(FileOpens.POLL_MS * 4)
+        val second = async(FileOpens.io("second")) {
+            FileOpens.gated { release ->
+                order += "second"
+                release()
+            }
+        }
+        waitUntil { FileOpens.waiting == 2 }
+        delay(FileOpens.POLL_MS * 4)
+        holders.first()()
+        withTimeout(5_000) {
+            first.await()
+            second.await()
+        }
+        holders.drop(1).forEach { it() }
+        assertThat(order).containsExactly("first", "second").inOrder()
+    }
+
+    @Test
+    fun `release is idempotent and never frees another caller's slot`() {
+        var release: () -> Unit = {}
+        FileOpens.gated { release = it }
+        val others = List(FileOpens.BACKGROUND_SLOTS - 1) {
+            var r: () -> Unit = {}
+            FileOpens.gated { r = it }
+            r
+        }
+        assertThat(FileOpens.open).isEqualTo(FileOpens.BACKGROUND_SLOTS)
+        release()
+        release()
+        release()
+        assertThat(FileOpens.open).isEqualTo(FileOpens.BACKGROUND_SLOTS - 1)
+        others.forEach { it() }
+        assertThat(FileOpens.open).isEqualTo(0)
+    }
+
+    @Test
+    fun `slots come back after failed decodes, an OutOfMemoryError and a cancelled decode`() = runBlocking<Unit> {
+        repeat(FileOpens.BACKGROUND_SLOTS * 2) {
+            assertThrows(java.io.IOException::class.java) {
+                FileOpens.gated { Held(it) }.use { throw java.io.IOException("corrupt") }
+            }
+        }
+        assertThat(FileOpens.open).isEqualTo(0)
+        repeat(FileOpens.BACKGROUND_SLOTS * 2) {
+            assertThrows(OutOfMemoryError::class.java) {
+                FileOpens.gated { Held(it) }.use { throw OutOfMemoryError("decode") }
+            }
+            // Also when the open itself runs out of memory: an Error frees the slot as well.
+            assertThrows(OutOfMemoryError::class.java) { FileOpens.gated<Unit> { throw OutOfMemoryError("open") } }
+        }
+        assertThat(FileOpens.open).isEqualTo(0)
+        val decoding = CompletableDeferredLatch()
+        val job = launch(FileOpens.io("test")) {
+            FileOpens.gated { Held(it) }.use {
+                decoding.open()
+                delay(60_000)
+            }
+        }
+        decoding.await()
+        assertThat(FileOpens.open).isEqualTo(1)
+        job.cancelAndJoin()
+        assertThat(FileOpens.open).isEqualTo(0)
+        fill().forEach { it() }
+    }
+
+    private class CompletableDeferredLatch {
+        private val latch = CountDownLatch(1)
+
+        fun open() = latch.countDown()
+
+        fun await() = assertThat(latch.await(5, TimeUnit.SECONDS)).isTrue()
+    }
+
+    @Test
+    fun `a busy provider's pause ends when the caller is cancelled`() = runBlocking<Unit> {
+        val job = launch(FileOpens.io("test")) {
+            FileOpens.gated(backoff = longArrayOf(60_000)) { release ->
+                release()
+                throw busy()
+            }
+        }
+        delay(FileOpens.POLL_MS * 2)
+        val started = System.nanoTime()
+        withTimeout(2_000) { job.cancelAndJoin() }
+        assertThat((System.nanoTime() - started) / 1_000_000).isLessThan(1_000L)
+        assertThat(FileOpens.open).isEqualTo(0)
+    }
+
+    @Test
+    fun `a long wait logs who holds the slots and keeps waiting`() {
+        val lines = java.util.Collections.synchronizedList(ArrayList<String>())
+        FileOpens.report = { lines += it }
+        FileOpens.stuckMs = 100
+        val holders = List(FileOpens.BACKGROUND_SLOTS) {
+            var r: () -> Unit = {}
+            FileOpens.gated(name = "DSC000$it.ARW", tag = "thumbnails") { r = it }
+            r
+        }
+        assertThat(FileOpens.holders()).hasSize(FileOpens.BACKGROUND_SLOTS)
+        val got = CountDownLatch(1)
+        val waiter = Thread {
+            FileOpens.gated(name = "DSC0009.JPG", tag = "viewer") {
+                got.countDown()
+                it()
+            }
+        }
+        waiter.start()
+        waitUntil { lines.size >= 2 }
+        // Still waiting: a pinned slot is reported, never bypassed.
+        assertThat(got.count).isEqualTo(1)
+        assertThat(lines.first()).contains("viewer (DSC0009.JPG)")
+        assertThat(lines.first()).contains("thumbnails (DSC0000.ARW")
+        holders.forEach { it() }
+        assertThat(got.await(5, TimeUnit.SECONDS)).isTrue()
+        waiter.join(5_000)
+        waitUntil { lines.any { it.contains("ended after") } }
     }
 }

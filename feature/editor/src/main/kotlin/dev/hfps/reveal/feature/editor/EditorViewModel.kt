@@ -38,6 +38,7 @@ import dev.hfps.reveal.data.mask.MaskInputs
 import dev.hfps.reveal.data.preset.PresetEvent
 import dev.hfps.reveal.data.preset.PresetFilesIo
 import dev.hfps.reveal.data.preset.PresetRepository
+import dev.hfps.reveal.data.storage.FileOpens
 import dev.hfps.reveal.data.sync.RemoteEdits
 import dev.hfps.reveal.feature.editor.edit.AsShot
 import dev.hfps.reveal.feature.editor.edit.OpticsAnalysis
@@ -129,6 +130,9 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.flow.updateAndGet
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+
+/** The editor's opens: a closed editor stops waiting for a FileOpens slot (ADR 0018 "W3/C"). */
+private val EDITOR_IO = FileOpens.io("editor")
 
 /**
  * The editor of one photo: shows the embedded preview immediately, decodes the screen proxy off the main thread with
@@ -315,9 +319,12 @@ class EditorViewModel @Inject constructor(
     private suspend fun prepareMasks(input: PipelineInput, source: Uri, name: String) {
         val small = withContext(Dispatchers.Default) { MaskInputs.downscale(input) }
         // The file's fingerprint keys the masks, so the export and the thumbnails reuse them (docs/adr/0022 "M4/F").
-        val key = withContext(Dispatchers.IO) {
+        val key = withContext(EDITOR_IO) {
             runCatching {
-                ImageInput.fromUri(context.contentResolver, source, name).use(MaskInputs::photoKey)
+                // Another app's document takes a FileOpens slot like every other open of it (ADR 0018 "W3/C").
+                FileOpens.openDocument(source, context.packageName) {
+                    ImageInput.fromUri(context.contentResolver, source, name)
+                }.use(MaskInputs::photoKey)
             }.getOrNull()
         }
         // The same key finds Remove's fills in their store (docs/adr/0023 "FIX/H": the thumbnails show them).
@@ -426,7 +433,7 @@ class EditorViewModel @Inject constructor(
             var opening: Opening? = null
             try {
                 opening = resolveTarget()
-                val (photo, uri) = withContext(Dispatchers.IO) { openWithFallback(opening, proxyLongEdge, screenLong) }
+                val (photo, uri) = withContext(EDITOR_IO) { openWithFallback(opening, proxyLongEdge, screenLong) }
                 EditorMetrics.proxy()
                 val previewOnly = previewOnly(photo, opening)
                 val input = photo.input
@@ -524,7 +531,7 @@ class EditorViewModel @Inject constructor(
      * an unreadable region) leaves the proxy-only zoom of M1.
      */
     private fun loadFullResolution(uri: Uri, renderer: GpuDevelopRenderer, scale: Float, then: () -> Unit) {
-        viewModelScope.launch(Dispatchers.IO) {
+        viewModelScope.launch(EDITOR_IO) {
             try {
                 fullResolution(uri, renderer, scale)
             } finally {

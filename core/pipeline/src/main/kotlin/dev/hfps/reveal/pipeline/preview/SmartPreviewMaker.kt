@@ -111,9 +111,18 @@ open class SmartPreviewMaker(private val dir: File) {
          * The display JPEG of a shot (long edge [edge]): the RAW's embedded preview, else its rendering, upright
          * (`FirstImageLoader`), at quality [JPEG_QUALITY].
          */
-        fun displayJpeg(raw: ImageInput?, rendered: ImageInput?, edge: Int): ByteArray {
-            val first = FirstImageLoader.load(raw, rendered, edge)
-            return ByteArrayOutputStream().use { out ->
+        fun displayJpeg(raw: ImageInput?, rendered: ImageInput?, edge: Int): ByteArray =
+            encodeDisplay(FirstImageLoader.load(raw, rendered, edge), edge)
+
+        /**
+         * [displayJpeg] from documents opened one after the other ([FirstImageLoader.loadEach]: each is closed
+         * before the next opens), for callers whose opens are throttled.
+         */
+        fun displayJpeg(raw: (() -> ImageInput)?, rendered: (() -> ImageInput)?, edge: Int): ByteArray =
+            encodeDisplay(FirstImageLoader.loadEach(raw, rendered, edge), edge)
+
+        private fun encodeDisplay(first: dev.hfps.image.preview.FirstImage, edge: Int): ByteArray =
+            ByteArrayOutputStream().use { out ->
                 val bitmap = first.bitmap
                 val long = maxOf(bitmap.width, bitmap.height)
                 val scaled = if (long > edge) {
@@ -132,6 +141,5 @@ open class SmartPreviewMaker(private val dir: File) {
                 bitmap.recycle()
                 out.toByteArray()
             }
-        }
     }
 }

@@ -40,6 +40,7 @@ import dev.hfps.reveal.data.model.PickFlag
 import dev.hfps.reveal.data.model.SourceKind
 import dev.hfps.reveal.data.model.SourceState
 import dev.hfps.reveal.data.storage.DocumentTree
+import dev.hfps.reveal.data.storage.FileOpens
 import dev.hfps.reveal.data.storage.SafDocumentTree
 import dev.hfps.reveal.data.storage.StorageVolumes
 import dev.hfps.reveal.data.storage.isAccessError
@@ -66,6 +67,9 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+
+/** The library's IO: a cancelled check, walk or merge stops waiting for a FileOpens slot (ADR 0018 "W3/C"). */
+private val LIBRARY_IO = FileOpens.io("library")
 
 /** Opens the [DocumentTree] of a source (SAF in the app; a fake in tests). */
 fun interface DocumentTreeFactory {
@@ -306,7 +310,7 @@ class LibraryRepository(
         photoDao.observeRows(PhotoQuerySql.toQuery(query)).map { withLocalPreviews(it, query) }.flowOn(Dispatchers.IO)
 
     suspend fun photoList(query: PhotoQuery): List<PhotoRow> =
-        withContext(Dispatchers.IO) { withLocalPreviews(photoDao.rows(PhotoQuerySql.toQuery(query)), query) }
+        withContext(LIBRARY_IO) { withLocalPreviews(photoDao.rows(PhotoQuerySql.toQuery(query)), query) }
 
     /**
      * The photos [filters] shows that Reveal cannot show at all (`PhotoAvailability`).
@@ -343,7 +347,7 @@ class LibraryRepository(
      * opens go through [FileOpens]' app-wide slots; a busy provider leaves the mark as it is (ADR 0018 "W3/C").
      */
     suspend fun recheckAccess(photoIds: Collection<Long>? = null, force: Boolean = false): Int =
-        withContext(Dispatchers.IO) {
+        withContext(LIBRARY_IO) {
             val now = clock()
             if (!force && now - lastRecheck < RECHECK_MIN_MS) return@withContext -1
             lastRecheck = now
@@ -437,7 +441,7 @@ class LibraryRepository(
         val running = accessJob.get()
         if (running?.isActive == true && !again) return
         running?.cancel()
-        val job = scope.launch(Dispatchers.IO) {
+        val job = scope.launch(LIBRARY_IO) {
             dev.hfps.reveal.data.storage.AppStart.awaitSettled()
             backgroundAccessCheck(again)
         }
@@ -445,7 +449,7 @@ class LibraryRepository(
     }
 
     /** One background access pass (see [scheduleAccessCheck]); returns its summary. */
-    suspend fun backgroundAccessCheck(again: Boolean = false): AccessPass = withContext(Dispatchers.IO) {
+    suspend fun backgroundAccessCheck(again: Boolean = false): AccessPass = withContext(LIBRARY_IO) {
         val pass = AccessPass(if (again) "again" else "background", pace = true)
         val handoff = sourceDao.handoff()?.id
         val recent = clock() - CHECK_INTERVAL_MS
@@ -469,7 +473,7 @@ class LibraryRepository(
     private var lastRecheck = 0L
 
     /** What the "Unavailable" explanation needs about [photoId]; null when the photo is gone. */
-    suspend fun unavailableDetail(photoId: Long): UnavailableDetail? = withContext(Dispatchers.IO) {
+    suspend fun unavailableDetail(photoId: Long): UnavailableDetail? = withContext(LIBRARY_IO) {
         val photo = photoDao.get(photoId) ?: return@withContext null
         val source = sourceDao.get(photo.sourceId) ?: return@withContext null
         val files = photoDao.files(photoId)
@@ -480,7 +484,7 @@ class LibraryRepository(
     }
 
     /** Whether [photoId] is unavailable now (`PhotoAvailability`): the viewer shows the placeholder, not an image. */
-    suspend fun isUnavailable(photoId: Long): Boolean = withContext(Dispatchers.IO) {
+    suspend fun isUnavailable(photoId: Long): Boolean = withContext(LIBRARY_IO) {
         if (!photoDao.unavailableCandidate(photoId)) return@withContext false
         val print = photoDao.files(photoId).firstOrNull { it.unreadableAt != null }?.fingerprint
         val local = previews?.let { print != null && (it.display(print) != null || it.smart(print) != null) } == true
@@ -488,7 +492,7 @@ class LibraryRepository(
     }
 
     /** How many of [photoIds] have edits (they go with "Remove from Reveal"). */
-    suspend fun editedCount(photoIds: List<Long>): Int = withContext(Dispatchers.IO) {
+    suspend fun editedCount(photoIds: List<Long>): Int = withContext(LIBRARY_IO) {
         photoIds.chunked(SQL_ARGS).sumOf { photoDao.editedCount(it) }
     }
 
@@ -497,7 +501,7 @@ class LibraryRepository(
      * app that shared it can share it again). A folder or Server photo is only hidden, like "Remove from library":
      * deleting its rows would be synced to the other devices.
      */
-    suspend fun forget(photoIds: List<Long>): Int = withContext(Dispatchers.IO) {
+    suspend fun forget(photoIds: List<Long>): Int = withContext(LIBRARY_IO) {
         val handoff = sourceDao.handoff()?.id
         val (gone, hide) = photoDao.getAll(photoIds).partition { it.sourceId == handoff }
         gone.map { it.id }.chunked(SQL_ARGS).forEach { ids ->
@@ -514,7 +518,7 @@ class LibraryRepository(
     }
 
     /** Whether [photoId] is in Hoard's trash (ADR 0018 "R1"): the viewer shows a note, never the editor. */
-    suspend fun isInTrash(photoId: Long): Boolean = withContext(Dispatchers.IO) { photoDao.inTrash(photoId) }
+    suspend fun isInTrash(photoId: Long): Boolean = withContext(LIBRARY_IO) { photoDao.inTrash(photoId) }
 
     // ------------------------------------------------------------------ sources
 
@@ -523,7 +527,7 @@ class LibraryRepository(
      * then indexes it in the background. Nothing is copied. [backup]: the originals backup of every photo the server
      * lacks ("Everything"); the default backs up only edited photos (FIX/V, ADR 0018 "Originals backup").
      */
-    suspend fun addSource(treeUri: Uri, backup: Boolean = false): AddSourceResult = withContext(Dispatchers.IO) {
+    suspend fun addSource(treeUri: Uri, backup: Boolean = false): AddSourceResult = withContext(LIBRARY_IO) {
         sourceDao.byTree(treeUri.toString())?.let { return@withContext AddSourceResult.AlreadyAdded(it.id) }
         val writeGranted = persist(treeUri)
         val rootId = runCatching { DocumentsContract.getTreeDocumentId(treeUri) }.getOrNull()
@@ -563,7 +567,7 @@ class LibraryRepository(
     }
 
     /** Forgets a folder: its index, edits and the grant. The files are never touched. */
-    suspend fun removeSource(sourceId: Long) = withContext(Dispatchers.IO) {
+    suspend fun removeSource(sourceId: Long) = withContext(LIBRARY_IO) {
         jobs.remove(sourceId)?.cancel()
         val source = sourceDao.get(sourceId) ?: return@withContext
         runCatching {
@@ -579,7 +583,7 @@ class LibraryRepository(
      * Re-checks every source (volume mounted, grant present, folder listable) and indexes the ones that are
      * available: incremental, so an unchanged folder costs one listing. Call on start and on volume changes.
      */
-    suspend fun refresh(reindex: Boolean = true) = withContext(Dispatchers.IO) {
+    suspend fun refresh(reindex: Boolean = true) = withContext(LIBRARY_IO) {
         for (source in sourceDao.all()) {
             val state = probe(source)
             val volumeName = source.volumeId?.let { id -> runCatching { volumes?.volume(id)?.description }.getOrNull() }
@@ -596,7 +600,7 @@ class LibraryRepository(
      * has no walk to hang it on. Folders do it after their fingerprints, Server photos within the sync's header budget.
      */
     private fun backfillHandoffCameras() {
-        scope.launch(Dispatchers.IO) {
+        scope.launch(LIBRARY_IO) {
             try {
                 val source = sourceDao.handoff() ?: return@launch
                 val done = indexer.backfillCameras(source.id, trees.open(source))
@@ -615,7 +619,7 @@ class LibraryRepository(
      * cannot be read. Opens each document once (no read), one at a time in [FileOpens]' slots; a busy provider changes
      * nothing. Explicit only (tests, a gallery permission change): the app's own checks are [scheduleAccessCheck]'s.
      */
-    suspend fun checkHandoffs(): Int = withContext(Dispatchers.IO) {
+    suspend fun checkHandoffs(): Int = withContext(LIBRARY_IO) {
         sourceDao.handoff() ?: return@withContext 0
         check(photoDao.handoffFiles(), AccessPass("handoffs", pace = false)).unreadable
     }
@@ -643,7 +647,7 @@ class LibraryRepository(
     fun index(sourceId: Long): Job {
         jobs[sourceId]?.takeIf { it.isActive }?.let { return it }
         fingerprintJobs.remove(sourceId)?.cancel()
-        val job = scope.launch(Dispatchers.IO) {
+        val job = scope.launch(LIBRARY_IO) {
             val source = sourceDao.get(sourceId) ?: return@launch
             progress.update { it + (sourceId to IndexProgress(dev.hfps.reveal.data.index.IndexPhase.LISTING, 0, 0)) }
             try {
@@ -684,7 +688,7 @@ class LibraryRepository(
      */
     private fun fingerprint(source: SourceEntity) {
         fingerprintJobs.remove(source.id)?.cancel()
-        val job = scope.launch(Dispatchers.IO) {
+        val job = scope.launch(LIBRARY_IO) {
             try {
                 val tree = trees.open(source)
                 val stored = indexer.fillFingerprints(source.id, tree)
@@ -707,7 +711,7 @@ class LibraryRepository(
      * Makes each hand-off photo whose file this folder holds the folder's photo (ADR 0011 "One photo across sources");
      * runs after every fingerprint pass, so rows printed before this existed are merged on the first walk too.
      */
-    suspend fun mergeHandoffs(sourceId: Long): MergeReport = withContext(Dispatchers.IO) {
+    suspend fun mergeHandoffs(sourceId: Long): MergeReport = withContext(LIBRARY_IO) {
         // A photo the sync server already describes (this folder added again, or added here after another device
         // backed it up) becomes this folder's photo with its id, edits and ratings, never a second photo (FIX/V).
         val server = merge.mergeServerPhotosInto(sourceId)
@@ -727,54 +731,54 @@ class LibraryRepository(
      * The library home's last filters (FIX/L, `meta`), so a fresh start shows the same photos; before FIX/L the
      * library saved its last source instead, which maps to the equivalent filter once.
      */
-    suspend fun lastFilters(): PhotoFilters? = withContext(Dispatchers.IO) {
+    suspend fun lastFilters(): PhotoFilters? = withContext(LIBRARY_IO) {
         val meta = db.metaDao()
         meta.get(KEY_LAST_FILTERS)?.let { return@withContext PhotoListCodec.decodeFilters(it) }
         meta.get(KEY_LAST_SELECTION)?.let(PhotoListCodec::legacySelection)
     }
 
-    suspend fun setLastFilters(filters: PhotoFilters) = withContext(Dispatchers.IO) {
+    suspend fun setLastFilters(filters: PhotoFilters) = withContext(LIBRARY_IO) {
         db.metaDao().put(MetaEntity(KEY_LAST_FILTERS, PhotoListCodec.encodeFilters(filters)))
     }
 
     /** The grid's date grouping (W3/D, `meta` `library.grouping`): `day` (the default) or `month`. */
-    suspend fun dateGrouping(): String? = withContext(Dispatchers.IO) { db.metaDao().get(KEY_GROUPING) }
+    suspend fun dateGrouping(): String? = withContext(LIBRARY_IO) { db.metaDao().get(KEY_GROUPING) }
 
-    suspend fun setDateGrouping(grouping: String) = withContext(Dispatchers.IO) {
+    suspend fun setDateGrouping(grouping: String) = withContext(LIBRARY_IO) {
         db.metaDao().put(MetaEntity(KEY_GROUPING, grouping))
     }
 
     // ------------------------------------------------------------------ photos
 
     /** Rating and flag live in the database (and the sync server); sidecars only change with Export XMP (W4). */
-    suspend fun setRating(photoIds: List<Long>, rating: Int) = withContext(Dispatchers.IO) {
+    suspend fun setRating(photoIds: List<Long>, rating: Int) = withContext(LIBRARY_IO) {
         photoIds.chunked(SQL_ARGS).forEach { photoDao.setRating(it, rating.coerceIn(0, MAX_RATING)) }
     }
 
-    suspend fun setFlag(photoIds: List<Long>, flag: PickFlag) = withContext(Dispatchers.IO) {
+    suspend fun setFlag(photoIds: List<Long>, flag: PickFlag) = withContext(LIBRARY_IO) {
         photoIds.chunked(SQL_ARGS).forEach { photoDao.setFlag(it, flag) }
     }
 
     /** The per-folder switch of the originals backup (ADR 0018). */
-    suspend fun setBackup(sourceId: Long, backup: Boolean) = withContext(Dispatchers.IO) {
+    suspend fun setBackup(sourceId: Long, backup: Boolean) = withContext(LIBRARY_IO) {
         sourceDao.setBackup(sourceId, backup)
     }
 
     /** "Photos opened from other apps" backs up everything (true) or only edited photos (ADR 0018 FIX/W). */
     fun handoffBackup(): Flow<Boolean> = HandoffBackup.observe(db)
 
-    suspend fun setHandoffBackup(everything: Boolean) = withContext(Dispatchers.IO) {
+    suspend fun setHandoffBackup(everything: Boolean) = withContext(LIBRARY_IO) {
         HandoffBackup.set(db, everything)
     }
 
     /** "Remove from library": hidden from every grid; files untouched. */
-    suspend fun removeFromLibrary(photoIds: List<Long>) = withContext(Dispatchers.IO) {
+    suspend fun removeFromLibrary(photoIds: List<Long>) = withContext(LIBRARY_IO) {
         photoIds.chunked(SQL_ARGS).forEach { photoDao.setHidden(it, true) }
     }
 
     fun observePhoto(photoId: Long): Flow<PhotoEntity?> = photoDao.observe(photoId)
 
-    suspend fun detail(photoId: Long): PhotoDetail? = withContext(Dispatchers.IO) {
+    suspend fun detail(photoId: Long): PhotoDetail? = withContext(LIBRARY_IO) {
         val photo = photoDao.get(photoId) ?: return@withContext null
         val source = sourceDao.get(photo.sourceId) ?: return@withContext null
         val version = photoDao.firstVersion(photoId) ?: return@withContext null
@@ -794,7 +798,7 @@ class LibraryRepository(
     }
 
     /** EXIF of a photo (RAW header first, gaps from its rendering), read now from the files. */
-    suspend fun metadata(detail: PhotoDetail): PhotoMetadata? = withContext(Dispatchers.IO) {
+    suspend fun metadata(detail: PhotoDetail): PhotoMetadata? = withContext(LIBRARY_IO) {
         val source = sourceDao.get(detail.photo.sourceId) ?: return@withContext null
         val tree = trees.open(source)
         val files = listOfNotNull(detail.raw, detail.rendered)
@@ -820,7 +824,7 @@ class LibraryRepository(
      * that instead (ADR 0018 "Smart previews"). A hand-off Reveal can no longer read opens the server's original, else
      * a smart preview, else reports what it was (ADR 0011 "Fallbacks").
      */
-    suspend fun editTarget(versionId: Long): EditTarget? = withContext(Dispatchers.IO) {
+    suspend fun editTarget(versionId: Long): EditTarget? = withContext(LIBRARY_IO) {
         val photoId = photoDao.photoIdOfVersion(versionId) ?: return@withContext null
         val detail = detail(photoId) ?: return@withContext null
         val main = detail.raw ?: detail.rendered ?: return@withContext null
@@ -853,7 +857,7 @@ class LibraryRepository(
 
     /** Where [photoId]'s original is now, for the viewer's info; null when the photo is gone. */
     @Suppress("ReturnCount")
-    suspend fun originalPlace(photoId: Long): OriginalPlace? = withContext(Dispatchers.IO) {
+    suspend fun originalPlace(photoId: Long): OriginalPlace? = withContext(LIBRARY_IO) {
         val photo = photoDao.get(photoId) ?: return@withContext null
         val source = sourceDao.get(photo.sourceId) ?: return@withContext null
         val files = photoDao.files(photoId)
@@ -896,7 +900,7 @@ class LibraryRepository(
      */
     @Suppress("ReturnCount")
     suspend fun keepSmartPreview(versionId: Long, write: (jpeg: ByteArray, out: java.io.OutputStream) -> Unit) {
-        withContext(Dispatchers.IO) {
+        withContext(LIBRARY_IO) {
             val local = previews ?: return@withContext
             val photoId = photoDao.photoIdOfVersion(versionId) ?: return@withContext
             val photo = photoDao.get(photoId) ?: return@withContext
@@ -939,11 +943,11 @@ class LibraryRepository(
 
     /** The XMP sidecar for an original-file export of [versionId] (docs/adr/0009 "Original copy"). */
     suspend fun exportSidecar(versionId: Long, recipe: Recipe? = null): ByteArray? =
-        withContext(Dispatchers.IO) { sidecars.exportSidecar(versionId, recipe) }
+        withContext(LIBRARY_IO) { sidecars.exportSidecar(versionId, recipe) }
 
     /** What an export of [versionId] reads (no side effect, unlike [editTarget]); null when the version is gone. */
     @Suppress("CyclomaticComplexMethod") // one branch per place an original can be read from (ADR 0011, 0018)
-    suspend fun exportTarget(versionId: Long): ExportTarget? = withContext(Dispatchers.IO) {
+    suspend fun exportTarget(versionId: Long): ExportTarget? = withContext(LIBRARY_IO) {
         val photoId = photoDao.photoIdOfVersion(versionId) ?: return@withContext null
         val detail = detail(photoId) ?: return@withContext null
         val main = detail.raw ?: detail.rendered ?: return@withContext null
@@ -996,12 +1000,12 @@ class LibraryRepository(
      * How many of [versionIds] belong to hand-offs Reveal can no longer read (ADR 0011 "Unreadable hand-offs"): an
      * export of those reads their local preview.
      */
-    suspend fun unreadableCount(versionIds: List<Long>): Int = withContext(Dispatchers.IO) {
+    suspend fun unreadableCount(versionIds: List<Long>): Int = withContext(LIBRARY_IO) {
         versionIds.chunked(SQL_ARGS).sumOf { photoDao.unreadableVersions(it) }
     }
 
     /** Opens a source's tree (the thumbnail loader and the viewer read files through it). */
-    suspend fun tree(sourceId: Long): DocumentTree = withContext(Dispatchers.IO) {
+    suspend fun tree(sourceId: Long): DocumentTree = withContext(LIBRARY_IO) {
         trees.open(sourceDao.get(sourceId) ?: throw IOException("No source $sourceId"))
     }
 

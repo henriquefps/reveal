@@ -20,6 +20,11 @@ All notable changes to Reveal are documented here. The format follows
   when) and Folders and photo access (what each folder backs up, gallery access). The library's sync status and the
   "Pair" button of a hand-off open Photo server directly.
 
+### Fixed
+- Photos handed over from other apps (such as Hoard) no longer stop loading for good after several of them were opened
+  at once: thumbnails, the viewer, previews, the editor and exports of those photos could all wait forever until
+  Reveal was restarted.
+
 ## [0.10.0] - 2026-11-16
 
 ### Added

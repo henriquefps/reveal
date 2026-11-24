@@ -68,7 +68,7 @@ class EditedThumbnailTest {
         try {
             val recipe = everyTool()
             val thumbs = GpuEditedThumbnails(CoroutineScope(Dispatchers.Default))
-            val thumb = ImageInput.fromFile(file).use { thumbs.render(it, recipe, EDGE) }
+            val thumb = thumbs.renderFile({ ImageInput.fromFile(file) }, recipe, EDGE)
             val (ew, eh, editor) = editorRender(file, recipe)
             Log.i(TAG, "thumbnail ${thumb.width}x${thumb.height}, editor ${ew}x$eh")
             // The geometry's output size (a crop), scaled.
@@ -95,9 +95,8 @@ class EditedThumbnailTest {
             assertThat(mean).isLessThan(MEAN_LEVELS)
             assertThat(p95).isAtMost(P95_LEVELS)
             // The removed object (red) is gone in the thumbnail: compared with the same edit without the Remove spot.
-            val kept = ImageInput.fromFile(file).use {
-                thumbs.render(it, recipe.copy(heals = recipe.heals.filter { h -> h.kind != Heal.KIND_REMOVE }), EDGE)
-            }
+            val withoutRemove = recipe.copy(heals = recipe.heals.filter { h -> h.kind != Heal.KIND_REMOVE })
+            val kept = thumbs.renderFile({ ImageInput.fromFile(file) }, withoutRemove, EDGE)
             val keptPx = IntArray(kept.width * kept.height)
             kept.getPixels(keptPx, 0, kept.width, 0, 0, kept.width, kept.height)
             val objectPx = (OBJECT_SIDE * thumb.width / (W * CROP_WIDTH)).let { it * it }

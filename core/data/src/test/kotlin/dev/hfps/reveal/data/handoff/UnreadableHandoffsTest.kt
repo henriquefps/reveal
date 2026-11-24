@@ -60,7 +60,8 @@ class UnreadableHandoffsTest {
 
     /** Writes a real small JPEG as the display image and marker bytes as the smart preview. */
     private val making = object : PreviewMaking {
-        override fun display(raw: ImageInput?, rendered: ImageInput?, out: File) {
+        override fun display(raw: (() -> ImageInput)?, rendered: (() -> ImageInput)?, out: File) {
+            readEach(raw, rendered)
             displays.incrementAndGet()
             out.writeBytes(jpeg(Color.RED))
         }

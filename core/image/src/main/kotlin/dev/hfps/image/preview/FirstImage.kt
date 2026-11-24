@@ -53,5 +53,25 @@ object FirstImageLoader {
         return FirstImage(decoded.bitmap, source, data.size.toLong(), (System.nanoTime() - started) / NANOS_PER_MILLI)
     }
 
+    /**
+     * [load] reading one file at a time: [openRaw]'s input is opened, its embedded preview used when it covers the
+     * target (or when there is no [openRendered]) and closed **before** [openRendered] is opened, so a caller whose
+     * opens are throttled (Reveal's `FileOpens` slots) never holds one slot while waiting for a second (four such
+     * callers used to wait for each other forever). Same choice of image as [load].
+     */
+    fun loadEach(openRaw: (() -> ImageInput)?, openRendered: (() -> ImageInput)?, targetLongEdge: Int): FirstImage {
+        if (openRaw != null) {
+            val embedded = openRaw().use { raw ->
+                val preview = raw.inspection.largestPreview
+                val previewLong = preview?.let { maxOf(it.width, it.height) } ?: 0
+                val covers = preview != null && previewLong >= targetLongEdge * PREVIEW_COVERAGE
+                if (openRendered == null || covers) load(raw, null, targetLongEdge) else null
+            }
+            if (embedded != null) return embedded
+        }
+        openRendered ?: throw IOException("No embedded preview and no paired rendering")
+        return openRendered().use { rendered -> load(null, rendered, targetLongEdge) }
+    }
+
     private const val NANOS_PER_MILLI = 1_000_000L
 }

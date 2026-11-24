@@ -81,3 +81,9 @@ internal class FileUriTree : DocumentTree {
 
     override fun uri(documentId: String): Uri = Uri.parse(documentId)
 }
+
+/**
+ * What the real [PreviewMaking.display] does with its openers, without decoding: each document opened and closed in
+ * turn (an open that fails still fails the preview).
+ */
+internal fun readEach(vararg openers: (() -> ImageInput)?) = openers.forEach { it?.invoke()?.close() }

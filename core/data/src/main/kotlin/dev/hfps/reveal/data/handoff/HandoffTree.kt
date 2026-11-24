@@ -63,14 +63,17 @@ class HandoffTree(private val resolver: ContentResolver) : DocumentTree {
     /**
      * Opens the document in one of [FileOpens]' app-wide slots (held until the input is closed), retrying (the slot
      * is released while it waits) while its provider is busy ([PROVIDER_BUSY_PREFIX], Hoard ADR
-     * 0010): a sender never sees a burst of opens from Reveal.
+     * 0010): a sender never sees a burst of opens from Reveal. Close the input once read, before opening another
+     * document or waiting for anything else ([FileOpens]' rules).
      */
-    override fun openInput(documentId: String, name: String): ImageInput = FileOpens.gated { release ->
+    override fun openInput(documentId: String, name: String): ImageInput = FileOpens.gated(name = name) { release ->
         val input = ImageInput.fromUri(resolver, documentId.toUri(), name)
         ImageInput(input.name, input.descriptor, release)
     }
 
-    override fun readBytes(documentId: String, maxBytes: Int): ByteArray = FileOpens.gated { release ->
+    override fun readBytes(documentId: String, maxBytes: Int): ByteArray = FileOpens.gated(
+        name = documentId.substringAfterLast('/'),
+    ) { release ->
         try {
             readBytesNow(documentId, maxBytes)
         } finally {

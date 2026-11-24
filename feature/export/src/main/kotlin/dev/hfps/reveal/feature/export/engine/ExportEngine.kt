@@ -144,9 +144,12 @@ class ExportEngine(
         onPartial: (Uri) -> Unit = {},
     ): ExportResult {
         if (!options.format.rendered) return copyOriginal(item, options, cancel, progress, onPartial)
+        // The pair's JPEG is read (and closed) before the main file is opened: never a FileOpens slot held while
+        // waiting for another (ADR 0018 "W3/C").
+        val paired = readPaired(item)
         val input = try {
             // A busy sender (Hoard ADR 0010) is waited out with the bounded backoff (ADR 0018 "W3/C").
-            FileOpens.openDocument(item.uri, context.packageName) {
+            FileOpens.openDocument(item.uri, context.packageName, tag = "export") {
                 ImageInput.fromUri(context.contentResolver, item.uri, item.name)
             }
         } catch (e: IllegalArgumentException) {
@@ -165,7 +168,7 @@ class ExportEngine(
                 // The AI masks' model input first, from a proxy, so it is never on the heap with the full image.
                 masks = maskSession(image, item.recipe)
                 smartPreview(image, item)?.let { return@use it }
-                val meta = readMetadata(image, item)
+                val meta = readMetadata(image, item, paired)
                 meta to openSource(image, meta.fallback)
             } catch (e: ExportException) {
                 throw e
@@ -442,18 +445,29 @@ class ExportEngine(
         return ai.session(key, small.width to small.height) { MaskInputs.render(small) }
     }
 
-    /** EXIF of the file (and of its pair's JPEG for gaps) and the photo's rating. */
-    private fun readMetadata(image: ImageInput, item: ExportItem): SourceMetadata {
+    /** The EXIF of the item's pair's JPEG (gaps of the main file's), read and closed; null without one. */
+    private fun readPaired(item: ExportItem): Pair<ExifSnapshot?, PhotoMetadata>? = item.renderedUri?.let { uri ->
+        runCatching {
+            FileOpens.openDocument(uri, context.packageName, tag = "export") {
+                ImageInput.fromUri(context.contentResolver, uri, "pair.jpg")
+            }.use { pair ->
+                pair.withSource { ExifSnapshot.read(BlockCachedSource(it), pair.type) } to pair.inspection.metadata
+            }
+        }.onFailure {
+            // A cancelled export (interrupted while waiting for a FileOpens slot) stops here, never goes on.
+            if (it is InterruptedException || it is java.util.concurrent.CancellationException) throw it
+        }.getOrNull()
+    }
+
+    /** EXIF of the file (and of its pair's JPEG, [paired], for gaps) and the photo's rating. */
+    private fun readMetadata(
+        image: ImageInput,
+        item: ExportItem,
+        paired: Pair<ExifSnapshot?, PhotoMetadata>?,
+    ): SourceMetadata {
         val snapshot = runCatching { image.withSource { ExifSnapshot.read(BlockCachedSource(it), image.type) } }
             .getOrNull()
         var inspected: PhotoMetadata? = runCatching { image.inspection.metadata }.getOrNull()
-        val paired = item.renderedUri?.let { uri ->
-            runCatching {
-                ImageInput.fromUri(context.contentResolver, uri, "pair.jpg").use { pair ->
-                    pair.withSource { ExifSnapshot.read(BlockCachedSource(it), pair.type) } to pair.inspection.metadata
-                }
-            }.getOrNull()
-        }
         if (paired != null) inspected = inspected?.orElse(paired.second) ?: paired.second
         return SourceMetadata(
             snapshot = snapshot ?: paired?.first,

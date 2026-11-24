@@ -470,7 +470,12 @@ class HandoffMediaTest {
     @Test
     fun `a RAW that joins its JPEG from an earlier chunk drops the JPEG's own display preview`() = runTest {
         val making = object : PreviewMaking {
-            override fun display(raw: dev.hfps.image.ImageInput?, rendered: dev.hfps.image.ImageInput?, out: File) {
+            override fun display(
+                raw: (() -> dev.hfps.image.ImageInput)?,
+                rendered: (() -> dev.hfps.image.ImageInput)?,
+                out: File,
+            ) {
+                readEach(raw, rendered)
                 out.writeBytes(byteArrayOf(1))
             }
 
@@ -506,7 +511,12 @@ class HandoffMediaTest {
     @Test
     fun `a joined JPEG keeps its display preview while the RAW's preview fails`() = runTest {
         val making = object : PreviewMaking {
-            override fun display(raw: dev.hfps.image.ImageInput?, rendered: dev.hfps.image.ImageInput?, out: File) {
+            override fun display(
+                raw: (() -> dev.hfps.image.ImageInput)?,
+                rendered: (() -> dev.hfps.image.ImageInput)?,
+                out: File,
+            ) {
+                readEach(raw, rendered)
                 check(raw == null) { "the RAW cannot be decoded" }
                 out.writeBytes(byteArrayOf(1))
             }
@@ -538,7 +548,12 @@ class HandoffMediaTest {
         val gate = java.util.concurrent.CountDownLatch(1)
         val made = java.util.Collections.synchronizedList(mutableListOf<String>())
         val making = object : PreviewMaking {
-            override fun display(raw: dev.hfps.image.ImageInput?, rendered: dev.hfps.image.ImageInput?, out: File) {
+            override fun display(
+                raw: (() -> dev.hfps.image.ImageInput)?,
+                rendered: (() -> dev.hfps.image.ImageInput)?,
+                out: File,
+            ) {
+                readEach(raw, rendered)
                 if (raw == null && rendered == null) gate.await() // The shot ahead of the queue.
                 made += when {
                     raw != null -> "raw"
@@ -586,7 +601,12 @@ class HandoffMediaTest {
         val displays = java.util.concurrent.atomic.AtomicInteger()
         val smarts = java.util.concurrent.atomic.AtomicInteger()
         val making = object : PreviewMaking {
-            override fun display(raw: dev.hfps.image.ImageInput?, rendered: dev.hfps.image.ImageInput?, out: File) {
+            override fun display(
+                raw: (() -> dev.hfps.image.ImageInput)?,
+                rendered: (() -> dev.hfps.image.ImageInput)?,
+                out: File,
+            ) {
+                readEach(raw, rendered)
                 displays.incrementAndGet()
                 out.writeBytes(byteArrayOf(1))
             }

@@ -6,7 +6,7 @@ All notable changes to Reveal are documented here. The format follows
 
 ## [Unreleased]
 
-## [0.11.0] - 2026-11-20
+## [0.11.0] - 2026-11-26
 
 ### Added
 - Settings › Appearance and language: choose the theme (System, Light or Dark; it applies at once, and the editor
